@@ -4,9 +4,6 @@ Workers import these by string name, so keep signatures stable and
 plain-Python (no FastAPI request objects, no async-only code paths).
 """
 
-import uuid
-
-
 def run_agent(raw_input_id: str) -> None:
     """Worker entry point: process one RawInput end-to-end."""
     # TODO: open a SessionLocal(), call app.agent.process_raw_input(session, UUID(raw_input_id))

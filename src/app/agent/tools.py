@@ -3,27 +3,16 @@
 These are the function signatures Claude will see during tool use. The actual
 implementations live in `app.agent.runner` (or, later, in domain services that
 the runner dispatches to).
+
+All three tools are terminal: the runner short-circuits after the first one
+fires. Dedup candidates are pre-fetched into the user message rather than
+discovered via a tool call, to keep per-input cost at one LLM round-trip.
 """
 
 # Anthropic tool-use schema format.
 # https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview
 
 TOOLS = [
-    {
-        "name": "search_similar_tasks",
-        "description": (
-            "Semantic-search existing open tasks. Use BEFORE creating a task to avoid duplicates. "
-            "Returns up to k tasks ranked by similarity."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Short description of the candidate task."},
-                "k": {"type": "integer", "default": 5},
-            },
-            "required": ["query"],
-        },
-    },
     {
         "name": "create_task",
         "description": "Persist a new task extracted from the current raw input.",
@@ -46,7 +35,11 @@ TOOLS = [
     },
     {
         "name": "mark_duplicate",
-        "description": "Record that the current input duplicates an existing task instead of creating a new one.",
+        "description": (
+            "Record that the current input duplicates an existing task instead of "
+            "creating a new one. `existing_task_id` must be one of the candidate IDs "
+            "listed in the user message."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -65,5 +58,4 @@ TOOLS = [
             "required": ["reason"],
         },
     },
-    # TODO: add `fetch_github_issue`, `fetch_notion_page` etc. once MCP wired
 ]

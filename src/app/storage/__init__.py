@@ -1,10 +1,10 @@
-"""Database-facing operations (CRUD + vector search).
+"""Database-facing operations.
 
 Kept separate from API routes so the agent runner can call the same code paths
-without going through HTTP.
+without going through HTTP. Each resource has its own module; this file just
+re-exports the surface.
 """
 
-# TODO: tasks.create / tasks.update / tasks.list / tasks.search_similar
-# TODO: raw_inputs.create / raw_inputs.mark_processed
-# TODO: feedback.create
-# TODO: oauth_tokens.upsert / oauth_tokens.get (with decryption)
+from app.storage import feedback, oauth_tokens, raw_inputs, tasks
+
+__all__ = ["feedback", "oauth_tokens", "raw_inputs", "tasks"]

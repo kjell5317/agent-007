@@ -4,7 +4,7 @@ from fastapi import FastAPI
 # @register_* decorators. Add a new provider/source = add a new import here.
 import app.auth.google  # noqa: F401
 import app.ingestion.gmail  # noqa: F401
-from app.api import feedback, inputs, oauth, tasks
+from app.api import feedback, inputs, oauth, sources, tasks
 from app.config import get_settings
 
 
@@ -20,6 +20,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(feedback.router)
     app.include_router(oauth.router)
+    app.include_router(sources.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:

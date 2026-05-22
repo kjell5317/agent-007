@@ -4,7 +4,7 @@ Personal task-extraction agent over semi-structured inputs.
 
 ## Architecture
 
-```
+```md
 [Sources]  →  [Ingestion]  →  [Queue]  →  [Agent]  →  [Storage]  →  [API]
  (TBD)        FastAPI         RQ +        Claude       Postgres     FastAPI
                               Redis      + tools     + pgvector     REST
