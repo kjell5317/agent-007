@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     claude_model: str = "claude-opus-4-7"
 
-    # TODO: add per-provider OAuth config as sources are implemented
+    # --- Google OAuth (Gmail) ---
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = "http://localhost:8000/oauth/google/callback"
+
     # TODO: add MCP server URLs (GitHub, Notion) when wiring those in
 
 

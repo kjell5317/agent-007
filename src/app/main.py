@@ -1,5 +1,9 @@
 from fastapi import FastAPI
 
+# Side-effect imports register OAuth providers and ingestion sources via their
+# @register_* decorators. Add a new provider/source = add a new import here.
+import app.auth.google  # noqa: F401
+import app.ingestion.gmail  # noqa: F401
 from app.api import feedback, inputs, oauth, tasks
 from app.config import get_settings
 
@@ -21,8 +25,6 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok"}
 
-    # TODO: register ingestion sources on startup (importing app.ingestion.<source>)
-    # TODO: register OAuth providers on startup (importing app.auth.<provider>)
     # TODO: structured logging + request id middleware
 
     return app
