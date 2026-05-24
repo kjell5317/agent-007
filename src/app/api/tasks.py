@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.models.raw_input import RawInput
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
-from app.storage import raw_inputs, tasks as tasks_store
+from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -80,39 +80,39 @@ async def update_task(
 
 @router.post("/{task_id}/close", status_code=status.HTTP_204_NO_CONTENT)
 async def close_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
-    """User marks the task done — insert a synthetic raw_input with status='closed'."""
-    row = tasks_store.get(session, task_id)
-    if row is None:
+    """User marks the task done — flip the latest raw_input's status to 'closed'."""
+    if tasks_store.get(session, task_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
-    session.add(
-        RawInput(
-            source="manual",
-            content="closed by user",
-            source_metadata={"manual": True, "action": "close"},
-            status="closed",
-            task_id=task_id,
-            processed_at=datetime.now(timezone.utc),
-            agent_trace={"outcome": "closed", "manual": True},
-        )
-    )
+    latest = raw_inputs_store.latest_for_task(session, task_id)
+    if latest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task has no raw_input to update")
+    latest.status = "closed"
+    latest.processed_at = datetime.now(timezone.utc)
     session.commit()
 
 
 @router.post("/{task_id}/not_task", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_not_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
-    """User retracts the task — insert a synthetic raw_input with status='not_task'."""
-    row = tasks_store.get(session, task_id)
-    if row is None:
+    """User retracts the task — flip the latest raw_input's status to 'not_task'."""
+    if tasks_store.get(session, task_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
-    session.add(
-        RawInput(
-            source="manual",
-            content="marked as not_task by user",
-            source_metadata={"manual": True, "action": "not_task"},
-            status="not_task",
-            task_id=task_id,
-            processed_at=datetime.now(timezone.utc),
-            agent_trace={"outcome": "not_task", "manual": True},
-        )
-    )
+    latest = raw_inputs_store.latest_for_task(session, task_id)
+    if latest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task has no raw_input to update")
+    latest.status = "not_task"
+    latest.processed_at = datetime.now(timezone.utc)
+    session.commit()
+
+
+@router.post("/{task_id}/reopen", status_code=status.HTTP_204_NO_CONTENT)
+async def reopen_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
+    """Re-open a previously closed / not_task / duplicate task by flipping the
+    latest anchor raw_input back to 'open'."""
+    if tasks_store.get(session, task_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    latest = raw_inputs_store.latest_for_task(session, task_id)
+    if latest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task has no raw_input to update")
+    latest.status = "open"
+    latest.processed_at = datetime.now(timezone.utc)
     session.commit()

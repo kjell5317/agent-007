@@ -15,9 +15,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.agent.runner import extract_task_fields
 from app.db import get_session
+from app.notifications import notify_task_created
 from app.schemas.raw_input import RawInputRead
-from app.schemas.task import TaskCreate, TaskRead
+from app.schemas.task import TaskCreate, TaskPromote, TaskRead
 from app.storage import raw_inputs, tasks as tasks_store
 
 router = APIRouter(prefix="/inputs", tags=["inputs"])
@@ -51,22 +53,59 @@ async def get_input(
 )
 async def open_task_from_input(
     raw_input_id: uuid.UUID,
-    payload: TaskCreate,
+    payload: TaskPromote | None = None,
     session: Session = Depends(get_session),
 ) -> TaskRead:
-    """User promotes a raw_input the agent skipped into an actual task."""
+    """Promote a raw_input the agent skipped into an actual task.
+
+    Body is fully optional. Whichever of `title`, `estimation`, `due_date` the
+    caller doesn't supply, the agent fills in by reading the raw_input. Any
+    user-provided fields override the agent's guesses.
+    """
     raw = raw_inputs.get(session, raw_input_id)
     if raw is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Raw input not found")
 
-    task = tasks_store.create(session, payload)
+    user_fields = (
+        {k: v for k, v in payload.model_dump().items() if v is not None}
+        if payload is not None
+        else {}
+    )
+
+    needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
+    agent_fields: dict = {}
+    if needs_agent:
+        agent_fields = await extract_task_fields(raw)
+
+    merged = {**agent_fields, **user_fields}
+    task = tasks_store.create(
+        session,
+        TaskCreate(
+            title=merged["title"],
+            description=merged.get("description"),
+            estimation=merged.get("estimation"),
+            due_date=merged.get("due_date"),
+            location=merged.get("location"),
+            link=merged.get("link"),
+        ),
+    )
+
     raw.status = "open"
     raw.task_id = task.id
     raw.processed_at = raw.processed_at or datetime.now(timezone.utc)
     trace = dict(raw.agent_trace or {})
-    trace["manual_override"] = {"outcome": "task_created", "task_id": str(task.id)}
+    trace["manual_override"] = {
+        "outcome": "task_created",
+        "task_id": str(task.id),
+        "agent_extracted": sorted(agent_fields.keys()) if agent_fields else [],
+        "user_provided": sorted(user_fields.keys()),
+    }
     raw.agent_trace = trace
     session.commit()
+
+    if needs_agent:
+        await notify_task_created(task, raw)
+
     return TaskRead.model_validate(
         {
             "id": task.id,
@@ -82,9 +121,3 @@ async def open_task_from_input(
         }
     )
 
-
-@router.post("/{source}/webhook", status_code=status.HTTP_202_ACCEPTED)
-async def source_webhook(
-    source: str, request: Request, session: Session = Depends(get_session)
-) -> dict:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, f"webhook for {source!r} not implemented")

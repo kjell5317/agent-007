@@ -89,6 +89,20 @@ def finalize(
     return row
 
 
+def latest_for_task(session: Session, task_id: uuid.UUID) -> RawInput | None:
+    """Return the most-recent *anchor* raw_input linked to a task — the row
+    whose status defines the task's current derived state (see
+    `latest_status_for`). Duplicates are references back to the task, not
+    state transitions for it, so they are skipped."""
+    stmt = (
+        select(RawInput)
+        .where(RawInput.task_id == task_id, RawInput.status != "duplicate")
+        .order_by(RawInput.received_at.desc())
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def find_by_thread(
     session: Session, source: str, thread_id: str
 ) -> RawInput | None:

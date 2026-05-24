@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     database_url: str
-    redis_url: str = "redis://localhost:6379/0"
 
     token_encryption_key: str = Field(default="", description="Fernet key for encrypting OAuth tokens at rest")
 

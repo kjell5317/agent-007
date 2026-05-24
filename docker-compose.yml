@@ -18,23 +18,10 @@ services:
       retries: 10
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "127.0.0.1:6379:6379"
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   app:
     # `image:` is the tag the workflow publishes and that the prod VM pulls.
     # `build:` lets `docker compose up --build` build locally from this repo.
-    image: ${APP_IMAGE:-ghcr.io/kjell5317/007-agent-app:latest}
+    image: ${APP_IMAGE:-ghcr.io/kjell5317/agent-007-app:latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -44,13 +31,10 @@ services:
       # Override the .env defaults so the app talks to compose services
       # instead of localhost.
       DATABASE_URL: postgresql+psycopg://taskagent:taskagent@postgres:5432/taskagent
-      REDIS_URL: redis://redis:6379/0
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -72,6 +56,5 @@ services:
 
 volumes:
   pgdata:
-  redisdata:
   caddy_data:
   caddy_config:

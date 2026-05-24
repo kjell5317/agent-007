@@ -57,6 +57,8 @@ export const api = {
     request<void>(`/tasks/${id}/close`, { method: "POST" }),
   markNotTask: (id: string) =>
     request<void>(`/tasks/${id}/not_task`, { method: "POST" }),
+  reopenTask: (id: string) =>
+    request<void>(`/tasks/${id}/reopen`, { method: "POST" }),
 
   listInputs: (params: { limit?: number; status?: string; source?: string } = {}) => {
     const qs = new URLSearchParams();
@@ -65,17 +67,10 @@ export const api = {
     if (params.source) qs.set("source", params.source);
     return request<RawInput[]>(`/inputs?${qs.toString()}`);
   },
-  promoteInput: (id: string, title: string) =>
+  promoteInput: (id: string, title?: string) =>
     request<Task>(`/inputs/${id}/open_task`, {
       method: "POST",
-      body: JSON.stringify({
-        title,
-        description: null,
-        due_date: null,
-        estimation: null,
-        location: null,
-        link: null,
-      }),
+      body: JSON.stringify(title ? { title } : {}),
     }),
 
   poll: (source: string) =>

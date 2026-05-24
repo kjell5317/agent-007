@@ -15,7 +15,14 @@ export function InboxPanel({ inputs, closedTasks, onChanged }: Props) {
         if (r.status === "not_task" || r.status === "duplicate") return true;
         return r.agent_trace?.outcome === "no_change";
       })
-      .map((r) => ({ kind: "input", id: r.id, sort: r.received_at, data: r }));
+      .map((r) => ({
+        kind: "input",
+        id: r.id,
+        // sort by "last updated": the agent's decision time when set, else
+        // the intake time as a fallback (e.g. still-processing rows).
+        sort: r.processed_at || r.received_at,
+        data: r,
+      }));
 
     const taskItems: InboxItem[] = closedTasks.map((t) => ({
       kind: "task",

@@ -17,12 +17,13 @@ export function isOverdue(iso: string | null): boolean {
 export function fmtDue(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return d.toLocaleString(
-    undefined,
-    isToday(iso)
-      ? { hour: "2-digit", minute: "2-digit" }
-      : { month: "short", day: "numeric" },
-  );
+  // Always show the local time alongside the date — otherwise a deadline
+  // of "tomorrow 17:00" reads as just "May 26" and loses the hour.
+  return d.toLocaleString(undefined, {
+    ...(isToday(iso) ? {} : { month: "short", day: "numeric" }),
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function fmtWhen(iso: string | null): string {

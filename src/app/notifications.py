@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from datetime import datetime
 
 import httpx
 
@@ -28,26 +29,33 @@ log = logging.getLogger(__name__)
 _TIMEOUT = 5.0
 
 
-async def notify(title: str, message: str) -> None:
-    """Send a single notification through HA's notify.<service>."""
+async def notify(title: str, message: str, url: str | None = None) -> None:
+    """Send a single notification through HA's notify.<service>.
+
+    When `url` is set, attach it as `data.clickAction` so tapping the phone
+    notification opens it (handled by the HA companion app).
+    """
     s = get_settings()
     if not s.home_assistant_url or not s.home_assistant_token:
         return
 
-    url = (
+    endpoint = (
         s.home_assistant_url.rstrip("/")
         + "/api/services/notify/"
         + s.home_assistant_notify_service
     )
+    payload: dict = {"title": title, "message": message}
+    if url:
+        payload["data"] = {"clickAction": url}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
-                url,
+                endpoint,
                 headers={
                     "Authorization": f"Bearer {s.home_assistant_token}",
                     "Content-Type": "application/json",
                 },
-                json={"title": title, "message": message},
+                json=payload,
             )
             resp.raise_for_status()
         log.info("notify · sent title=%r", title)
@@ -58,19 +66,33 @@ async def notify(title: str, message: str) -> None:
 async def notify_task_created(task, raw) -> None:
     """Notify on a newly extracted task. `task` is an ORM Task, `raw` a RawInput."""
     meta = raw.source_metadata or {}
-    sender = meta.get("from") or meta.get("channel_name") or raw.source
     parts: list[str] = []
     if task.due_date:
-        parts.append(f"due {task.due_date.isoformat()}")
+        parts.append(f"{_fmt_when(task.due_date)}")
     if task.estimation:
-        parts.append(f"~{task.estimation} min")
-    if task.location:
-        parts.append(task.location)
-    suffix = f" · {' · '.join(parts)}" if parts else ""
+        parts.append(f"{task.estimation}m")
+    details = " · ".join(parts)
+    urls = meta.get("urls") or []
     await notify(
-        title=f"New task: {task.title}",
-        message=f"from {sender}{suffix}",
+        title=f"{task.title[:100]}",
+        message=details or "(no details)",
+        url=urls[0] if urls else None,
     )
+
+
+def _fmt_when(dt: datetime) -> str:
+    """Short, human-friendly local-time format for phone notifications.
+
+    Today  → just the time (e.g. "14:30").
+    Else   → month/day + time, with year only when it's not the current one.
+    """
+    local = dt.astimezone()
+    now = datetime.now(local.tzinfo)
+    if local.date() == now.date():
+        return local.strftime("%H:%M")
+    if local.year == now.year:
+        return local.strftime("%b %d, %H:%M")
+    return local.strftime("%b %d %Y, %H:%M")
 
 
 async def notify_error(title: str, exc: BaseException, *, context: str | None = None) -> None:

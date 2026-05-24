@@ -58,13 +58,17 @@ def update(
     return row
 
 
-# Task status is derived: the status of the most-recent raw_input pointing at
-# the task is the task's current state. `received_at DESC` is indexed.
+# Task status is derived: the status of the most-recent *anchor* raw_input
+# pointing at the task is the task's current state. Rows with status='duplicate'
+# are references back to an existing task, not state transitions for it, so
+# they are excluded — otherwise a new duplicate would visually flip the
+# original task's status to 'duplicate'. `received_at DESC` is indexed.
 _LATEST_STATUS_SQL = text(
     """
     SELECT DISTINCT ON (task_id) task_id, status
     FROM raw_inputs
     WHERE task_id = ANY(:ids)
+      AND status <> 'duplicate'
     ORDER BY task_id, received_at DESC
     """
 )

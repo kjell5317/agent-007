@@ -26,6 +26,19 @@ class TaskUpdate(BaseModel):
     location: str | None = None
 
 
+class TaskPromote(BaseModel):
+    """Body for POST /inputs/{id}/open_task. Every field optional — anything
+    missing from title/estimation/due_date triggers an agent extraction over
+    the raw input. User-provided values always override agent guesses."""
+
+    title: str | None = None
+    description: str | None = None
+    link: str | None = None
+    due_date: datetime | None = None
+    estimation: int | None = None
+    location: str | None = None
+
+
 class TaskRead(TaskBase):
     id: uuid.UUID
     status: str  # derived from latest linked raw_input

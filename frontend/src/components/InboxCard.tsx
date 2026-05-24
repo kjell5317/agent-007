@@ -1,23 +1,24 @@
 import { useState } from "react";
+import { CirclePlus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
+import { cn } from "@/lib/utils";
 import type { RawInput, Task } from "@/lib/types";
 
 export type InboxItem =
   | { kind: "input"; id: string; sort: string; data: RawInput }
   | { kind: "task"; id: string; sort: string; data: Task };
 
+type BadgeKind = "not_task" | "duplicate" | "no_change" | "closed";
+
 interface Props {
   item: InboxItem;
   onChanged: () => Promise<void> | void;
 }
-
-type BadgeKind = "not_task" | "duplicate" | "no_change" | "closed";
 
 function labelFor(item: InboxItem): BadgeKind {
   if (item.kind === "task") return "closed";
@@ -28,6 +29,7 @@ function labelFor(item: InboxItem): BadgeKind {
 
 export function InboxCard({ item, onChanged }: Props) {
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const label = labelFor(item);
   const isInput = item.kind === "input";
 
@@ -41,17 +43,31 @@ export function InboxCard({ item, onChanged }: Props) {
   );
   const source = isInput ? item.data.source : "task";
 
-  const promote = async () => {
-    const title = prompt("Title for the new task?");
-    if (!title) return;
+  async function withBusy<T>(fn: () => Promise<T>, msg: string) {
+    setBusy(true);
     try {
-      await api.promoteInput(item.id, title);
-      toast.success("Task created");
+      await fn();
+      toast.success(msg);
       await onChanged();
     } catch (e) {
       toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
     }
-  };
+  }
+
+  // Inbox action: closed tasks → reopen; raw_inputs (not_task/duplicate/no_change) → promote.
+  const action = isInput
+    ? {
+        label: "Make a task",
+        Icon: CirclePlus,
+        run: () => withBusy(() => api.promoteInput(item.id), "Task created"),
+      }
+    : {
+        label: "Re-open task",
+        Icon: RotateCcw,
+        run: () => withBusy(() => api.reopenTask(item.id), "Task re-opened"),
+      };
 
   return (
     <Card>
@@ -62,16 +78,33 @@ export function InboxCard({ item, onChanged }: Props) {
           setOpen((v) => !v);
         }}
       >
-        <div className="font-medium leading-snug">{title}</div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <Badge variant={label}>{label}</Badge>
-          <span>{source}</span>
-          <span>{when}</span>
+        <div className="flex items-start gap-2">
+          <button
+            type="button"
+            aria-label={action.label}
+            title={action.label}
+            disabled={busy}
+            onClick={action.run}
+            className={cn(
+              "mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
+            )}
+          >
+            <action.Icon className="h-5 w-5" />
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-medium leading-snug">{title}</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <Badge variant={label}>{label}</Badge>
+              <span>{source}</span>
+              <span>{when}</span>
+            </div>
+          </div>
         </div>
 
         <Collapsible open={open}>
           <div className="mt-3 space-y-3 border-t pt-3 text-sm" onClick={(e) => e.stopPropagation()}>
-            {isInput ? <InputBody data={item.data} onPromote={promote} /> : <TaskBody data={item.data} />}
+            {isInput ? <InputBody data={item.data} /> : <TaskBody data={item.data} />}
           </div>
         </Collapsible>
       </CardContent>
@@ -79,7 +112,7 @@ export function InboxCard({ item, onChanged }: Props) {
   );
 }
 
-function InputBody({ data, onPromote }: { data: RawInput; onPromote: () => void }) {
+function InputBody({ data }: { data: RawInput }) {
   return (
     <>
       <div className="text-xs text-muted-foreground">
@@ -115,11 +148,6 @@ function InputBody({ data, onPromote }: { data: RawInput; onPromote: () => void 
           </pre>
         </details>
       )}
-      <div>
-        <Button size="sm" onClick={onPromote}>
-          Promote to task
-        </Button>
-      </div>
     </>
   );
 }

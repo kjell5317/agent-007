@@ -173,6 +173,77 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     )
 
 
+# --- manual promotion: agent-fills-missing-fields ----------------------------
+
+
+async def extract_task_fields(raw) -> dict[str, Any]:
+    """Ask the LLM to extract task fields from a raw input.
+
+    Used by the manual promotion endpoint when the user hasn't supplied
+    title/estimation/due_date. Only the `create_task` tool is offered — the
+    user has already decided this is a task, so the agent's job is purely
+    extraction (no dedup, no candidates, no `mark_not_task`).
+    """
+    settings = get_settings()
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    user_msg = _build_extract_message(raw)
+    create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
+
+    log.info("llm call · branch=extract_fields raw=%s", raw.id)
+    resp = await client.messages.create(
+        model=settings.claude_model,
+        max_tokens=MAX_TOKENS,
+        temperature=TEMPERATURE,
+        system=_cached_system(EXTRACT_FIELDS_SYSTEM_PROMPT),
+        tools=_cached_tools([create_tool]),
+        tool_choice={"type": "tool", "name": "create_task"},
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    log.debug(
+        "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",
+        raw.id, resp.stop_reason,
+        getattr(resp.usage, "input_tokens", "?"),
+        getattr(resp.usage, "output_tokens", "?"),
+    )
+
+    tool_uses = [b for b in resp.content if isinstance(b, ToolUseBlock)]
+    if not tool_uses:
+        raise RuntimeError("agent did not call create_task during field extraction")
+    payload = dict(tool_uses[0].input or {})
+    if "due_date" in payload:
+        payload["due_date"] = _parse_iso(payload["due_date"])
+    return payload
+
+
+def _build_extract_message(raw) -> str:
+    meta = raw.source_metadata or {}
+    lines = [f"Source: {raw.source}"]
+    for key in ("from", "to", "subject", "date", "thread_id", "account"):
+        val = meta.get(key)
+        if val:
+            lines.append(f"{key.capitalize()}: {val}")
+    lines.append("")
+    lines.append("Body:")
+    lines.append((raw.content or "").strip() or "(empty)")
+    return "\n".join(lines)
+
+
+EXTRACT_FIELDS_SYSTEM_PROMPT = """\
+You are extracting structured task fields from a raw input the user has
+explicitly chosen to promote to a task. Do NOT second-guess the decision —
+your only job is to populate `create_task` accurately:
+
+- title: short, imperative.
+- estimation: minutes; required, best-guess.
+- due_date: ISO 8601; required — use the explicit deadline if stated,
+  otherwise a reasonable best-guess based on urgency.
+- description, location, link: include when supported by the input.
+
+Call `create_task` exactly once. Do not narrate.
+"""
+
+
 # --- thread-followup agent ----------------------------------------------------
 
 

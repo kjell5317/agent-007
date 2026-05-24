@@ -17,13 +17,12 @@ export function useAppData(): AppData {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const [open, dup, allInputs, closed] = await Promise.all([
+    const [open, allInputs, closed] = await Promise.all([
       api.listTasks("open"),
-      api.listTasks("duplicate"),
       api.listInputs({ limit: 200 }),
       api.listTasks("closed"),
     ]);
-    setTasks([...open, ...dup]);
+    setTasks([...open]);
     setInputs(allInputs);
     setClosedTasks(closed);
     setLoading(false);
