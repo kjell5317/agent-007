@@ -40,8 +40,8 @@ COPY alembic.ini ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Frontend build goes last so it overlays src/app/static cleanly.
-COPY --from=frontend /src/app/static ./src/app/static
+# Frontend build goes into the installed package — that's the one uvicorn imports
+COPY --from=frontend /src/app/static /usr/local/lib/python3.12/site-packages/app/static
 
 USER app
 EXPOSE 8000
