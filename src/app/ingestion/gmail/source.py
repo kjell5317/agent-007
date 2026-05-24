@@ -21,6 +21,7 @@ on a schedule is simpler and avoids Pub/Sub topic setup.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from app.ingestion.base import IngestionSource, register_source
@@ -28,9 +29,11 @@ from app.ingestion.gmail.client import GmailClient, HistoryExpiredError
 from app.ingestion.gmail.preprocess import preprocess_message
 from app.schemas.raw_input import RawInputCreate
 
+log = logging.getLogger(__name__)
+
 # Initial-bootstrap filter. Tightened to inbox to keep the first
 # sync small; widen once the agent's behaviour is trusted.
-BOOTSTRAP_QUERY = "in:inbox newer_than:7d"
+BOOTSTRAP_QUERY = "in:inbox newer_than:1d"
 
 # Gmail label IDs to skip outright. SENT covers messages the user authored
 # (incl. self-cc), DRAFT is unfinished, SPAM/TRASH are obvious. The history
@@ -53,7 +56,10 @@ class GmailSource(IngestionSource):
         async for message_id in self._iter_new_message_ids():
             raw = await self.client.get_message(message_id)
 
-            if SKIP_LABELS.intersection(raw.get("labelIds") or ()):
+            labels = raw.get("labelIds") or ()
+            skip = SKIP_LABELS.intersection(labels)
+            if skip:
+                log.debug("gmail · skip id=%s labels=%s", message_id, sorted(skip))
                 continue
 
             result = preprocess_message(raw)
@@ -84,10 +90,12 @@ class GmailSource(IngestionSource):
 
     async def _iter_new_message_ids(self) -> AsyncIterator[str]:
         if self.history_id is None:
+            log.info("gmail fetch · bootstrap query=%r", BOOTSTRAP_QUERY)
             async for mid in self.client.list_messages(query=BOOTSTRAP_QUERY):
                 yield mid
             return
 
+        log.info("gmail fetch · incremental from history_id=%s", self.history_id)
         try:
             async for record in self.client.history_list(self.history_id):
                 for added in record.get("messagesAdded", []):
@@ -98,5 +106,9 @@ class GmailSource(IngestionSource):
         except HistoryExpiredError:
             # Watermark too old — re-bootstrap. Caller will overwrite history_id
             # via `next_history_id` after the new mailbox state is captured.
+            log.warning(
+                "gmail fetch · history_id=%s expired, falling back to bootstrap",
+                self.history_id,
+            )
             async for mid in self.client.list_messages(query=BOOTSTRAP_QUERY):
                 yield mid

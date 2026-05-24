@@ -53,9 +53,11 @@ _REPLY_INTRO_PATTERNS = [
 ]
 
 # Standard sigdash per RFC 3676 (`-- ` with trailing space) plus common phrases.
+# Em-dash separators (`—`) are deliberately NOT here: GitHub uses them before
+# the "Reply to this email directly, view it on GitHub" footer, which carries
+# the URLs we want.
 _SIGNATURE_PATTERNS = [
     re.compile(r"^-- \s*$"),
-    re.compile(r"^—\s*$"),
     re.compile(r"^Sent from my .+$", re.IGNORECASE),
     re.compile(r"^Get Outlook for .+$", re.IGNORECASE),
 ]
@@ -88,7 +90,12 @@ def preprocess_message(raw_message: dict) -> PreprocessResult:
     body = _strip_signature(body)
     body = _collapse_whitespace(body)
 
+    # URL extraction from body text covers the common case. For HTML-only links
+    # (e.g. GitHub's "View it on GitHub" anchor that doesn't appear in the
+    # plain-text alternative) we additionally scan <a href> in the HTML part.
     urls = _extract_urls(body)
+    if html:
+        urls = _merge_urls(urls, _extract_html_hrefs(html))
 
     truncated = False
     if len(body) > MAX_BODY_CHARS:
@@ -190,17 +197,21 @@ def _html_to_text(html: str) -> str:
 def _strip_quoted_replies(text: str) -> str:
     """Remove the quoted history below a reply.
 
-    Strategy: walk lines top-down; the first line that matches either a
-    reply-intro pattern or starts a `>` quote block ends the original message.
+    Cut on either:
+      - a reply-intro line ("On X, Y wrote:", etc.), OR
+      - the first of a block of 2+ consecutive `>`-quoted lines.
+
+    The 2-line minimum avoids killing legitimate single-line markdown quotes
+    that appear inside the message body.
     """
     lines = text.splitlines()
     cut = len(lines)
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith(">"):
+        if any(p.match(stripped) for p in _REPLY_INTRO_PATTERNS):
             cut = i
             break
-        if any(p.match(stripped) for p in _REPLY_INTRO_PATTERNS):
+        if stripped.startswith(">") and i + 1 < len(lines) and lines[i + 1].lstrip().startswith(">"):
             cut = i
             break
     return "\n".join(lines[:cut])
@@ -242,4 +253,28 @@ def _extract_urls(text: str) -> list[str]:
         if url not in seen:
             seen.add(url)
             out.append(url)
+    return out
+
+
+def _extract_html_hrefs(html: str) -> list[str]:
+    """Distinct http(s) URLs from <a href> attributes, in document order."""
+    soup = BeautifulSoup(html, "lxml")
+    seen: set[str] = set()
+    out: list[str] = []
+    for a in soup.find_all("a"):
+        href = (a.get("href") or "").strip()
+        if href.startswith(("http://", "https://")) and href not in seen:
+            seen.add(href)
+            out.append(href)
+    return out
+
+
+def _merge_urls(base: list[str], extra: list[str]) -> list[str]:
+    """Append URLs from `extra` to `base` preserving order, dedup'd."""
+    seen = set(base)
+    out = list(base)
+    for u in extra:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
     return out

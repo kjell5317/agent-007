@@ -106,6 +106,16 @@ def get_decrypted(
     )
 
 
+def list_account_keys(session: Session, *, provider: str) -> list[str]:
+    """All account_keys connected for a provider, oldest first."""
+    rows = session.execute(
+        select(OAuthToken.account_key)
+        .where(OAuthToken.provider == provider)
+        .order_by(OAuthToken.created_at)
+    ).all()
+    return [r[0] for r in rows]
+
+
 def set_extra(session: Session, *, provider: str, account_key: str, patch: dict) -> None:
     """Merge-patch the `extra` JSON for a token (e.g. to bump Gmail historyId)."""
     row = session.execute(

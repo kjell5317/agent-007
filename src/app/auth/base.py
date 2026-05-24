@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, TypeVar
 
 
 @dataclass
@@ -52,9 +52,13 @@ class OAuthProvider(ABC):
 
 _REGISTRY: dict[str, type[OAuthProvider]] = {}
 
+# See base.py in ingestion for the rationale — preserve concrete class type
+# through the decorator so subclass-specific __init__ signatures survive.
+_TProvider = TypeVar("_TProvider", bound=type[OAuthProvider])
+
 
 def register_provider(name: str):
-    def _wrap(cls: type[OAuthProvider]) -> type[OAuthProvider]:
+    def _wrap(cls: _TProvider) -> _TProvider:
         cls.name = name
         _REGISTRY[name] = cls
         return cls

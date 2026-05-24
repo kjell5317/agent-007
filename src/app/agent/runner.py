@@ -19,6 +19,7 @@ Flow per raw input:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, cast
@@ -31,9 +32,12 @@ from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PR
 from app.agent.tools import NEW_INPUT_TOOLS, THREAD_FOLLOWUP_TOOLS
 from app.config import get_settings
 from app.embeddings import embed
+from app.notifications import notify_task_created
 from app.schemas.task import TaskCreate
 from app.storage import raw_inputs, tasks
 from app.storage.raw_inputs import SimilarInput
+
+log = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 2
 MAX_TOKENS = 1024
@@ -45,12 +49,18 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     """Run the agent over one raw input and persist the outcome."""
     raw = raw_inputs.get(session, raw_input_id)
     if raw is None:
+        log.warning("process · raw_input not found id=%s", raw_input_id)
         return {"outcome": "missing"}
     if raw.processed_at is not None:
+        log.debug("process · already-processed raw=%s status=%s", raw_input_id, raw.status)
         return {"outcome": "already_processed", "status": raw.status}
 
     meta = raw.source_metadata or {}
     thread_id = meta.get("thread_id")
+    log.info(
+        "process start · raw=%s source=%s thread_id=%s",
+        raw_input_id, raw.source, thread_id or "—",
+    )
 
     # --- 1. Thread shortcut --------------------------------------------------
     if thread_id:
@@ -58,16 +68,23 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         if prior is not None and prior.task_id is not None:
             task = tasks.get(session, prior.task_id)
             if task is not None:
+                log.info(
+                    "branch=thread_followup · raw=%s task=%s (prior_raw=%s)",
+                    raw_input_id, task.id, prior.id,
+                )
                 return await _run_thread_followup(session, raw, task)
 
     # --- 2. Embed once -------------------------------------------------------
     query_text = _candidate_query_text(raw.content, meta)
     query_embedding: list[float] | None = raw.embedding
     if query_embedding is None and query_text:
+        log.debug("embed · raw=%s len=%d", raw_input_id, len(query_text))
         query_embedding = await embed(query_text)
         if query_embedding is not None:
             raw_inputs.set_embedding(session, raw_input_id, query_embedding)
             session.commit()
+    if query_embedding is None:
+        log.info("embed · raw=%s NO embedding (no api key or empty text)", raw_input_id)
 
     # --- 3. Auto-decide vs not_task / open precedents ------------------------
     settings = get_settings()
@@ -110,6 +127,10 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
             "precedent_similarity": round(top.similarity, 4),
             "reason": reason,
         }
+        log.info(
+            "branch=auto_not_task · raw=%s precedent=%s sim=%.3f (threshold=%.2f)",
+            raw_input_id, top.id, top.similarity, auto_threshold,
+        )
         raw_inputs.finalize(session, raw_input_id, status="not_task", agent_trace=trace)
         session.commit()
         return trace
@@ -123,6 +144,10 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
             "precedent_similarity": round(top.similarity, 4),
             "existing_task_id": str(top.task_id),
         }
+        log.info(
+            "branch=auto_duplicate · raw=%s precedent=%s sim=%.3f task=%s",
+            raw_input_id, top.id, top.similarity, top.task_id,
+        )
         raw_inputs.finalize(
             session,
             raw_input_id,
@@ -132,6 +157,15 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         )
         session.commit()
         return trace
+
+    # No auto-decide path matched.
+    if open_hits or not_task_hits:
+        top_not_task = not_task_hits[0].similarity if not_task_hits else 0.0
+        top_open = open_hits[0].similarity if open_hits else 0.0
+        log.debug(
+            "auto-decide miss · raw=%s top_not_task=%.3f top_open=%.3f threshold=%.2f",
+            raw_input_id, top_not_task, top_open, auto_threshold,
+        )
 
     # --- 4. Otherwise: new-input agent ---------------------------------------
     return await _run_new_input_agent(
@@ -152,6 +186,7 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
     final_task_id = task.id
 
     messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
+    log.info("llm call · branch=thread_followup raw=%s task=%s", raw.id, task.id)
     resp = await client.messages.create(
         model=settings.claude_model,
         max_tokens=MAX_TOKENS,
@@ -159,6 +194,12 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
         system=_cached_system(THREAD_FOLLOWUP_SYSTEM_PROMPT),
         tools=_cached_tools(THREAD_FOLLOWUP_TOOLS),
         messages=messages,
+    )
+    log.debug(
+        "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",
+        raw.id, resp.stop_reason,
+        getattr(resp.usage, "input_tokens", "?"),
+        getattr(resp.usage, "output_tokens", "?"),
     )
     trace["blocks"] = [_block_summary(b) for b in resp.content]
 
@@ -264,6 +305,10 @@ async def _run_new_input_agent(
     final_task_id: uuid.UUID | None = None
 
     messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
+    log.info(
+        "llm call · branch=new_input raw=%s candidates=%d not_task_precedents=%d closed_precedents=%d",
+        raw.id, len(open_tasks), len(not_task_hits), len(closed_hits),
+    )
 
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await client.messages.create(
@@ -273,6 +318,12 @@ async def _run_new_input_agent(
             system=_cached_system(NEW_INPUT_SYSTEM_PROMPT),
             tools=_cached_tools(NEW_INPUT_TOOLS),
             messages=messages,
+        )
+        log.debug(
+            "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",
+            raw.id, resp.stop_reason,
+            getattr(resp.usage, "input_tokens", "?"),
+            getattr(resp.usage, "output_tokens", "?"),
         )
         iter_log = {
             "stop_reason": resp.stop_reason,
@@ -307,6 +358,7 @@ async def _run_new_input_agent(
             trace["task_id"] = str(task.id)
             final_status = "open"
             final_task_id = task.id
+            await notify_task_created(task, raw)
             break
         if tu.name == "mark_duplicate":
             existing_id = uuid.UUID((tu.input or {})["existing_task_id"])

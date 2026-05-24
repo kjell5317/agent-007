@@ -1,209 +1,431 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Task Agent · Test UI</title>
-<style>
-  :root { --fg:#1a1a1a; --muted:#666; --bg:#fafafa; --line:#ddd; --accent:#2b6cb0; --bad:#c53030; }
-  * { box-sizing: border-box; }
-  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; color: var(--fg); margin: 0; background: var(--bg); }
-  header { padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
-  header h1 { font-size: 16px; margin: 0; }
-  header .status { font-size: 12px; color: var(--muted); }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 20px; }
-  section { background: #fff; border: 1px solid var(--line); border-radius: 6px; }
-  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
-  section .body { padding: 12px 14px; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
-  input, select, textarea, button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 4px; padding: 4px 8px; color: var(--fg); }
-  textarea { width: 100%; min-height: 60px; font-family: ui-monospace, monospace; font-size: 12px; }
-  button { cursor: pointer; background: var(--accent); color: #fff; border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  button.ghost { background: #fff; color: var(--fg); }
-  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
-  ul.list { list-style: none; padding: 0; margin: 0; max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
-  ul.list li { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
-  ul.list li:last-child { border-bottom: 0; }
-  ul.list li:hover { background: #f3f7fc; }
-  ul.list li.selected { background: #e6f0fa; }
-  .meta { font-size: 11px; color: var(--muted); }
-  .badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; }
-  .b-open { background: #c6f6d5; color: #22543d; }
-  .b-closed { background: #e2e8f0; color: #2d3748; }
-  .b-not_task, .b-dismissed { background: #fed7d7; color: #742a2a; }
-  .b-duplicate { background: #feebc8; color: #744210; }
-  .b-processing { background: #bee3f8; color: #2a4365; }
-  pre { background: #f7f7f7; padding: 8px; border-radius: 4px; font-size: 11.5px; overflow: auto; max-height: 240px; margin: 4px 0; }
-  .detail { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
-  .err { color: var(--bad); font-size: 12px; }
-  .ok { color: #22543d; font-size: 12px; }
-</style>
-</head>
-<body>
+  <head>
+    <meta charset="utf-8" />
+    <title>Task Agent · Test UI</title>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --bg: #fafafa;
+        --line: #ddd;
+        --accent: #2b6cb0;
+        --bad: #c53030;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font:
+          14px/1.45 -apple-system,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+        background: var(--bg);
+      }
+      header {
+        padding: 12px 20px;
+        background: #fff;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      header h1 {
+        font-size: 16px;
+        margin: 0;
+      }
+      header .status {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        padding: 16px 20px;
+      }
+      section {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      section h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin: 0;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      section .body {
+        padding: 12px 14px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      label {
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      input,
+      select,
+      textarea,
+      button {
+        font: inherit;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 4px;
+        padding: 4px 8px;
+        color: var(--fg);
+      }
+      textarea {
+        width: 100%;
+        min-height: 60px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      button.ghost {
+        background: #fff;
+        color: var(--fg);
+      }
+      button.danger {
+        background: var(--bad);
+        border-color: var(--bad);
+        color: #fff;
+      }
+      ul.list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+      }
+      ul.list li {
+        padding: 8px 10px;
+        border-bottom: 1px solid #eee;
+        cursor: pointer;
+      }
+      ul.list li:last-child {
+        border-bottom: 0;
+      }
+      ul.list li:hover {
+        background: #f3f7fc;
+      }
+      ul.list li.selected {
+        background: #e6f0fa;
+      }
+      .meta {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .b-open {
+        background: #c6f6d5;
+        color: #22543d;
+      }
+      .b-closed {
+        background: #e2e8f0;
+        color: #2d3748;
+      }
+      .b-not_task {
+        background: #fed7d7;
+        color: #742a2a;
+      }
+      .b-duplicate {
+        background: #feebc8;
+        color: #744210;
+      }
+      .b-processing {
+        background: #bee3f8;
+        color: #2a4365;
+      }
+      .b-no_change {
+        background: #edf2f7;
+        color: #4a5568;
+      }
+      .b-updated {
+        background: #d6eaff;
+        color: #2c5282;
+      }
+      pre {
+        background: #f7f7f7;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 11.5px;
+        overflow: auto;
+        max-height: 240px;
+        margin: 4px 0;
+      }
+      .detail {
+        border-top: 1px dashed var(--line);
+        margin-top: 10px;
+        padding-top: 10px;
+      }
+      .err {
+        color: var(--bad);
+        font-size: 12px;
+      }
+      .ok {
+        color: #22543d;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Task Agent · Test UI</h1>
+      <span class="status" id="health">checking…</span>
+      <button id="poll-btn" data-source="gmail">Poll Gmail</button>
+      <button id="poll-slack-btn" data-source="slack">Poll Slack</button>
+      <span id="poll-result" class="status"></span>
+      <span style="flex: 1"></span>
+      <span class="status" id="whoami"></span>
+      <button class="ghost" id="logout-btn" hidden>Logout</button>
+    </header>
 
-<header>
-  <h1>Task Agent · Test UI</h1>
-  <span class="status" id="health">checking…</span>
-  <span style="flex:1"></span>
-  <label>poll max
-    <input type="number" id="poll-max" value="20" min="1" max="200" style="width:64px" />
-  </label>
-  <button id="poll-btn">Poll Gmail</button>
-  <span id="poll-result" class="status"></span>
-</header>
+    <main>
+      <section>
+        <h2>
+          Raw inputs
+          <button class="ghost" data-act="refresh-inputs">refresh</button>
+        </h2>
+        <div class="body">
+          <div class="row" style="margin-bottom: 8px">
+            <label
+              >status
+              <select id="inputs-status">
+                <option value="">(any)</option>
+                <option>processing</option>
+                <option>open</option>
+                <option>duplicate</option>
+                <option>closed</option>
+                <option>not_task</option>
+              </select>
+            </label>
+            <label
+              >source
+              <input
+                id="inputs-source"
+                placeholder="gmail / slack / manual"
+                style="width: 140px"
+              />
+            </label>
+          </div>
+          <ul class="list" id="inputs-list"></ul>
+          <div id="input-detail" class="detail" hidden></div>
+        </div>
+      </section>
 
-<main>
+      <section>
+        <h2>
+          Tasks <button class="ghost" data-act="refresh-tasks">refresh</button>
+        </h2>
+        <div class="body">
+          <div class="row" style="margin-bottom: 8px">
+            <label
+              >status
+              <select id="tasks-status">
+                <option value="">(any)</option>
+                <option>open</option>
+                <option>closed</option>
+                <option>not_task</option>
+                <option>duplicate</option>
+              </select>
+            </label>
+          </div>
+          <ul class="list" id="tasks-list"></ul>
+          <div id="task-detail" class="detail" hidden></div>
+        </div>
+      </section>
 
-  <section>
-    <h2>Raw inputs <button class="ghost" data-act="refresh-inputs">refresh</button></h2>
-    <div class="body">
-      <div class="row" style="margin-bottom:8px">
-        <label>status
-          <select id="inputs-status">
-            <option value="">(any)</option>
-            <option>processing</option>
-            <option>open</option>
-            <option>duplicate</option>
-            <option>closed</option>
-            <option>not_task</option>
-          </select>
-        </label>
-        <label>source
-          <input id="inputs-source" placeholder="gmail / manual" style="width:120px" />
-        </label>
-      </div>
-      <ul class="list" id="inputs-list"></ul>
-      <div id="input-detail" class="detail" hidden></div>
-    </div>
-  </section>
+      <section>
+        <h2>Create task (manual)</h2>
+        <div class="body">
+          <div class="row">
+            <label style="flex: 2">title <input id="t-title" /></label>
+            <label
+              >estimation (min)
+              <input type="number" id="t-est" style="width: 90px"
+            /></label>
+          </div>
+          <label style="margin-top: 8px"
+            >description <textarea id="t-desc"></textarea>
+          </label>
+          <div class="row" style="margin-top: 8px">
+            <label
+              >due_date (ISO)
+              <input id="t-due" placeholder="2026-05-30T10:00:00Z"
+            /></label>
+            <label>location <input id="t-loc" /></label>
+            <label>link <input id="t-link" /></label>
+          </div>
+          <div class="row" style="margin-top: 8px">
+            <button data-act="create-task">Create</button>
+            <span id="t-result"></span>
+          </div>
+        </div>
+      </section>
+    </main>
 
-  <section>
-    <h2>Tasks <button class="ghost" data-act="refresh-tasks">refresh</button></h2>
-    <div class="body">
-      <div class="row" style="margin-bottom:8px">
-        <label>status
-          <select id="tasks-status">
-            <option value="">(any)</option>
-            <option>open</option>
-            <option>closed</option>
-            <option>not_task</option>
-            <option>duplicate</option>
-          </select>
-        </label>
-      </div>
-      <ul class="list" id="tasks-list"></ul>
-      <div id="task-detail" class="detail" hidden></div>
-    </div>
-  </section>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const api = async (path, opts = {}) => {
+        const r = await fetch(path, {
+          headers: { "content-type": "application/json" },
+          ...opts,
+        });
+        const text = await r.text();
+        let body = null;
+        try {
+          body = text ? JSON.parse(text) : null;
+        } catch {
+          body = text;
+        }
+        if (!r.ok)
+          throw Object.assign(new Error(`${r.status} ${r.statusText}`), {
+            status: r.status,
+            body,
+          });
+        return body;
+      };
+      const flash = (el, msg, ok = true) => {
+        el.textContent = msg;
+        el.className = ok ? "ok" : "err";
+        setTimeout(() => {
+          el.textContent = "";
+          el.className = "";
+        }, 4000);
+      };
+      const fmt = (v) =>
+        v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+      const badge = (s) => (s ? `<span class="badge b-${s}">${s}</span>` : "");
 
-  <section>
-    <h2>Submit raw input</h2>
-    <div class="body">
-      <div class="row" style="gap:12px">
-        <label>source <input id="ri-source" value="manual" /></label>
-        <label>external_id <input id="ri-external" placeholder="(optional)" /></label>
-        <label>run sync
-          <select id="ri-sync"><option value="false">false</option><option value="true">true</option></select>
-        </label>
-      </div>
-      <label style="margin-top:8px">content
-        <textarea id="ri-content" placeholder="Body of the message…"></textarea>
-      </label>
-      <label style="margin-top:8px">source_metadata (JSON)
-        <textarea id="ri-meta" placeholder='{"subject": "...", "from": "...", "thread_id": "..."}'>{}</textarea>
-      </label>
-      <div class="row" style="margin-top:8px">
-        <button data-act="submit-input">Submit</button>
-        <span id="ri-result"></span>
-      </div>
-    </div>
-  </section>
+      // Some thread-followup outcomes (no_change, updated) leave the raw_input
+      // status at "open"; surface the outcome for clearer signal in the UI.
+      const inputLabel = (r) => {
+        const o = r.agent_trace && r.agent_trace.outcome;
+        if (o === "no_change" || o === "updated") return o;
+        return r.status;
+      };
 
-  <section>
-    <h2>Create task (manual)</h2>
-    <div class="body">
-      <div class="row">
-        <label style="flex:2">title <input id="t-title" /></label>
-        <label>estimation (min) <input type="number" id="t-est" style="width:90px" /></label>
-      </div>
-      <label style="margin-top:8px">description <textarea id="t-desc"></textarea></label>
-      <div class="row" style="margin-top:8px">
-        <label>due_date (ISO) <input id="t-due" placeholder="2026-05-30T10:00:00Z" /></label>
-        <label>location <input id="t-loc" /></label>
-        <label>link <input id="t-link" /></label>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button data-act="create-task">Create</button>
-        <span id="t-result"></span>
-      </div>
-    </div>
-  </section>
+      // --- Health -----------------------------------------------------------------
+      (async () => {
+        try {
+          await api("/health");
+          $("health").textContent = "● healthy";
+          $("health").style.color = "#22543d";
+        } catch {
+          $("health").textContent = "● unreachable";
+          $("health").style.color = "#c53030";
+        }
+      })();
 
-</main>
+      // --- Identity + logout -----------------------------------------------------
+      (async () => {
+        try {
+          const { email } = await api("/auth/whoami");
+          if (email) {
+            $("whoami").textContent = email;
+            $("logout-btn").hidden = false;
+          }
+        } catch {
+          // /auth/whoami should never 401 (it's exempt). If it does, silent.
+        }
+      })();
+      $("logout-btn").onclick = async () => {
+        await api("/auth/logout", { method: "POST" });
+        window.location.href = "/";
+      };
 
-<script>
-const $ = (id) => document.getElementById(id);
-const api = async (path, opts = {}) => {
-  const r = await fetch(path, { headers: { "content-type": "application/json" }, ...opts });
-  const text = await r.text();
-  let body = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-  if (!r.ok) throw Object.assign(new Error(`${r.status} ${r.statusText}`), { status: r.status, body });
-  return body;
-};
-const flash = (el, msg, ok = true) => {
-  el.textContent = msg;
-  el.className = ok ? "ok" : "err";
-  setTimeout(() => { el.textContent = ""; el.className = ""; }, 4000);
-};
-const fmt = (v) => v == null ? "" : (typeof v === "string" ? v : JSON.stringify(v));
-const badge = (s) => s ? `<span class="badge b-${s}">${s}</span>` : "";
+      // --- Source poll (Gmail / Slack) -------------------------------------------
+      async function pollSource(btn) {
+        const src = btn.dataset.source;
+        btn.disabled = true;
+        $("poll-result").textContent = `polling ${src}…`;
+        try {
+          const out = await api(`/sources/poll?source=${src}`, { method: "POST" });
+          $("poll-result").innerHTML =
+            `${src}: fetched=${out.fetched} created=${out.tasks_created} skipped=${out.skipped} errors=${out.errors.length}`;
+          refreshInputs();
+          refreshTasks();
+        } catch (e) {
+          $("poll-result").innerHTML =
+            `<span class="err">${src}: ${e.status || ""} ${fmt(e.body?.detail || e.message)}</span>`;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+      $("poll-btn").onclick = (e) => pollSource(e.currentTarget);
+      $("poll-slack-btn").onclick = (e) => pollSource(e.currentTarget);
 
-// --- Health -----------------------------------------------------------------
-(async () => {
-  try { await api("/health"); $("health").textContent = "● healthy"; $("health").style.color = "#22543d"; }
-  catch { $("health").textContent = "● unreachable"; $("health").style.color = "#c53030"; }
-})();
-
-// --- Gmail poll -------------------------------------------------------------
-$("poll-btn").onclick = async () => {
-  const btn = $("poll-btn"); btn.disabled = true;
-  $("poll-result").textContent = "polling…";
-  try {
-    const max = $("poll-max").value;
-    const out = await api(`/sources/gmail/poll?max_messages=${max}`, { method: "POST" });
-    $("poll-result").innerHTML = `fetched=${out.fetched} created=${out.tasks_created} skipped=${out.skipped} errors=${out.errors.length}`;
-    refreshInputs(); refreshTasks();
-  } catch (e) {
-    $("poll-result").innerHTML = `<span class="err">${e.status || ""} ${fmt(e.body?.detail || e.message)}</span>`;
-  } finally { btn.disabled = false; }
-};
-
-// --- Raw inputs -------------------------------------------------------------
-async function refreshInputs() {
-  const status = $("inputs-status").value;
-  const source = $("inputs-source").value.trim();
-  const qs = new URLSearchParams();
-  if (status) qs.set("status", status);
-  if (source) qs.set("source", source);
-  const list = await api(`/inputs?${qs.toString()}`);
-  const ul = $("inputs-list");
-  ul.innerHTML = list.map(r => `
+      // --- Raw inputs -------------------------------------------------------------
+      async function refreshInputs() {
+        const status = $("inputs-status").value;
+        const source = $("inputs-source").value.trim();
+        const qs = new URLSearchParams();
+        if (status) qs.set("status", status);
+        if (source) qs.set("source", source);
+        const list = await api(`/inputs?${qs.toString()}`);
+        const ul = $("inputs-list");
+        ul.innerHTML =
+          list
+            .map(
+              (r) => `
     <li data-id="${r.id}">
-      ${badge(r.status)} <strong>${escape(r.source_metadata?.subject || r.content.slice(0, 60) || "(no subject)")}</strong>
+      ${badge(inputLabel(r))} <strong>${escape(r.source_metadata?.subject || r.content.slice(0, 60) || "(no subject)")}</strong>
       <div class="meta">${r.source} · ${r.received_at?.slice(0, 19).replace("T", " ")} · ${r.id.slice(0, 8)}…</div>
     </li>
-  `).join("") || `<li class="meta" style="cursor:default">no inputs</li>`;
-  ul.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => showInput(li.dataset.id));
-}
+  `,
+            )
+            .join("") ||
+          `<li class="meta" style="cursor:default">no inputs</li>`;
+        ul.querySelectorAll("li[data-id]").forEach(
+          (li) => (li.onclick = () => showInput(li.dataset.id)),
+        );
+      }
 
-async function showInput(id) {
-  const r = await api(`/inputs/${id}`);
-  document.querySelectorAll("#inputs-list li").forEach(li => li.classList.toggle("selected", li.dataset.id === id));
-  const d = $("input-detail"); d.hidden = false;
-  d.innerHTML = `
-    <div>${badge(r.status)} <code>${r.id}</code>${r.task_id ? ` → task <code>${r.task_id}</code>` : ""}</div>
+      async function showInput(id) {
+        const r = await api(`/inputs/${id}`);
+        document
+          .querySelectorAll("#inputs-list li")
+          .forEach((li) =>
+            li.classList.toggle("selected", li.dataset.id === id),
+          );
+        const d = $("input-detail");
+        d.hidden = false;
+        d.innerHTML = `
+    <div>${badge(inputLabel(r))} <code>${r.id}</code>${r.task_id ? ` → task <code>${r.task_id}</code>` : ""}</div>
     <pre>${escape(JSON.stringify(r.source_metadata, null, 2))}</pre>
     <pre>${escape(r.content || "")}</pre>
     ${r.agent_trace ? `<details><summary>agent_trace</summary><pre>${escape(JSON.stringify(r.agent_trace, null, 2))}</pre></details>` : ""}
@@ -211,29 +433,42 @@ async function showInput(id) {
       <button data-act="open-task-from-input" data-id="${r.id}">Promote → new task</button>
     </div>
   `;
-}
+      }
 
-// --- Tasks ------------------------------------------------------------------
-async function refreshTasks() {
-  const status = $("tasks-status").value;
-  const qs = new URLSearchParams();
-  if (status) qs.set("status", status);
-  const list = await api(`/tasks?${qs.toString()}`);
-  const ul = $("tasks-list");
-  ul.innerHTML = list.map(t => `
+      // --- Tasks ------------------------------------------------------------------
+      async function refreshTasks() {
+        const status = $("tasks-status").value;
+        const qs = new URLSearchParams();
+        if (status) qs.set("status", status);
+        const list = await api(`/tasks?${qs.toString()}`);
+        const ul = $("tasks-list");
+        ul.innerHTML =
+          list
+            .map(
+              (t) => `
     <li data-id="${t.id}">
       ${badge(t.status)} <strong>${escape(t.title)}</strong>
       <div class="meta">${t.due_date ? "due " + t.due_date.slice(0, 16).replace("T", " ") + " · " : ""}${t.id.slice(0, 8)}…</div>
     </li>
-  `).join("") || `<li class="meta" style="cursor:default">no tasks</li>`;
-  ul.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => showTask(li.dataset.id));
-}
+  `,
+            )
+            .join("") ||
+          `<li class="meta" style="cursor:default">no tasks</li>`;
+        ul.querySelectorAll("li[data-id]").forEach(
+          (li) => (li.onclick = () => showTask(li.dataset.id)),
+        );
+      }
 
-async function showTask(id) {
-  const t = await api(`/tasks/${id}`);
-  document.querySelectorAll("#tasks-list li").forEach(li => li.classList.toggle("selected", li.dataset.id === id));
-  const d = $("task-detail"); d.hidden = false;
-  d.innerHTML = `
+      async function showTask(id) {
+        const t = await api(`/tasks/${id}`);
+        document
+          .querySelectorAll("#tasks-list li")
+          .forEach((li) =>
+            li.classList.toggle("selected", li.dataset.id === id),
+          );
+        const d = $("task-detail");
+        d.hidden = false;
+        d.innerHTML = `
     <div>${badge(t.status)} <code>${t.id}</code></div>
     <div class="row" style="margin-top:8px">
       <label style="flex:2">title <input data-f="title" value="${attr(t.title)}" /></label>
@@ -252,90 +487,104 @@ async function showTask(id) {
       <span id="task-action-result"></span>
     </div>
   `;
-}
+      }
 
-// --- Action dispatcher ------------------------------------------------------
-document.body.addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-act]");
-  if (!btn) return;
-  const act = btn.dataset.act;
-  const id = btn.dataset.id;
-  try {
-    if (act === "refresh-inputs") return refreshInputs();
-    if (act === "refresh-tasks") return refreshTasks();
-    if (act === "submit-input") {
-      let meta = {};
-      try { meta = JSON.parse($("ri-meta").value || "{}"); }
-      catch { flash($("ri-result"), "metadata must be JSON", false); return; }
-      const body = {
-        source: $("ri-source").value || "manual",
-        external_id: $("ri-external").value || null,
-        content: $("ri-content").value,
-        source_metadata: meta,
-      };
-      const sync = $("ri-sync").value === "true";
-      await api(`/inputs?run_sync=${sync}`, { method: "POST", body: JSON.stringify(body) });
-      flash($("ri-result"), "submitted");
+      // --- Action dispatcher ------------------------------------------------------
+      document.body.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-act]");
+        if (!btn) return;
+        const act = btn.dataset.act;
+        const id = btn.dataset.id;
+        try {
+          if (act === "refresh-inputs") return refreshInputs();
+          if (act === "refresh-tasks") return refreshTasks();
+          if (act === "create-task") {
+            const body = {
+              title: $("t-title").value,
+              description: $("t-desc").value || null,
+              estimation: $("t-est").value ? Number($("t-est").value) : null,
+              due_date: $("t-due").value || null,
+              location: $("t-loc").value || null,
+              link: $("t-link").value || null,
+            };
+            await api("/tasks", { method: "POST", body: JSON.stringify(body) });
+            flash($("t-result"), "created");
+            refreshTasks();
+            refreshInputs();
+          }
+          if (act === "save-task") {
+            const fields = {};
+            document.querySelectorAll("#task-detail [data-f]").forEach((el) => {
+              const v = el.value;
+              if (v === "" && el.dataset.f !== "title") return;
+              fields[el.dataset.f] =
+                el.type === "number" ? (v === "" ? null : Number(v)) : v;
+            });
+            await api(`/tasks/${id}`, {
+              method: "PATCH",
+              body: JSON.stringify(fields),
+            });
+            flash($("task-action-result"), "saved");
+            refreshTasks();
+          }
+          if (act === "close-task") {
+            await api(`/tasks/${id}/close`, { method: "POST" });
+            flash($("task-action-result"), "closed");
+            refreshTasks();
+            refreshInputs();
+          }
+          if (act === "not-task") {
+            await api(`/tasks/${id}/not_task`, { method: "POST" });
+            flash($("task-action-result"), "marked not_task");
+            refreshTasks();
+            refreshInputs();
+          }
+          if (act === "open-task-from-input") {
+            const title = prompt("Task title?");
+            if (!title) return;
+            await api(`/inputs/${id}/open_task`, {
+              method: "POST",
+              body: JSON.stringify({
+                title,
+                description: null,
+                due_date: null,
+                estimation: null,
+                location: null,
+                link: null,
+              }),
+            });
+            refreshInputs();
+            refreshTasks();
+          }
+        } catch (err) {
+          const span =
+            btn.parentElement.querySelector(".err, .ok, span") ||
+            btn.parentElement;
+          const detail = err.body?.detail || err.message;
+          if (span && span.tagName === "SPAN") {
+            span.textContent = detail;
+            span.className = "err";
+          } else alert(detail);
+        }
+      });
+
+      $("inputs-status").onchange = refreshInputs;
+      $("inputs-source").onchange = refreshInputs;
+      $("tasks-status").onchange = refreshTasks;
+
+      // Browsers don't escape by default — keep two tiny helpers rather than pulling in a lib.
+      function escape(s) {
+        return String(s).replace(
+          /[&<>]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        );
+      }
+      function attr(s) {
+        return String(s).replace(/"/g, "&quot;");
+      }
+
       refreshInputs();
-      if (sync) refreshTasks();
-    }
-    if (act === "create-task") {
-      const body = {
-        title: $("t-title").value,
-        description: $("t-desc").value || null,
-        estimation: $("t-est").value ? Number($("t-est").value) : null,
-        due_date: $("t-due").value || null,
-        location: $("t-loc").value || null,
-        link: $("t-link").value || null,
-      };
-      await api("/tasks", { method: "POST", body: JSON.stringify(body) });
-      flash($("t-result"), "created");
-      refreshTasks(); refreshInputs();
-    }
-    if (act === "save-task") {
-      const fields = {};
-      document.querySelectorAll("#task-detail [data-f]").forEach(el => {
-        const v = el.value;
-        if (v === "" && el.dataset.f !== "title") return;
-        fields[el.dataset.f] = el.type === "number" ? (v === "" ? null : Number(v)) : v;
-      });
-      await api(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(fields) });
-      flash($("task-action-result"), "saved"); refreshTasks();
-    }
-    if (act === "close-task") {
-      await api(`/tasks/${id}/close`, { method: "POST" });
-      flash($("task-action-result"), "closed"); refreshTasks(); refreshInputs();
-    }
-    if (act === "not-task") {
-      await api(`/tasks/${id}/not_task`, { method: "POST" });
-      flash($("task-action-result"), "marked not_task"); refreshTasks(); refreshInputs();
-    }
-    if (act === "open-task-from-input") {
-      const title = prompt("Task title?");
-      if (!title) return;
-      await api(`/inputs/${id}/open_task`, {
-        method: "POST",
-        body: JSON.stringify({ title, description: null, due_date: null, estimation: null, location: null, link: null }),
-      });
-      refreshInputs(); refreshTasks();
-    }
-  } catch (err) {
-    const span = btn.parentElement.querySelector(".err, .ok, span") || btn.parentElement;
-    const detail = err.body?.detail || err.message;
-    if (span && span.tagName === "SPAN") { span.textContent = detail; span.className = "err"; }
-    else alert(detail);
-  }
-});
-
-$("inputs-status").onchange = refreshInputs;
-$("inputs-source").onchange = refreshInputs;
-$("tasks-status").onchange = refreshTasks;
-
-// Browsers don't escape by default — keep two tiny helpers rather than pulling in a lib.
-function escape(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
-function attr(s) { return String(s).replace(/"/g, "&quot;"); }
-
-refreshInputs(); refreshTasks();
-</script>
-</body>
+      refreshTasks();
+    </script>
+  </body>
 </html>

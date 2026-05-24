@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import ClassVar
+from typing import ClassVar, TypeVar
 
 from app.schemas.raw_input import RawInputCreate
 
@@ -49,11 +49,17 @@ class IngestionSource(ABC):
 
 _REGISTRY: dict[str, type[IngestionSource]] = {}
 
+# Preserve the decorated class's concrete type so type-checkers still see
+# subclass-specific attributes (e.g. GmailSource.next_history_id) after the
+# decorator runs. Without the TypeVar the return type would widen to
+# `type[IngestionSource]` and those attributes look unknown to pyright.
+_TSource = TypeVar("_TSource", bound=type[IngestionSource])
+
 
 def register_source(name: str):
     """Class decorator to register a concrete source under a string key."""
 
-    def _wrap(cls: type[IngestionSource]) -> type[IngestionSource]:
+    def _wrap(cls: _TSource) -> _TSource:
         cls.name = name
         _REGISTRY[name] = cls
         return cls

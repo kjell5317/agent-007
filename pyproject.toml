@@ -21,6 +21,7 @@ dependencies = [
     "rq>=2.0",
     "beautifulsoup4>=4.12",
     "lxml>=5.3",
+    "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -40,3 +41,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the test-UI HTML alongside the python package so non-editable installs
+# can serve it. Editable installs would also work via the real src path, but
+# this keeps both install modes consistent.
+app = ["static/*"]

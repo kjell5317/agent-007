@@ -1,52 +1,26 @@
 """Raw-input endpoints.
 
-  * POST /inputs                     — manual / programmatic submission
-  * POST /inputs/{source}/webhook    — webhook dispatch (TODO)
   * GET  /inputs                     — list raw inputs (filter by status/source)
   * GET  /inputs/{id}                — fetch one
   * POST /inputs/{id}/open_task      — manually promote a raw_input to a task
+  * POST /inputs/{source}/webhook    — webhook dispatch (TODO)
+
+Direct creation of raw_inputs goes through the ingestion sources (Gmail/Slack
+poll). Manual task entry lives at `POST /tasks`.
 """
 
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.agent.runner import process_raw_input
-from app.db import SessionLocal, get_session
-from app.schemas.raw_input import RawInputCreate, RawInputRead
+from app.db import get_session
+from app.schemas.raw_input import RawInputRead
 from app.schemas.task import TaskCreate, TaskRead
 from app.storage import raw_inputs, tasks as tasks_store
 
 router = APIRouter(prefix="/inputs", tags=["inputs"])
-
-
-async def _process_in_background(raw_input_id) -> None:
-    session = SessionLocal()
-    try:
-        await process_raw_input(session, raw_input_id)
-    finally:
-        session.close()
-
-
-@router.post("", response_model=RawInputRead, status_code=status.HTTP_201_CREATED)
-async def submit_input(
-    payload: RawInputCreate,
-    background: BackgroundTasks,
-    run_sync: bool = False,
-    session: Session = Depends(get_session),
-) -> RawInputRead:
-    row = raw_inputs.create(session, payload)
-    session.commit()
-
-    if run_sync:
-        await process_raw_input(session, row.id)
-        session.refresh(row)
-    else:
-        background.add_task(_process_in_background, row.id)
-
-    return RawInputRead.model_validate(row)
 
 
 @router.get("", response_model=list[RawInputRead])

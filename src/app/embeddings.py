@@ -10,11 +10,14 @@ fall back to keyword-only search during local dev.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 import httpx
 
 from app.config import get_settings
+
+log = logging.getLogger(__name__)
 
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -47,6 +50,10 @@ async def embed(text: str, *, task_type: TaskType = "SEMANTIC_SIMILARITY") -> li
         payload_text = payload_text[:MAX_INPUT_CHARS]
 
     url = f"{_GEMINI_BASE}/{settings.embedding_model}:embedContent"
+    log.debug(
+        "gemini embed · model=%s task_type=%s chars=%d dim=%d",
+        settings.embedding_model, task_type, len(payload_text), settings.embedding_dim,
+    )
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
             url,
