@@ -9,12 +9,17 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.config import get_settings
 from app.db import Base
 import app.models  # noqa: F401 — registers tables on Base.metadata
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
+
+# Source the DB URL from app settings (DATABASE_URL env var) so the same
+# alembic.ini works locally and in containers without editing the file.
+config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 target_metadata = Base.metadata
 

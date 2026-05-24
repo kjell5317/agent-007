@@ -50,6 +50,10 @@ def list_(
         stmt = stmt.where(RawInput.status == status)
     if source is not None:
         stmt = stmt.where(RawInput.source == source)
+    else:
+        # Manual entries are anchors for tasks created via POST /tasks — they
+        # carry no agent decision and shouldn't surface in the inbox feed.
+        stmt = stmt.where(RawInput.source != "manual")
     return list(session.execute(stmt).scalars())
 
 

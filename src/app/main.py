@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 # Side-effect imports register OAuth providers and ingestion sources via their
@@ -17,6 +18,7 @@ from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_ASSETS_DIR = _STATIC_DIR / "assets"
 
 
 def _configure_logging(level: str) -> None:
@@ -27,10 +29,12 @@ def _configure_logging(level: str) -> None:
             datefmt="%H:%M:%S",
         )
     )
-    app_logger = logging.getLogger("app")
-    app_logger.setLevel(level.upper())
-    app_logger.handlers = [handler]
-    app_logger.propagate = False
+    lvl = level.upper()
+    for name in ("app", "uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
+        logger = logging.getLogger(name)
+        logger.setLevel(lvl)
+        logger.handlers = [handler]
+        logger.propagate = False
 
 
 def create_app() -> FastAPI:
@@ -51,6 +55,12 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["meta"])
     def health() -> dict:
         return {"status": "ok"}
+
+    # Vite builds into static/. assets/ contains the hashed JS/CSS chunks;
+    # index.html is the SPA entry. Order matters: API routes are registered
+    # above, so they win over the catch-all index handler.
+    if _ASSETS_DIR.is_dir():
+        app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:

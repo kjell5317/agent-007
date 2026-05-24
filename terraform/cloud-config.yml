@@ -1,0 +1,44 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - git
+
+runcmd:
+  - systemctl enable --now docker
+  - while ! docker info > /dev/null 2>&1; do sleep 1; done
+
+  # ghcr login (used by `docker compose pull` later)
+  - echo "${github_token}" | docker login ghcr.io -u ${github_username} --password-stdin
+
+  # Persist credentials for git so future `git pull` works without re-injecting
+  # the token. .netrc with 600 perms is the conventional Linux place.
+  - install -m 600 /dev/null /root/.netrc
+  - printf 'machine github.com\n  login %s\n  password %s\n' "${github_username}" "${github_token}" > /root/.netrc
+
+  # Clone the app repo. docker-compose.yml, Caddyfile, etc. live here from now
+  # on — edit on the host via `git pull`, no terraform apply needed.
+  - git clone https://github.com/${github_username}/${github_repo}.git /opt/agent-007
+
+  # The .env file is intentionally NOT shipped in user_data so secrets don't
+  # land in terraform state. The user scp's it in after first boot.
+  - |
+    cat > /etc/motd <<'MOTD'
+    ────────────────────────────────────────────────────────────────────
+     agent-007 host — finish setup:
+
+       1. scp .env to /opt/agent-007/.env
+          (set APP_DOMAIN and ACME_EMAIL — Caddy needs these for TLS)
+       2. cd /opt/agent-007 && docker compose pull && docker compose up -d
+
+     DNS:
+       The Cloudflare A record is managed by terraform — `terraform apply`
+       updates it whenever the server IP changes.
+
+     Updates from now on:
+       cd /opt/agent-007 && git pull && docker compose pull && docker compose up -d
+    ────────────────────────────────────────────────────────────────────
+    MOTD

@@ -1,0 +1,43 @@
+# Source control / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Python local
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Local secrets — must not be baked into the image
+.env
+.env.local
+
+# Frontend local build artifacts and modules — the image runs `npm ci` itself
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Pre-built static output on the host. The image's frontend stage produces
+# its own copy; including the host's would risk shipping a stale bundle.
+src/app/static/assets
+src/app/static/index.html
+
+# Misc
+*.log
+*.sqlite
+.DS_Store
+
+# Infra / docs the container doesn't need
+terraform
+docker-compose.yml
+Caddyfile
+README.md

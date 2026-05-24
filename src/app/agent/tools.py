@@ -23,12 +23,21 @@ NEW_INPUT_TOOLS = [
             "properties": {
                 "title": {"type": "string"},
                 "description": {"type": "string"},
-                "estimation": {"type": "integer", "description": "Minutes."},
-                "due_date": {"type": "string", "description": "ISO 8601 timestamp"},
+                "estimation": {
+                    "type": "integer",
+                    "description": "Estimated duration in minutes. Always set a best-guess value.",
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": (
+                        "ISO 8601 timestamp. Always set: use the explicit deadline if present, "
+                        "otherwise a reasonable best-guess based on urgency."
+                    ),
+                },
                 "location": {"type": "string"},
                 "link": {"type": "string", "description": "Most relevant source URL."},
             },
-            "required": ["title"],
+            "required": ["title", "estimation", "due_date"],
         },
     },
     {

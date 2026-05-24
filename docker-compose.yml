@@ -5,18 +5,73 @@ services:
       POSTGRES_USER: taskagent
       POSTGRES_PASSWORD: taskagent
       POSTGRES_DB: taskagent
+    # Bound to loopback only so the DB isn't reachable from the public IP.
+    # Drop the host mapping in prod if you don't need local psql access.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskagent -d taskagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    # `image:` is the tag the workflow publishes and that the prod VM pulls.
+    # `build:` lets `docker compose up --build` build locally from this repo.
+    image: ${APP_IMAGE:-ghcr.io/kjell5317/007-agent-app:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      # Override the .env defaults so the app talks to compose services
+      # instead of localhost.
+      DATABASE_URL: postgresql+psycopg://taskagent:taskagent@postgres:5432/taskagent
+      REDIS_URL: redis://redis:6379/0
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
 
 volumes:
   pgdata:
   redisdata:
+  caddy_data:
+  caddy_config:

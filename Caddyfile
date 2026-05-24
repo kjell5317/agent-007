@@ -1,0 +1,18 @@
+# Single-site reverse proxy in front of the FastAPI app.
+#
+# APP_DOMAIN selects TLS behavior:
+#   - APP_DOMAIN=localhost (default) → Caddy issues a self-signed cert
+#   - APP_DOMAIN=your.domain.com     → Caddy fetches a Let's Encrypt cert
+
+{$APP_DOMAIN:localhost} {
+	encode gzip zstd
+
+	# Long-lived hashed assets from Vite. /assets/* file names contain a content
+	# hash, so we can safely cache them aggressively.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	# Everything else (including index.html) goes to the app — FastAPI serves
+	# the SPA shell at / and the API routes at /tasks, /inputs, /sources, etc.
+	reverse_proxy app:8000
+}

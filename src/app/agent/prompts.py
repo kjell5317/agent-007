@@ -13,8 +13,10 @@ Given a single semi-structured input from one of the user's sources
 
 - `create_task` — if the input represents a concrete, actionable task for the
   user. Extract: title (short, imperative), description (optional),
-  estimation (minutes), due_date (ISO 8601) if implied, location if mentioned,
-  link (most relevant source URL).
+  estimation (minutes, REQUIRED — always your best guess), due_date (ISO 8601,
+  REQUIRED — use the explicit deadline if stated, otherwise a reasonable
+  best-guess based on urgency), location if mentioned, link (most relevant
+  source URL).
 
 - `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS
   listed in the user message. `existing_task_id` must come from that list.
