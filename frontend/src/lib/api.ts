@@ -36,17 +36,10 @@ export const api = {
 
   listTasks: (status?: string) =>
     request<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
-  createTask: (title: string) =>
+  createTask: (text: string) =>
     request<Task>("/tasks", {
       method: "POST",
-      body: JSON.stringify({
-        title,
-        description: null,
-        estimation: null,
-        due_date: null,
-        location: null,
-        link: null,
-      }),
+      body: JSON.stringify({ title: text }),
     }),
   updateTask: (id: string, fields: Partial<Task>) =>
     request<Task>(`/tasks/${id}`, {
@@ -75,4 +68,15 @@ export const api = {
 
   poll: (source: string) =>
     request<SourcePollResult>(`/sources/poll?source=${source}`, { method: "POST" }),
+
+  getSettings: () => request<AppSettings>("/settings"),
+  updateSettings: (patch: Partial<AppSettings>) =>
+    request<AppSettings>("/settings", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
 };
+
+export interface AppSettings {
+  auto_poll_enabled: boolean;
+}

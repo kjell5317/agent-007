@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleUser, ExternalLink, LogOut, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ export function Topbar({ onSynced }: Props) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
 
   useEffect(() => {
     api
@@ -33,7 +34,23 @@ export function Topbar({ onSynced }: Props) {
       .whoami()
       .then((r) => setEmail(r?.email ?? null))
       .catch(() => setEmail(null));
+    api
+      .getSettings()
+      .then((s) => setAutoPoll(s.auto_poll_enabled))
+      .catch(() => setAutoPoll(null));
   }, []);
+
+  const toggleAutoPoll = useCallback(async (next: boolean) => {
+    const prev = autoPoll;
+    setAutoPoll(next);
+    try {
+      const updated = await api.updateSettings({ auto_poll_enabled: next });
+      setAutoPoll(updated.auto_poll_enabled);
+    } catch (err) {
+      setAutoPoll(prev);
+      toast.error(`Failed to update setting: ${(err as Error).message}`);
+    }
+  }, [autoPoll]);
 
   const sync = async () => {
     setSyncing(true);
@@ -93,7 +110,14 @@ export function Topbar({ onSynced }: Props) {
           <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
           Sync
         </Button>
-        {email && <AccountMenu email={email} onLogout={logout} />}
+        {email && (
+          <AccountMenu
+            email={email}
+            autoPoll={autoPoll}
+            onToggleAutoPoll={toggleAutoPoll}
+            onLogout={logout}
+          />
+        )}
       </div>
     </header>
   );
@@ -101,9 +125,13 @@ export function Topbar({ onSynced }: Props) {
 
 function AccountMenu({
   email,
+  autoPoll,
+  onToggleAutoPoll,
   onLogout,
 }: {
   email: string;
+  autoPoll: boolean | null;
+  onToggleAutoPoll: (next: boolean) => void;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -163,6 +191,20 @@ function AccountMenu({
               </a>
             ))}
           </div>
+          {autoPoll !== null && (
+            <div className="border-t py-1">
+              <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Preferences
+              </div>
+              <label className="flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground">
+                <span>Auto sync · 5 min</span>
+                <Switch
+                  checked={autoPoll}
+                  onChange={(e) => onToggleAutoPoll(e.target.checked)}
+                />
+              </label>
+            </div>
+          )}
           <div className="border-t py-1">
             <button
               type="button"
@@ -177,5 +219,33 @@ function AccountMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function Switch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <span className="relative inline-flex h-5 w-9 shrink-0 items-center">
+      <input
+        type="checkbox"
+        role="switch"
+        aria-checked={checked}
+        checked={checked}
+        onChange={onChange}
+        className="peer h-full w-full cursor-pointer appearance-none rounded-full bg-muted transition-colors checked:bg-emerald-500"
+      />
+      <span
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute left-0.5 h-4 w-4 rounded-full bg-card shadow transition-transform",
+          checked && "translate-x-4",
+        )}
+      />
+    </span>
   );
 }

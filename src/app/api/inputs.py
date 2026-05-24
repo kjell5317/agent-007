@@ -12,12 +12,11 @@ poll). Manual task entry lives at `POST /tasks`.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.agent.runner import extract_task_fields
 from app.db import get_session
-from app.notifications import notify_task_created
 from app.schemas.raw_input import RawInputRead
 from app.schemas.task import TaskCreate, TaskPromote, TaskRead
 from app.storage import raw_inputs, tasks as tasks_store
@@ -102,9 +101,6 @@ async def open_task_from_input(
     }
     raw.agent_trace = trace
     session.commit()
-
-    if needs_agent:
-        await notify_task_created(task, raw)
 
     return TaskRead.model_validate(
         {

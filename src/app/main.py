@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -12,10 +14,15 @@ import app.auth.google  # noqa: F401
 import app.auth.slack  # noqa: F401
 import app.ingestion.gmail  # noqa: F401
 import app.ingestion.slack  # noqa: F401
+from app import runtime_state
 from app.api import auth as auth_router
-from app.api import inputs, oauth, sources, tasks
+from app.api import inputs, oauth, settings as settings_router, sources, tasks
+from app.api.sources import poll_sources
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
+from app.db import SessionLocal
+
+AUTO_POLL_INTERVAL_S = 300
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _ASSETS_DIR = _STATIC_DIR / "assets"
@@ -37,6 +44,47 @@ def _configure_logging(level: str) -> None:
         logger.propagate = False
 
 
+async def _auto_poll_loop() -> None:
+    """Background job: poll every connected source every AUTO_POLL_INTERVAL_S
+    seconds, gated by `runtime_state.auto_poll_enabled` (in-memory, resets on
+    restart). One iteration's failure never kills the loop — we log and move on."""
+    log = logging.getLogger("app.auto_poll")
+    log.info("auto-poll loop started · interval=%ds", AUTO_POLL_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(AUTO_POLL_INTERVAL_S)
+            if not runtime_state.auto_poll_enabled:
+                log.debug("auto-poll skipped (disabled)")
+                continue
+            with SessionLocal() as session:
+                summary = await poll_sources(session)
+            log.info(
+                "auto-poll done · fetched=%d created=%d skipped=%d errors=%d",
+                summary["fetched"],
+                summary["tasks_created"],
+                summary["skipped"],
+                len(summary["errors"]),
+            )
+        except asyncio.CancelledError:
+            log.info("auto-poll loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("auto-poll iteration failed")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    task = asyncio.create_task(_auto_poll_loop(), name="auto-poll")
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     _configure_logging(settings.log_level)
@@ -44,6 +92,7 @@ def create_app() -> FastAPI:
         title="Task Agent",
         version="0.1.0",
         debug=(settings.app_env == "dev"),
+        lifespan=_lifespan,
     )
 
     app.include_router(auth_router.router)
@@ -51,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(oauth.router)
     app.include_router(sources.router)
+    app.include_router(settings_router.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:

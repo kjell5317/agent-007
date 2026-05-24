@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.agent.runner import extract_task_fields
 from app.db import get_session
 from app.models.raw_input import RawInput
-from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.schemas.task import TaskCreate, TaskPromote, TaskRead, TaskUpdate
 from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -48,19 +49,55 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
 
 
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-async def create_task(payload: TaskCreate, session: Session = Depends(get_session)) -> TaskRead:
-    """Manual task create. Writes a synthetic raw_input(source='manual', status='open')
-    so the task's lifecycle is anchored just like agent-created ones."""
-    task = tasks_store.create(session, payload)
-    synthetic = RawInput(
+async def create_task(payload: TaskPromote, session: Session = Depends(get_session)) -> TaskRead:
+    """Manual task create. Mirrors POST /inputs/{id}/open_task: a synthetic
+    raw_input is the anchor, and the agent fills any of the required fields
+    (title/estimation/due_date) the user didn't supply. User-provided fields
+    always override the agent's guesses."""
+    user_fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    content = (user_fields.get("description") or user_fields.get("title") or "").strip()
+    if not content:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Provide a title or description"
+        )
+
+    raw = RawInput(
         source="manual",
-        content=payload.description or payload.title,
+        content=content,
         source_metadata={"manual": True},
-        status="open",
-        task_id=task.id,
-        processed_at=datetime.now(timezone.utc),
+        status="processing",
     )
-    session.add(synthetic)
+    session.add(raw)
+    session.flush()
+
+    needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
+    agent_fields: dict = {}
+    if needs_agent:
+        agent_fields = await extract_task_fields(raw)
+
+    merged = {**agent_fields, **user_fields}
+    task = tasks_store.create(
+        session,
+        TaskCreate(
+            title=merged["title"],
+            description=merged.get("description"),
+            estimation=merged.get("estimation"),
+            due_date=merged.get("due_date"),
+            location=merged.get("location"),
+            link=merged.get("link"),
+        ),
+    )
+
+    raw.status = "open"
+    raw.task_id = task.id
+    raw.processed_at = datetime.now(timezone.utc)
+    raw.agent_trace = {
+        "outcome": "task_created",
+        "branch": "manual",
+        "task_id": str(task.id),
+        "agent_extracted": sorted(agent_fields.keys()) if agent_fields else [],
+        "user_provided": sorted(user_fields.keys()),
+    }
     session.commit()
     return _to_read(task, "open")
 

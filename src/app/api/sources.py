@@ -28,25 +28,18 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 _SUPPORTED_SOURCES = ("gmail", "slack")
 
 
-@router.post("/poll")
-async def poll(
-    source: str | None = Query(
-        None, description=f"One of {_SUPPORTED_SOURCES}. Omit to poll all connected sources."
-    ),
-    account_key: str | None = Query(
-        None, description="Narrow to a single account. Requires `source`."
-    ),
-    session: Session = Depends(get_session),
+async def poll_sources(
+    session: Session,
+    *,
+    source: str | None = None,
+    account_key: str | None = None,
 ) -> dict:
-    if account_key and not source:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "`account_key` requires `source` — pick one source to filter within.",
-        )
+    """Drive one or all sources through their poll routine. Shared by the
+    `POST /sources/poll` endpoint and the background auto-poll job.
+    Validates `source` (raises ValueError for unknown values)."""
     if source and source not in _SUPPORTED_SOURCES:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Unknown source {source!r}. Supported: {_SUPPORTED_SOURCES}.",
+        raise ValueError(
+            f"Unknown source {source!r}. Supported: {_SUPPORTED_SOURCES}."
         )
 
     targets = [source] if source else list(_SUPPORTED_SOURCES)
@@ -75,6 +68,27 @@ async def poll(
         aggregate["errors"].extend(result.get("errors", []))
 
     return aggregate
+
+
+@router.post("/poll")
+async def poll(
+    source: str | None = Query(
+        None, description=f"One of {_SUPPORTED_SOURCES}. Omit to poll all connected sources."
+    ),
+    account_key: str | None = Query(
+        None, description="Narrow to a single account. Requires `source`."
+    ),
+    session: Session = Depends(get_session),
+) -> dict:
+    if account_key and not source:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "`account_key` requires `source` — pick one source to filter within.",
+        )
+    try:
+        return await poll_sources(session, source=source, account_key=account_key)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 # --- per-source helpers -------------------------------------------------------

@@ -12,7 +12,7 @@ Given a single semi-structured input from one of the user's sources
 (email, chat message, manual note, ...), call exactly ONE tool:
 
 - `create_task` — if the input represents a concrete, actionable task for the
-  user. Extract: title (short, imperative), description (optional),
+  user. Extract: title (very short, imperative, use GitHub numbers if available), description (optional),
   estimation (minutes, REQUIRED — always your best guess), due_date (ISO 8601,
   REQUIRED — use the explicit deadline if stated, otherwise a reasonable
   best-guess based on urgency), location if mentioned, link (most relevant
@@ -22,12 +22,11 @@ Given a single semi-structured input from one of the user's sources
   listed in the user message. `existing_task_id` must come from that list.
 
 - `mark_not_task` — if the input is informational, conversational, or
-  directed at someone else.
+  directed at someone else. If uncertain, prefer creating a task.
 
 The user message may include a "Past similar inputs" section listing prior
 decisions on near-duplicate inputs. Treat these as strong precedent.
 
-Be conservative: when uncertain, prefer `mark_not_task` over inventing a task.
 Automated notifications (security alerts, marketing, newsletters) are usually
 NOT tasks unless they require a specific action from the user.
 
