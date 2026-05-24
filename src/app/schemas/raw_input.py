@@ -5,11 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class RawInputCreate(BaseModel):
-    """Generic envelope for any incoming message.
-
-    Sources adapt their payloads into this shape before handing off
-    to the processing pipeline.
-    """
+    """Generic envelope for any incoming message."""
 
     source: str = Field(..., description="Source identifier, e.g. 'gmail', 'slack', 'manual'")
     external_id: str | None = Field(
@@ -28,6 +24,8 @@ class RawInputRead(BaseModel):
     received_at: datetime
     processed_at: datetime | None
     status: str
+    task_id: uuid.UUID | None
+    agent_trace: dict | None
 
     class Config:
         from_attributes = True

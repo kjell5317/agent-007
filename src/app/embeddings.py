@@ -67,10 +67,3 @@ async def embed(text: str, *, task_type: TaskType = "SEMANTIC_SIMILARITY") -> li
             f"{settings.embedding_dim}; check EMBEDDING_MODEL / EMBEDDING_DIM."
         )
     return vector
-
-
-def task_embed_text(title: str, description: str | None) -> str:
-    """Canonical text used to embed a task: title + description, joined."""
-    if description:
-        return f"{title}\n\n{description}".strip()
-    return title.strip()

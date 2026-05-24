@@ -2,21 +2,32 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, DateTime, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
-# Must match `tasks.embedding` dim so the two columns are directly comparable.
 EMBEDDING_DIM = 1536
+
+# Single source of truth for the lifecycle enum. Mirrored by a CHECK constraint
+# in 0003_reshape — keep in sync.
+RawInputStatus = (
+    "processing",  # in flight
+    "not_task",    # not actionable
+    "duplicate",   # matched an existing task (see task_id)
+    "open",        # produced a task that is still open (see task_id)
+    "closed",      # produced a task that is now done (see task_id)
+)
 
 
 class RawInput(Base):
-    """Normalized envelope around any incoming message before agent processing.
+    """Normalized envelope around any incoming message.
 
-    Every source (Gmail, Slack, manual, ...) maps into this shape so the agent
-    and storage layers stay source-agnostic.
+    Carries the pipeline's *decision* via `status` and the link to the task
+    (if any) it produced or attached to. Multiple raw_inputs can share one
+    `task_id` (Gmail thread follow-ups, manual updates) — the latest row
+    represents the task's current state.
     """
 
     __tablename__ = "raw_inputs"
@@ -30,18 +41,17 @@ class RawInput(Base):
     external_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     content: Mapped[str] = mapped_column(Text)
-    # TODO: store structured fields (sender, subject, channel, urls, ...) per source
     source_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
 
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # TODO: status enum (received | processing | processed | failed | skipped)
-    status: Mapped[str] = mapped_column(String(32), default="received", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="processing", index=True)
 
-    # TODO: store the agent's raw decision payload for auditing / replay
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+
     agent_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # Cached embedding of (subject + body). Computed once per raw input so
-    # subsequent similar-input lookups are free of further embedding-API cost.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)

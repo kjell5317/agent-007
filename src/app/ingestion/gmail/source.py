@@ -28,9 +28,9 @@ from app.ingestion.gmail.client import GmailClient, HistoryExpiredError
 from app.ingestion.gmail.preprocess import preprocess_message
 from app.schemas.raw_input import RawInputCreate
 
-# Initial-bootstrap filter. Tightened to inbox + unread to keep the first
+# Initial-bootstrap filter. Tightened to inbox to keep the first
 # sync small; widen once the agent's behaviour is trusted.
-BOOTSTRAP_QUERY = "in:inbox is:unread newer_than:7d"
+BOOTSTRAP_QUERY = "in:inbox newer_than:7d"
 
 # Gmail label IDs to skip outright. SENT covers messages the user authored
 # (incl. self-cc), DRAFT is unfinished, SPAM/TRASH are obvious. The history

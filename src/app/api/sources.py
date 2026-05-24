@@ -76,9 +76,10 @@ async def gmail_poll(
         try:
             trace = await process_raw_input(session, raw.id)
             summary["agent_runs"] += 1
-            if trace.get("outcome") == "task_created":
+            outcome = trace.get("outcome")
+            if outcome == "task_created":
                 summary["tasks_created"] += 1
-            elif trace.get("outcome") in {"duplicate", "not_a_task"}:
+            elif outcome in {"duplicate", "not_task", "closed", "no_change", "updated"}:
                 summary["skipped"] += 1
         except Exception as exc:  # noqa: BLE001 — best-effort batch processing
             summary["errors"].append({"external_id": envelope.external_id, "error": str(exc)})

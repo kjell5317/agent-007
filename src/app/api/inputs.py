@@ -1,27 +1,28 @@
-"""Generic input intake.
+"""Raw-input endpoints.
 
-Two entry points:
-  * POST /inputs            — manual / programmatic submission of a RawInput
-  * POST /inputs/{source}/webhook — dispatch to the registered source's handler
-
-Source-specific routes (e.g. OAuth-driven pollers) live alongside their
-implementations once added.
+  * POST /inputs                     — manual / programmatic submission
+  * POST /inputs/{source}/webhook    — webhook dispatch (TODO)
+  * GET  /inputs                     — list raw inputs (filter by status/source)
+  * GET  /inputs/{id}                — fetch one
+  * POST /inputs/{id}/open_task      — manually promote a raw_input to a task
 """
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.agent.runner import process_raw_input
 from app.db import SessionLocal, get_session
 from app.schemas.raw_input import RawInputCreate, RawInputRead
-from app.storage import raw_inputs
+from app.schemas.task import TaskCreate, TaskRead
+from app.storage import raw_inputs, tasks as tasks_store
 
 router = APIRouter(prefix="/inputs", tags=["inputs"])
 
 
 async def _process_in_background(raw_input_id) -> None:
-    """Open a fresh session for the agent run; BackgroundTasks runs after the
-    response, so the request-scoped session is already closed."""
     session = SessionLocal()
     try:
         await process_raw_input(session, raw_input_id)
@@ -41,14 +42,75 @@ async def submit_input(
 
     if run_sync:
         await process_raw_input(session, row.id)
+        session.refresh(row)
     else:
         background.add_task(_process_in_background, row.id)
 
     return RawInputRead.model_validate(row)
 
 
+@router.get("", response_model=list[RawInputRead])
+async def list_inputs(
+    status_filter: str | None = Query(None, alias="status"),
+    source: str | None = Query(None),
+    limit: int = Query(100, le=500),
+    session: Session = Depends(get_session),
+) -> list[RawInputRead]:
+    rows = raw_inputs.list_(session, status=status_filter, source=source, limit=limit)
+    return [RawInputRead.model_validate(r) for r in rows]
+
+
+@router.get("/{raw_input_id}", response_model=RawInputRead)
+async def get_input(
+    raw_input_id: uuid.UUID, session: Session = Depends(get_session)
+) -> RawInputRead:
+    row = raw_inputs.get(session, raw_input_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Raw input not found")
+    return RawInputRead.model_validate(row)
+
+
+@router.post(
+    "/{raw_input_id}/open_task",
+    response_model=TaskRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def open_task_from_input(
+    raw_input_id: uuid.UUID,
+    payload: TaskCreate,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """User promotes a raw_input the agent skipped into an actual task."""
+    raw = raw_inputs.get(session, raw_input_id)
+    if raw is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Raw input not found")
+
+    task = tasks_store.create(session, payload)
+    raw.status = "open"
+    raw.task_id = task.id
+    raw.processed_at = raw.processed_at or datetime.now(timezone.utc)
+    trace = dict(raw.agent_trace or {})
+    trace["manual_override"] = {"outcome": "task_created", "task_id": str(task.id)}
+    raw.agent_trace = trace
+    session.commit()
+    return TaskRead.model_validate(
+        {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "link": task.link,
+            "due_date": task.due_date,
+            "estimation": task.estimation,
+            "location": task.location,
+            "status": "open",
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }
+    )
+
+
 @router.post("/{source}/webhook", status_code=status.HTTP_202_ACCEPTED)
-async def source_webhook(source: str, request: Request, session: Session = Depends(get_session)) -> dict:
-    # TODO: look up source via app.ingestion.get_source(source), verify signature,
-    # call source.handle_webhook, persist + enqueue results.
+async def source_webhook(
+    source: str, request: Request, session: Session = Depends(get_session)
+) -> dict:
     raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, f"webhook for {source!r} not implemented")

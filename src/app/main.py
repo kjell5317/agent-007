@@ -1,11 +1,16 @@
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 # Side-effect imports register OAuth providers and ingestion sources via their
 # @register_* decorators. Add a new provider/source = add a new import here.
 import app.auth.google  # noqa: F401
 import app.ingestion.gmail  # noqa: F401
-from app.api import feedback, inputs, oauth, sources, tasks
+from app.api import inputs, oauth, sources, tasks
 from app.config import get_settings
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_app() -> FastAPI:
@@ -18,7 +23,6 @@ def create_app() -> FastAPI:
 
     app.include_router(inputs.router)
     app.include_router(tasks.router)
-    app.include_router(feedback.router)
     app.include_router(oauth.router)
     app.include_router(sources.router)
 
@@ -26,7 +30,9 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok"}
 
-    # TODO: structured logging + request id middleware
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(_STATIC_DIR / "index.html")
 
     return app
 

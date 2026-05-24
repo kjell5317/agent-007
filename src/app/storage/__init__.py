@@ -1,10 +1,9 @@
 """Database-facing operations.
 
 Kept separate from API routes so the agent runner can call the same code paths
-without going through HTTP. Each resource has its own module; this file just
-re-exports the surface.
+without going through HTTP.
 """
 
-from app.storage import feedback, oauth_tokens, raw_inputs, tasks
+from app.storage import oauth_tokens, raw_inputs, tasks
 
-__all__ = ["feedback", "oauth_tokens", "raw_inputs", "tasks"]
+__all__ = ["oauth_tokens", "raw_inputs", "tasks"]
