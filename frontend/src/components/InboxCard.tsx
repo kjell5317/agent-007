@@ -39,7 +39,9 @@ export function InboxCard({ item, onChanged }: Props) {
       "(no subject)"
     : item.data.title;
   const when = fmtWhen(
-    isInput ? item.data.received_at : item.data.updated_at || item.data.created_at,
+    isInput
+      ? item.data.received_at
+      : item.data.updated_at || item.data.created_at,
   );
   const source = isInput ? item.data.source : "task";
 
@@ -78,7 +80,7 @@ export function InboxCard({ item, onChanged }: Props) {
           setOpen((v) => !v);
         }}
       >
-        <div className="flex items-start gap-2">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             aria-label={action.label}
@@ -86,7 +88,7 @@ export function InboxCard({ item, onChanged }: Props) {
             disabled={busy}
             onClick={action.run}
             className={cn(
-              "mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
+              "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
             )}
           >
             <action.Icon className="h-5 w-5" />
@@ -94,7 +96,7 @@ export function InboxCard({ item, onChanged }: Props) {
 
           <div className="min-w-0 flex-1">
             <div className="truncate font-medium leading-snug">{title}</div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <Badge variant={label}>{label}</Badge>
               <span>{source}</span>
               <span>{when}</span>
@@ -103,8 +105,15 @@ export function InboxCard({ item, onChanged }: Props) {
         </div>
 
         <Collapsible open={open}>
-          <div className="mt-3 space-y-3 border-t pt-3 text-sm" onClick={(e) => e.stopPropagation()}>
-            {isInput ? <InputBody data={item.data} /> : <TaskBody data={item.data} />}
+          <div
+            className="mt-3 space-y-3 border-t pt-3 text-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {isInput ? (
+              <InputBody data={item.data} />
+            ) : (
+              <TaskBody data={item.data} />
+            )}
           </div>
         </Collapsible>
       </CardContent>
@@ -126,7 +135,9 @@ function InputBody({ data }: { data: RawInput }) {
       </div>
       {data.source_metadata && Object.keys(data.source_metadata).length > 0 && (
         <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">metadata</summary>
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            metadata
+          </summary>
           <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
             {JSON.stringify(data.source_metadata, null, 2)}
           </pre>
@@ -134,7 +145,9 @@ function InputBody({ data }: { data: RawInput }) {
       )}
       {data.content && (
         <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">content</summary>
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            content
+          </summary>
           <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
             {data.content}
           </pre>
@@ -142,7 +155,9 @@ function InputBody({ data }: { data: RawInput }) {
       )}
       {data.agent_trace && (
         <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">agent trace</summary>
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            agent trace
+          </summary>
           <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
             {JSON.stringify(data.agent_trace, null, 2)}
           </pre>

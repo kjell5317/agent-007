@@ -15,7 +15,7 @@ Given a single semi-structured input from one of the user's sources
   user. Extract: title (very short, imperative, use GitHub numbers if available), description (optional),
   estimation (minutes, REQUIRED — always your best guess), due_date (ISO 8601,
   REQUIRED — use the explicit deadline if stated, otherwise a reasonable
-  best-guess based on urgency), location if mentioned, link (most relevant
+  best-guess based on urgency, usually in the near future), location if mentioned, link (most relevant
   source URL).
 
 - `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS

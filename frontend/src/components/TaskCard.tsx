@@ -155,7 +155,7 @@ export function TaskCard({ task, onChanged }: Props) {
                 <Trash2 className="h-4 w-4" />
               </IconButton>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {task.due_date && (
                 <Badge variant={overdue ? "overdue" : "open"}>
                   {overdue ? "overdue · " : ""}
