@@ -24,6 +24,20 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     claude_model: str = "claude-opus-4-7"
 
+    # --- Embeddings (hybrid candidate retrieval + input dedup) ---
+    # Gemini's gemini-embedding-001 supports configurable output dimensions via
+    # outputDimensionality (768 / 1536 / 3072); 1536 matches the existing
+    # `tasks.embedding` and `raw_inputs.embedding` columns.
+    gemini_api_key: str = ""
+    embedding_model: str = "gemini-embedding-001"
+    embedding_dim: int = 1536
+
+    # Cosine similarity at/above which a new raw input inherits the decision of
+    # a past raw input verbatim (no LLM call). 0.88 catches near-duplicate
+    # automated emails (e.g. repeated security alerts) while leaving genuine
+    # follow-ups for the agent. Tune up if you see wrong auto-decisions.
+    input_dedup_threshold: float = 0.88
+
     # --- Google OAuth (Gmail) ---
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.embeddings import embed, task_embed_text
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 from app.storage import tasks as tasks_store
 
@@ -30,7 +31,8 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
 
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 async def create_task(payload: TaskCreate, session: Session = Depends(get_session)) -> TaskRead:
-    row = tasks_store.create(session, payload)
+    embedding = await embed(task_embed_text(payload.title, payload.description))
+    row = tasks_store.create(session, payload, embedding=embedding)
     session.commit()
     return TaskRead.model_validate(row)
 
@@ -39,7 +41,18 @@ async def create_task(payload: TaskCreate, session: Session = Depends(get_sessio
 async def update_task(
     task_id: uuid.UUID, payload: TaskUpdate, session: Session = Depends(get_session)
 ) -> TaskRead:
-    row = tasks_store.update(session, task_id, **payload.model_dump(exclude_unset=True))
+    fields = payload.model_dump(exclude_unset=True)
+
+    # Re-embed when the embedded text changes (title or description).
+    if {"title", "description"} & fields.keys():
+        current = tasks_store.get(session, task_id)
+        if current is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+        title = fields.get("title", current.title)
+        description = fields.get("description", current.description)
+        fields["embedding"] = await embed(task_embed_text(title, description))
+
+    row = tasks_store.update(session, task_id, **fields)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     session.commit()

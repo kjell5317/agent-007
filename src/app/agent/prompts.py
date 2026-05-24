@@ -28,6 +28,13 @@ Given a single semi-structured input from one of the user's sources
 - `mark_not_a_task` — if the input is informational, conversational, or
   directed at someone else.
 
+The user message may also include a "Past similar inputs" section listing
+prior decisions on near-duplicate inputs. Treat these as a strong precedent:
+when a past similar input was marked NOT_A_TASK, this one almost always is
+too; when a past similar input CREATED a task, prefer `mark_duplicate` on
+that task. Only deviate if the new input's content clearly differs in a way
+that changes the decision (e.g. it adds new actionable detail).
+
 Be conservative: when uncertain whether an input is actionable, prefer
 `mark_not_a_task` over inventing a task. Automated notifications (security
 alerts, marketing, newsletters) are usually NOT tasks unless they require a

@@ -1,14 +1,17 @@
 """Agent loop: turn a single RawInput into a decision (create / duplicate / skip).
 
-Kept intentionally thin and source-agnostic. The runner:
+Per-input flow:
 
-  1. Loads the raw input + a small set of dedup candidates.
-  2. Calls Claude once with the system prompt + tool schemas (cached).
-  3. Dispatches the (terminal) tool call to storage.
-  4. Writes the agent trace back onto the RawInput for audit/replay.
+  1. Compute the candidate-query text and embed it ONCE. The embedding is
+     persisted on the raw_input row so any later step (re-runs, debug,
+     analytics) reuses it without another embedding-API call.
+  2. Look up similar past inputs. If the closest one is above the auto-decide
+     similarity threshold, copy its outcome verbatim — no LLM call.
+  3. Otherwise: pre-fetch task dedup candidates (hybrid search) + the top
+     past-input precedents, hand both to Claude, dispatch the (terminal) tool
+     call, and persist the trace.
 
-Per-input cost is one LLM round trip: candidates are pre-fetched into the
-user message and every tool short-circuits the loop.
+Source-agnostic throughout: nothing here knows that the raw input is an email.
 """
 
 from __future__ import annotations
@@ -24,15 +27,18 @@ from sqlalchemy.orm import Session
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
 from app.config import get_settings
+from app.embeddings import embed, task_embed_text
 from app.models.task import Task
 from app.schemas.feedback import FeedbackCreate
 from app.schemas.task import TaskCreate
 from app.storage import feedback, raw_inputs, tasks
+from app.storage.raw_inputs import SimilarInput
 
 MAX_TOOL_ITERATIONS = 4
 MAX_TOKENS = 1024
 TEMPERATURE = 0.4
 DEDUP_CANDIDATES = 10
+PRECEDENT_CANDIDATES = 5
 
 TERMINAL_TOOLS = frozenset({"create_task", "mark_duplicate", "mark_not_a_task"})
 
@@ -49,16 +55,49 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     if raw.processed_at is not None:
         return {"outcome": "already_processed", "status": raw.status}
 
-    candidates = tasks.list_(session, status="open", limit=DEDUP_CANDIDATES)
+    query_text = _candidate_query_text(raw.content, raw.source_metadata or {})
+
+    # --- embed once and cache on the row -------------------------------------
+    query_embedding: list[float] | None = raw.embedding
+    if query_embedding is None:
+        query_embedding = await embed(query_text)
+        if query_embedding is not None:
+            raw_inputs.set_embedding(session, raw_input_id, query_embedding)
+            session.commit()
+
+    # --- precedent-based auto-decide -----------------------------------------
+    precedents: list[SimilarInput] = []
+    if query_embedding is not None:
+        precedents = raw_inputs.search_similar(
+            session,
+            embedding=query_embedding,
+            exclude_id=raw_input_id,
+            k=PRECEDENT_CANDIDATES,
+        )
+
+    auto = _try_auto_decide(session, raw_input_id, precedents)
+    if auto is not None:
+        return auto
+
+    # --- hybrid task-candidate fetch + LLM call ------------------------------
+    candidates = tasks.search_similar(
+        session, query=query_text, embedding=query_embedding, k=DEDUP_CANDIDATES
+    )
     user_content = _build_user_message(
-        raw.source, raw.content, raw.source_metadata or {}, candidates
+        raw.source, raw.content, raw.source_metadata or {}, candidates, precedents
     )
 
     settings = get_settings()
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     messages: list[MessageParam] = [{"role": "user", "content": user_content}]
-    trace: dict[str, Any] = {"iterations": [], "outcome": None, "candidates": len(candidates)}
+    trace: dict[str, Any] = {
+        "iterations": [],
+        "outcome": None,
+        "candidates": len(candidates),
+        "precedents": [_precedent_summary(p) for p in precedents],
+        "embedded_query": query_embedding is not None,
+    }
     final_status = "processed"
 
     for _ in range(MAX_TOOL_ITERATIONS):
@@ -84,7 +123,7 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
 
         terminal_hit = False
         for tu in tool_uses:
-            result = _dispatch_tool(session, raw_input_id, tu.name, tu.input or {})
+            result = await _dispatch_tool(session, raw_input_id, tu.name, tu.input or {})
             iter_log.setdefault("tool_calls", []).append(
                 {"name": tu.name, "input": tu.input, "result": result}
             )
@@ -104,7 +143,6 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
                 final_status = "skipped"
                 terminal_hit = True
 
-        # Every tool is terminal — short-circuit before another model call.
         if terminal_hit:
             break
 
@@ -136,13 +174,101 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     return trace
 
 
-def _cached_system() -> list[dict[str, Any]]:
-    """System prompt as a single cache-controlled block.
+# --- precedent auto-decide ----------------------------------------------------
 
-    Anthropic prompt caching: every request with the same prefix bytes (system
-    + tools) hits the cache for 5 minutes after the first call, cutting cost
-    on the static portion to ~10%.
+
+def _try_auto_decide(
+    session: Session, raw_input_id: uuid.UUID, precedents: list[SimilarInput]
+) -> dict | None:
+    """If the top precedent is above threshold, copy its decision and return.
+
+    Only "safe" decisions are auto-applied — those that produce no new task:
+      - not_a_task → mark this input not_a_task too
+      - task_created on the precedent → mark this input duplicate of that task
+      - duplicate of T → mark this input duplicate of T
+
+    Anything else (no_tool_call, max_iterations, missing outcome) is treated
+    as inconclusive and falls through to a fresh LLM call.
     """
+    if not precedents:
+        return None
+
+    threshold = get_settings().input_dedup_threshold
+    top = precedents[0]
+    if top.similarity < threshold:
+        return None
+
+    prior_outcome = (top.agent_trace or {}).get("outcome")
+    if prior_outcome not in {"not_a_task", "task_created", "duplicate"}:
+        return None
+
+    trace: dict[str, Any] = {
+        "outcome": None,
+        "auto_decided": True,
+        "precedent_id": str(top.id),
+        "precedent_similarity": top.similarity,
+        "precedent_outcome": prior_outcome,
+    }
+
+    if prior_outcome == "not_a_task":
+        prior_reason = (top.agent_trace or {}).get("reason") or "matched earlier input"
+        feedback.create(
+            session,
+            FeedbackCreate(
+                raw_input_id=raw_input_id,
+                kind="not_a_task",
+                note=f"auto: precedent {top.id} (sim={top.similarity:.3f}): {prior_reason}",
+            ),
+        )
+        trace["outcome"] = "not_a_task"
+        trace["reason"] = prior_reason
+        final_status = "skipped"
+
+    else:
+        # task_created or duplicate — link this input to the original task.
+        prior_task = (top.agent_trace or {}).get("task_id") or (top.agent_trace or {}).get(
+            "existing_task_id"
+        )
+        if not prior_task:
+            return None
+        feedback.create(
+            session,
+            FeedbackCreate(
+                task_id=uuid.UUID(prior_task),
+                raw_input_id=raw_input_id,
+                kind="duplicate_of",
+                note=f"auto: precedent {top.id} (sim={top.similarity:.3f})",
+            ),
+        )
+        trace["outcome"] = "duplicate"
+        trace["existing_task_id"] = prior_task
+        final_status = "skipped"
+
+    raw_inputs.mark_processed(
+        session, raw_input_id, status=final_status, agent_trace=trace
+    )
+    session.commit()
+    return trace
+
+
+def _precedent_summary(p: SimilarInput) -> dict:
+    """Compact precedent record for the agent_trace audit log."""
+    return {
+        "id": str(p.id),
+        "similarity": round(p.similarity, 4),
+        "status": p.status,
+        "outcome": (p.agent_trace or {}).get("outcome"),
+        "task_id": (p.agent_trace or {}).get("task_id")
+        or (p.agent_trace or {}).get("existing_task_id"),
+        "subject": p.subject,
+    }
+
+
+# --- prompt assembly ----------------------------------------------------------
+
+
+def _cached_system() -> list[dict[str, Any]]:
+    """System prompt as a single cache-controlled block."""
     return [
         {
             "type": "text",
@@ -153,17 +279,30 @@ def _cached_system() -> list[dict[str, Any]]:
 
 
 def _cached_tools() -> list[ToolParam]:
-    """Tools list with cache_control on the final entry.
-
-    Marking the last tool caches every preceding tool definition as well.
-    """
+    """Tools list with cache_control on the final entry (caches everything before it)."""
     out = [dict(t) for t in TOOLS]
     out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
     return cast(list[ToolParam], out)
 
 
+def _candidate_query_text(content: str, metadata: dict) -> str:
+    """Subject + truncated body — used both as keyword query and embedding text."""
+    parts: list[str] = []
+    subject = metadata.get("subject")
+    if subject:
+        parts.append(subject)
+    body = (content or "").strip()
+    if body:
+        parts.append(body[:1500])
+    return "\n".join(parts).strip()
+
+
 def _build_user_message(
-    source: str, content: str, metadata: dict, candidates: list[Task]
+    source: str,
+    content: str,
+    metadata: dict,
+    candidates: list[Task],
+    precedents: list[SimilarInput],
 ) -> str:
     lines = [f"Source: {source}"]
     for key in ("from", "to", "subject", "date", "thread_id", "account"):
@@ -183,17 +322,46 @@ def _build_user_message(
                 desc = desc[:160] + "…"
             lines.append(f"- {c.id} | {c.title}" + (f" — {desc}" if desc else ""))
 
+    precedent_lines = [_format_precedent(p) for p in precedents if _format_precedent(p)]
+    if precedent_lines:
+        lines.append("")
+        lines.append("Past similar inputs (precedents — strong signal, follow unless clearly wrong):")
+        lines.extend(precedent_lines)
+
     lines.append("")
     lines.append("Body:")
     lines.append(content.strip() or "(empty)")
     return "\n".join(lines)
 
 
-def _dispatch_tool(
+def _format_precedent(p: SimilarInput) -> str | None:
+    """One-line precedent for the user prompt; None if the precedent isn't decisive."""
+    outcome = (p.agent_trace or {}).get("outcome")
+    if outcome not in {"not_a_task", "task_created", "duplicate"}:
+        return None
+    subj = p.subject or "(no subject)"
+    sender = p.sender or "?"
+    sim = f"{p.similarity:.2f}"
+    if outcome == "not_a_task":
+        reason = (p.agent_trace or {}).get("reason") or ""
+        return f"- sim={sim} | NOT_A_TASK | from {sender} | {subj} | reason: {reason[:120]}"
+    if outcome == "task_created":
+        tid = (p.agent_trace or {}).get("task_id")
+        return f"- sim={sim} | CREATED task {tid} | from {sender} | {subj}"
+    if outcome == "duplicate":
+        tid = (p.agent_trace or {}).get("existing_task_id")
+        return f"- sim={sim} | DUPLICATE_OF task {tid} | from {sender} | {subj}"
+    return None
+
+
+# --- tool dispatch ------------------------------------------------------------
+
+
+async def _dispatch_tool(
     session: Session, raw_input_id: uuid.UUID, name: str, payload: dict
 ) -> dict:
     if name == "create_task":
-        return _tool_create_task(session, raw_input_id, payload)
+        return await _tool_create_task(session, raw_input_id, payload)
     if name == "mark_duplicate":
         return _tool_mark_duplicate(session, raw_input_id, payload)
     if name == "mark_not_a_task":
@@ -201,7 +369,7 @@ def _dispatch_tool(
     return {"error": f"unknown tool {name!r}"}
 
 
-def _tool_create_task(session: Session, raw_input_id: uuid.UUID, payload: dict) -> dict:
+async def _tool_create_task(session: Session, raw_input_id: uuid.UUID, payload: dict) -> dict:
     create = TaskCreate(
         title=payload["title"],
         description=payload.get("description"),
@@ -212,7 +380,8 @@ def _tool_create_task(session: Session, raw_input_id: uuid.UUID, payload: dict) 
         confidence=payload.get("confidence"),
         raw_input_id=raw_input_id,
     )
-    row = tasks.create(session, create)
+    embedding = await embed(task_embed_text(create.title, create.description))
+    row = tasks.create(session, create, embedding=embedding)
     return {"task_id": str(row.id), "title": row.title}
 
 
@@ -258,3 +427,4 @@ def _block_to_dict(block) -> dict:
     if isinstance(block, ToolUseBlock):
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
     return {"type": getattr(block, "type", "unknown")}
+

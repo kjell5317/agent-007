@@ -1,11 +1,15 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+
+# Must match `tasks.embedding` dim so the two columns are directly comparable.
+EMBEDDING_DIM = 1536
 
 
 class RawInput(Base):
@@ -37,3 +41,7 @@ class RawInput(Base):
 
     # TODO: store the agent's raw decision payload for auditing / replay
     agent_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Cached embedding of (subject + body). Computed once per raw input so
+    # subsequent similar-input lookups are free of further embedding-API cost.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
