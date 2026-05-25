@@ -23,7 +23,22 @@ _TIMEOUT = 10.0
 
 
 class MapsLookupError(RuntimeError):
-    pass
+    """`cacheable=True` means the result won't change on retry (bad address,
+    no route exists, route too long) — callers should persist the failure so
+    they don't burn API calls re-asking. `cacheable=False` covers transient
+    failures: rate limits, network blips, malformed requests."""
+
+    def __init__(self, message: str, *, cacheable: bool = False) -> None:
+        super().__init__(message)
+        self.cacheable = cacheable
+
+
+# Element-level statuses Google returns that won't change on retry. Anything
+# else (OVER_QUERY_LIMIT, REQUEST_DENIED, …) is transient — don't poison the
+# cache with it.
+_CACHEABLE_FAILURE_STATUSES = frozenset(
+    {"ZERO_RESULTS", "NOT_FOUND", "MAX_ROUTE_LENGTH_EXCEEDED"}
+)
 
 
 async def distance(
@@ -59,19 +74,28 @@ async def distance(
         resp.raise_for_status()
         payload = resp.json()
 
-    if payload.get("status") != "OK":
+    top_status = payload.get("status")
+    if top_status != "OK":
+        # Top-level non-OK is config / quota — never poison the cache from here.
         raise MapsLookupError(
-            f"distance matrix status={payload.get('status')} "
-            f"msg={payload.get('error_message')!r}"
+            f"distance matrix status={top_status} "
+            f"msg={payload.get('error_message')!r}",
+            cacheable=False,
         )
     try:
         element = payload["rows"][0]["elements"][0]
     except (IndexError, KeyError) as exc:
-        raise MapsLookupError(f"unexpected distance matrix shape: {payload}") from exc
+        raise MapsLookupError(
+            f"unexpected distance matrix shape: {payload}", cacheable=False,
+        ) from exc
 
-    if element.get("status") != "OK":
+    element_status = element.get("status")
+    if element_status != "OK":
         # `ZERO_RESULTS` is the common case here — e.g. no transit at 03:00.
-        raise MapsLookupError(f"element status={element.get('status')}")
+        raise MapsLookupError(
+            f"element status={element_status}",
+            cacheable=element_status in _CACHEABLE_FAILURE_STATUSES,
+        )
 
     duration_s = int(element["duration"]["value"])
     distance_m = element.get("distance", {}).get("value")

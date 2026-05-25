@@ -94,16 +94,21 @@ async def plan_week_commutes(
         account_key=account_key,
     )
     physical, online, existing_commutes = _partition(events, write_calendar_id)
-    log.info(
-        "commute planner · physical=%d online=%d existing_commute=%d window=%dd",
-        len(physical), len(online), len(existing_commutes), WINDOW_DAYS,
-    )
-
     home = settings.home_address
     home_latlon = await geocode(home)
 
+    # NOT_FOUND / ZERO_RESULTS from Maps is a stable signal: the address can't
+    # be reached. Per spec we treat that like an online event — drop it from
+    # the commute walk so it doesn't influence prev/next decisions either.
+    physical, unroutable = await _filter_routable(session, physical, home)
+    log.info(
+        "commute planner · physical=%d online=%d unroutable=%d existing_commute=%d window=%dd",
+        len(physical), len(online), len(unroutable), len(existing_commutes), WINDOW_DAYS,
+    )
+
     summary = _empty_summary()
-    summary["skipped_online"] = len(online)
+    summary["skipped_online"] = len(online) + len(unroutable)
+    summary["skipped_unroutable"] = len(unroutable)
 
     plans: list[CommutePlan] = []
     for idx, ev in enumerate(physical):
@@ -158,6 +163,7 @@ def _empty_summary(reason: str | None = None) -> dict:
     out: dict = {
         "planned": 0,
         "skipped_online": 0,
+        "skipped_unroutable": 0,
         "skipped_no_location": 0,
         "rescheduled_tasks": 0,
         "errors": [],
@@ -165,6 +171,53 @@ def _empty_summary(reason: str | None = None) -> dict:
     if reason:
         out["errors"].append({"setup": reason})
     return out
+
+
+async def _filter_routable(
+    session: Session,
+    physical: list[CalendarEvent],
+    home: str,
+) -> tuple[list[CalendarEvent], list[CalendarEvent]]:
+    """Split `physical` into (routable, unroutable) from home.
+
+    A destination is unroutable when neither bike nor transit returns a
+    duration. We probe from `home` only — if the user can't be routed there
+    from their own home, there's no realistic origin we'd succeed from. The
+    resolver caches negative answers so this pre-pass costs at most one bike
+    + one transit call per *distinct* destination, lifetime.
+    """
+    routable: list[CalendarEvent] = []
+    unroutable: list[CalendarEvent] = []
+    for ev in physical:
+        assert ev.location is not None
+        # Departure-time hint for the transit lookup; the bike call ignores it.
+        departure_hint = ev.start - timedelta(hours=1)
+        bike = await resolve_duration(
+            session,
+            origin=home,
+            destination=ev.location,
+            mode="bicycling",
+            departure=departure_hint,
+        )
+        if bike is not None:
+            routable.append(ev)
+            continue
+        transit = await resolve_duration(
+            session,
+            origin=home,
+            destination=ev.location,
+            mode="transit",
+            departure=departure_hint,
+        )
+        if transit is not None:
+            routable.append(ev)
+            continue
+        log.info(
+            "commute · unroutable destination, treating as online: event=%s loc=%r",
+            ev.id, ev.location,
+        )
+        unroutable.append(ev)
+    return routable, unroutable
 
 
 def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:
@@ -415,8 +468,7 @@ async def _write_plans(
 
 def _summary_for(plan: CommutePlan) -> str:
     icon = "🚲" if plan.mode == "bicycling" else "🚆"
-    direction = "→" if plan.leg == "outbound" else "←"
-    return f"{icon} Commute {direction}"
+    return f"{icon} To {plan.destination.split(' ')[0]}"
 
 
 def _description_for(plan: CommutePlan) -> str:
