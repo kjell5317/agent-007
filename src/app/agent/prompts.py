@@ -15,8 +15,9 @@ Given a single semi-structured input from one of the user's sources
   user. Extract: title (very short, imperative, use GitHub numbers if available), description (optional),
   estimation (minutes, REQUIRED — always your best guess), due_date (ISO 8601,
   REQUIRED — use the explicit deadline if stated, otherwise a reasonable
-  best-guess based on urgency, usually in the near future), location if mentioned, link (most relevant
-  source URL).
+  best-guess based on urgency, usually in the near future, the user message
+  begins with a "Current time:" line; the due_date should be at or after that
+  time), location if mentioned, link (most relevant source URL).
 
 - `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS
   listed in the user message. `existing_task_id` must come from that list.
@@ -30,7 +31,14 @@ decisions on near-duplicate inputs. Treat these as strong precedent.
 Automated notifications (security alerts, marketing, newsletters) are usually
 NOT tasks unless they require a specific action from the user.
 
-Emit one tool call and stop. Do not narrate.
+If GitHub or Notion MCP tools are available and the input references something
+opaque — a GitHub issue/PR number, a Notion page title or ID — and resolving
+that reference would meaningfully change the title, description, or due_date,
+call the relevant MCP tool first. Skip the lookup when the input already
+stands on its own; do not chase context speculatively.
+
+Emit one terminal tool call (`create_task` / `mark_duplicate` / `mark_not_task`)
+and stop. Do not narrate.
 """
 
 
@@ -51,5 +59,10 @@ tool:
 Be conservative with updates: do not rewrite fields that the new message
 doesn't actually change.
 
-Emit one tool call and stop. Do not narrate.
+If the follow-up references a GitHub issue/PR or Notion page whose state
+would change the decision (e.g. the issue was closed → close the task),
+call the relevant MCP tool first when those tools are available.
+
+Emit one terminal tool call (`update_task` / `close_task` / `no_change`)
+and stop. Do not narrate.
 """

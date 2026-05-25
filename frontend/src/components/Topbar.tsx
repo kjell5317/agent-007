@@ -14,9 +14,11 @@ const SOURCES = ["gmail", "slack"] as const;
 // Each entry becomes a "Connect <label>" link inside the account dropdown.
 // The href points at the backend's generic OAuth authorize route, which
 // redirects to the provider's consent screen and back through /oauth/<p>/callback.
+// Google is intentionally omitted: /auth/login already captures Gmail +
+// Calendar scopes alongside the session, so a separate entry would duplicate it.
 const OAUTH_PROVIDERS: { label: string; href: string }[] = [
-  { label: "Gmail", href: "/oauth/google/authorize" },
-  { label: "Slack", href: "/oauth/slack/authorize" },
+  { label: "CSEE", href: "/oauth/slack/authorize?app=csee" },
+  { label: "Social AI", href: "/oauth/slack/authorize?app=social" },
 ];
 
 export function Topbar({ onSynced }: Props) {
@@ -40,17 +42,20 @@ export function Topbar({ onSynced }: Props) {
       .catch(() => setAutoPoll(null));
   }, []);
 
-  const toggleAutoPoll = useCallback(async (next: boolean) => {
-    const prev = autoPoll;
-    setAutoPoll(next);
-    try {
-      const updated = await api.updateSettings({ auto_poll_enabled: next });
-      setAutoPoll(updated.auto_poll_enabled);
-    } catch (err) {
-      setAutoPoll(prev);
-      toast.error(`Failed to update setting: ${(err as Error).message}`);
-    }
-  }, [autoPoll]);
+  const toggleAutoPoll = useCallback(
+    async (next: boolean) => {
+      const prev = autoPoll;
+      setAutoPoll(next);
+      try {
+        const updated = await api.updateSettings({ auto_poll_enabled: next });
+        setAutoPoll(updated.auto_poll_enabled);
+      } catch (err) {
+        setAutoPoll(prev);
+        toast.error(`Failed to update setting: ${(err as Error).message}`);
+      }
+    },
+    [autoPoll],
+  );
 
   const sync = async () => {
     setSyncing(true);

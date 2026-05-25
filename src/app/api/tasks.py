@@ -8,6 +8,7 @@ from app.agent.runner import extract_task_fields
 from app.db import get_session
 from app.models.raw_input import RawInput
 from app.schemas.task import TaskCreate, TaskPromote, TaskRead, TaskUpdate
+from app.services.google_calendar import add_task_to_calendar
 from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -99,6 +100,7 @@ async def create_task(payload: TaskPromote, session: Session = Depends(get_sessi
         "user_provided": sorted(user_fields.keys()),
     }
     session.commit()
+    await add_task_to_calendar(session, task)
     return _to_read(task, "open")
 
 

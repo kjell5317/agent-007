@@ -21,18 +21,19 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from anthropic import AsyncAnthropic
-from anthropic.types import MessageParam, TextBlock, ToolParam, ToolUseBlock
+from anthropic.types import MessageParam, ToolParam
 from sqlalchemy.orm import Session
 
 from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PROMPT
 from app.agent.tools import NEW_INPUT_TOOLS, THREAD_FOLLOWUP_TOOLS
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.embeddings import embed
-from app.notifications import notify_task_created
+from app.services.google_calendar import add_task_to_calendar
+from app.services.notifications import notify_task_created
 from app.schemas.task import TaskCreate
 from app.storage import raw_inputs, tasks
 from app.storage.raw_inputs import SimilarInput
@@ -42,7 +43,13 @@ log = logging.getLogger(__name__)
 MAX_TOOL_ITERATIONS = 2
 MAX_TOKENS = 1024
 TEMPERATURE = 0.4
-SIMILAR_K = 8
+SIMILAR_K = 4
+MCP_BETA = "mcp-client-2025-04-04"
+
+TERMINAL_TOOLS = frozenset({
+    "create_task", "mark_duplicate", "mark_not_task",
+    "update_task", "close_task", "no_change",
+})
 
 
 async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
@@ -191,10 +198,8 @@ async def extract_task_fields(raw) -> dict[str, Any]:
     create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
 
     log.info("llm call · branch=extract_fields raw=%s", raw.id)
-    resp = await client.messages.create(
-        model=settings.claude_model,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
+    resp = await _create_message(
+        client, settings,
         system=_cached_system(EXTRACT_FIELDS_SYSTEM_PROMPT),
         tools=_cached_tools([create_tool]),
         tool_choice={"type": "tool", "name": "create_task"},
@@ -207,18 +212,18 @@ async def extract_task_fields(raw) -> dict[str, Any]:
         getattr(resp.usage, "output_tokens", "?"),
     )
 
-    tool_uses = [b for b in resp.content if isinstance(b, ToolUseBlock)]
+    tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
     if not tool_uses:
         raise RuntimeError("agent did not call create_task during field extraction")
     payload = dict(tool_uses[0].input or {})
     if "due_date" in payload:
-        payload["due_date"] = _parse_iso(payload["due_date"])
+        payload["due_date"] = _parse_iso(str(payload["due_date"]))
     return payload
 
 
 def _build_extract_message(raw) -> str:
     meta = raw.source_metadata or {}
-    lines = [f"Source: {raw.source}"]
+    lines = [f"Current time: {_now_iso()}", f"Source: {raw.source}"]
     for key in ("from", "to", "subject", "date", "thread_id", "account"):
         val = meta.get(key)
         if val:
@@ -237,7 +242,9 @@ your only job is to populate `create_task` accurately:
 - title: short, imperative.
 - estimation: minutes; required, best-guess.
 - due_date: ISO 8601; required — use the explicit deadline if stated,
-  otherwise a reasonable best-guess based on urgency.
+  otherwise a reasonable best-guess based on urgency. The user message
+  begins with a "Current time:" line; the due_date MUST be at or after
+  that time — never pick a date in the past.
 - description, location, link: include when supported by the input.
 
 Call `create_task` exactly once. Do not narrate.
@@ -258,10 +265,8 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
 
     messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
     log.info("llm call · branch=thread_followup raw=%s task=%s", raw.id, task.id)
-    resp = await client.messages.create(
-        model=settings.claude_model,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
+    resp = await _create_message(
+        client, settings,
         system=_cached_system(THREAD_FOLLOWUP_SYSTEM_PROMPT),
         tools=_cached_tools(THREAD_FOLLOWUP_TOOLS),
         messages=messages,
@@ -274,7 +279,10 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
     )
     trace["blocks"] = [_block_summary(b) for b in resp.content]
 
-    tool_uses = [b for b in resp.content if isinstance(b, ToolUseBlock)]
+    tool_uses = [
+        b for b in resp.content
+        if getattr(b, "type", None) == "tool_use" and b.name in TERMINAL_TOOLS
+    ]
     if not tool_uses:
         trace["outcome"] = "no_tool_call"
     else:
@@ -283,7 +291,7 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
         if tu.name == "update_task":
             patch = {k: v for k, v in (tu.input or {}).items() if v is not None}
             if "due_date" in patch:
-                patch["due_date"] = _parse_iso(patch["due_date"])
+                patch["due_date"] = _parse_iso(str(patch["due_date"]))
             tasks.update(session, task.id, **patch)
             trace["outcome"] = "updated"
             final_status = "open"
@@ -307,7 +315,7 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
 
 def _build_thread_user_message(raw, task) -> str:
     meta = raw.source_metadata or {}
-    lines = [f"Source: {raw.source}"]
+    lines = [f"Current time: {_now_iso()}", f"Source: {raw.source}"]
     for key in ("from", "to", "subject", "date", "thread_id"):
         val = meta.get(key)
         if val:
@@ -367,9 +375,9 @@ async def _run_new_input_agent(
         "outcome": None,
         "branch": "new_input",
         "embedded_query": query_embedding is not None,
-        "candidates_open": len(open_tasks),
-        "precedents_not_task": len(not_task_hits),
-        "precedents_closed": len(closed_hits),
+        "top_sim_open": round(open_hits[0].similarity, 4) if open_hits else None,
+        "top_sim_not_task": round(not_task_hits[0].similarity, 4) if not_task_hits else None,
+        "top_sim_closed": round(closed_hits[0].similarity, 4) if closed_hits else None,
         "iterations": [],
     }
     final_status = "not_task"
@@ -382,10 +390,8 @@ async def _run_new_input_agent(
     )
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        resp = await client.messages.create(
-            model=settings.claude_model,
-            max_tokens=MAX_TOKENS,
-            temperature=TEMPERATURE,
+        resp = await _create_message(
+            client, settings,
             system=_cached_system(NEW_INPUT_SYSTEM_PROMPT),
             tools=_cached_tools(NEW_INPUT_TOOLS),
             messages=messages,
@@ -396,13 +402,15 @@ async def _run_new_input_agent(
             getattr(resp.usage, "input_tokens", "?"),
             getattr(resp.usage, "output_tokens", "?"),
         )
-        iter_log = {
-            "stop_reason": resp.stop_reason,
+        iter_log: dict[str, Any] = {
             "blocks": [_block_summary(b) for b in resp.content],
         }
         trace["iterations"].append(iter_log)
 
-        tool_uses = [b for b in resp.content if isinstance(b, ToolUseBlock)]
+        tool_uses = [
+            b for b in resp.content
+            if getattr(b, "type", None) == "tool_use" and b.name in TERMINAL_TOOLS
+        ]
         if not tool_uses:
             trace["outcome"] = trace["outcome"] or "no_tool_call"
             break
@@ -413,16 +421,16 @@ async def _run_new_input_agent(
         if tu.name == "create_task":
             payload = dict(tu.input or {})
             if "due_date" in payload:
-                payload["due_date"] = _parse_iso(payload["due_date"])
+                payload["due_date"] = _parse_iso(str(payload["due_date"]))
             task = tasks.create(
                 session,
                 TaskCreate(
-                    title=payload["title"],
-                    description=payload.get("description"),
-                    estimation=payload.get("estimation"),
-                    due_date=payload.get("due_date"),
-                    location=payload.get("location"),
-                    link=payload.get("link"),
+                    title=str(payload["title"]),
+                    description=str(payload.get("description")) if payload.get("description") else None,
+                    estimation=int(payload.get("estimation")) if payload.get("estimation") else None,
+                    due_date=_parse_iso(str(payload.get("due_date"))) if payload.get("due_date") else None,
+                    location=str(payload.get("location")) if payload.get("location") else None,
+                    link=str(payload.get("link")) if payload.get("link") else None,
                 ),
             )
             trace["outcome"] = "task_created"
@@ -430,6 +438,7 @@ async def _run_new_input_agent(
             final_status = "open"
             final_task_id = task.id
             await notify_task_created(task, raw)
+            await add_task_to_calendar(session, task)
             break
         if tu.name == "mark_duplicate":
             existing_id = uuid.UUID((tu.input or {})["existing_task_id"])
@@ -466,7 +475,7 @@ def _build_new_input_message(
     raw, open_tasks, not_task_hits: list[SimilarInput], closed_hits: list[SimilarInput]
 ) -> str:
     meta = raw.source_metadata or {}
-    lines = [f"Source: {raw.source}"]
+    lines = [f"Current time: {_now_iso()}", f"Source: {raw.source}"]
     for key in ("from", "to", "subject", "date", "thread_id", "account"):
         val = meta.get(key)
         if val:
@@ -518,6 +527,10 @@ def _candidate_query_text(content: str, metadata: dict) -> str:
     return "\n".join(parts).strip()
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def _parse_iso(value: str | datetime | None) -> datetime | None:
     if value is None or isinstance(value, datetime):
         return value
@@ -535,9 +548,78 @@ def _cached_tools(tools: list[dict]) -> list[ToolParam]:
     return cast(list[ToolParam], out)
 
 
+def _mcp_servers(settings: Settings) -> list[dict[str, Any]]:
+    """Build the MCP server list, silently skipping any pair that isn't both
+    URL and token set. Empty list → caller stays on the non-beta endpoint."""
+    candidates = [
+        ("github", settings.github_mcp_url, settings.github_mcp_token),
+        ("notion", settings.notion_mcp_url, settings.notion_mcp_token),
+    ]
+    servers: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for name, url, token in candidates:
+        entry = _mcp_entry(name, url, token)
+        if entry is None:
+            skipped.append(name)
+        else:
+            servers.append(entry)
+    if skipped:
+        log.debug("mcp · skipped (missing url or token): %s", ", ".join(skipped))
+    return servers
+
+
+def _mcp_entry(name: str, url: str, token: str) -> dict[str, Any] | None:
+    url = (url or "").strip()
+    token = (token or "").strip()
+    if not url or not token:
+        return None
+    return {
+        "name": name,
+        "type": "url",
+        "url": url,
+        "authorization_token": token,
+    }
+
+
+async def _create_message(client: AsyncAnthropic, settings: Settings, **kwargs: Any):
+    """Issue a Messages API call, routing through the beta endpoint when MCP is on.
+
+    When at least one MCP server is configured, the agent gains access to the
+    server's tools mid-decision (server-side execution by Anthropic); when
+    none are configured, behavior is identical to the prior direct call.
+    """
+    base = dict(
+        model=settings.claude_model,
+        max_tokens=MAX_TOKENS,
+        temperature=TEMPERATURE,
+    )
+    mcp_servers = _mcp_servers(settings)
+    if mcp_servers:
+        return await client.beta.messages.create(
+            **base,
+            mcp_servers=mcp_servers,
+            betas=[MCP_BETA],
+            **kwargs,
+        )
+    return await client.messages.create(**base, **kwargs)
+
+
 def _block_summary(block) -> dict:
-    if isinstance(block, TextBlock):
-        return {"type": "text", "text": (block.text or "")[:500]}
-    if isinstance(block, ToolUseBlock):
+    btype = getattr(block, "type", "unknown")
+    if btype == "text":
+        return {"type": "text", "text": (getattr(block, "text", "") or "")[:500]}
+    if btype == "tool_use":
         return {"type": "tool_use", "name": block.name, "input": block.input}
-    return {"type": getattr(block, "type", "unknown")}
+    if btype == "mcp_tool_use":
+        return {
+            "type": "mcp_tool_use",
+            "server": getattr(block, "server_name", None),
+            "name": getattr(block, "name", None),
+        }
+    if btype == "mcp_tool_result":
+        return {
+            "type": "mcp_tool_result",
+            "tool_use_id": getattr(block, "tool_use_id", None),
+            "is_error": bool(getattr(block, "is_error", False)),
+        }
+    return {"type": btype}

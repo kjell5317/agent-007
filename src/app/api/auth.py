@@ -1,9 +1,19 @@
-"""Login flow — Google SSO with an email allowlist.
+"""Login flow — Google SSO that also captures Gmail + Calendar tokens.
 
-Distinct from the Gmail data-access OAuth at /oauth/google/*: this flow only
-verifies who the user is and sets a signed session cookie. It does not
-persist any token. Reuses the same Google OAuth client (different redirect
-URI, lighter scopes).
+One Google consent screen, two outcomes:
+
+  1. A signed session cookie keyed by email (used by `AuthMiddleware`).
+  2. A persisted token bundle in `oauth_tokens` for the same account, so the
+     Gmail ingestion source and the Calendar service can call Google APIs
+     without a separate authorization step.
+
+Reuses `GoogleOAuthProvider`, which already requests the full scope set
+(openid email · gmail.readonly · calendar.events) with offline access. The
+allowlist is enforced before the bundle is persisted — denied emails leave
+no trace in the database.
+
+The provider-agnostic `/oauth/google/*` routes still work for re-authorizing
+after a scope change; this flow just removes the need to visit them.
 """
 
 from __future__ import annotations
@@ -11,20 +21,18 @@ from __future__ import annotations
 import logging
 import secrets
 import time
-from urllib.parse import urlencode
 
-import httpx
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
 
+from app.auth import get_provider
 from app.config import get_settings
+from app.db import get_session
+from app.storage import oauth_tokens
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = logging.getLogger(__name__)
-
-_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-_TOKEN_URL = "https://oauth2.googleapis.com/token"
-_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 _STATE_TTL_SECONDS = 600
 _state_store: dict[str, float] = {}
@@ -58,15 +66,11 @@ async def login(request: Request) -> RedirectResponse:
     state = secrets.token_urlsafe(32)
     _state_store[state] = time.time() + _STATE_TTL_SECONDS
 
-    params = {
-        "client_id": settings.google_oauth_client_id,
-        "redirect_uri": settings.google_oauth_login_redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": state,
-        "prompt": "select_account",
-    }
-    return RedirectResponse(f"{_AUTH_URL}?{urlencode(params)}")
+    provider = get_provider("google")()
+    url = provider.authorize_url(
+        state=state, redirect_uri=settings.google_oauth_login_redirect_uri,
+    )
+    return RedirectResponse(url)
 
 
 @router.get("/callback")
@@ -74,38 +78,38 @@ async def callback(
     request: Request,
     code: str = Query(...),
     state: str = Query(...),
+    session: Session = Depends(get_session),
 ) -> RedirectResponse:
     expires = _state_store.pop(state, None)
     if expires is None or expires < time.time():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired state")
 
     settings = get_settings()
-    data = {
-        "client_id": settings.google_oauth_client_id,
-        "client_secret": settings.google_oauth_client_secret,
-        "code": code,
-        "grant_type": "authorization_code",
-        "redirect_uri": settings.google_oauth_login_redirect_uri,
-    }
-    async with httpx.AsyncClient(timeout=10) as client:
-        token_resp = await client.post(_TOKEN_URL, data=data)
-        token_resp.raise_for_status()
-        access_token = token_resp.json()["access_token"]
+    provider = get_provider("google")()
+    bundle = await provider.exchange_code(
+        code=code, redirect_uri=settings.google_oauth_login_redirect_uri,
+    )
+    email = (await provider.identify(bundle.access_token)).lower()
 
-        user_resp = await client.get(
-            _USERINFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        user_resp.raise_for_status()
-        userinfo = user_resp.json()
-
-    email = (userinfo.get("email") or "").lower()
     if email not in settings.auth_allowed_emails:
         log.warning("login denied · email=%r not in allowlist", email)
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Access denied for {email!r}")
 
+    # Persist the full token bundle so the same consent covers Gmail ingestion
+    # and the Calendar service. extra_merge preserves any per-source state
+    # already stored under this account (e.g. Gmail's history_id watermark).
+    existing = oauth_tokens.get_decrypted(session, provider="google", account_key=email)
+    oauth_tokens.upsert(
+        session,
+        provider="google",
+        account_key=email,
+        bundle=bundle,
+        extra_merge=existing.extra if existing else None,
+    )
+    session.commit()
+
     request.session["email"] = email
-    log.info("login ok · email=%s", email)
+    log.info("login ok · email=%s scopes=%s", email, " ".join(bundle.scopes))
     return RedirectResponse("/")
 
 

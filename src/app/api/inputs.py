@@ -19,6 +19,7 @@ from app.agent.runner import extract_task_fields
 from app.db import get_session
 from app.schemas.raw_input import RawInputRead
 from app.schemas.task import TaskCreate, TaskPromote, TaskRead
+from app.services.google_calendar import add_task_to_calendar
 from app.storage import raw_inputs, tasks as tasks_store
 
 router = APIRouter(prefix="/inputs", tags=["inputs"])
@@ -101,6 +102,7 @@ async def open_task_from_input(
     }
     raw.agent_trace = trace
     session.commit()
+    await add_task_to_calendar(session, task)
 
     return TaskRead.model_validate(
         {

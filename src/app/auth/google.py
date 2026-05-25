@@ -19,12 +19,15 @@ _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
-# Least-privilege default. Gmail read-only is enough for the ingestion path;
-# add more (`gmail.modify`, `calendar.readonly`, ...) when a source needs them.
+# Least-privilege default. Gmail read-only covers the ingestion path; the
+# calendar.events scope covers the Calendar service in app.services. Existing
+# users must re-authorize once after this list changes — Google's consent
+# screen handles that because we pass prompt=consent below.
 DEFAULT_SCOPES = [
     "openid",
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
 ]
 
 

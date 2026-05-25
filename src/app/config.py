@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # redirect URIs in Google Cloud Console alongside the Gmail one above.
     google_oauth_login_redirect_uri: str = "http://localhost:8000/auth/callback"
 
+    # --- Google Calendar (auto-mirror tasks as events) ---
+    # `primary` is the signed-in user's main calendar. Set to a specific
+    # calendar ID (e.g. "abc...@group.calendar.google.com") to mirror tasks
+    # into a dedicated calendar instead. Empty disables the sync entirely.
+    google_calendar_id: str = "primary"
+    # Duration used when a task has no estimation, in minutes.
+    google_calendar_default_event_minutes: int = 30
+
     # --- Auth (Google SSO with email allowlist) ---
     # Comma-separated emails allowed to log in. Empty → auth middleware is
     # disabled entirely (handy for local dev / running tests).
@@ -91,7 +99,16 @@ class Settings(BaseSettings):
     # per-conversation watermarks (latest message ts) drive incremental sync.
     slack_bootstrap_days: int = 1
 
-    # TODO: add MCP server URLs (GitHub, Notion) when wiring those in
+    # --- MCP servers (optional research tools for the agent) ---
+    # When both URL and token are set for a server, the agent can call its
+    # tools mid-decision to resolve references (e.g. fetch a GitHub issue
+    # mentioned by number, or a Notion page mentioned by title) before
+    # picking create_task / mark_duplicate / mark_not_task.
+    # Leave a pair empty to disable that server.
+    github_mcp_url: str = ""
+    github_mcp_token: str = ""
+    notion_mcp_url: str = ""
+    notion_mcp_token: str = ""
 
 
 @lru_cache

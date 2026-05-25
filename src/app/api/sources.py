@@ -18,7 +18,7 @@ from app.auth import get_provider
 from app.db import get_session
 from app.ingestion.gmail.source import GmailSource
 from app.ingestion.slack.source import SlackSource
-from app.notifications import notify_error
+from app.services.notifications import notify_error
 from app.storage import oauth_tokens, raw_inputs
 
 log = logging.getLogger(__name__)
