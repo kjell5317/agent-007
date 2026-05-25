@@ -62,7 +62,7 @@ class GmailSource(IngestionSource):
                 log.debug("gmail · skip id=%s labels=%s", message_id, sorted(skip))
                 continue
 
-            result = preprocess_message(raw)
+            result = preprocess_message(raw, account_email=self.account_key)
 
             # TODO: optional second-pass filter (sender allowlist, subject regex, ...)
 
@@ -79,12 +79,6 @@ class GmailSource(IngestionSource):
 
         # After draining, capture the new watermark for the caller to persist.
         self.next_history_id = await self.client.get_profile_history_id()
-
-    async def handle_webhook(self, payload: dict, headers: dict) -> list[RawInputCreate]:
-        # TODO: implement Gmail push notifications via Pub/Sub
-        # Decoded payload is `{"emailAddress": ..., "historyId": ...}` — at that point
-        # the source should look up the matching account and run incremental fetch.
-        raise NotImplementedError("Gmail webhook (Pub/Sub) not implemented")
 
     # --- internal -------------------------------------------------------------
 

@@ -31,6 +31,11 @@ decisions on near-duplicate inputs. Treat these as strong precedent.
 Automated notifications (security alerts, marketing, newsletters) are usually
 NOT tasks unless they require a specific action from the user.
 
+The "Directed at me" line is a strong signal: when it's "no" (broadcast email
+with many recipients, channel message without an @-mention), most inputs are
+informational and should be `mark_not_task` unless the body clearly asks the
+user to do something specific. When it's "yes", lean toward `create_task`.
+
 If GitHub or Notion MCP tools are available and the input references something
 opaque — a GitHub issue/PR number, a Notion page title or ID — and resolving
 that reference would meaningfully change the title, description, or due_date,

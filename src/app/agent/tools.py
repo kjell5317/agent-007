@@ -14,6 +14,16 @@ All tools are terminal — the runner stops after the first tool call.
 # Anthropic tool-use schema format.
 # https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview
 
+_CONFIDENCE_SCHEMA = {
+    "type": "number",
+    "minimum": 0.0,
+    "maximum": 1.0,
+    "description": (
+        "Your confidence in this decision, between 0.0 and 1.0. Calibrate: "
+        "≥0.9 = obvious, 0.7 = likely, 0.5 = coin-flip."
+    ),
+}
+
 NEW_INPUT_TOOLS = [
     {
         "name": "create_task",
@@ -35,7 +45,14 @@ NEW_INPUT_TOOLS = [
                     ),
                 },
                 "location": {"type": "string"},
-                "link": {"type": "string", "description": "Most relevant source URL."},
+                "link": {
+                    "type": "string",
+                    "description": (
+                        "Most relevant source URL. When the user message contains "
+                        "a 'Links:' section, pick one of those — do NOT scan the "
+                        "body for URLs unless that section is absent."
+                    ),
+                },
             },
             "required": ["title", "estimation", "due_date"],
         },
@@ -51,6 +68,7 @@ NEW_INPUT_TOOLS = [
             "properties": {
                 "existing_task_id": {"type": "string", "format": "uuid"},
                 "reason": {"type": "string"},
+                "confidence": _CONFIDENCE_SCHEMA,
             },
             "required": ["existing_task_id"],
         },
@@ -60,7 +78,10 @@ NEW_INPUT_TOOLS = [
         "description": "Record that the current input is not actionable for the user.",
         "input_schema": {
             "type": "object",
-            "properties": {"reason": {"type": "string"}},
+            "properties": {
+                "reason": {"type": "string"},
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
             "required": ["reason"],
         },
     },
@@ -82,7 +103,14 @@ THREAD_FOLLOWUP_TOOLS = [
                 "estimation": {"type": "integer"},
                 "due_date": {"type": "string", "description": "ISO 8601 timestamp"},
                 "location": {"type": "string"},
-                "link": {"type": "string"},
+                "link": {
+                    "type": "string",
+                    "description": (
+                        "Source URL. Prefer one from the 'Links:' section of "
+                        "the user message; only scan the body if that section "
+                        "is absent."
+                    ),
+                },
             },
         },
     },
@@ -91,7 +119,10 @@ THREAD_FOLLOWUP_TOOLS = [
         "description": "Mark the linked task as done; the follow-up indicates completion.",
         "input_schema": {
             "type": "object",
-            "properties": {"reason": {"type": "string"}},
+            "properties": {
+                "reason": {"type": "string"},
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
         },
     },
     {
@@ -99,7 +130,10 @@ THREAD_FOLLOWUP_TOOLS = [
         "description": "The follow-up adds no actionable change to the existing task.",
         "input_schema": {
             "type": "object",
-            "properties": {"reason": {"type": "string"}},
+            "properties": {
+                "reason": {"type": "string"},
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
         },
     },
 ]

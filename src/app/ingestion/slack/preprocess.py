@@ -47,16 +47,22 @@ def preprocess_message(
     channel_id: str,
     channel_name: str | None = None,
     user_names: dict[str, str] | None = None,
+    authed_user_id: str | None = None,
+    is_dm: bool = False,
 ) -> PreprocessResult:
     """Turn a Slack message into clean body text + metadata.
 
     `user_names` maps user IDs to display names so mentions render as
     `@alice` instead of `@U123`. Pass an empty dict for tests.
+
+    `authed_user_id` and `is_dm` feed the `directed_at_me` metadata flag.
     """
     user_names = user_names or {}
 
-    text = raw_message.get("text") or ""
-    text, urls = _normalize_refs(text, user_names)
+    raw_text = raw_message.get("text") or ""
+    directed = _directed_at_me(raw_text, authed_user_id, is_dm)
+
+    text, urls = _normalize_refs(raw_text, user_names)
     text = _collapse_whitespace(text)
 
     truncated = False
@@ -77,8 +83,31 @@ def preprocess_message(
         "subtype": raw_message.get("subtype"),
         "bot_id": raw_message.get("bot_id"),
         "urls": urls,
+        "is_dm": is_dm,
+        "directed_at_me": directed,
     }
     return PreprocessResult(body=text, metadata=metadata, truncated=truncated)
+
+
+# DM is treated as direct. `<@user_id>` and `<!channel>` are the literal
+# mrkdwn for @user and @channel respectively — checked on raw text before
+# `_normalize_refs` rewrites them.
+_DIRECT_MENTION_RE = re.compile(r"<@([UW][A-Z0-9]+)(?:\|[^>]+)?>")
+_CHANNEL_BROADCAST = "<!channel>"
+
+
+def _directed_at_me(text: str, authed_user_id: str | None, is_dm: bool) -> bool:
+    if is_dm:
+        return True
+    if not text:
+        return False
+    if _CHANNEL_BROADCAST in text:
+        return True
+    if authed_user_id:
+        for m in _DIRECT_MENTION_RE.finditer(text):
+            if m.group(1) == authed_user_id:
+                return True
+    return False
 
 
 def _normalize_refs(text: str, user_names: dict[str, str]) -> tuple[str, list[str]]:

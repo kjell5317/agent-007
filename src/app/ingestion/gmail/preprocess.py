@@ -21,6 +21,7 @@ import base64
 import binascii
 import re
 from dataclasses import dataclass, field
+from email.utils import getaddresses
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -73,12 +74,19 @@ class PreprocessResult:
     truncated: bool = False
 
 
-def preprocess_message(raw_message: dict) -> PreprocessResult:
+def preprocess_message(
+    raw_message: dict,
+    *,
+    account_email: str | None = None,
+) -> PreprocessResult:
     """Turn a Gmail API message resource into clean body text + metadata.
 
     `raw_message` is the JSON dict returned by `users.messages.get` with
     `format=full`. Robust against missing fields — Gmail sometimes returns
     very minimal payloads (e.g. deleted or filtered messages).
+
+    `account_email` is the address of the connected Gmail account; passed
+    in so we can compute `directed_at_me` in the metadata.
     """
     payload = raw_message.get("payload") or {}
     headers = _index_headers(payload.get("headers") or [])
@@ -115,8 +123,25 @@ def preprocess_message(raw_message: dict) -> PreprocessResult:
         "snippet": raw_message.get("snippet"),
         "urls": urls,
         "has_attachments": _has_attachments(payload),
+        "directed_at_me": _directed_at_me(headers, account_email),
     }
     return PreprocessResult(body=body, metadata=metadata, truncated=truncated)
+
+
+def _directed_at_me(headers: dict[str, str], account_email: str | None) -> bool:
+    """True when the user is one of at most two direct (To:) recipients.
+
+    Returns False when the user only appears in Cc, when To+Cc exceeds two
+    distinct addresses, or when `account_email` is unknown.
+    """
+    if not account_email:
+        return False
+    me = account_email.strip().lower()
+    to = {a.lower() for _, a in getaddresses([headers.get("to") or ""]) if a}
+    cc = {a.lower() for _, a in getaddresses([headers.get("cc") or ""]) if a}
+    if me not in to:
+        return False
+    return len(to | cc) <= 2
 
 
 # --- MIME walk ----------------------------------------------------------------
@@ -262,7 +287,7 @@ def _extract_html_hrefs(html: str) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for a in soup.find_all("a"):
-        href = (a.get("href") or "").strip()
+        href = str(a.get("href") or "").strip()
         if href.startswith(("http://", "https://")) and href not in seen:
             seen.add(href)
             out.append(href)

@@ -75,6 +75,7 @@ class SlackSource(IngestionSource):
         async for conv in self.client.users_conversations():
             channel_id = conv["id"]
             channel_name = conv.get("name") or _dm_label(conv)
+            is_dm = bool(conv.get("is_im"))
             oldest = self.watermarks.get(channel_id) or bootstrap_oldest
             is_bootstrap = channel_id not in self.watermarks
             log.debug(
@@ -113,6 +114,8 @@ class SlackSource(IngestionSource):
                         channel_id=channel_id,
                         channel_name=channel_name,
                         user_names=self._user_cache,
+                        authed_user_id=self.authed_user_id,
+                        is_dm=is_dm,
                     )
 
                     if not result.body.strip():

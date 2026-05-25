@@ -26,6 +26,7 @@ from typing import Any, cast
 
 from anthropic import AsyncAnthropic
 from anthropic.types import MessageParam, ToolParam
+from anthropic.types.beta import BetaRequestMCPServerURLDefinitionParam
 from sqlalchemy.orm import Session
 
 from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PROMPT
@@ -287,9 +288,9 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
         trace["outcome"] = "no_tool_call"
     else:
         tu = tool_uses[0]
-        trace["tool"] = {"name": tu.name, "input": tu.input}
+        tu_input = tu.input or {}
         if tu.name == "update_task":
-            patch = {k: v for k, v in (tu.input or {}).items() if v is not None}
+            patch = {k: v for k, v in tu_input.items() if v is not None}
             if "due_date" in patch:
                 patch["due_date"] = _parse_iso(str(patch["due_date"]))
             tasks.update(session, task.id, **patch)
@@ -297,11 +298,11 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
             final_status = "open"
         elif tu.name == "close_task":
             trace["outcome"] = "closed"
-            trace["reason"] = (tu.input or {}).get("reason")
+            trace["confidence"] = tu_input.get("confidence")
             final_status = "closed"
         elif tu.name == "no_change":
             trace["outcome"] = "no_change"
-            trace["reason"] = (tu.input or {}).get("reason")
+            trace["confidence"] = tu_input.get("confidence")
             final_status = "open"
         else:
             trace["outcome"] = f"unknown_tool:{tu.name}"
@@ -316,10 +317,7 @@ async def _run_thread_followup(session: Session, raw, task) -> dict:
 def _build_thread_user_message(raw, task) -> str:
     meta = raw.source_metadata or {}
     lines = [f"Current time: {_now_iso()}", f"Source: {raw.source}"]
-    for key in ("from", "to", "subject", "date", "thread_id"):
-        val = meta.get(key)
-        if val:
-            lines.append(f"{key.capitalize()}: {val}")
+    _append_meta_lines(lines, meta)
 
     lines.append("")
     lines.append("Current task:")
@@ -416,10 +414,10 @@ async def _run_new_input_agent(
             break
 
         tu = tool_uses[0]
-        iter_log["tool"] = {"name": tu.name, "input": tu.input}
+        tu_input = tu.input or {}
 
         if tu.name == "create_task":
-            payload = dict(tu.input or {})
+            payload = dict(tu_input)
             if "due_date" in payload:
                 payload["due_date"] = _parse_iso(str(payload["due_date"]))
             task = tasks.create(
@@ -427,7 +425,7 @@ async def _run_new_input_agent(
                 TaskCreate(
                     title=str(payload["title"]),
                     description=str(payload.get("description")) if payload.get("description") else None,
-                    estimation=int(payload.get("estimation")) if payload.get("estimation") else None,
+                    estimation=payload.get("estimation") if payload.get("estimation") else None,
                     due_date=_parse_iso(str(payload.get("due_date"))) if payload.get("due_date") else None,
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
@@ -441,16 +439,16 @@ async def _run_new_input_agent(
             await add_task_to_calendar(session, task)
             break
         if tu.name == "mark_duplicate":
-            existing_id = uuid.UUID((tu.input or {})["existing_task_id"])
+            existing_id = uuid.UUID(tu_input["existing_task_id"])
             trace["outcome"] = "duplicate"
             trace["existing_task_id"] = str(existing_id)
-            trace["reason"] = (tu.input or {}).get("reason")
+            trace["confidence"] = tu_input.get("confidence")
             final_status = "duplicate"
             final_task_id = existing_id
             break
         if tu.name == "mark_not_task":
             trace["outcome"] = "not_task"
-            trace["reason"] = (tu.input or {}).get("reason")
+            trace["confidence"] = tu_input.get("confidence")
             final_status = "not_task"
             break
 
@@ -476,10 +474,7 @@ def _build_new_input_message(
 ) -> str:
     meta = raw.source_metadata or {}
     lines = [f"Current time: {_now_iso()}", f"Source: {raw.source}"]
-    for key in ("from", "to", "subject", "date", "thread_id", "account"):
-        val = meta.get(key)
-        if val:
-            lines.append(f"{key.capitalize()}: {val}")
+    _append_meta_lines(lines, meta, include_account=True)
 
     if open_tasks:
         lines.append("")
@@ -529,6 +524,28 @@ def _candidate_query_text(content: str, metadata: dict) -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+# Metadata keys surfaced to the agent. Source-agnostic: missing keys are
+# silently skipped (Gmail has subject/to/cc; Slack has channel_name; etc).
+_META_KEYS = ("from", "to", "cc", "subject", "channel_name", "date", "thread_id")
+
+
+def _append_meta_lines(lines: list[str], meta: dict, *, include_account: bool = False) -> None:
+    keys = _META_KEYS + (("account",) if include_account else ())
+    for key in keys:
+        val = meta.get(key)
+        if val:
+            lines.append(f"{key.replace('_', ' ').capitalize()}: {val}")
+    if "directed_at_me" in meta:
+        lines.append(f"Directed at me: {'yes' if meta['directed_at_me'] else 'no'}")
+    if meta.get("has_attachments"):
+        lines.append("Has attachments: yes")
+    urls = meta.get("urls") or []
+    if urls:
+        lines.append("Links (use one of these as `link`):")
+        for u in urls[:4]:
+            lines.append(f"  - {u}")
 
 
 def _parse_iso(value: str | datetime | None) -> datetime | None:
@@ -597,7 +614,7 @@ async def _create_message(client: AsyncAnthropic, settings: Settings, **kwargs: 
     if mcp_servers:
         return await client.beta.messages.create(
             **base,
-            mcp_servers=mcp_servers,
+            mcp_servers=cast(list[BetaRequestMCPServerURLDefinitionParam], mcp_servers),
             betas=[MCP_BETA],
             **kwargs,
         )
@@ -607,7 +624,7 @@ async def _create_message(client: AsyncAnthropic, settings: Settings, **kwargs: 
 def _block_summary(block) -> dict:
     btype = getattr(block, "type", "unknown")
     if btype == "text":
-        return {"type": "text", "text": (getattr(block, "text", "") or "")[:500]}
+        return {"type": "text", "text": getattr(block, "text", "") or ""}
     if btype == "tool_use":
         return {"type": "tool_use", "name": block.name, "input": block.input}
     if btype == "mcp_tool_use":
