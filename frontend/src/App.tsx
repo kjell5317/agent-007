@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Composer } from "@/components/Composer";
-import { InboxPanel } from "@/components/InboxPanel";
-import { TasksPanel } from "@/components/TasksPanel";
+import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";

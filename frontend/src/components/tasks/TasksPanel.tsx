@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { TaskCard } from "@/components/TaskCard";
+import { TaskCard } from "@/components/tasks/TaskCard";
 import { isOverdue, isToday } from "@/lib/dates";
 import type { Task } from "@/lib/types";
 

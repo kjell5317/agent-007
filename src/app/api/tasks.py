@@ -8,7 +8,11 @@ from app.db import get_session
 from app.models.raw_input import RawInput
 from app.schemas.task import TaskCreationAccepted, TaskPromote, TaskRead, TaskUpdate
 from app.services import task_creation_queue
-from app.services.google_calendar import update_task_in_calendar
+from app.services.google_calendar import (
+    add_task_to_calendar,
+    remove_task_from_calendar,
+    update_task_in_calendar,
+)
 from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -97,8 +101,10 @@ async def update_task(
 
 @router.post("/{task_id}/close", status_code=status.HTTP_204_NO_CONTENT)
 async def close_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
-    """User marks the task done — flip the latest raw_input's status to 'closed'."""
-    if tasks_store.get(session, task_id) is None:
+    """User marks the task done — flip the latest raw_input's status to 'closed'
+    and drop the mirrored calendar event."""
+    task = tasks_store.get(session, task_id)
+    if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     latest = raw_inputs_store.latest_for_task(session, task_id)
     if latest is None:
@@ -106,12 +112,15 @@ async def close_task(task_id: uuid.UUID, session: Session = Depends(get_session)
     latest.status = "closed"
     latest.processed_at = datetime.now(timezone.utc)
     session.commit()
+    await remove_task_from_calendar(session, task)
 
 
 @router.post("/{task_id}/not_task", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_not_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
-    """User retracts the task — flip the latest raw_input's status to 'not_task'."""
-    if tasks_store.get(session, task_id) is None:
+    """User retracts the task — flip the latest raw_input's status to 'not_task'
+    and drop the mirrored calendar event."""
+    task = tasks_store.get(session, task_id)
+    if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     latest = raw_inputs_store.latest_for_task(session, task_id)
     if latest is None:
@@ -119,13 +128,15 @@ async def mark_not_task(task_id: uuid.UUID, session: Session = Depends(get_sessi
     latest.status = "not_task"
     latest.processed_at = datetime.now(timezone.utc)
     session.commit()
+    await remove_task_from_calendar(session, task)
 
 
 @router.post("/{task_id}/reopen", status_code=status.HTTP_204_NO_CONTENT)
 async def reopen_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
     """Re-open a previously closed / not_task / duplicate task by flipping the
-    latest anchor raw_input back to 'open'."""
-    if tasks_store.get(session, task_id) is None:
+    latest anchor raw_input back to 'open' and re-creating its calendar event."""
+    task = tasks_store.get(session, task_id)
+    if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     latest = raw_inputs_store.latest_for_task(session, task_id)
     if latest is None:
@@ -133,3 +144,4 @@ async def reopen_task(task_id: uuid.UUID, session: Session = Depends(get_session
     latest.status = "open"
     latest.processed_at = datetime.now(timezone.utc)
     session.commit()
+    await add_task_to_calendar(session, task)

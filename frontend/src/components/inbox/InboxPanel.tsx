@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { InboxCard, type InboxItem } from "@/components/InboxCard";
+import { InboxCard, type InboxItem } from "@/components/inbox/InboxCard";
 import { Button } from "@/components/ui/button";
 import type { RawInput, Task } from "@/lib/types";
 
