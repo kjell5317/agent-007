@@ -15,9 +15,10 @@ decides:
       - Otherwise (no previous event today, or it ended at home), we start
         from `home_address`.
 
-  * **Online events** — never queue a commute. We still consider whether the
-    user could have gone home before the next physical event (handled by the
-    same "is the gap big enough?" check above).
+  * **Online events** — never queue a commute themselves, but they *do* shift
+    the inbound (home) leg: if a physical event ends and an online starts
+    before there's time to commute home, the inbound leg slides past the
+    online's end. Chained online events repeat the same check.
 
 The planner then writes `🚲 Commute` / `🚆 Commute` events back to the
 calendar (idempotent — re-running replaces in place) and reschedules any task
@@ -58,6 +59,13 @@ class CommutePlan:
     depart: datetime
     arrive: datetime
     related_event_id: str
+    # Why this mode was chosen — surfaced in the calendar event description so
+    # you can tell at a glance whether the planner switched to transit because
+    # of rain, a too-long bike trip, or just because biking wasn't routable.
+    # `None` means "no reason to log" (default: bike fits, no rain).
+    mode_reason: str | None = None
+    rain_pct: int | None = None
+    bike_minutes: int | None = None
 
 
 async def plan_week_commutes(
@@ -110,6 +118,11 @@ async def plan_week_commutes(
     summary["skipped_online"] = len(online) + len(unroutable)
     summary["skipped_unroutable"] = len(unroutable)
 
+    # Online events occupy the user even though they don't trigger a commute;
+    # we need a chronological view to know when the user is actually free to
+    # head home after a physical event.
+    occupied = sorted([*physical, *online], key=lambda e: e.start)
+
     plans: list[CommutePlan] = []
     for idx, ev in enumerate(physical):
         # `_partition` only keeps events with a non-empty location, so this is
@@ -131,13 +144,17 @@ async def plan_week_commutes(
             plans.append(plan)
 
         next_ev = physical[idx + 1] if idx + 1 < len(physical) else None
-        if _should_return_home(ev, next_ev, settings):
+        next_physical_start = next_ev.start if next_ev is not None else None
+        inbound_depart = _effective_inbound_depart(
+            ev, occupied, next_physical_start, settings,
+        )
+        if _should_return_home(inbound_depart, next_ev, settings):
             plan = await _build_leg(
                 session,
                 origin=ev.location,
                 destination=home,
                 arrive_by=None,
-                depart_at=ev.end,
+                depart_at=inbound_depart,
                 home_latlon=home_latlon,
                 settings=settings,
                 related_event_id=ev.id,
@@ -304,22 +321,51 @@ def _outbound_origin(
 
 
 def _should_return_home(
-    ev: CalendarEvent,
+    depart: datetime,
     next_ev: CalendarEvent | None,
     settings,
 ) -> bool:
-    """Return-home decision after `ev`.
+    """Return-home decision given the time the user is actually free to leave.
 
     - Last event of the planning window → always go home.
-    - Next event is online → go home (the user can dial in from there).
-    - Next event is physical & gap is too short for a home detour → stay put.
+    - Otherwise, return home only if there's enough gap between `depart` and
+      the next physical event to fit a layover at home.
     """
     if next_ev is None:
         return True
-    if _is_online(next_ev):
-        return True
-    gap = next_ev.start - ev.end
+    gap = next_ev.start - depart
     return gap >= 2 * timedelta(minutes=settings.commute_home_layover_minutes)
+
+
+def _effective_inbound_depart(
+    ev: CalendarEvent,
+    occupied: list[CalendarEvent],
+    next_physical_start: datetime | None,
+    settings,
+) -> datetime:
+    """When the user is actually free to commute home after `ev`.
+
+    If an online event starts before the user could realistically commute home
+    (less than `commute_bike_max_minutes` between the current departure and
+    the online's start), the user attends the online from wherever they are;
+    departure is pushed past its end. Chains of online events repeat the same
+    check. We never push past `next_physical_start` — anything beyond that is
+    a different physical event's commute to handle.
+    """
+    depart = ev.end
+    threshold = timedelta(minutes=settings.commute_bike_max_minutes)
+    for other in occupied:
+        if other.id == ev.id:
+            continue
+        if other.end <= depart:
+            continue
+        if next_physical_start is not None and other.start >= next_physical_start:
+            break
+        if not _is_online(other):
+            continue
+        if other.start - depart < threshold:
+            depart = max(depart, other.end)
+    return depart
 
 
 async def _build_leg(
@@ -364,15 +410,25 @@ async def _build_leg(
             home_latlon[0], home_latlon[1], when_for_rain,
         )
 
+    bike_minutes: int | None = (
+        round(bike_seconds / 60) if bike_seconds is not None else None
+    )
+
     use_transit = False
+    reason: str | None = None
     if bike_seconds is None:
         use_transit = True
-    else:
-        bike_minutes = bike_seconds / 60
-        if bike_minutes > settings.commute_bike_max_minutes:
-            use_transit = True
-        elif rain_pct is not None and rain_pct >= settings.commute_rain_threshold_pct:
-            use_transit = True
+        reason = "bike route unavailable"
+    elif bike_minutes is not None and bike_minutes > settings.commute_bike_max_minutes:
+        use_transit = True
+        reason = (
+            f"bike {bike_minutes}min > {settings.commute_bike_max_minutes}min threshold"
+        )
+    elif rain_pct is not None and rain_pct >= settings.commute_rain_threshold_pct:
+        use_transit = True
+        reason = (
+            f"rain {rain_pct}% ≥ {settings.commute_rain_threshold_pct}% threshold"
+        )
 
     mode: str
     duration_s: int | None
@@ -399,6 +455,11 @@ async def _build_leg(
                 return None
             mode = "bicycling"
             duration_s = bike_seconds
+            reason = (
+                f"{reason}; transit unavailable, fell back to bike"
+                if reason
+                else "transit unavailable, fell back to bike"
+            )
     else:
         mode = "bicycling"
         duration_s = bike_seconds
@@ -419,6 +480,9 @@ async def _build_leg(
         depart=depart,
         arrive=arrive,
         related_event_id=related_event_id,
+        mode_reason=reason,
+        rain_pct=rain_pct,
+        bike_minutes=bike_minutes,
     )
 
 
@@ -478,4 +542,6 @@ def _description_for(plan: CommutePlan) -> str:
         f"To: {plan.destination}",
         f"Mode: {plan.mode}",
     ]
+    if plan.mode_reason:
+        lines.append(f"Reason: {plan.mode_reason}")
     return "\n".join(lines)
