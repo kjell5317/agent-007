@@ -100,6 +100,14 @@ class GoogleCalendarClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def patch_event(self, calendar_id: str, event_id: str, body: dict) -> dict:
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.patch(
+                f"{_BASE}/calendars/{calendar_id}/events/{event_id}", json=body,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
 
 async def list_week_events(
     session: Session,
@@ -170,6 +178,41 @@ async def create_event(
     return _normalize(raw, calendar_id)
 
 
+async def patch_event(
+    session: Session,
+    *,
+    calendar_id: str,
+    event_id: str,
+    summary: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    account_key: str | None = None,
+) -> CalendarEvent:
+    """Patch an existing event on `calendar_id`. Only provided fields change."""
+    body: dict[str, Any] = {}
+    if summary is not None:
+        body["summary"] = summary
+    if start is not None:
+        if start.tzinfo is None:
+            raise ValueError("start must be timezone-aware")
+        body["start"] = {"dateTime": _rfc3339(start), "timeZone": _tz_name(start)}
+    if end is not None:
+        if end.tzinfo is None:
+            raise ValueError("end must be timezone-aware")
+        body["end"] = {"dateTime": _rfc3339(end), "timeZone": _tz_name(end)}
+    if description is not None:
+        body["description"] = description
+    if location is not None:
+        body["location"] = location
+
+    client = await _authorized_client(session, account_key)
+    log.info("calendar patch · calendar=%s event=%s", calendar_id, event_id)
+    raw = await client.patch_event(calendar_id, event_id, body)
+    return _normalize(raw, calendar_id)
+
+
 async def add_task_to_calendar(session: Session, task) -> None:
     """Fire-and-forget: mirror `task` as a Google Calendar event.
 
@@ -177,7 +220,8 @@ async def add_task_to_calendar(session: Session, task) -> None:
     (falling back to `google_calendar_default_event_minutes` when estimation
     is missing). Skipped silently when due_date is None, when no Google
     account is connected, or when google_calendar_id is empty. Never raises
-    — calendar failures must not break task creation.
+    — calendar failures must not break task creation. On success the new
+    event id is persisted on `task.calendar_event_id` and committed.
     """
     settings = get_settings()
     calendar_id = (settings.google_calendar_id or "").strip()
@@ -187,30 +231,74 @@ async def add_task_to_calendar(session: Session, task) -> None:
         log.debug("calendar sync · task=%s skipped (no due_date)", task.id)
         return
 
-    end = task.due_date
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
-    minutes = task.estimation or settings.google_calendar_default_event_minutes
-    start = end - timedelta(minutes=minutes)
-
-    description_parts: list[str] = []
-    if task.description:
-        description_parts.append(task.description)
-    if task.link:
-        description_parts.append(task.link)
-
+    start, end = _task_window(task, settings)
     try:
-        await create_event(
+        event = await create_event(
             session,
             calendar_id=calendar_id,
             summary=task.title,
             start=start,
             end=end,
-            description="\n\n".join(description_parts) or None,
+            description=_task_description(task),
             location=task.location,
         )
     except Exception as exc:  # noqa: BLE001 — never let calendar break task creation
         log.warning("calendar sync failed · task=%s err=%s", task.id, exc)
+        return
+
+    task.calendar_event_id = event.id
+    session.commit()
+
+
+async def update_task_in_calendar(session: Session, task) -> None:
+    """Fire-and-forget: push the task's current fields to its calendar event.
+
+    If the task has no `calendar_event_id` yet (e.g. it was created without a
+    due_date and now has one), delegates to `add_task_to_calendar` so the
+    event is created. Never raises.
+    """
+    settings = get_settings()
+    calendar_id = (settings.google_calendar_id or "").strip()
+    if not calendar_id:
+        return
+    if task.due_date is None:
+        log.debug("calendar sync · task=%s skipped (no due_date)", task.id)
+        return
+    if not task.calendar_event_id:
+        await add_task_to_calendar(session, task)
+        return
+
+    start, end = _task_window(task, settings)
+    try:
+        await patch_event(
+            session,
+            calendar_id=calendar_id,
+            event_id=task.calendar_event_id,
+            summary=task.title,
+            start=start,
+            end=end,
+            description=_task_description(task) or "",
+            location=task.location or "",
+        )
+    except Exception as exc:  # noqa: BLE001 — never let calendar break task updates
+        log.warning("calendar update failed · task=%s err=%s", task.id, exc)
+
+
+def _task_window(task, settings) -> tuple[datetime, datetime]:
+    end = task.due_date
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    minutes = task.estimation or settings.google_calendar_default_event_minutes
+    return end - timedelta(minutes=minutes), end
+
+
+def _task_description(task) -> str | None:
+    parts: list[str] = []
+    if task.description:
+        parts.append(task.description)
+    if task.link:
+        parts.append(task.link)
+    return "\n\n".join(parts) or None
 
 
 # --- internals ----------------------------------------------------------------

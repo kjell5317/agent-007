@@ -148,10 +148,6 @@ class SlackSource(IngestionSource):
                 )
             self.next_watermarks[channel_id] = new_max
 
-    async def handle_webhook(self, payload: dict, headers: dict) -> list[RawInputCreate]:
-        # TODO: implement Slack Events API webhook (url_verification + event_callback)
-        raise NotImplementedError("Slack Events API webhook not implemented")
-
     def _should_skip(self, msg: dict) -> bool:
         if msg.get("subtype") in SKIP_SUBTYPES:
             return True

@@ -35,18 +35,6 @@ class IngestionSource(ABC):
         raise NotImplementedError
         yield  # pragma: no cover - for typing
 
-    @abstractmethod
-    async def handle_webhook(self, payload: dict, headers: dict) -> list[RawInputCreate]:
-        """Translate a webhook payload into zero or more raw inputs.
-
-        Sources that don't support webhooks may raise NotImplementedError.
-        """
-        raise NotImplementedError
-
-    # TODO: signature verification hook for incoming webhooks (per-provider HMAC)
-    # TODO: cursor / watermark persistence for resumable polling
-
-
 _REGISTRY: dict[str, type[IngestionSource]] = {}
 
 # Preserve the decorated class's concrete type so type-checkers still see

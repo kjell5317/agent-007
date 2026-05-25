@@ -8,7 +8,7 @@ from app.agent.runner import extract_task_fields
 from app.db import get_session
 from app.models.raw_input import RawInput
 from app.schemas.task import TaskCreate, TaskPromote, TaskRead, TaskUpdate
-from app.services.google_calendar import add_task_to_calendar
+from app.services.google_calendar import add_task_to_calendar, update_task_in_calendar
 from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -113,6 +113,7 @@ async def update_task(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     session.commit()
+    await update_task_in_calendar(session, row)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     return _to_read(row, status_)
 
