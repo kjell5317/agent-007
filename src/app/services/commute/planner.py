@@ -105,23 +105,27 @@ async def plan_week_commutes(
     home = settings.home_address
     home_latlon = await geocode(home)
 
-    # NOT_FOUND / ZERO_RESULTS from Maps is a stable signal: the address can't
-    # be reached. Per spec we treat that like an online event — drop it from
-    # the commute walk so it doesn't influence prev/next decisions either.
+    # NOT_FOUND / ZERO_RESULTS from Maps is a stable signal that the address
+    # can't be reached. Such events are folded straight into `online` — same
+    # treatment everywhere downstream: they occupy the user but don't trigger
+    # a commute. The count is reported separately for diagnostics only.
     physical, unroutable = await _filter_routable(session, physical, home)
+    online = sorted([*online, *unroutable], key=lambda e: e.start)
     log.info(
-        "commute planner · physical=%d online=%d unroutable=%d existing_commute=%d window=%dd",
+        "commute planner · physical=%d online=%d (of which unroutable=%d) "
+        "existing_commute=%d window=%dd",
         len(physical), len(online), len(unroutable), len(existing_commutes), WINDOW_DAYS,
     )
 
     summary = _empty_summary()
-    summary["skipped_online"] = len(online) + len(unroutable)
+    summary["skipped_online"] = len(online)
     summary["skipped_unroutable"] = len(unroutable)
 
     # Online events occupy the user even though they don't trigger a commute;
     # we need a chronological view to know when the user is actually free to
     # head home after a physical event.
     occupied = sorted([*physical, *online], key=lambda e: e.start)
+    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
 
     plans: list[CommutePlan] = []
     for idx, ev in enumerate(physical):
@@ -134,7 +138,7 @@ async def plan_week_commutes(
             session,
             origin=outbound_origin,
             destination=ev.location,
-            arrive_by=ev.start,
+            arrive_by=ev.start - buffer,
             home_latlon=home_latlon,
             settings=settings,
             related_event_id=ev.id,
@@ -345,24 +349,28 @@ def _effective_inbound_depart(
 ) -> datetime:
     """When the user is actually free to commute home after `ev`.
 
-    If an online event starts before the user could realistically commute home
-    (less than `commute_bike_max_minutes` between the current departure and
-    the online's start), the user attends the online from wherever they are;
-    departure is pushed past its end. Chains of online events repeat the same
-    check. We never push past `next_physical_start` — anything beyond that is
-    a different physical event's commute to handle.
+    Starts from `ev.end + commute_event_buffer_minutes` (the user lingers a few
+    minutes after the meeting). If an online event starts before the user
+    could realistically commute home (less than `commute_bike_max_minutes`
+    between the current departure and the online's start), the user attends
+    the online from wherever they are; departure is pushed past its end.
+    Chains of online events repeat the same check. We never push past
+    `next_physical_start` — anything beyond that is a different physical
+    event's commute to handle.
     """
-    depart = ev.end
+    depart = ev.end + timedelta(minutes=settings.commute_event_buffer_minutes)
     threshold = timedelta(minutes=settings.commute_bike_max_minutes)
     for other in occupied:
         if other.id == ev.id:
             continue
         if other.end <= depart:
             continue
+        # `next_physical_start` bounds this window — anything at/after it is
+        # the next physical event's problem to handle. Combined with skipping
+        # `ev` itself, what remains in the window is exactly the non-commute
+        # events that occupy the user (online + unroutable).
         if next_physical_start is not None and other.start >= next_physical_start:
             break
-        if not _is_online(other):
-            continue
         if other.start - depart < threshold:
             depart = max(depart, other.end)
     return depart
@@ -532,7 +540,7 @@ async def _write_plans(
 
 def _summary_for(plan: CommutePlan) -> str:
     icon = "🚲" if plan.mode == "bicycling" else "🚆"
-    return f"{icon} To {plan.destination.split(' ')[0]}"
+    return f"{icon} To {plan.destination.split(',')[0]}"
 
 
 def _description_for(plan: CommutePlan) -> str:

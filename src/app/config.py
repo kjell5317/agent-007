@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # with this much buffer at home, the planner sends you home in between;
     # otherwise it routes A → B directly.
     commute_home_layover_minutes: int = 60
+    # Slack on each side of a physical event: arrive this many minutes before
+    # `start` (outbound) and depart this many minutes after `end` (inbound).
+    # Keeps commute events from butting flush against the meeting they bracket.
+    commute_event_buffer_minutes: int = 5
 
     # --- Home Assistant (push notifications) ---
     # Leave url or token empty to disable notifications outright.
