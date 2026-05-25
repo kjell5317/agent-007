@@ -23,6 +23,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.services.commute import maps_client
 from app.services.commute.maps_client import MapsLookupError, TravelMode
 from app.storage import route_cache as route_cache_store
@@ -31,6 +32,21 @@ log = logging.getLogger(__name__)
 
 BIKE_BUCKET = 0
 NEGATIVE_CACHE_SENTINEL = -1
+
+
+def _normalize_location(loc: str) -> str:
+    """Resolve user-supplied aliases to real addresses.
+
+    Today the only alias is `home` (case-insensitive, whitespace-trimmed),
+    which expands to `settings.home_address`. Frontend tasks and the agent
+    can both type `Home` as a location and it'll route correctly. Falls back
+    to the original string when no alias matches or when home isn't set.
+    """
+    if loc.strip().lower() == "home":
+        home = get_settings().home_address
+        if home:
+            return home
+    return loc
 
 
 def hour_bucket(when: datetime, mode: TravelMode) -> int:
@@ -57,6 +73,10 @@ async def resolve_duration(
     A `None` return from a cache hit is permanent (negative cache); a `None`
     from a transient failure is not persisted, so the next call will retry.
     """
+    # Normalize before hitting the cache so `home`, `Home`, and the literal
+    # configured address all collapse to the same cache row.
+    origin = _normalize_location(origin)
+    destination = _normalize_location(destination)
     bucket = hour_bucket(departure, mode)
     cached = route_cache_store.lookup(
         session,

@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -8,12 +9,15 @@ from app.db import get_session
 from app.models.raw_input import RawInput
 from app.schemas.task import TaskCreationAccepted, TaskPromote, TaskRead, TaskUpdate
 from app.services import task_creation_queue
+from app.services.commute import plan_week_commutes
 from app.services.google_calendar import (
     add_task_to_calendar,
     remove_task_from_calendar,
     update_task_in_calendar,
 )
 from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -87,6 +91,9 @@ async def create_task(
     return TaskCreationAccepted(raw_input_id=raw.id, status="processing")
 
 
+_COMMUTE_TRIGGER_FIELDS = frozenset({"estimation", "due_date", "location"})
+
+
 @router.patch("/{task_id}", response_model=TaskRead)
 async def update_task(
     task_id: uuid.UUID, payload: TaskUpdate, session: Session = Depends(get_session)
@@ -97,6 +104,17 @@ async def update_task(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     session.commit()
     await update_task_in_calendar(session, row)
+
+    # Re-plan commutes when a field that affects scheduling or location changes.
+    # `update_task_in_calendar` already re-seats the slot on every patch; here
+    # we propagate that to the week's commute plan when the change matters for
+    # routing — fire-and-forget so commute failure can't break the API response.
+    if _COMMUTE_TRIGGER_FIELDS.intersection(fields):
+        try:
+            await plan_week_commutes(session)
+        except Exception as exc:  # noqa: BLE001 — never let commute break a task update
+            log.warning("commute replan after task patch failed · task=%s err=%s", task_id, exc)
+
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     return _to_read(row, status_)
 

@@ -25,7 +25,13 @@ interface Props {
   onChanged: () => Promise<void> | void;
 }
 
-type Field = "title" | "due_date" | "estimation" | "location" | "link" | "label";
+type Field =
+  | "title"
+  | "due_date"
+  | "estimation"
+  | "location"
+  | "link"
+  | "label";
 type Draft = Record<Field, string>;
 
 const CROSS_OFF_MS = 350;
@@ -170,9 +176,6 @@ export function TaskCard({ task, onChanged }: Props) {
                   {fmtDue(task.due_date)}
                 </Badge>
               )}
-              {task.status === "duplicate" && (
-                <Badge variant="duplicate">duplicate</Badge>
-              )}
               {task.label && (
                 <span
                   title={labelMeta?.description ?? task.label}
@@ -185,9 +188,14 @@ export function TaskCard({ task, onChanged }: Props) {
                 </span>
               )}
               {task.location && (
-                <span className="inline-flex items-center gap-1">
+                <span
+                  className="inline-flex items-center gap-1"
+                  title={task.location}
+                >
                   <MapPin className="h-3 w-3" />
-                  {task.location}
+                  {task.location.length > 10
+                    ? `${task.location.slice(0, 10)}...`
+                    : task.location}
                 </span>
               )}
               {task.estimation != null && (
