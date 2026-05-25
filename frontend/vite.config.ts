@@ -23,6 +23,8 @@ export default defineConfig({
       "/inputs": "http://localhost:8000",
       "/sources": "http://localhost:8000",
       "/oauth": "http://localhost:8000",
+      "/labels": "http://localhost:8000",
+      "/settings": "http://localhost:8000",
     },
   },
 });

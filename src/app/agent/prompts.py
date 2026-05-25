@@ -28,6 +28,18 @@ Given a single semi-structured input from one of the user's sources
   `label` enum values on `create_task` plausibly fits the input — an item
   that doesn't belong to any of the user's categories is unlikely to be
   a real task for them. If uncertain, prefer creating a task.
+  When the input contains a genuinely useful standalone fact (someone's
+  role, an account/ID, a policy, a one-off reference), include it under
+  `notes` so future runs can recall it. Skip ephemeral content (greetings,
+  newsletters, marketing).
+
+You also have one non-terminal tool:
+
+- `search_notes(query)` — look up the agent's long-term memory (facts
+  saved from past `mark_not_task` inputs). Call this before deciding when
+  the current input mentions a person, project, account, or fact you might
+  have recorded earlier. You may call it more than once. After searching
+  you still need to call one of the terminal tools above to finish.
 
 The user message may include a "Past similar inputs" section listing prior
 decisions on near-duplicate inputs. Treat these as strong precedent.

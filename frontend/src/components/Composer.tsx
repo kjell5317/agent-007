@@ -66,12 +66,15 @@ export function Composer({ onCreated }: Props) {
     const text = value.trim();
     if (!text || submitting) return;
     setSubmitting(true);
+    // Show the loading toast immediately — the POST itself takes a moment,
+    // so without this the user gets no feedback until polling starts.
+    const toastId = toast.loading("Creating task…", { duration: Infinity });
     try {
       const { raw_input_id } = await api.createTask(text);
       setValue("");
-      const toastId = toast.loading("Creating task…", { duration: Infinity });
       pollUntilDone(raw_input_id, toastId);
     } catch (err) {
+      toast.dismiss(toastId);
       toast.error((err as Error).message);
     } finally {
       setSubmitting(false);

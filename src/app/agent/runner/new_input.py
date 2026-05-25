@@ -29,10 +29,11 @@ from app.agent.runner.llm import (
 from app.agent.runner.text import append_meta_lines, now_iso, parse_iso
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
+from app.embeddings import embed
 from app.schemas.task import TaskCreate
 from app.services.google_calendar import add_task_to_calendar
 from app.services.notifications import notify_task_created
-from app.storage import raw_inputs, tasks
+from app.storage import notes as notes_store, raw_inputs, tasks
 from app.storage.raw_inputs import SimilarInput
 
 log = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ async def run_new_input_agent(
         raw.id, len(open_tasks), len(not_task_hits), len(closed_hits),
     )
 
+    done = False
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await create_message(
             client, settings,
@@ -100,15 +102,40 @@ async def run_new_input_agent(
         }
         trace["iterations"].append(iter_log)
 
-        tool_uses = [
-            b for b in resp.content
-            if getattr(b, "type", None) == "tool_use" and b.name in TERMINAL_TOOLS
+        all_tool_uses = [
+            b for b in resp.content if getattr(b, "type", None) == "tool_use"
         ]
-        if not tool_uses:
+        terminal_uses = [b for b in all_tool_uses if b.name in TERMINAL_TOOLS]
+        non_terminal_uses = [b for b in all_tool_uses if b.name not in TERMINAL_TOOLS]
+
+        # Handle non-terminal tools (search_notes) by appending tool_results
+        # and continuing the loop. If the same response also contains a
+        # terminal tool, we still let that win below — the agent can do both
+        # in one turn.
+        if non_terminal_uses and not terminal_uses:
+            results = []
+            for tu in non_terminal_uses:
+                if tu.name == "search_notes":
+                    out = await _run_search_notes(session, str((tu.input or {}).get("query") or ""))
+                else:
+                    out = f"unknown tool: {tu.name}"
+                iter_log.setdefault("tool_results", []).append(
+                    {"name": tu.name, "preview": out[:200]}
+                )
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": out,
+                })
+            messages.append({"role": "assistant", "content": resp.content})
+            messages.append({"role": "user", "content": results})
+            continue
+
+        if not terminal_uses:
             trace["outcome"] = trace["outcome"] or "no_tool_call"
             break
 
-        tu = tool_uses[0]
+        tu = terminal_uses[0]
         tu_input = tu.input or {}
 
         if tu.name == "create_task":
@@ -134,6 +161,7 @@ async def run_new_input_agent(
             final_task_id = task.id
             await notify_task_created(task, raw)
             await add_task_to_calendar(session, task)
+            done = True
             break
         if tu.name == "mark_duplicate":
             existing_id = uuid.UUID(tu_input["existing_task_id"])
@@ -142,17 +170,24 @@ async def run_new_input_agent(
             trace["confidence"] = tu_input.get("confidence")
             final_status = "duplicate"
             final_task_id = existing_id
+            done = True
             break
         if tu.name == "mark_not_task":
             trace["outcome"] = "not_task"
             trace["confidence"] = tu_input.get("confidence")
             final_status = "not_task"
+            raw_notes = tu_input.get("notes") or []
+            saved = await _save_notes(session, raw.id, raw_notes)
+            if saved:
+                trace["notes_saved"] = saved
+            done = True
             break
 
         # Unknown tool — surface and stop.
         trace["outcome"] = f"unknown_tool:{tu.name}"
+        done = True
         break
-    else:
+    if not done:
         trace["outcome"] = trace["outcome"] or "max_iterations"
 
     raw_inputs.finalize(
@@ -164,6 +199,45 @@ async def run_new_input_agent(
     )
     session.commit()
     return trace
+
+
+async def _run_search_notes(session, query: str) -> str:
+    """Embed the query, fetch top-k similar notes, format as text for the LLM."""
+    query = (query or "").strip()
+    if not query:
+        return "search_notes: empty query."
+    vec = await embed(query)
+    if vec is None:
+        return "search_notes: embeddings disabled — no notes available."
+    hits = notes_store.search_similar(session, embedding=vec, k=5)
+    if not hits:
+        return "search_notes: no matching notes."
+    lines = [f"- sim={h.similarity:.2f} | {h.content}" for h in hits]
+    return "Notes:\n" + "\n".join(lines)
+
+
+async def _save_notes(session, raw_input_id, raw_notes) -> list[str]:
+    """Persist the notes the agent attached to `mark_not_task`. Each note is
+    embedded so future `search_notes` calls can retrieve it. Returns the
+    list of saved note contents (for the trace)."""
+    saved: list[str] = []
+    if not isinstance(raw_notes, list):
+        return saved
+    for entry in raw_notes:
+        content = str(entry or "").strip()
+        if not content:
+            continue
+        vec = await embed(content)
+        notes_store.create(
+            session,
+            content=content,
+            source_raw_input_id=raw_input_id,
+            embedding=vec,
+        )
+        saved.append(content)
+    if saved:
+        session.commit()
+    return saved
 
 
 def _build_new_input_message(

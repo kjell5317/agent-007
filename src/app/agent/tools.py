@@ -139,6 +139,31 @@ if _update_label:
 
 NEW_INPUT_TOOLS = [
     {
+        "name": "search_notes",
+        "description": (
+            "Look up previously saved notes (the agent's long-term memory carved "
+            "out of past `mark_not_task` inputs). Use this before deciding when "
+            "the current input references a person, project, account, or fact "
+            "you might have recorded earlier. Returns the top matching notes "
+            "by semantic similarity. Non-terminal — you can call it more than "
+            "once and you still need a terminal tool (`create_task`, "
+            "`mark_duplicate`, or `mark_not_task`) to finish."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "What to look up. A short phrase or sentence describing "
+                        "the entity or fact you're trying to remember."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "create_task",
         "description": "Persist a new task extracted from the current raw input.",
         "input_schema": {
@@ -165,12 +190,28 @@ NEW_INPUT_TOOLS = [
     },
     {
         "name": "mark_not_task",
-        "description": "Record that the current input is not actionable for the user.",
+        "description": (
+            "Record that the current input is not actionable for the user. "
+            "Optionally include `notes` — short standalone facts worth keeping "
+            "as long-term memory (someone's role, an account number, a "
+            "reference, a policy). Future agent runs can retrieve these via "
+            "`search_notes`. Only save genuinely useful information; skip "
+            "ephemeral content."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "reason": {"type": "string"},
                 "confidence": _CONFIDENCE_SCHEMA,
+                "notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Zero or more short, self-contained facts to remember "
+                        "for future decisions. Each entry must stand on its own "
+                        "without the original input."
+                    ),
+                },
             },
             "required": ["reason"],
         },
