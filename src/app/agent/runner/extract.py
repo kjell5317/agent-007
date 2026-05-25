@@ -34,6 +34,8 @@ your only job is to populate `create_task` accurately:
   pick the single best-fitting value from the enum. The user has already
   committed to this being a task, so pick the closest match even if the
   fit is loose.
+- ai_doable: required — `yes` / `no` / `unsure`, as described in the
+  tool schema.
 - description, location, link: include when supported by the input.
 
 Call `create_task` exactly once. Do not narrate.

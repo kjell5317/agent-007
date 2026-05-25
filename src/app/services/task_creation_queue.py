@@ -101,6 +101,7 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
                 location=merged.get("location"),
                 link=merged.get("link"),
                 label=merged.get("label"),
+                ai_doable=merged.get("ai_doable"),
             ),
         )
 

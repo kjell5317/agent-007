@@ -18,7 +18,7 @@ import { api } from "@/lib/api";
 import { fmtDue, isOverdue } from "@/lib/dates";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import type { Label, Task } from "@/lib/types";
+import type { AiDoable, Label, Task } from "@/lib/types";
 
 interface Props {
   task: Task;
@@ -191,6 +191,9 @@ export function TaskCard({ task, onChanged }: Props) {
                 <span className="inline-flex items-center gap-1">
                   <Timer className="h-3 w-3" />
                   {task.estimation} min
+                  {task.ai_doable && (
+                    <AiDoableDot value={task.ai_doable} />
+                  )}
                 </span>
               )}
             </div>
@@ -308,6 +311,28 @@ function FieldRow({
       </span>
       {children}
     </label>
+  );
+}
+
+function AiDoableDot({ value }: { value: AiDoable }) {
+  const color =
+    value === "yes"
+      ? "bg-emerald-500"
+      : value === "no"
+        ? "bg-red-500"
+        : "bg-amber-400";
+  const title =
+    value === "yes"
+      ? "AI-doable: yes"
+      : value === "no"
+        ? "AI-doable: no"
+        : "AI-doable: unsure";
+  return (
+    <span
+      aria-label={title}
+      title={title}
+      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", color)}
+    />
   );
 }
 

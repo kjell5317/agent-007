@@ -12,6 +12,7 @@ class TaskBase(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
+    ai_doable: str | None = None  # "yes" / "no" / "unsure"
 
 
 class TaskCreate(TaskBase):
@@ -26,6 +27,7 @@ class TaskUpdate(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
+    ai_doable: str | None = None
 
 
 class TaskPromote(BaseModel):
@@ -40,6 +42,7 @@ class TaskPromote(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
+    ai_doable: str | None = None
 
 
 class TaskCreationAccepted(BaseModel):

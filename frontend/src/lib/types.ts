@@ -1,5 +1,7 @@
 export type TaskStatus = "open" | "duplicate" | "closed" | "not_task";
 
+export type AiDoable = "yes" | "no" | "unsure";
+
 export interface Task {
   id: string;
   title: string;
@@ -9,6 +11,7 @@ export interface Task {
   estimation: number | null;
   location: string | null;
   label: string | null;
+  ai_doable: AiDoable | null;
   status: TaskStatus;
   created_at: string;
   updated_at: string;

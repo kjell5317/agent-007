@@ -19,6 +19,7 @@ def create(session: Session, payload: TaskCreate) -> Task:
         estimation=payload.estimation,
         location=payload.location,
         label=payload.label,
+        ai_doable=payload.ai_doable,
     )
     session.add(row)
     session.flush()
@@ -40,6 +41,7 @@ def update(
     estimation: int | None = None,
     location: str | None = None,
     label: str | None = None,
+    ai_doable: str | None = None,
 ) -> Task | None:
     row = session.get(Task, task_id)
     if row is None:
@@ -58,6 +60,8 @@ def update(
         row.location = location
     if label is not None:
         row.label = label
+    if ai_doable is not None:
+        row.ai_doable = ai_doable
     session.flush()
     return row
 

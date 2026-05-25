@@ -18,7 +18,7 @@ from app.config import Settings
 
 log = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 2
+MAX_TOOL_ITERATIONS = 3
 MAX_TOKENS = 1024
 TEMPERATURE = 0.4
 MCP_BETA = "mcp-client-2025-04-04"

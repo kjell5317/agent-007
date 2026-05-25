@@ -125,6 +125,7 @@ async def run_new_input_agent(
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
                     label=str(payload.get("label")) if payload.get("label") else None,
+                    ai_doable=str(payload.get("ai_doable")) if payload.get("ai_doable") else None,
                 ),
             )
             trace["outcome"] = "task_created"

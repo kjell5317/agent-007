@@ -28,6 +28,10 @@ class Task(Base):
     # the labels config was populated may have no label.
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Agent's judgement of whether an AI assistant could meaningfully do
+    # this task: "yes" / "no" / "unsure". Nullable for legacy rows.
+    ai_doable: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
     calendar_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

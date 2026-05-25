@@ -28,6 +28,7 @@ def _to_read(task, status_: str) -> TaskRead:
         "estimation": task.estimation,
         "location": task.location,
         "label": task.label,
+        "ai_doable": task.ai_doable,
         "status": status_,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
