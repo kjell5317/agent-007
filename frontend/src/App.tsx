@@ -9,7 +9,7 @@ import { useAppData } from "@/hooks/useAppData";
 import { api } from "@/lib/api";
 
 export function App() {
-  const { tasks, inputs, closedTasks, refresh } = useAppData();
+  const { tasks, inputs, closedTasks, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const [unreadInbox, setUnreadInbox] = useState(0);
 
   const loadUnread = useCallback(async () => {
@@ -71,6 +71,8 @@ export function App() {
               inputs={inputs}
               closedTasks={closedTasks}
               onChanged={refresh}
+              onLoadMore={loadMoreInputs}
+              hasMore={hasMoreInputs}
             />
           </TabsContent>
         </Tabs>

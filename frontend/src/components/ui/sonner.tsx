@@ -4,7 +4,7 @@ export function Toaster(props: React.ComponentProps<typeof Sonner>) {
   return (
     <Sonner
       position="bottom-center"
-      offset={96}
+      offset="calc(env(safe-area-inset-bottom, 0px) + 80px)"
       toastOptions={{
         classNames: {
           toast:

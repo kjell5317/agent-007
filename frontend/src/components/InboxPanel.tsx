@@ -1,14 +1,19 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { InboxCard, type InboxItem } from "@/components/InboxCard";
+import { Button } from "@/components/ui/button";
 import type { RawInput, Task } from "@/lib/types";
 
 interface Props {
   inputs: RawInput[];
   closedTasks: Task[];
   onChanged: () => Promise<void> | void;
+  onLoadMore: () => Promise<void>;
+  hasMore: boolean;
 }
 
-export function InboxPanel({ inputs, closedTasks, onChanged }: Props) {
+export function InboxPanel({ inputs, closedTasks, onChanged, onLoadMore, hasMore }: Props) {
+  const [loadingMore, setLoadingMore] = useState(false);
+
   const items = useMemo<InboxItem[]>(() => {
     const inputItems: InboxItem[] = inputs
       .filter((r) => {
@@ -36,10 +41,35 @@ export function InboxPanel({ inputs, closedTasks, onChanged }: Props) {
     );
   }, [inputs, closedTasks]);
 
+  const handleLoadMore = async () => {
+    setLoadingMore(true);
+    try {
+      await onLoadMore();
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const loadMoreButton = hasMore ? (
+    <div className="flex justify-center pt-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleLoadMore}
+        disabled={loadingMore}
+      >
+        {loadingMore ? "Loading…" : "Load more"}
+      </Button>
+    </div>
+  ) : null;
+
   if (items.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-        Inbox is empty.
+      <div className="space-y-2">
+        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+          Inbox is empty.
+        </div>
+        {loadMoreButton}
       </div>
     );
   }
@@ -49,6 +79,7 @@ export function InboxPanel({ inputs, closedTasks, onChanged }: Props) {
       {items.map((it) => (
         <InboxCard key={`${it.kind}:${it.id}`} item={it} onChanged={onChanged} />
       ))}
+      {loadMoreButton}
     </div>
   );
 }

@@ -21,6 +21,7 @@ from app.api.sources import poll_sources
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 from app.db import SessionLocal
+from app.services import task_creation_queue
 
 AUTO_POLL_INTERVAL_S = 300
 
@@ -74,6 +75,7 @@ async def _auto_poll_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    await task_creation_queue.start()
     task = asyncio.create_task(_auto_poll_loop(), name="auto-poll")
     try:
         yield
@@ -83,6 +85,7 @@ async def _lifespan(_app: FastAPI):
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+        await task_creation_queue.stop()
 
 
 def create_app() -> FastAPI:

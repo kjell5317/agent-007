@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.agent.runner import extract_task_fields
 from app.db import get_session
 from app.models.raw_input import RawInput
-from app.schemas.task import TaskCreate, TaskPromote, TaskRead, TaskUpdate
-from app.services.google_calendar import add_task_to_calendar, update_task_in_calendar
+from app.schemas.task import TaskCreationAccepted, TaskPromote, TaskRead, TaskUpdate
+from app.services import task_creation_queue
+from app.services.google_calendar import update_task_in_calendar
 from app.storage import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -49,12 +49,17 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
     return _to_read(row, status_)
 
 
-@router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-async def create_task(payload: TaskPromote, session: Session = Depends(get_session)) -> TaskRead:
-    """Manual task create. Mirrors POST /inputs/{id}/open_task: a synthetic
-    raw_input is the anchor, and the agent fills any of the required fields
-    (title/estimation/due_date) the user didn't supply. User-provided fields
-    always override the agent's guesses."""
+@router.post(
+    "", response_model=TaskCreationAccepted, status_code=status.HTTP_202_ACCEPTED
+)
+async def create_task(
+    payload: TaskPromote, session: Session = Depends(get_session)
+) -> TaskCreationAccepted:
+    """Manual task create. Anchors a synthetic raw_input synchronously and
+    hands the agent work (extracting title/estimation/due_date, persisting the
+    task, mirroring to Calendar) to the in-process queue worker. The client
+    polls `GET /inputs/{raw_input_id}` to know when the task is ready, which
+    means a second POST can run while a previous one is still processing."""
     user_fields = {k: v for k, v in payload.model_dump().items() if v is not None}
     content = (user_fields.get("description") or user_fields.get("title") or "").strip()
     if not content:
@@ -69,39 +74,11 @@ async def create_task(payload: TaskPromote, session: Session = Depends(get_sessi
         status="processing",
     )
     session.add(raw)
-    session.flush()
-
-    needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
-    agent_fields: dict = {}
-    if needs_agent:
-        agent_fields = await extract_task_fields(raw)
-
-    merged = {**agent_fields, **user_fields}
-    task = tasks_store.create(
-        session,
-        TaskCreate(
-            title=merged["title"],
-            description=merged.get("description"),
-            estimation=merged.get("estimation"),
-            due_date=merged.get("due_date"),
-            location=merged.get("location"),
-            link=merged.get("link"),
-        ),
-    )
-
-    raw.status = "open"
-    raw.task_id = task.id
-    raw.processed_at = datetime.now(timezone.utc)
-    raw.agent_trace = {
-        "outcome": "task_created",
-        "branch": "manual",
-        "task_id": str(task.id),
-        "agent_extracted": sorted(agent_fields.keys()) if agent_fields else [],
-        "user_provided": sorted(user_fields.keys()),
-    }
     session.commit()
-    await add_task_to_calendar(session, task)
-    return _to_read(task, "open")
+    session.refresh(raw)
+
+    await task_creation_queue.enqueue(raw.id, user_fields)
+    return TaskCreationAccepted(raw_input_id=raw.id, status="processing")
 
 
 @router.patch("/{task_id}", response_model=TaskRead)

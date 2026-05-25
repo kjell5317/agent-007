@@ -39,6 +39,15 @@ class TaskPromote(BaseModel):
     location: str | None = None
 
 
+class TaskCreationAccepted(BaseModel):
+    """Response for POST /tasks — the raw_input has landed, agent work is
+    queued. Clients poll GET /inputs/{raw_input_id} until status moves off
+    'processing' to know when the task itself is ready."""
+
+    raw_input_id: uuid.UUID
+    status: str = "processing"
+
+
 class TaskRead(TaskBase):
     id: uuid.UUID
     status: str  # derived from latest linked raw_input

@@ -37,7 +37,7 @@ export const api = {
   listTasks: (status?: string) =>
     request<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
   createTask: (text: string) =>
-    request<Task>("/tasks", {
+    request<TaskCreationAccepted>("/tasks", {
       method: "POST",
       body: JSON.stringify({ title: text }),
     }),
@@ -60,6 +60,7 @@ export const api = {
     if (params.source) qs.set("source", params.source);
     return request<RawInput[]>(`/inputs?${qs.toString()}`);
   },
+  getInput: (id: string) => request<RawInput>(`/inputs/${id}`),
   promoteInput: (id: string, title?: string) =>
     request<Task>(`/inputs/${id}/open_task`, {
       method: "POST",
@@ -83,6 +84,11 @@ export const api = {
 
 export interface AppSettings {
   auto_poll_enabled: boolean;
+}
+
+export interface TaskCreationAccepted {
+  raw_input_id: string;
+  status: string;
 }
 
 export interface UnreadInputs {
