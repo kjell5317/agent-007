@@ -73,6 +73,13 @@ export function Topbar({ onSynced }: Props) {
           failed.push(SOURCES[i]);
         }
       });
+
+      // Commute planning runs after source polling so freshly-mirrored task
+      // events have a chance to land on the calendar before the planner reads
+      // it. Failures are reported alongside source failures rather than
+      // hidden — a missing maps key shouldn't fail silently.
+      const commute = await api.planCommutes().catch((err: Error) => err);
+
       if (failed.length === SOURCES.length) {
         toast.error(`Sync failed: ${failed.join(", ")}`, { id: toastId });
       } else {
@@ -80,6 +87,16 @@ export function Topbar({ onSynced }: Props) {
           `${fetched} fetched`,
           `${created} new task${created === 1 ? "" : "s"}`,
         ];
+        if (commute instanceof Error) {
+          parts.push("commute failed");
+        } else {
+          parts.push(`${commute.planned} commute${commute.planned === 1 ? "" : "s"}`);
+          if (commute.rescheduled_tasks > 0) {
+            parts.push(
+              `${commute.rescheduled_tasks} task${commute.rescheduled_tasks === 1 ? "" : "s"} moved`,
+            );
+          }
+        }
         if (failed.length) parts.push(`${failed.join(", ")} failed`);
         toast.success(`Synced: ${parts.join(" · ")}`, { id: toastId });
         await onSynced();

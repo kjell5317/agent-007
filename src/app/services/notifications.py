@@ -70,7 +70,7 @@ async def notify_task_created(task, raw) -> None:
     if task.due_date:
         parts.append(f"{_fmt_when(task.due_date)}")
     if task.estimation:
-        parts.append(f"{task.estimation}m")
+        parts.append(f"{task.estimation}min")
     details = " · ".join(parts)
     urls = meta.get("urls") or []
     await notify(

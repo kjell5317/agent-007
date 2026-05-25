@@ -74,6 +74,9 @@ export const api = {
   poll: (source: string) =>
     request<SourcePollResult>(`/sources/poll?source=${source}`, { method: "POST" }),
 
+  planCommutes: () =>
+    request<CommutePlanResult>("/commute/plan", { method: "POST" }),
+
   listLabels: () => request<Label[]>("/labels"),
 
   getSettings: () => request<AppSettings>("/settings"),
@@ -96,4 +99,12 @@ export interface TaskCreationAccepted {
 export interface UnreadInputs {
   count: number;
   last_seen_at: string;
+}
+
+export interface CommutePlanResult {
+  planned: number;
+  skipped_online: number;
+  skipped_no_location: number;
+  rescheduled_tasks: number;
+  errors: { setup?: string; [k: string]: unknown }[];
 }
