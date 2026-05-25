@@ -16,7 +16,7 @@ import app.ingestion.gmail  # noqa: F401
 import app.ingestion.slack  # noqa: F401
 from app import runtime_state
 from app.api import auth as auth_router
-from app.api import inputs, oauth, settings as settings_router, sources, tasks
+from app.api import inputs, labels, oauth, settings as settings_router, sources, tasks
 from app.api.sources import poll_sources
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
@@ -100,6 +100,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router.router)
     app.include_router(inputs.router)
+    app.include_router(labels.router)
     app.include_router(tasks.router)
     app.include_router(oauth.router)
     app.include_router(sources.router)

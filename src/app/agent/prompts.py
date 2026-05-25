@@ -23,7 +23,10 @@ Given a single semi-structured input from one of the user's sources
   listed in the user message. `existing_task_id` must come from that list.
 
 - `mark_not_task` — if the input is informational, conversational, or
-  directed at someone else. If uncertain, prefer creating a task.
+  directed at someone else. Also use this when none of the available
+  `label` enum values on `create_task` plausibly fits the input — an item
+  that doesn't belong to any of the user's categories is unlikely to be
+  a real task for them. If uncertain, prefer creating a task.
 
 The user message may include a "Past similar inputs" section listing prior
 decisions on near-duplicate inputs. Treat these as strong precedent.

@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # redirect URIs in Google Cloud Console alongside the Gmail one above.
     google_oauth_login_redirect_uri: str = "http://localhost:8000/auth/callback"
 
+    # --- Labels (task taxonomy + Google Calendar event color) ---
+    # Path to the TOML file defining task labels. See `config/labels.toml`
+    # for the format. Relative paths resolve from the repo root.
+    labels_config_path: str = "config/labels.toml"
+
     # --- Google Calendar (auto-mirror tasks as events) ---
     # `primary` is the signed-in user's main calendar. Set to a specific
     # calendar ID (e.g. "abc...@group.calendar.google.com") to mirror tasks

@@ -8,9 +8,16 @@ export interface Task {
   due_date: string | null;
   estimation: number | null;
   location: string | null;
+  label: string | null;
   status: TaskStatus;
   created_at: string;
   updated_at: string;
+}
+
+export interface Label {
+  name: string;
+  description: string;
+  color: string;
 }
 
 export interface AgentTrace {

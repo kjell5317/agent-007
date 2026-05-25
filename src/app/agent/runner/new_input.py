@@ -124,6 +124,7 @@ async def run_new_input_agent(
                     due_date=parse_iso(str(payload.get("due_date"))) if payload.get("due_date") else None,
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
+                    label=str(payload.get("label")) if payload.get("label") else None,
                 ),
             )
             trace["outcome"] = "task_created"

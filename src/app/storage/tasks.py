@@ -18,6 +18,7 @@ def create(session: Session, payload: TaskCreate) -> Task:
         due_date=payload.due_date,
         estimation=payload.estimation,
         location=payload.location,
+        label=payload.label,
     )
     session.add(row)
     session.flush()
@@ -38,6 +39,7 @@ def update(
     due_date: datetime | None = None,
     estimation: int | None = None,
     location: str | None = None,
+    label: str | None = None,
 ) -> Task | None:
     row = session.get(Task, task_id)
     if row is None:
@@ -54,6 +56,8 @@ def update(
         row.estimation = estimation
     if location is not None:
         row.location = location
+    if label is not None:
+        row.label = label
     session.flush()
     return row
 

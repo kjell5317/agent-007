@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.labels import color_for
 from app.services.google_calendar.events import create_event, delete_event, patch_event
 
 log = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ async def add_task_to_calendar(session: Session, task) -> None:
             end=end,
             description=_task_description(task),
             location=task.location,
+            color_id=color_for(task.label),
         )
     except Exception as exc:  # noqa: BLE001 — never let calendar break task creation
         log.warning("calendar sync failed · task=%s err=%s", task.id, exc)
@@ -75,6 +77,9 @@ async def update_task_in_calendar(session: Session, task) -> None:
         return
 
     start, end = _task_window(task, settings)
+    # Google reads "" as "clear colorId back to the calendar default", which
+    # is what we want when the label was removed or no longer maps to a color.
+    color_id = color_for(task.label) or ""
     try:
         await patch_event(
             session,
@@ -85,6 +90,7 @@ async def update_task_in_calendar(session: Session, task) -> None:
             end=end,
             description=_task_description(task) or "",
             location=task.location or "",
+            color_id=color_id,
         )
     except Exception as exc:  # noqa: BLE001 — never let calendar break task updates
         log.warning("calendar update failed · task=%s err=%s", task.id, exc)

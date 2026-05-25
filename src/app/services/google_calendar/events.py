@@ -75,6 +75,7 @@ async def create_event(
     end: datetime,
     description: str | None = None,
     location: str | None = None,
+    color_id: str | None = None,
     account_key: str | None = None,
 ) -> CalendarEvent:
     """Create an event on `calendar_id`. `start`/`end` must be tz-aware."""
@@ -92,6 +93,8 @@ async def create_event(
         body["description"] = description
     if location:
         body["location"] = location
+    if color_id:
+        body["colorId"] = color_id
 
     client = await authorized_client(session, account_key)
     log.info("calendar insert · calendar=%s summary=%r", calendar_id, summary)
@@ -109,6 +112,7 @@ async def patch_event(
     end: datetime | None = None,
     description: str | None = None,
     location: str | None = None,
+    color_id: str | None = None,
     account_key: str | None = None,
 ) -> CalendarEvent:
     """Patch an existing event on `calendar_id`. Only provided fields change."""
@@ -127,6 +131,8 @@ async def patch_event(
         body["description"] = description
     if location is not None:
         body["location"] = location
+    if color_id is not None:
+        body["colorId"] = color_id
 
     client = await authorized_client(session, account_key)
     log.info("calendar patch · calendar=%s event=%s", calendar_id, event_id)

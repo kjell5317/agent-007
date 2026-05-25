@@ -30,6 +30,10 @@ your only job is to populate `create_task` accurately:
   otherwise a reasonable best-guess based on urgency. The user message
   begins with a "Current time:" line; the due_date MUST be at or after
   that time — never pick a date in the past.
+- label: required if the `label` field is part of the tool schema —
+  pick the single best-fitting value from the enum. The user has already
+  committed to this being a task, so pick the closest match even if the
+  fit is loose.
 - description, location, link: include when supported by the input.
 
 Call `create_task` exactly once. Do not narrate.

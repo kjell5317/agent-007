@@ -11,6 +11,7 @@ class TaskBase(BaseModel):
     due_date: datetime | None = None
     estimation: int | None = None
     location: str | None = None
+    label: str | None = None
 
 
 class TaskCreate(TaskBase):
@@ -24,6 +25,7 @@ class TaskUpdate(BaseModel):
     due_date: datetime | None = None
     estimation: int | None = None
     location: str | None = None
+    label: str | None = None
 
 
 class TaskPromote(BaseModel):
@@ -37,6 +39,7 @@ class TaskPromote(BaseModel):
     due_date: datetime | None = None
     estimation: int | None = None
     location: str | None = None
+    label: str | None = None
 
 
 class TaskCreationAccepted(BaseModel):

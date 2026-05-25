@@ -1,4 +1,4 @@
-import type { RawInput, SourcePollResult, Task } from "./types";
+import type { Label, RawInput, SourcePollResult, Task } from "./types";
 
 class ApiError extends Error {
   status: number;
@@ -73,6 +73,8 @@ export const api = {
 
   poll: (source: string) =>
     request<SourcePollResult>(`/sources/poll?source=${source}`, { method: "POST" }),
+
+  listLabels: () => request<Label[]>("/labels"),
 
   getSettings: () => request<AppSettings>("/settings"),
   updateSettings: (patch: Partial<AppSettings>) =>

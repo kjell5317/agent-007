@@ -13,17 +13,19 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue } from "@/lib/dates";
+import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import type { Task } from "@/lib/types";
+import type { Label, Task } from "@/lib/types";
 
 interface Props {
   task: Task;
   onChanged: () => Promise<void> | void;
 }
 
-type Field = "title" | "due_date" | "estimation" | "location" | "link";
+type Field = "title" | "due_date" | "estimation" | "location" | "link" | "label";
 type Draft = Record<Field, string>;
 
 const CROSS_OFF_MS = 350;
@@ -35,6 +37,7 @@ function toDraft(t: Task): Draft {
     estimation: t.estimation == null ? "" : String(t.estimation),
     location: t.location ?? "",
     link: t.link ?? "",
+    label: t.label ?? "",
   };
 }
 
@@ -58,8 +61,10 @@ export function TaskCard({ task, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
   const [draft, setDraft] = useState<Draft>(toDraft(task));
+  const labels = useLabels();
 
   const overdue = isOverdue(task.due_date);
+  const labelMeta = labels.find((l) => l.name === task.label);
 
   async function withBusy<T>(fn: () => Promise<T>, msg: string) {
     setBusy(true);
@@ -90,6 +95,7 @@ export function TaskCard({ task, onChanged }: Props) {
         estimation: draft.estimation === "" ? null : Number(draft.estimation),
         location: draft.location || null,
         link: draft.link || null,
+        label: draft.label || null,
       });
       setEditing(false);
     }, "Saved");
@@ -164,6 +170,17 @@ export function TaskCard({ task, onChanged }: Props) {
               {task.status === "duplicate" && (
                 <Badge variant="duplicate">duplicate</Badge>
               )}
+              {task.label && (
+                <span
+                  title={labelMeta?.description ?? task.label}
+                  className={cn(
+                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                    labelChipClass(labelMeta?.color),
+                  )}
+                >
+                  {task.label}
+                </span>
+              )}
               {task.location && (
                 <span className="inline-flex items-center gap-1">
                   <MapPin className="h-3 w-3" />
@@ -209,14 +226,23 @@ export function TaskCard({ task, onChanged }: Props) {
                 />
               </FieldRow>
             </div>
-            <FieldRow label="Location">
-              <Input
-                value={draft.location}
-                onChange={(e) =>
-                  setDraft({ ...draft, location: e.target.value })
-                }
-              />
-            </FieldRow>
+            <div className="grid grid-cols-2 gap-4">
+              <FieldRow label="Label">
+                <LabelSelect
+                  value={draft.label}
+                  labels={labels}
+                  onChange={(v) => setDraft({ ...draft, label: v })}
+                />
+              </FieldRow>
+              <FieldRow label="Location">
+                <Input
+                  value={draft.location}
+                  onChange={(e) =>
+                    setDraft({ ...draft, location: e.target.value })
+                  }
+                />
+              </FieldRow>
+            </div>
             <FieldRow label="Link">
               <Input
                 value={draft.link}
@@ -282,5 +308,41 @@ function FieldRow({
       </span>
       {children}
     </label>
+  );
+}
+
+function LabelSelect({
+  value,
+  labels,
+  onChange,
+}: {
+  value: string;
+  labels: Label[];
+  onChange: (v: string) => void;
+}) {
+  const current = labels.find((l) => l.name === value);
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        aria-hidden
+        className={cn(
+          "h-3 w-3 shrink-0 rounded-full",
+          labelChipClass(current?.color),
+        )}
+      />
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        title={current?.description}
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        <option value="">— none —</option>
+        {labels.map((l) => (
+          <option key={l.name} value={l.name}>
+            {l.name}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
