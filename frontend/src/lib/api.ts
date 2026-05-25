@@ -65,6 +65,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(title ? { title } : {}),
     }),
+  unreadInputCount: () =>
+    request<UnreadInputs>("/inputs/unread_count"),
+  markInputsSeen: () =>
+    request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 
   poll: (source: string) =>
     request<SourcePollResult>(`/sources/poll?source=${source}`, { method: "POST" }),
@@ -79,4 +83,9 @@ export const api = {
 
 export interface AppSettings {
   auto_poll_enabled: boolean;
+}
+
+export interface UnreadInputs {
+  count: number;
+  last_seen_at: string;
 }

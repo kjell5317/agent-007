@@ -513,6 +513,9 @@ def _build_new_input_message(
 
 def _candidate_query_text(content: str, metadata: dict) -> str:
     parts: list[str] = []
+    sender = _sender_descriptor(metadata)
+    if sender:
+        parts.append(f"from: {sender}")
     subject = metadata.get("subject")
     if subject:
         parts.append(subject)
@@ -520,6 +523,21 @@ def _candidate_query_text(content: str, metadata: dict) -> str:
     if body:
         parts.append(body[:1500])
     return "\n".join(parts).strip()
+
+
+def _sender_descriptor(metadata: dict) -> str | None:
+    """Source-agnostic 'from' value for the embedding.
+
+    Always labeled `from:` in the query text, regardless of source, so the
+    embedding doesn't get a categorical Gmail/Slack split from the key name.
+    For Slack we fold the channel into the same line (`alice in #general`)
+    since channel context is part of what makes repeated alerts cluster.
+    """
+    sender = (metadata.get("from") or "").strip() or None
+    channel = (metadata.get("channel_name") or "").strip() or None
+    if sender and channel:
+        return f"{sender} in {channel}"
+    return sender or channel
 
 
 def _now_iso() -> str:

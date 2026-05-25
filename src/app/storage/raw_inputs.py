@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import String, bindparam, select, text
+from sqlalchemy import String, bindparam, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.raw_input import RawInput
@@ -55,6 +55,15 @@ def list_(
         # carry no agent decision and shouldn't surface in the inbox feed.
         stmt = stmt.where(RawInput.source != "manual")
     return list(session.execute(stmt).scalars())
+
+
+def count_since(session: Session, ts: datetime) -> int:
+    """Count non-manual raw inputs received after `ts` (matches the inbox feed)."""
+    stmt = (
+        select(func.count(RawInput.id))
+        .where(RawInput.received_at > ts, RawInput.source != "manual")
+    )
+    return int(session.execute(stmt).scalar_one() or 0)
 
 
 def set_embedding(

@@ -17,7 +17,7 @@ Given a single semi-structured input from one of the user's sources
   REQUIRED — use the explicit deadline if stated, otherwise a reasonable
   best-guess based on urgency, usually in the near future, the user message
   begins with a "Current time:" line; the due_date should be at or after that
-  time), location if mentioned, link (most relevant source URL).
+  time, use 5 minute steps.), location if mentioned, link (most relevant source URL).
 
 - `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS
   listed in the user message. `existing_task_id` must come from that list.

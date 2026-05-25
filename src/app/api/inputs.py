@@ -13,8 +13,10 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app import runtime_state
 from app.agent.runner import extract_task_fields
 from app.db import get_session
 from app.schemas.raw_input import RawInputRead
@@ -23,6 +25,11 @@ from app.services.google_calendar import add_task_to_calendar
 from app.storage import raw_inputs, tasks as tasks_store
 
 router = APIRouter(prefix="/inputs", tags=["inputs"])
+
+
+class UnreadCount(BaseModel):
+    count: int
+    last_seen_at: datetime
 
 
 @router.get("", response_model=list[RawInputRead])
@@ -34,6 +41,25 @@ async def list_inputs(
 ) -> list[RawInputRead]:
     rows = raw_inputs.list_(session, status=status_filter, source=source, limit=limit)
     return [RawInputRead.model_validate(r) for r in rows]
+
+
+# Watermark for the inbox unread badge. Static paths must precede the dynamic
+# /{raw_input_id} GET below — FastAPI matches in registration order.
+@router.get("/unread_count", response_model=UnreadCount)
+async def get_unread_count(session: Session = Depends(get_session)) -> UnreadCount:
+    return UnreadCount(
+        count=raw_inputs.count_since(session, runtime_state.last_seen_input_at),
+        last_seen_at=runtime_state.last_seen_input_at,
+    )
+
+
+@router.post("/mark_seen", response_model=UnreadCount)
+async def mark_inputs_seen(session: Session = Depends(get_session)) -> UnreadCount:
+    runtime_state.last_seen_input_at = datetime.now(timezone.utc)
+    return UnreadCount(
+        count=raw_inputs.count_since(session, runtime_state.last_seen_input_at),
+        last_seen_at=runtime_state.last_seen_input_at,
+    )
 
 
 @router.get("/{raw_input_id}", response_model=RawInputRead)
