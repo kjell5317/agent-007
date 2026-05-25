@@ -78,18 +78,22 @@ async def plan_week_commutes(
     if not settings.google_maps_api_key:
         log.info("commute planner skipped — GOOGLE_MAPS_API_KEY not set")
         return _empty_summary("google_maps_api_key not configured")
-    calendar_id = (settings.google_calendar_id or "").strip()
-    if not calendar_id:
+    write_calendar_id = (settings.google_calendar_id or "").strip()
+    if not write_calendar_id:
         return _empty_summary("google_calendar_id not configured")
+
+    # Read from every busy calendar so commutes account for events on shared /
+    # secondary calendars; write to the primary `google_calendar_id` only.
+    read_calendar_ids = _read_calendar_ids(settings, write_calendar_id)
 
     anchor = (week_start or datetime.now(timezone.utc)).astimezone()
     events = await list_week_events(
         session,
-        calendar_ids=[calendar_id],
+        calendar_ids=read_calendar_ids,
         week_start=anchor,
         account_key=account_key,
     )
-    physical, online, existing_commutes = _partition(events)
+    physical, online, existing_commutes = _partition(events, write_calendar_id)
     log.info(
         "commute planner · physical=%d online=%d existing_commute=%d window=%dd",
         len(physical), len(online), len(existing_commutes), WINDOW_DAYS,
@@ -103,6 +107,9 @@ async def plan_week_commutes(
 
     plans: list[CommutePlan] = []
     for idx, ev in enumerate(physical):
+        # `_partition` only keeps events with a non-empty location, so this is
+        # always a string by the time we get here.
+        assert ev.location is not None
         prev = physical[idx - 1] if idx > 0 else None
         outbound_origin = _outbound_origin(home, prev, ev, settings)
         plan = await _build_leg(
@@ -135,7 +142,7 @@ async def plan_week_commutes(
                 plans.append(plan)
 
     summary["planned"] = await _write_plans(
-        session, plans, calendar_id, existing_commutes, account_key,
+        session, plans, write_calendar_id, existing_commutes, account_key,
     )
 
     # Lazy import to keep the planner module loadable without sync.py side effects.
@@ -160,13 +167,28 @@ def _empty_summary(reason: str | None = None) -> dict:
     return out
 
 
+def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:
+    """Union of `google_calendar_id` and `google_busy_calendar_ids`, in order,
+    de-duplicated. Read-side: every calendar that should influence the plan."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for cid in [write_calendar_id, *settings.google_busy_calendar_ids]:
+        clean = (cid or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            out.append(clean)
+    return out
+
+
 def _partition(
     events: list[CalendarEvent],
+    write_calendar_id: str,
 ) -> tuple[list[CalendarEvent], list[CalendarEvent], list[CalendarEvent]]:
     """Split events into (physical, online, existing_commute) lists.
 
-    Commute events the planner wrote previously are kept aside so they can be
-    deleted/replaced rather than treated as "real" events to commute toward.
+    Only events on the write calendar can be `existing_commute` — a tagged
+    event on a shared/secondary calendar would be re-deleted on every run,
+    which we don't own and shouldn't touch.
     """
     physical: list[CalendarEvent] = []
     online: list[CalendarEvent] = []
@@ -174,8 +196,11 @@ def _partition(
     for ev in events:
         if ev.all_day:
             continue
-        if (ev.description or "").strip().startswith(COMMUTE_TAG):
+        is_commute_tag = (ev.description or "").strip().startswith(COMMUTE_TAG)
+        if is_commute_tag and ev.calendar_id == write_calendar_id:
             commutes.append(ev)
+            continue
+        if is_commute_tag:
             continue
         if _is_online(ev):
             online.append(ev)
