@@ -9,12 +9,12 @@ task operation.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.labels import color_for
+from app.services.event_planning import plan_task_slot
 from app.services.google_calendar.events import create_event, delete_event, patch_event
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,11 @@ async def add_task_to_calendar(session: Session, task) -> None:
         log.debug("calendar sync · task=%s skipped (no due_date)", task.id)
         return
 
-    start, end = _task_window(task, settings)
+    try:
+        start, end = await plan_task_slot(session, task)
+    except Exception as exc:  # noqa: BLE001 — never let calendar break task creation
+        log.warning("calendar sync planning failed · task=%s err=%s", task.id, exc)
+        return
     try:
         event = await create_event(
             session,
@@ -76,7 +80,11 @@ async def update_task_in_calendar(session: Session, task) -> None:
         await add_task_to_calendar(session, task)
         return
 
-    start, end = _task_window(task, settings)
+    try:
+        start, end = await plan_task_slot(session, task)
+    except Exception as exc:  # noqa: BLE001 — never let calendar break task updates
+        log.warning("calendar update planning failed · task=%s err=%s", task.id, exc)
+        return
     color_id = color_for(task.label)
     try:
         await patch_event(
@@ -117,14 +125,6 @@ async def remove_task_from_calendar(session: Session, task) -> None:
 
     task.calendar_event_id = None
     session.commit()
-
-
-def _task_window(task, settings) -> tuple[datetime, datetime]:
-    end = task.due_date
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
-    minutes = task.estimation or settings.google_calendar_default_event_minutes
-    return end - timedelta(minutes=minutes), end
 
 
 def _task_description(task) -> str | None:

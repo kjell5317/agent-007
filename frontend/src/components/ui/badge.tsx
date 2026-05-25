@@ -14,6 +14,7 @@ const badgeVariants = cva(
         closed: "border-transparent bg-slate-200 text-slate-700",
         no_change: "border-transparent bg-indigo-100 text-indigo-800",
         overdue: "border-transparent bg-red-500 text-white",
+        urgent: "border-transparent bg-orange-500 text-white",
         muted: "border-transparent bg-muted text-muted-foreground",
       },
     },

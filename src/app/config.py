@@ -56,8 +56,21 @@ class Settings(BaseSettings):
     # calendar ID (e.g. "abc...@group.calendar.google.com") to mirror tasks
     # into a dedicated calendar instead. Empty disables the sync entirely.
     google_calendar_id: str = "primary"
+    # Extra calendar IDs the planner should treat as busy when picking a
+    # slot (e.g. a shared family calendar). Comma-separated in env:
+    #   GOOGLE_BUSY_CALENDAR_IDS=you@gmail.com,family123@group.calendar.google.com
+    # The target `google_calendar_id` is always considered busy too — no
+    # need to repeat it here.
+    google_busy_calendar_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     # Duration used when a task has no estimation, in minutes.
     google_calendar_default_event_minutes: int = 30
+
+    @field_validator("google_busy_calendar_ids", mode="before")
+    @classmethod
+    def _parse_calendar_ids(cls, v):
+        if isinstance(v, str):
+            return [c.strip() for c in v.split(",") if c.strip()]
+        return v
 
     # --- Auth (Google SSO with email allowlist) ---
     # Comma-separated emails allowed to log in. Empty → auth middleware is

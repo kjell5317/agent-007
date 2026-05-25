@@ -15,7 +15,7 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
-import { fmtDue, isOverdue } from "@/lib/dates";
+import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import type { AiDoable, Label, Task } from "@/lib/types";
@@ -64,6 +64,7 @@ export function TaskCard({ task, onChanged }: Props) {
   const labels = useLabels();
 
   const overdue = isOverdue(task.due_date);
+  const urgent = isUrgent(task.due_date, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
 
   async function withBusy<T>(fn: () => Promise<T>, msg: string) {
@@ -163,7 +164,9 @@ export function TaskCard({ task, onChanged }: Props) {
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {task.due_date && (
-                <Badge variant={overdue ? "overdue" : "open"}>
+                <Badge
+                  variant={overdue ? "overdue" : urgent ? "urgent" : "open"}
+                >
                   {fmtDue(task.due_date)}
                 </Badge>
               )}
