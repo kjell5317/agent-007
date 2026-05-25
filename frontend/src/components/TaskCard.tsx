@@ -158,7 +158,6 @@ export function TaskCard({ task, onChanged }: Props) {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {task.due_date && (
                 <Badge variant={overdue ? "overdue" : "open"}>
-                  {overdue ? "overdue · " : ""}
                   {fmtDue(task.due_date)}
                 </Badge>
               )}

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/InboxPanel";
 import { TasksPanel } from "@/components/TasksPanel";
@@ -10,17 +9,6 @@ import { useAppData } from "@/hooks/useAppData";
 export function App() {
   const { tasks, inputs, closedTasks, refresh } = useAppData();
 
-  const inboxCount = useMemo(
-    () =>
-      inputs.filter(
-        (r) =>
-          r.status === "not_task" ||
-          r.status === "duplicate" ||
-          r.agent_trace?.outcome === "no_change",
-      ).length + closedTasks.length,
-    [inputs, closedTasks],
-  );
-
   return (
     <div className="min-h-dvh pb-[120px]">
       <Topbar onSynced={refresh} />
@@ -30,21 +18,22 @@ export function App() {
             <TabsTrigger value="tasks">
               Tasks
               {tasks.length > 0 && (
-                <span className="ml-1.5 text-xs text-muted-foreground">{tasks.length}</span>
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  {tasks.length}
+                </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="inbox">
-              Inbox
-              {inboxCount > 0 && (
-                <span className="ml-1.5 text-xs text-muted-foreground">{inboxCount}</span>
-              )}
-            </TabsTrigger>
+            <TabsTrigger value="inbox">Inbox</TabsTrigger>
           </TabsList>
           <TabsContent value="tasks">
             <TasksPanel tasks={tasks} onChanged={refresh} />
           </TabsContent>
           <TabsContent value="inbox">
-            <InboxPanel inputs={inputs} closedTasks={closedTasks} onChanged={refresh} />
+            <InboxPanel
+              inputs={inputs}
+              closedTasks={closedTasks}
+              onChanged={refresh}
+            />
           </TabsContent>
         </Tabs>
       </main>
