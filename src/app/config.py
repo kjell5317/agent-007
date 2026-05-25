@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
 
+    # IANA timezone the user lives in. Used by the event planner to interpret
+    # the preferred / extended scheduling windows as wall-clock hours *in your
+    # zone*, regardless of what the server's local tz happens to be (typically
+    # UTC in containers, which is what produces the "scheduled at 0:42 AM"
+    # surprise on a 9:45 due date). Set to `Europe/Berlin` for CEST.
+    user_timezone: str = "UTC"
+
     database_url: str
 
     token_encryption_key: str = Field(default="", description="Fernet key for encrypting OAuth tokens at rest")

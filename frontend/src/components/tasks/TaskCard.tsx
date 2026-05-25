@@ -194,8 +194,9 @@ export function TaskCard({ task, onChanged }: Props) {
                 >
                   <MapPin className="h-3 w-3" />
                   {task.location.length > 10
-                    ? `${task.location.slice(0, 10)}...`
-                    : task.location}
+                    ? `${String(task.location).charAt(1).toUpperCase() + String(task.location).slice(1, 10)}...`
+                    : String(task.location).charAt(0).toUpperCase() +
+                      String(task.location).slice(1)}
                 </span>
               )}
               {task.estimation != null && (

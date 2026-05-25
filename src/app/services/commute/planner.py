@@ -358,7 +358,8 @@ def _effective_inbound_depart(
     `next_physical_start` — anything beyond that is a different physical
     event's commute to handle.
     """
-    depart = ev.end + timedelta(minutes=settings.commute_event_buffer_minutes)
+    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
+    depart = ev.end + buffer
     threshold = timedelta(minutes=settings.commute_bike_max_minutes)
     for other in occupied:
         if other.id == ev.id:
@@ -372,7 +373,10 @@ def _effective_inbound_depart(
         if next_physical_start is not None and other.start >= next_physical_start:
             break
         if other.start - depart < threshold:
-            depart = max(depart, other.end)
+            # `+ buffer` keeps the contract consistent: every commute home
+            # departs `buffer` minutes after the *last* thing that held the
+            # user, not flush against its end.
+            depart = max(depart, other.end + buffer)
     return depart
 
 

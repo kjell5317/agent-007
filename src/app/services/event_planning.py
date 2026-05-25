@@ -10,8 +10,10 @@ Rules:
 - Batch planning (`plan_tasks`) processes tasks shortest-due-date first
   so the most urgent claim the best slot.
 
-Local timezone follows the system zone via `datetime.astimezone()`,
-matching the convention used elsewhere (see `services/notifications.py`).
+Local timezone is whatever `Settings.user_timezone` resolves to (default UTC).
+Container-default UTC was producing scheduling at "8:00 UTC = 10:00 CEST" and
+similar surprises; setting `USER_TIMEZONE=Europe/Berlin` fixes it without
+relying on the container's `TZ` env var.
 """
 
 from __future__ import annotations
@@ -20,12 +22,29 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 
 log = logging.getLogger(__name__)
+
+
+def _user_tz() -> ZoneInfo | timezone:
+    """User's configured IANA timezone, falling back to UTC if unset/invalid.
+
+    Centralized so every conversion in this module picks the same zone — the
+    scheduling windows (`PREFERRED_WINDOW`, `EXTENDED_WINDOW`) are wall-clock
+    hours and only make sense relative to a definite zone, not whatever the
+    container's local zone happens to be.
+    """
+    name = (get_settings().user_timezone or "UTC").strip()
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        log.warning("user_timezone=%r not found; falling back to UTC", name)
+        return timezone.utc
 
 PREFERRED_WINDOW: tuple[time, time] = (time(10, 0), time(20, 0))
 # `time(0, 0)` here means "midnight at end of day"; resolved by `_day_window`.
@@ -62,7 +81,8 @@ async def plan_task_slot(
     """
     settings = get_settings()
     duration = task.estimation or settings.google_calendar_default_event_minutes
-    now_local = (now or datetime.now(timezone.utc)).astimezone()
+    tz = _user_tz()
+    now_local = (now or datetime.now(timezone.utc)).astimezone(tz)
     due_local = _to_local(task.due_date)
 
     if due_local <= now_local + timedelta(minutes=duration):
@@ -214,7 +234,7 @@ def _next_day_start(anchor: datetime) -> datetime:
 def _to_local(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone()
+    return dt.astimezone(_user_tz())
 
 
 async def _fetch_busy(
@@ -245,5 +265,6 @@ async def _fetch_busy(
             if raw.get("transparency") == "transparent":
                 continue
             ev = normalize(raw, cid)
-            out.append(Interval(ev.start.astimezone(), ev.end.astimezone()))
+            tz = _user_tz()
+            out.append(Interval(ev.start.astimezone(tz), ev.end.astimezone(tz)))
     return out
