@@ -90,6 +90,27 @@ class Settings(BaseSettings):
             return [e.strip().lower() for e in v.split(",") if e.strip()]
         return v
 
+    # --- Commute planning (Google Maps Distance Matrix + Open-Meteo) ---
+    # Home base — full street address, geocoded by Google as part of each
+    # Distance Matrix call. Leave empty to disable commute planning entirely.
+    home_address: str = ""
+    # Google Maps Platform API key with Distance Matrix enabled. Same project
+    # as the Calendar OAuth client is fine; the key is an unauth bearer for
+    # Maps APIs, not tied to a user.
+    google_maps_api_key: str = ""
+    # When biking takes longer than this many minutes OR rain probability is
+    # at/above `commute_rain_threshold_pct`, the planner switches the trip to
+    # public transport.
+    commute_bike_max_minutes: int = 25
+    commute_rain_threshold_pct: int = 30
+    # How far ahead to plan commutes (in days). One week matches the calendar
+    # sync window so we don't pull farther than we look.
+    commute_lookahead_days: int = 7
+    # "Home is worth returning to" threshold. If event A → home → event B fits
+    # with this much buffer at home, the planner sends you home in between;
+    # otherwise it routes A → B directly.
+    commute_home_layover_minutes: int = 60
+
     # --- Home Assistant (push notifications) ---
     # Leave url or token empty to disable notifications outright.
     # `notify_service` is the entity slug after `notify.` — e.g. `notify`,
