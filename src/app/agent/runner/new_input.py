@@ -26,6 +26,7 @@ from app.agent.runner.llm import (
     cached_tools,
     create_message,
 )
+from app.agent.runner.notes_lookup import run_search_notes
 from app.agent.runner.text import append_meta_lines, now_iso, parse_iso
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
@@ -116,7 +117,7 @@ async def run_new_input_agent(
             results = []
             for tu in non_terminal_uses:
                 if tu.name == "search_notes":
-                    out = await _run_search_notes(session, str((tu.input or {}).get("query") or ""))
+                    out = await run_search_notes(session, str((tu.input or {}).get("query") or ""))
                 else:
                     out = f"unknown tool: {tu.name}"
                 iter_log.setdefault("tool_results", []).append(
@@ -212,21 +213,6 @@ async def run_new_input_agent(
     )
     session.commit()
     return trace
-
-
-async def _run_search_notes(session, query: str) -> str:
-    """Embed the query, fetch top-k similar notes, format as text for the LLM."""
-    query = (query or "").strip()
-    if not query:
-        return "search_notes: empty query."
-    vec = await embed(query)
-    if vec is None:
-        return "search_notes: embeddings disabled — no notes available."
-    hits = notes_store.search_similar(session, embedding=vec, k=5)
-    if not hits:
-        return "search_notes: no matching notes."
-    lines = [f"- sim={h.similarity:.2f} | {h.content}" for h in hits]
-    return "Notes:\n" + "\n".join(lines)
 
 
 async def _save_notes(session, raw_input_id, raw_notes) -> list[str]:

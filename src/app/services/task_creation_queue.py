@@ -88,7 +88,7 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
         needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
         agent_fields: dict = {}
         if needs_agent:
-            agent_fields = await extract_task_fields(raw)
+            agent_fields = await extract_task_fields(session, raw)
 
         merged = {**agent_fields, **user_fields}
         task = tasks_store.create(

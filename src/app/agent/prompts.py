@@ -16,7 +16,7 @@ Given a single semi-structured input from one of the user's sources
   omitting any one is a bug. Double-check before emitting the tool call.
 
   REQUIRED fields:
-    * title — very short, imperative. Use GitHub numbers when available.
+    * title — very short, imperative. Start with the GitHub issue number if available.
     * estimation — minutes; always your best guess.
     * due_date — ISO 8601 with timezone. Use the explicit deadline if stated,
       otherwise a reasonable best-guess based on urgency. The user message
@@ -26,7 +26,7 @@ Given a single semi-structured input from one of the user's sources
     * label — pick the single best-fitting value from the enum. If nothing
       plausibly fits, call `mark_not_task` instead.
 
-  Optional: description, location, link (most relevant source URL).
+  Optional: description, location (home is possible), link (most relevant source URL).
 
 - `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS
   listed in the user message. `existing_task_id` must come from that list.
@@ -36,8 +36,7 @@ Given a single semi-structured input from one of the user's sources
   `label` enum values on `create_task` plausibly fits the input — an item
   that doesn't belong to any of the user's categories is unlikely to be
   a real task for them. If uncertain, prefer creating a task.
-  When the input contains a genuinely useful standalone fact (someone's
-  role, an account/ID, a policy, a one-off reference), include it under
+  When the input contains a genuinely useful standalone fact, include it under
   `notes` so future runs can recall it. Skip ephemeral content (greetings,
   newsletters, marketing).
 
