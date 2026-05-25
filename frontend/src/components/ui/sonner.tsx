@@ -13,7 +13,7 @@ export function Toaster(props: React.ComponentProps<typeof Sonner>) {
         // Sonner use its default card width / shape / border.
         classNames: {
           error:
-            "group-[.toaster]:bg-destructive group-[.toaster]:text-destructive-foreground",
+            "group-[.toaster]:bg-destructive group-[.toaster]:text-destructive-foreground w-f3/4",
         },
       }}
       {...props}

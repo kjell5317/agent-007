@@ -191,11 +191,9 @@ export function TaskCard({ task, onChanged }: Props) {
                 <span className="inline-flex items-center gap-1">
                   <Timer className="h-3 w-3" />
                   {task.estimation} min
-                  {task.ai_doable && (
-                    <AiDoableDot value={task.ai_doable} />
-                  )}
                 </span>
               )}
+              {task.ai_doable && <AiDoableDot value={task.ai_doable} />}
             </div>
           </div>
         </div>
@@ -331,7 +329,12 @@ function AiDoableDot({ value }: { value: AiDoable }) {
     <span
       aria-label={title}
       title={title}
-      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", color)}
+      // 10×10 with a soft outer ring — clearly visible against the muted
+      // meta row without dominating the row.
+      className={cn(
+        "inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-background",
+        color,
+      )}
     />
   );
 }

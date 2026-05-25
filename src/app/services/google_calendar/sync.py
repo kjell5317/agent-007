@@ -77,9 +77,7 @@ async def update_task_in_calendar(session: Session, task) -> None:
         return
 
     start, end = _task_window(task, settings)
-    # Google reads "" as "clear colorId back to the calendar default", which
-    # is what we want when the label was removed or no longer maps to a color.
-    color_id = color_for(task.label) or ""
+    color_id = color_for(task.label)
     try:
         await patch_event(
             session,

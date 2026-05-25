@@ -22,21 +22,27 @@ log = logging.getLogger(__name__)
 _EXTRACT_FIELDS_SYSTEM_PROMPT = """\
 You are extracting structured task fields from a raw input the user has
 explicitly chosen to promote to a task. Do NOT second-guess the decision —
-your only job is to populate `create_task` accurately:
+your only job is to populate `create_task` accurately.
 
-- title: short, imperative.
-- estimation: minutes; required, best-guess.
-- due_date: ISO 8601; required — use the explicit deadline if stated,
-  otherwise a reasonable best-guess based on urgency. The user message
-  begins with a "Current time:" line; the due_date MUST be at or after
-  that time — never pick a date in the past.
-- label: required if the `label` field is part of the tool schema —
-  pick the single best-fitting value from the enum. The user has already
-  committed to this being a task, so pick the closest match even if the
-  fit is loose.
-- ai_doable: required — `yes` / `no` / `unsure`, as described in the
-  tool schema.
-- description, location, link: include when supported by the input.
+The user already committed to "this is a task", so unlike the new-input
+flow you may NOT bail out with mark_not_task. Pick reasonable values even
+when the fit is loose.
+
+Every `create_task` call MUST include all five required fields below.
+Omitting any one is a bug. Double-check before emitting the tool call.
+
+REQUIRED:
+  * title — short, imperative.
+  * estimation — minutes; best-guess.
+  * due_date — ISO 8601 with timezone. Use the explicit deadline if stated,
+    otherwise a reasonable best-guess based on urgency. The user message
+    begins with a "Current time:" line; due_date MUST be at or after that
+    time — never pick a date in the past.
+  * ai_doable — one of `yes` / `no` / `unsure`.
+  * label — pick the single best-fitting value from the enum. Pick the
+    closest match even if the fit is loose.
+
+Optional: description, location, link.
 
 Call `create_task` exactly once. Do not narrate.
 """
@@ -71,7 +77,24 @@ async def extract_task_fields(raw) -> dict[str, Any]:
     payload = dict(tool_uses[0].input or {})
     if "due_date" in payload:
         payload["due_date"] = parse_iso(str(payload["due_date"]))
+    _backstop_required(payload, raw_id=raw.id)
     return payload
+
+
+def _backstop_required(payload: dict, *, raw_id) -> None:
+    """The tool schema marks `ai_doable` and `label` as required, but the LLM
+    sometimes still ships a create_task call without them. Fill in a sane
+    default for ai_doable; warn (and leave NULL) for label so the user can
+    pick one manually."""
+    if not payload.get("ai_doable"):
+        log.warning(
+            "agent skipped ai_doable · raw=%s — defaulting to 'unsure'", raw_id,
+        )
+        payload["ai_doable"] = "unsure"
+    if not payload.get("label"):
+        log.warning(
+            "agent skipped label · raw=%s — leaving NULL, user must assign", raw_id,
+        )
 
 
 def _build_extract_message(raw) -> str:

@@ -12,13 +12,21 @@ Given a single semi-structured input from one of the user's sources
 (email, chat message, manual note, ...), call exactly ONE tool:
 
 - `create_task` — if the input represents a concrete, actionable task for the
-  user. Extract: title (very short, imperative, use GitHub numbers if available), description (optional),
-  estimation (minutes, REQUIRED — always your best guess), due_date (ISO 8601,
-  REQUIRED — use the explicit deadline if stated, otherwise a reasonable
-  best-guess based on urgency, usually in the near future, the user message
-  begins with a "Current time:" line; the due_date should be at or after that
-  time, use 5 minute steps.), ai_doable (REQUIRED — `yes`/`no`/`unsure`, see
-  the tool schema), location if mentioned, link (most relevant source URL).
+  user. Every `create_task` call MUST include all five required fields below;
+  omitting any one is a bug. Double-check before emitting the tool call.
+
+  REQUIRED fields:
+    * title — very short, imperative. Use GitHub numbers when available.
+    * estimation — minutes; always your best guess.
+    * due_date — ISO 8601 with timezone. Use the explicit deadline if stated,
+      otherwise a reasonable best-guess based on urgency. The user message
+      begins with a "Current time:" line; due_date must be at or after that
+      time. Round to 5-minute steps.
+    * ai_doable — one of `yes` / `no` / `unsure`. See the tool schema.
+    * label — pick the single best-fitting value from the enum. If nothing
+      plausibly fits, call `mark_not_task` instead.
+
+  Optional: description, location, link (most relevant source URL).
 
 - `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS
   listed in the user message. `existing_task_id` must come from that list.

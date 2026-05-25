@@ -11,7 +11,9 @@ export function isToday(iso: string | null): boolean {
 
 export function isOverdue(iso: string | null): boolean {
   if (!iso) return false;
-  return new Date(iso).getTime() < Date.now() && !isToday(iso);
+  // Past the due instant counts as overdue — including same-day times that
+  // have already gone by (e.g. due at 09:00 when it's now 17:00).
+  return new Date(iso).getTime() < Date.now();
 }
 
 export function fmtDue(iso: string | null): string {
