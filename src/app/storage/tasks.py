@@ -30,38 +30,29 @@ def get(session: Session, task_id: uuid.UUID) -> Task | None:
     return session.get(Task, task_id)
 
 
-def update(
-    session: Session,
-    task_id: uuid.UUID,
-    *,
-    title: str | None = None,
-    description: str | None = None,
-    link: str | None = None,
-    due_date: datetime | None = None,
-    estimation: int | None = None,
-    location: str | None = None,
-    label: str | None = None,
-    ai_doable: str | None = None,
-) -> Task | None:
+_UPDATABLE = {
+    "title", "description", "link", "due_date", "estimation",
+    "location", "label", "ai_doable",
+}
+
+
+def update(session: Session, task_id: uuid.UUID, **fields) -> Task | None:
+    """Apply the given fields to the task. A field's *presence* in `fields`
+    means "change it" — even when the value is None (which clears it).
+    Callers should pass `model_dump(exclude_unset=True)` to express "leave
+    untouched" for the fields that should stay as they are.
+
+    `title` is non-nullable in the schema; passing `title=None` is rejected
+    so we don't crash on flush. The other six are nullable."""
     row = session.get(Task, task_id)
     if row is None:
         return None
-    if title is not None:
-        row.title = title
-    if description is not None:
-        row.description = description
-    if link is not None:
-        row.link = link
-    if due_date is not None:
-        row.due_date = due_date
-    if estimation is not None:
-        row.estimation = estimation
-    if location is not None:
-        row.location = location
-    if label is not None:
-        row.label = label
-    if ai_doable is not None:
-        row.ai_doable = ai_doable
+    for key, value in fields.items():
+        if key not in _UPDATABLE:
+            continue
+        if key == "title" and value is None:
+            continue
+        setattr(row, key, value)
     session.flush()
     return row
 

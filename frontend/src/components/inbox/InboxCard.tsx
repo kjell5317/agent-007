@@ -45,13 +45,22 @@ export function InboxCard({ item, onChanged }: Props) {
   );
   const source = isInput ? item.data.source : "task";
 
-  async function withBusy<T>(fn: () => Promise<T>, msg: string) {
+  async function withBusy<T>(
+    fn: () => Promise<T>,
+    successMsg: string,
+    loadingMsg?: string,
+  ) {
     setBusy(true);
+    const toastId = loadingMsg
+      ? toast.loading(loadingMsg, { duration: Infinity })
+      : undefined;
     try {
       await fn();
-      toast.success(msg);
+      if (toastId !== undefined) toast.dismiss(toastId);
+      toast.success(successMsg);
       await onChanged();
     } catch (e) {
+      if (toastId !== undefined) toast.dismiss(toastId);
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
@@ -59,11 +68,18 @@ export function InboxCard({ item, onChanged }: Props) {
   }
 
   // Inbox action: closed tasks → reopen; raw_inputs (not_task/duplicate/no_change) → promote.
+  // Promotion synchronously awaits the LLM extractor on the backend, so show
+  // a loading toast immediately rather than leaving the UI still.
   const action = isInput
     ? {
         label: "Make a task",
         Icon: CirclePlus,
-        run: () => withBusy(() => api.promoteInput(item.id), "Task created"),
+        run: () =>
+          withBusy(
+            () => api.promoteInput(item.id),
+            "Task created",
+            "Creating task…",
+          ),
       }
     : {
         label: "Re-open task",

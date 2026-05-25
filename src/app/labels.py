@@ -33,13 +33,23 @@ class Label:
 @lru_cache
 def load_labels() -> dict[str, Label]:
     """Return the configured labels keyed by name. Cached for process lifetime."""
-    path = Path(get_settings().labels_config_path)
-    if not path.is_absolute():
-        # Resolve relative to repo root (two levels up from this file:
-        # src/app/labels.py → src/app → src → repo root).
-        path = Path(__file__).resolve().parents[2] / path
-    if not path.is_file():
-        log.warning("labels config not found at %s — labels disabled", path)
+    raw = Path(get_settings().labels_config_path)
+    if raw.is_absolute():
+        candidates = [raw]
+    else:
+        # Try CWD first (Docker: WORKDIR /app with config/ COPY'd alongside);
+        # fall back to the source-tree layout (local dev: repo-root/src/app/
+        # → walk up to repo root).
+        candidates = [
+            Path.cwd() / raw,
+            Path(__file__).resolve().parents[2] / raw,
+        ]
+    path = next((p for p in candidates if p.is_file()), None)
+    if path is None:
+        log.warning(
+            "labels config not found (tried %s) — labels disabled",
+            ", ".join(str(p) for p in candidates),
+        )
         return {}
 
     with path.open("rb") as f:
