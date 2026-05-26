@@ -20,9 +20,14 @@ async def close_task(session: Session, task_id: uuid.UUID) -> None:
     if task is None:
         raise LookupError("Task not found")
     latest = raw_inputs_store.latest_for_task(session, task_id)
-    if latest is None:
-        raise LookupError("Task has no raw_input to update")
-    latest.status = "closed"
-    latest.processed_at = datetime.now(timezone.utc)
-    session.commit()
+    if latest is not None:
+        latest.status = "closed"
+        latest.processed_at = datetime.now(timezone.utc)
+        session.commit()
+    else:
+        # Orphan task (no non-duplicate raw_input — e.g. anchor promoted
+        # away via no_change override). With nothing to flip, drop the
+        # row outright so it stops surfacing as "open" by default.
+        session.delete(task)
+        session.commit()
     await delete_task_event(session, task)

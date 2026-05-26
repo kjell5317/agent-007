@@ -4,9 +4,10 @@ from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.db.models.task import Task
 
 EMBEDDING_DIM = 1536
 
@@ -51,6 +52,7 @@ class RawInput(Base):
     task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )
+    task: Mapped[Task | None] = relationship(Task, lazy="joined")
 
     agent_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

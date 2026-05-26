@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CirclePlus, RotateCcw } from "lucide-react";
+import { CirclePlus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,13 +8,20 @@ import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
-import type { RawInput, Task } from "@/lib/types";
+import type { RawInput } from "@/lib/types";
 
-export type InboxItem =
-  | { kind: "input"; id: string; sort: string; data: RawInput }
-  | { kind: "task"; id: string; sort: string; data: Task };
+export interface InboxItem {
+  id: string;
+  sort: string;
+  data: RawInput;
+}
 
-type BadgeKind = "not_task" | "duplicate" | "no_change" | "closed";
+type BadgeKind =
+  | "open"
+  | "not_task"
+  | "duplicate"
+  | "no_change"
+  | "closed";
 
 interface Props {
   item: InboxItem;
@@ -22,7 +29,6 @@ interface Props {
 }
 
 function labelFor(item: InboxItem): BadgeKind {
-  if (item.kind === "task") return "closed";
   const outcome = item.data.agent_trace?.outcome;
   if (outcome === "no_change") return "no_change";
   return item.data.status as BadgeKind;
@@ -44,41 +50,43 @@ export function InboxCard({ item, onChanged }: Props) {
   );
 
   const label = labelFor(item);
-  const isInput = item.kind === "input";
+  const data = item.data;
 
-  const title = isInput
-    ? item.data.source_metadata?.subject ||
-      (item.data.content || "").slice(0, 80) ||
-      "(no subject)"
-    : item.data.title;
-  const when = fmtWhen(
-    isInput
-      ? item.data.received_at
-      : item.data.updated_at || item.data.created_at,
-  );
-  const source = isInput ? item.data.source : "task";
+  // Prefer the linked task's title when we have a live (open) or completed
+  // (closed) task attached — that's the human-meaningful name. Fall back to
+  // the raw envelope (email subject / content snippet) for everything else.
+  const linkedTitle =
+    data.task_title && (data.status === "open" || data.status === "closed")
+      ? data.task_title
+      : null;
+  const title =
+    linkedTitle ||
+    data.source_metadata?.subject ||
+    (data.content || "").slice(0, 80) ||
+    "(no subject)";
+  const when = fmtWhen(data.received_at);
+  const source = data.source;
 
-  async function withBusy<T>(
-    fn: () => Promise<T>,
+  async function runTaskAction(
+    call: (id: string) => Promise<unknown>,
     successMsg: string,
-    loadingMsg?: string,
   ) {
+    if (!data.task_id) return;
+    const taskId = data.task_id;
     setBusy(true);
-    const toastId = loadingMsg
-      ? toast.loading(loadingMsg, { duration: Infinity })
-      : undefined;
     try {
-      await fn();
-      if (toastId !== undefined) toast.dismiss(toastId);
+      await call(taskId);
       toast.success(successMsg);
       await onChanged();
     } catch (e) {
-      if (toastId !== undefined) toast.dismiss(toastId);
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
+
+  const dismiss = () => runTaskAction(api.markNotTask, "Task dismissed");
+  const reopen = () => runTaskAction(api.reopenTask, "Task re-opened");
 
   async function promote() {
     setBusy(true);
@@ -110,16 +118,16 @@ export function InboxCard({ item, onChanged }: Props) {
     }
   }
 
-  // Inbox action: closed tasks → reopen; raw_inputs (not_task/duplicate/no_change) → promote.
-  // Promotion enqueues the LLM extractor on the backend and we poll the
-  // raw_input until it gains a task_id (mirrors the Composer flow).
-  const action = isInput
+  // No task yet → promote. Open task → dismiss (mark not_task). Closed task
+  // → reopen. Other statuses (not_task / duplicate / processing) get no
+  // action button.
+  const action = !data.task_id
     ? { label: "Make a task", Icon: CirclePlus, run: promote }
-    : {
-        label: "Re-open task",
-        Icon: RotateCcw,
-        run: () => withBusy(() => api.reopenTask(item.id), "Task re-opened"),
-      };
+    : data.status === "open"
+      ? { label: "Dismiss task", Icon: Trash2, run: dismiss }
+      : data.status === "closed"
+        ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
+        : null;
 
   return (
     <Card>
@@ -131,18 +139,24 @@ export function InboxCard({ item, onChanged }: Props) {
         }}
       >
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-label={action.label}
-            title={action.label}
-            disabled={busy}
-            onClick={action.run}
-            className={cn(
-              "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
-            )}
-          >
-            <action.Icon className="h-5 w-5" />
-          </button>
+          {action ? (
+            <button
+              type="button"
+              aria-label={action.label}
+              title={action.label}
+              disabled={busy}
+              onClick={action.run}
+              className={cn(
+                "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
+              )}
+            >
+              <action.Icon className="h-5 w-5" />
+            </button>
+          ) : (
+            // Keep the leading column reserved so cards align whether or
+            // not they have an action button.
+            <div className="h-8 w-8 shrink-0" />
+          )}
 
           <div className="min-w-0 flex-1">
             <div className="truncate font-medium leading-snug">{title}</div>
@@ -159,11 +173,7 @@ export function InboxCard({ item, onChanged }: Props) {
             className="mt-3 space-y-3 border-t pt-3 text-sm"
             onClick={(e) => e.stopPropagation()}
           >
-            {isInput ? (
-              <InputBody data={item.data} />
-            ) : (
-              <TaskBody data={item.data} />
-            )}
+            <InputBody data={data} />
           </div>
         </Collapsible>
       </CardContent>
@@ -212,52 +222,6 @@ function InputBody({ data }: { data: RawInput }) {
             {JSON.stringify(data.agent_trace, null, 2)}
           </pre>
         </details>
-      )}
-    </>
-  );
-}
-
-function TaskBody({ data }: { data: Task }) {
-  return (
-    <>
-      {data.description && (
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Description
-          </div>
-          <div>{data.description}</div>
-        </div>
-      )}
-      {data.due_date && (
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Due
-          </div>
-          <div>{fmtWhen(data.due_date)}</div>
-        </div>
-      )}
-      {data.location && (
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Location
-          </div>
-          <div>{data.location}</div>
-        </div>
-      )}
-      {data.link && (
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Link
-          </div>
-          <a
-            href={data.link}
-            target="_blank"
-            rel="noopener"
-            className="text-primary underline"
-          >
-            {data.link}
-          </a>
-        </div>
       )}
     </>
   );

@@ -12,7 +12,6 @@ const POLL_INTERVAL_MS = 20_000;
 export interface AppData {
   tasks: Task[];
   inputs: RawInput[];
-  closedTasks: Task[];
   loading: boolean;
   refresh: () => Promise<void>;
   loadMoreInputs: () => Promise<void>;
@@ -22,7 +21,6 @@ export interface AppData {
 export function useAppData(): AppData {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [inputs, setInputs] = useState<RawInput[]>([]);
-  const [closedTasks, setClosedTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMoreInputs, setHasMoreInputs] = useState(false);
   // Held in a ref so refresh/loadMoreInputs keep stable identities across renders.
@@ -30,14 +28,12 @@ export function useAppData(): AppData {
 
   const refresh = useCallback(async () => {
     const limit = inputsLimitRef.current;
-    const [open, allInputs, closed] = await Promise.all([
+    const [open, allInputs] = await Promise.all([
       api.listTasks("open"),
       api.listInputs({ limit }),
-      api.listTasks("closed"),
     ]);
     setTasks([...open]);
     setInputs(allInputs);
-    setClosedTasks(closed);
     setHasMoreInputs(allInputs.length >= limit);
     setLoading(false);
   }, []);
@@ -114,7 +110,6 @@ export function useAppData(): AppData {
   return {
     tasks,
     inputs,
-    closedTasks,
     loading,
     refresh,
     loadMoreInputs,

@@ -43,13 +43,15 @@ export interface RawInput {
   processed_at: string | null;
   status: "processing" | "not_task" | "duplicate" | "open" | "closed";
   task_id: string | null;
+  task_title: string | null;
   agent_trace: AgentTrace | null;
 }
 
 export interface SourcePollResult {
-  source: string;
   fetched: number;
+  agent_runs: number;
   tasks_created: number;
   skipped: number;
-  errors: string[];
+  errors: unknown[];
+  per_source: Record<string, unknown>;
 }

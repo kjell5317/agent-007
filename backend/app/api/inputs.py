@@ -7,7 +7,7 @@
 
 Direct creation of raw_inputs goes through the ingestion sources (Gmail/Slack
 poll). Manual task entry lives at `POST /tasks`. Promoting an existing
-raw_input to a task lives at `POST /tasks/from_input/{raw_input_id}`.
+raw_input to a task lives at `POST /tasks/open/{raw_input_id}`.
 """
 
 import uuid
@@ -38,7 +38,7 @@ async def list_inputs(
     session: Session = Depends(get_session),
 ) -> list[RawInputRead]:
     rows = raw_inputs.list_(session, status=status_filter, source=source, limit=limit)
-    return [RawInputRead.model_validate(r) for r in rows]
+    return [RawInputRead.from_row(r) for r in rows]
 
 
 # Static paths must precede the dynamic /{raw_input_id} GET below — FastAPI
@@ -67,4 +67,4 @@ async def get_input(
     row = raw_inputs.get(session, raw_input_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Raw input not found")
-    return RawInputRead.model_validate(row)
+    return RawInputRead.from_row(row)

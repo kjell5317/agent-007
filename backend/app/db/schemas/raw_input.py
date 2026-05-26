@@ -1,7 +1,11 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from app.db.models.raw_input import RawInput
 
 
 class RawInputCreate(BaseModel):
@@ -25,7 +29,21 @@ class RawInputRead(BaseModel):
     processed_at: datetime | None
     status: str
     task_id: uuid.UUID | None
+    task_title: str | None
     agent_trace: dict | None
 
-    class Config:
-        from_attributes = True
+    @classmethod
+    def from_row(cls, row: "RawInput") -> "RawInputRead":
+        return cls(
+            id=row.id,
+            source=row.source,
+            external_id=row.external_id,
+            content=row.content,
+            source_metadata=row.source_metadata,
+            received_at=row.received_at,
+            processed_at=row.processed_at,
+            status=row.status,
+            task_id=row.task_id,
+            task_title=row.task.title if row.task is not None else None,
+            agent_trace=row.agent_trace,
+        )

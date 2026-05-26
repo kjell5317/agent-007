@@ -9,8 +9,6 @@ interface Props {
   onSynced: () => Promise<void> | void;
 }
 
-const SOURCES = ["gmail", "slack"] as const;
-
 // Each entry becomes a "Connect <label>" link inside the account dropdown.
 // The href points at the backend's generic OAuth authorize route, which
 // redirects to the provider's consent screen and back through /oauth/<p>/callback.
@@ -61,46 +59,16 @@ export function Topbar({ onSynced }: Props) {
     setSyncing(true);
     const toastId = toast.loading("Syncing…");
     try {
-      const results = await Promise.allSettled(SOURCES.map((s) => api.poll(s)));
-      let created = 0;
-      let fetched = 0;
-      const failed: string[] = [];
-      results.forEach((r, i) => {
-        if (r.status === "fulfilled") {
-          created += r.value.tasks_created;
-          fetched += r.value.fetched;
-        } else {
-          failed.push(SOURCES[i]);
-        }
-      });
-
-      // Commute planning runs after source polling so freshly-mirrored task
-      // events have a chance to land on the calendar before the planner reads
-      // it. Failures are reported alongside source failures rather than
-      // hidden — a missing maps key shouldn't fail silently.
-      const commute = await api.planCommutes().catch((err: Error) => err);
-
-      if (failed.length === SOURCES.length) {
-        toast.error(`Sync failed: ${failed.join(", ")}`, { id: toastId });
-      } else {
-        const parts = [
-          `${fetched} fetched`,
-          `${created} new task${created === 1 ? "" : "s"}`,
-        ];
-        if (commute instanceof Error) {
-          parts.push("commute failed");
-        } else {
-          parts.push(`${commute.planned} commute${commute.planned === 1 ? "" : "s"}`);
-          if (commute.rescheduled_tasks > 0) {
-            parts.push(
-              `${commute.rescheduled_tasks} task${commute.rescheduled_tasks === 1 ? "" : "s"} moved`,
-            );
-          }
-        }
-        if (failed.length) parts.push(`${failed.join(", ")} failed`);
-        toast.success(`Synced: ${parts.join(" · ")}`, { id: toastId });
-        await onSynced();
-      }
+      const result = await api.poll();
+      const parts = [
+        `${result.fetched} fetched`,
+        `${result.tasks_created} new task${result.tasks_created === 1 ? "" : "s"}`,
+      ];
+      if (result.errors.length) parts.push(`${result.errors.length} error(s)`);
+      toast.success(`Synced: ${parts.join(" · ")}`, { id: toastId });
+      await onSynced();
+    } catch (err) {
+      toast.error(`Sync failed: ${(err as Error).message}`, { id: toastId });
     } finally {
       setSyncing(false);
     }

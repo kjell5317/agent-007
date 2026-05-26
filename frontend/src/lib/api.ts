@@ -71,11 +71,8 @@ export const api = {
   markInputsSeen: () =>
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 
-  poll: (source: string) =>
-    request<SourcePollResult>(`/sources/poll?source=${source}`, { method: "POST" }),
-
-  planCommutes: () =>
-    request<CommutePlanResult>("/commute/plan", { method: "POST" }),
+  poll: () =>
+    request<SourcePollResult>("/sources/poll", { method: "POST" }),
 
   listLabels: () => request<Label[]>("/labels"),
 
@@ -101,10 +98,3 @@ export interface UnreadInputs {
   last_seen_at: string;
 }
 
-export interface CommutePlanResult {
-  planned: number;
-  skipped_online: number;
-  skipped_no_location: number;
-  rescheduled_tasks: number;
-  errors: { setup?: string; [k: string]: unknown }[];
-}

@@ -18,7 +18,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.db.clients import raw_inputs as raw_inputs_store
+from app.db.clients import (
+    raw_inputs as raw_inputs_store,
+    tasks as tasks_store,
+)
+from app.services.calendar import delete_task_event
 from app.services.task.queue import enqueue
 
 
@@ -31,12 +35,39 @@ async def open_task_from_input(
 
     Raises:
       * `LookupError` — no raw_input with that id.
-      * `ValueError`  — the raw_input is already linked to a task (the
-        user is trying to open something that's already open).
+      * `ValueError`  — the raw_input is the anchor of an existing open
+        task (status='open' with task_id set), so it can't be promoted
+        into a *new* task without orphaning the current one.
     """
     raw = raw_inputs_store.get(session, raw_input_id)
     if raw is None:
         raise LookupError("Raw input not found")
     if raw.task_id is not None:
-        raise ValueError("Raw input is already linked to a task")
+        # `duplicate` (status='duplicate') and `no_change` follow-ups
+        # (status='open', trace.outcome='no_change') hold a backlink to
+        # the task they were a reference to. The user is overriding the
+        # agent ("this is actually its own task"), so break the backlink
+        # and let the worker attach a fresh task. The prior agent decision
+        # is preserved under `agent_trace.manual_override` by the queue
+        # worker.
+        outcome = (raw.agent_trace or {}).get("outcome")
+        if raw.status == "duplicate" or outcome == "no_change":
+            old_task_id = raw.task_id
+            raw.task_id = None
+            session.commit()
+            # Defensive: the override should never leave the old task
+            # without an anchor (we only detach follow-ups, not the
+            # task_created anchor itself). If somehow `raw` was the last
+            # non-duplicate row pointing at it, drop the task rather
+            # than leaving an orphan — orphans surface as "open" by
+            # default in tasks.list_ and have no raw_input for
+            # close / dismiss / reopen to flip.
+            if raw_inputs_store.latest_for_task(session, old_task_id) is None:
+                old_task = tasks_store.get(session, old_task_id)
+                if old_task is not None:
+                    await delete_task_event(session, old_task)
+                    session.delete(old_task)
+                    session.commit()
+        else:
+            raise ValueError("Raw input is already linked to a task")
     await enqueue(raw_input_id, user_fields)

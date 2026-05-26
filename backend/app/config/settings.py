@@ -7,7 +7,12 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # `.env.dev` overrides `.env` when present — pydantic loads the
+        # tuple left-to-right, so later files win. Production deploys ship
+        # only `.env`; `scripts/dev.sh` ships a `.env.dev` with local
+        # overrides (e.g. OAuth redirect URIs pointing at :5173). Missing
+        # files are silently skipped.
+        env_file=(".env", ".env.dev"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
