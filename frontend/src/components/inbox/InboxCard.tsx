@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CirclePlus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
+import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
 import type { RawInput, Task } from "@/lib/types";
 
@@ -30,6 +31,18 @@ function labelFor(item: InboxItem): BadgeKind {
 export function InboxCard({ item, onChanged }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Promote is async on the backend (queue + LLM extract) — track the in-flight
+  // poll so we can cancel it if the card unmounts mid-flight.
+  const activePolls = useRef<Set<PollHandle>>(new Set());
+
+  useEffect(
+    () => () => {
+      activePolls.current.forEach((handle) => handle.cancel());
+      activePolls.current.clear();
+    },
+    [],
+  );
+
   const label = labelFor(item);
   const isInput = item.kind === "input";
 
@@ -67,20 +80,41 @@ export function InboxCard({ item, onChanged }: Props) {
     }
   }
 
+  async function promote() {
+    setBusy(true);
+    const toastId = toast.loading("Creating task…", { duration: Infinity });
+    let handle: PollHandle | null = null;
+    const finish = (run: () => void) => {
+      toast.dismiss(toastId);
+      run();
+      if (handle) activePolls.current.delete(handle);
+      setBusy(false);
+    };
+    try {
+      const { raw_input_id } = await api.promoteInput(item.id);
+      handle = pollTaskCreation(raw_input_id, {
+        onSuccess: () =>
+          finish(() => {
+            toast.success("Task added");
+            void onChanged();
+          }),
+        onFailure: (message) => finish(() => toast.error(message)),
+        onTimeout: () =>
+          finish(() => toast.error("Task is taking longer than expected")),
+      });
+      activePolls.current.add(handle);
+    } catch (err) {
+      toast.dismiss(toastId);
+      toast.error((err as Error).message);
+      setBusy(false);
+    }
+  }
+
   // Inbox action: closed tasks → reopen; raw_inputs (not_task/duplicate/no_change) → promote.
-  // Promotion synchronously awaits the LLM extractor on the backend, so show
-  // a loading toast immediately rather than leaving the UI still.
+  // Promotion enqueues the LLM extractor on the backend and we poll the
+  // raw_input until it gains a task_id (mirrors the Composer flow).
   const action = isInput
-    ? {
-        label: "Make a task",
-        Icon: CirclePlus,
-        run: () =>
-          withBusy(
-            () => api.promoteInput(item.id),
-            "Task created",
-            "Creating task…",
-          ),
-      }
+    ? { label: "Make a task", Icon: CirclePlus, run: promote }
     : {
         label: "Re-open task",
         Icon: RotateCcw,

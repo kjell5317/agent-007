@@ -2,7 +2,7 @@ import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Vite writes the build into ../src/app/static. FastAPI serves index.html
+// Vite writes the build into ../backend/app/static. FastAPI serves index.html
 // from there and mounts /assets onto the same directory. `emptyOutDir` is
 // explicit because the outDir is outside Vite's project root.
 export default defineConfig({
@@ -11,7 +11,7 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "src") },
   },
   build: {
-    outDir: path.resolve(__dirname, "../src/app/static"),
+    outDir: path.resolve(__dirname, "../backend/app/static"),
     emptyOutDir: true,
   },
   server: {

@@ -6,8 +6,8 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-# Vite's outDir resolves to ../src/app/static — see frontend/vite.config.ts.
-RUN npm run build && ls /src/app/static
+# Vite's outDir resolves to ../backend/app/static — see frontend/vite.config.ts.
+RUN npm run build && ls /backend/app/static
 
 # --- Stage 2: install Python deps into an isolated prefix ---
 FROM python:3.12-slim AS pybuild
@@ -18,7 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY pyproject.toml ./
-COPY src/ ./src/
+COPY backend/ ./backend/
 RUN pip install --prefix=/install .
 
 # --- Stage 3: minimal runtime image ---
@@ -34,15 +34,14 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=pybuild /install /usr/local
-COPY src/ ./src/
-COPY migrations/ ./migrations/
+COPY backend/ ./backend/
 COPY config/ ./config/
 COPY alembic.ini ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Frontend build goes into the installed package — that's the one uvicorn imports
-COPY --from=frontend /src/app/static /usr/local/lib/python3.12/site-packages/app/static
+COPY --from=frontend /backend/app/static /usr/local/lib/python3.12/site-packages/app/static
 
 USER app
 EXPOSE 8000

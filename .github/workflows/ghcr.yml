@@ -43,7 +43,7 @@ jobs:
 
       # Multi-stage Dockerfile builds the React frontend in stage 1 (node) and
       # the Python runtime in stage 3. The image ships the bundled SPA under
-      # src/app/static, served by FastAPI alongside the API.
+      # backend/app/static, served by FastAPI alongside the API.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

@@ -62,7 +62,7 @@ export const api = {
   },
   getInput: (id: string) => request<RawInput>(`/inputs/${id}`),
   promoteInput: (id: string, title?: string) =>
-    request<Task>(`/inputs/${id}/open_task`, {
+    request<TaskCreationAccepted>(`/tasks/open/${id}`, {
       method: "POST",
       body: JSON.stringify(title ? { title } : {}),
     }),

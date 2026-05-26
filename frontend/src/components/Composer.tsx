@@ -3,62 +3,44 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 
 interface Props {
   onCreated: () => Promise<void> | void;
 }
 
-const POLL_INTERVAL_MS = 1000;
-const POLL_TIMEOUT_MS = 120_000;
-
 export function Composer({ onCreated }: Props) {
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   // Stop in-flight polls when the component unmounts.
-  const activePolls = useRef<Set<number>>(new Set());
+  const activePolls = useRef<Set<PollHandle>>(new Set());
 
   useEffect(
     () => () => {
-      activePolls.current.forEach((id) => clearTimeout(id));
+      activePolls.current.forEach((handle) => handle.cancel());
       activePolls.current.clear();
     },
     [],
   );
 
-  const pollUntilDone = (rawInputId: string, toastId: string | number) => {
-    const startedAt = Date.now();
-    const tick = async () => {
-      try {
-        const input = await api.getInput(rawInputId);
-        if (input.status === "processing") {
-          if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
-            toast.dismiss(toastId);
-            toast.error("Task is taking longer than expected");
-            return;
-          }
-          const id = window.setTimeout(() => {
-            activePolls.current.delete(id);
-            tick();
-          }, POLL_INTERVAL_MS);
-          activePolls.current.add(id);
-          return;
-        }
-        toast.dismiss(toastId);
-        const outcome = input.agent_trace?.outcome;
-        if (input.task_id && outcome === "task_created") {
-          toast.success("Task added");
-        } else if (outcome === "task_creation_failed") {
-          toast.error("Task creation failed");
-        } else {
-          toast.success("Done");
-        }
-        await onCreated();
-      } catch (err) {
-        toast.dismiss(toastId);
-        toast.error((err as Error).message);
-      }
+  const trackPoll = (rawInputId: string, toastId: string | number) => {
+    let handle: PollHandle | null = null;
+    const finish = (run: () => void) => {
+      toast.dismiss(toastId);
+      run();
+      if (handle) activePolls.current.delete(handle);
     };
-    void tick();
+    handle = pollTaskCreation(rawInputId, {
+      onSuccess: () =>
+        finish(() => {
+          toast.success("Task added");
+          void onCreated();
+        }),
+      onFailure: (message) => finish(() => toast.error(message)),
+      onTimeout: () =>
+        finish(() => toast.error("Task is taking longer than expected")),
+    });
+    activePolls.current.add(handle);
   };
 
   const submit = async (e: FormEvent) => {
@@ -72,7 +54,7 @@ export function Composer({ onCreated }: Props) {
     try {
       const { raw_input_id } = await api.createTask(text);
       setValue("");
-      pollUntilDone(raw_input_id, toastId);
+      trackPoll(raw_input_id, toastId);
     } catch (err) {
       toast.dismiss(toastId);
       toast.error((err as Error).message);
