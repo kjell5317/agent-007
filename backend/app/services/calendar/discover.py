@@ -107,7 +107,6 @@ async def discover_updated_events(
                 )
                 await reschedule(
                     session,
-                    calendar_id=cid,
                     event_id=ev.id,
                     account_key=account_key,
                 )
