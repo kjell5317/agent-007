@@ -55,6 +55,11 @@ class GmailSource(IngestionSource):
     async def fetch(self) -> AsyncIterator[RawInputCreate]:
         async for message_id in self._iter_new_message_ids():
             raw = await self.client.get_message(message_id)
+            if raw is None:
+                # History referenced a message that's gone (hard-deleted,
+                # purged, etc). Skip it so the watermark can still advance.
+                log.info("gmail · skip id=%s (404 from get_message)", message_id)
+                continue
 
             labels = raw.get("labelIds") or ()
             skip = SKIP_LABELS.intersection(labels)

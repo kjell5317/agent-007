@@ -71,12 +71,20 @@ class GmailClient:
                     return
                 params["pageToken"] = token
 
-    async def get_message(self, message_id: str) -> dict:
-        """Fetch a single message in `format=full` for preprocessing."""
+    async def get_message(self, message_id: str) -> dict | None:
+        """Fetch a single message in `format=full` for preprocessing.
+
+        Returns `None` when Gmail no longer has the message (404 — typical when
+        a history record references a message that's since been hard-deleted).
+        Caller should skip such ids; raising would block the entire poll and
+        prevent the history watermark from advancing past the broken record.
+        """
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             resp = await client.get(
                 f"{_BASE}/messages/{message_id}", params={"format": "full"}
             )
+            if resp.status_code == 404:
+                return None
             resp.raise_for_status()
             return resp.json()
 
