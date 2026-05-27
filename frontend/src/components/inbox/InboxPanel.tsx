@@ -8,9 +8,16 @@ interface Props {
   onChanged: () => Promise<void> | void;
   onLoadMore: () => Promise<void>;
   hasMore: boolean;
+  seenAfter: string | null;
 }
 
-export function InboxPanel({ inputs, onChanged, onLoadMore, hasMore }: Props) {
+export function InboxPanel({
+  inputs,
+  onChanged,
+  onLoadMore,
+  hasMore,
+  seenAfter,
+}: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Inbox is a raw-input log/debug view. Tasks live on the Tasks tab — we
@@ -65,7 +72,12 @@ export function InboxPanel({ inputs, onChanged, onLoadMore, hasMore }: Props) {
   return (
     <div className="space-y-2">
       {items.map((it) => (
-        <InboxCard key={it.id} item={it} onChanged={onChanged} />
+        <InboxCard
+          key={it.id}
+          item={it}
+          onChanged={onChanged}
+          seenAfter={seenAfter}
+        />
       ))}
       {loadMoreButton}
     </div>

@@ -12,10 +12,18 @@ model rather than Claude.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+def now_iso(tz_name: str | None = None) -> str:
+    """Current time as ISO-8601 with an explicit offset.
+
+    Pass `tz_name` (e.g. "Europe/Berlin") so the agent sees wall-clock time
+    in the user's zone — otherwise it defaults to UTC and "tomorrow at 2 PM"
+    gets stored as 14:00Z, which renders as 16:00 CEST on the frontend.
+    """
+    tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    return datetime.now(tz).replace(microsecond=0).isoformat()
 
 
 def parse_iso(value: str | datetime | None) -> datetime | None:

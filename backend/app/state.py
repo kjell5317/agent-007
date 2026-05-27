@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 
 auto_poll_enabled: bool = True
 
-# Watermark for the inbox unread badge. Initialised at process start so the
-# count is 0 on first load and rises as new inputs land before the user opens
-# the inbox tab; reset to "now" whenever the tab is viewed.
+# Watermarks for the unread indicators on each tab. Initialised at process
+# start so counts/dots are 0 on first load and rise as new rows land before
+# the user opens the matching tab; reset to "now" whenever the tab is viewed.
 last_seen_input_at: datetime = datetime.now(timezone.utc)
+last_seen_task_at: datetime = datetime.now(timezone.utc)

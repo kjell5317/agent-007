@@ -3,11 +3,46 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.db.models.raw_input import RawInput
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
+
+
+def count_since(session: Session, ts: datetime) -> int:
+    """Count tasks created after `ts` — drives the Tasks-tab unread badge.
+
+    Excludes manual tasks (every linked raw_input has source='manual'): the
+    user just created those via POST /tasks, no need to badge themselves.
+    """
+    stmt = (
+        select(func.count(func.distinct(Task.id)))
+        .join(RawInput, RawInput.task_id == Task.id)
+        .where(Task.created_at > ts, RawInput.source != "manual")
+    )
+    return int(session.execute(stmt).scalar_one() or 0)
+
+
+def is_manual_for(
+    session: Session, task_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, bool]:
+    """Map each task to whether every one of its raw_inputs is `manual`."""
+    if not task_ids:
+        return {}
+    rows = session.execute(
+        select(RawInput.task_id, RawInput.source).where(
+            RawInput.task_id.in_(task_ids)
+        )
+    ).all()
+    by_task: dict[uuid.UUID, list[str]] = {}
+    for r in rows:
+        by_task.setdefault(r.task_id, []).append(r.source)
+    return {
+        tid: all(s == "manual" for s in sources)
+        for tid, sources in by_task.items()
+    }
 
 
 def create(session: Session, payload: TaskCreate) -> Task:

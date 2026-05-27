@@ -1,77 +1,56 @@
 import { useState } from "react";
 import {
+  ChevronLeft,
   Circle,
   CircleCheckBig,
   MapPin,
-  Settings,
   Timer,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Collapsible } from "@/components/ui/collapsible";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
+import { EstimationPicker } from "@/components/ui/estimation-picker";
+import { LabelPicker } from "@/components/ui/label-picker";
+import { Modal } from "@/components/ui/modal";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import type { AiDoable, Label, Task } from "@/lib/types";
+import type { AiDoable, Task } from "@/lib/types";
 
 interface Props {
   task: Task;
   onChanged: () => Promise<void> | void;
+  seenAfter: string | null;
 }
 
-type Field =
-  | "title"
-  | "due_date"
-  | "estimation"
-  | "location"
-  | "link"
-  | "label";
-type Draft = Record<Field, string>;
+type EditField = "due_date" | "estimation" | "label" | null;
 
 const CROSS_OFF_MS = 350;
 
-function toDraft(t: Task): Draft {
-  return {
-    title: t.title,
-    due_date: toDateTimeLocal(t.due_date),
-    estimation: t.estimation == null ? "" : String(t.estimation),
-    location: t.location ?? "",
-    link: t.link ?? "",
-    label: t.label ?? "",
-  };
-}
-
-// <input type="datetime-local"> uses naive local time (no tz). Convert the
-// UTC ISO from the API into the local "YYYY-MM-DDTHH:MM" the input expects,
-// and back into a UTC ISO when saving.
-function toDateTimeLocal(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fromDateTimeLocal(local: string): string | null {
-  if (!local) return null;
-  return new Date(local).toISOString();
-}
-
-export function TaskCard({ task, onChanged }: Props) {
-  const [editing, setEditing] = useState(false);
+export function TaskCard({ task, onChanged, seenAfter }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
-  const [draft, setDraft] = useState<Draft>(toDraft(task));
+  const [editField, setEditField] = useState<EditField>(null);
+  const [draft, setDraft] = useState("");
+  // Lifted out of DatePicker so the surrounding Modal can render a Back
+  // arrow into its top-left action slot on the time step.
+  const [dateStep, setDateStep] = useState<"date" | "time">("date");
   const labels = useLabels();
 
   const overdue = isOverdue(task.due_date);
   const urgent = isUrgent(task.due_date, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
+  // Manual tasks are excluded from the Tasks-tab unread count on the
+  // server (count_since skips manual-only tasks). Suppress the per-card
+  // dot too so the badge and the dots stay consistent.
+  const unread =
+    seenAfter !== null &&
+    !task.is_manual &&
+    new Date(task.created_at).getTime() > new Date(seenAfter).getTime();
 
   async function withBusy<T>(fn: () => Promise<T>, msg: string) {
     setBusy(true);
@@ -94,18 +73,30 @@ export function TaskCard({ task, onChanged }: Props) {
     }, CROSS_OFF_MS);
   };
 
-  const save = () =>
-    withBusy(async () => {
-      await api.updateTask(task.id, {
-        title: draft.title,
-        due_date: fromDateTimeLocal(draft.due_date),
-        estimation: draft.estimation === "" ? null : Number(draft.estimation),
-        location: draft.location || null,
-        link: draft.link || null,
-        label: draft.label || null,
-      });
-      setEditing(false);
-    }, "Saved");
+  const openEdit = (field: Exclude<EditField, null>) => {
+    if (field === "due_date") setDraft(task.due_date ?? "");
+    else if (field === "estimation")
+      setDraft(task.estimation == null ? "" : String(task.estimation));
+    else setDraft(task.label ?? "");
+    setDateStep("date");
+    setEditField(field);
+  };
+
+  const closeEdit = () => setEditField(null);
+
+  const saveEdit = async () => {
+    if (!editField) return;
+    let patch: Partial<Task>;
+    if (editField === "due_date") {
+      patch = { due_date: draft || null };
+    } else if (editField === "estimation") {
+      patch = { estimation: draft === "" ? null : Number(draft) };
+    } else {
+      patch = { label: draft || null };
+    }
+    await withBusy(() => api.updateTask(task.id, patch), "Saved");
+    closeEdit();
+  };
 
   const TitleEl = task.link ? "a" : "span";
   const titleProps = task.link
@@ -135,6 +126,13 @@ export function TaskCard({ task, onChanged }: Props) {
           </IconButton>
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
+              {unread && (
+                <span
+                  aria-label="Unread"
+                  title="Unread"
+                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                />
+              )}
               <TitleEl
                 {...titleProps}
                 className={cn(
@@ -147,17 +145,6 @@ export function TaskCard({ task, onChanged }: Props) {
               </TitleEl>
 
               <IconButton
-                label="Edit task"
-                disabled={busy || crossing}
-                onClick={() => setEditing((v) => !v)}
-                className={cn(
-                  "text-muted-foreground hover:text-foreground",
-                  editing && "text-foreground",
-                )}
-              >
-                <Settings className="h-4 w-4" />
-              </IconButton>
-              <IconButton
                 label="Mark not a task"
                 disabled={busy || crossing}
                 onClick={() =>
@@ -169,23 +156,64 @@ export function TaskCard({ task, onChanged }: Props) {
               </IconButton>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              {task.due_date && (
-                <Badge
-                  variant={overdue ? "overdue" : urgent ? "urgent" : "open"}
+              {task.due_date ? (
+                <button
+                  type="button"
+                  onClick={() => openEdit("due_date")}
+                  disabled={busy || crossing}
+                  className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  {fmtDue(task.due_date)}
-                </Badge>
+                  <Badge
+                    variant={overdue ? "overdue" : urgent ? "urgent" : "open"}
+                  >
+                    {fmtDue(task.due_date)}
+                  </Badge>
+                </button>
+              ) : (
+                <AddChip
+                  label="+ Due"
+                  onClick={() => openEdit("due_date")}
+                  disabled={busy || crossing}
+                />
               )}
-              {task.label && (
-                <span
+
+              {task.label ? (
+                <button
+                  type="button"
+                  onClick={() => openEdit("label")}
+                  disabled={busy || crossing}
                   title={labelMeta?.description ?? task.label}
                   className={cn(
-                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     labelChipClass(labelMeta?.color),
                   )}
                 >
                   {task.label}
-                </span>
+                </button>
+              ) : (
+                <AddChip
+                  label="+ Label"
+                  onClick={() => openEdit("label")}
+                  disabled={busy || crossing}
+                />
+              )}
+
+              {task.estimation != null ? (
+                <button
+                  type="button"
+                  onClick={() => openEdit("estimation")}
+                  disabled={busy || crossing}
+                  className="inline-flex items-center gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Timer className="h-3 w-3" />
+                  {task.estimation} min
+                </button>
+              ) : (
+                <AddChip
+                  label="+ Estimation"
+                  onClick={() => openEdit("estimation")}
+                  disabled={busy || crossing}
+                />
               )}
               {task.location && (
                 <span
@@ -199,88 +227,64 @@ export function TaskCard({ task, onChanged }: Props) {
                       String(task.location).slice(1)}
                 </span>
               )}
-              {task.estimation != null && (
-                <span className="inline-flex items-center gap-1">
-                  <Timer className="h-3 w-3" />
-                  {task.estimation} min
-                </span>
-              )}
               {task.ai_doable && <AiDoableDot value={task.ai_doable} />}
             </div>
           </div>
         </div>
-
-        <Collapsible open={editing}>
-          <div className="mt-3 space-y-3 border-t pt-3">
-            <FieldRow label="Title">
-              <Input
-                value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              />
-            </FieldRow>
-            <div className="grid grid-cols-2 gap-4">
-              <FieldRow label="Due">
-                <Input
-                  type="datetime-local"
-                  value={draft.due_date}
-                  onChange={(e) =>
-                    setDraft({ ...draft, due_date: e.target.value })
-                  }
-                />
-              </FieldRow>
-              <FieldRow label="Estimation (min)">
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  value={draft.estimation}
-                  onChange={(e) =>
-                    setDraft({ ...draft, estimation: e.target.value })
-                  }
-                />
-              </FieldRow>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <FieldRow label="Label">
-                <LabelSelect
-                  value={draft.label}
-                  labels={labels}
-                  onChange={(v) => setDraft({ ...draft, label: v })}
-                />
-              </FieldRow>
-              <FieldRow label="Location">
-                <Input
-                  value={draft.location}
-                  onChange={(e) =>
-                    setDraft({ ...draft, location: e.target.value })
-                  }
-                />
-              </FieldRow>
-            </div>
-            <FieldRow label="Link">
-              <Input
-                value={draft.link}
-                onChange={(e) => setDraft({ ...draft, link: e.target.value })}
-              />
-            </FieldRow>
-            <div className="flex justify-end gap-2 pt-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => {
-                  setDraft(toDraft(task));
-                  setEditing(false);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button size="sm" disabled={busy} onClick={save}>
-                Save
-              </Button>
-            </div>
-          </div>
-        </Collapsible>
       </CardContent>
+
+      <Modal
+        open={editField !== null}
+        onClose={closeEdit}
+        title={
+          editField === "due_date"
+            ? "Edit due date"
+            : editField === "estimation"
+              ? "Edit estimation"
+              : editField === "label"
+                ? "Edit label"
+                : ""
+        }
+        leftAction={
+          editField === "due_date" && dateStep === "time" ? (
+            <button
+              type="button"
+              aria-label="Back"
+              onClick={() => setDateStep("date")}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          ) : null
+        }
+      >
+        {editField === "due_date" && (
+          // DatePicker owns its own Next / Save footer; the modal's
+          // leftAction slot supplies the Back arrow on the time step.
+          <DatePicker
+            value={draft || null}
+            onChange={(iso) => setDraft(iso ?? "")}
+            onSave={saveEdit}
+            step={dateStep}
+            onStepChange={setDateStep}
+          />
+        )}
+        {editField === "estimation" && (
+          <EstimationPicker
+            value={draft === "" ? null : Number(draft)}
+            onChange={(n) => setDraft(n == null ? "" : String(n))}
+            onSave={saveEdit}
+          />
+        )}
+        {editField === "label" && (
+          <LabelPicker
+            value={draft}
+            onChange={(v) => setDraft(v)}
+            onSave={saveEdit}
+            labels={labels}
+          />
+        )}
+      </Modal>
     </Card>
   );
 }
@@ -307,20 +311,24 @@ function IconButton({
   );
 }
 
-function FieldRow({
+function AddChip({
   label,
-  children,
+  onClick,
+  disabled,
 }: {
   label: string;
-  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </label>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-md px-1 text-[11px] text-muted-foreground/70 hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -351,38 +359,3 @@ function AiDoableDot({ value }: { value: AiDoable }) {
   );
 }
 
-function LabelSelect({
-  value,
-  labels,
-  onChange,
-}: {
-  value: string;
-  labels: Label[];
-  onChange: (v: string) => void;
-}) {
-  const current = labels.find((l) => l.name === value);
-  return (
-    <div className="flex items-center gap-2">
-      <span
-        aria-hidden
-        className={cn(
-          "h-3 w-3 shrink-0 rounded-full",
-          labelChipClass(current?.color),
-        )}
-      />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        title={current?.description}
-        className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-      >
-        <option value="">— none —</option>
-        {labels.map((l) => (
-          <option key={l.name} value={l.name}>
-            {l.name}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}

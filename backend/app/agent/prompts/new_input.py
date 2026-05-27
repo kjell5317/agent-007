@@ -14,7 +14,9 @@ Given a single semi-structured input from one of the user's sources
     * due_date — ISO 8601 with timezone. Use the explicit deadline if stated,
       otherwise a reasonable best-guess based on urgency. The user message
       begins with a "Current time:" line; due_date must be at or after that
-      time. Round to 5-minute steps.
+      time and MUST use the user's local zone
+      unless the input explicitly names a different zone.
+      Round to 5-minute steps.
     * ai_doable — one of `yes` / `no` / `unsure`. See the tool schema.
     * label — pick the single best-fitting value from the enum. If nothing
       plausibly fits, call `mark_not_task` instead.

@@ -91,7 +91,10 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
 
 def _build_thread_user_message(raw, task) -> str:
     meta = raw.source_metadata or {}
-    lines = [f"Current time: {now_iso()}", f"Source: {raw.source}"]
+    lines = [
+        f"Current time: {now_iso(get_settings().user_timezone)}",
+        f"Source: {raw.source}",
+    ]
     append_meta_lines(lines, meta)
 
     lines.append("")

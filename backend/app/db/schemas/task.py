@@ -58,6 +58,7 @@ class TaskCreationAccepted(BaseModel):
 class TaskRead(TaskBase):
     id: uuid.UUID
     status: str  # derived from latest linked raw_input
+    is_manual: bool  # true if every linked raw_input has source='manual'
     created_at: datetime
     updated_at: datetime
 

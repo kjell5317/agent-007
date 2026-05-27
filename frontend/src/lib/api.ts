@@ -71,6 +71,11 @@ export const api = {
   markInputsSeen: () =>
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 
+  unreadTaskCount: () =>
+    request<UnreadInputs>("/tasks/unread_count"),
+  markTasksSeen: () =>
+    request<UnreadInputs>("/tasks/mark_seen", { method: "POST" }),
+
   poll: () =>
     request<SourcePollResult>("/sources/poll", { method: "POST" }),
 

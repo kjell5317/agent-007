@@ -6,6 +6,7 @@ import type { Task } from "@/lib/types";
 interface Props {
   tasks: Task[];
   onChanged: () => Promise<void> | void;
+  seenAfter: string | null;
 }
 
 function sortTasks(a: Task, b: Task) {
@@ -15,7 +16,7 @@ function sortTasks(a: Task, b: Task) {
   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 }
 
-export function TasksPanel({ tasks, onChanged }: Props) {
+export function TasksPanel({ tasks, onChanged, seenAfter }: Props) {
   const [today, later] = useMemo(() => {
     const sorted = [...tasks].sort(sortTasks);
     const t: Task[] = [];
@@ -43,14 +44,24 @@ export function TasksPanel({ tasks, onChanged }: Props) {
       {today.length > 0 && (
         <Section title="Today">
           {today.map((t) => (
-            <TaskCard key={t.id} task={t} onChanged={onChanged} />
+            <TaskCard
+              key={t.id}
+              task={t}
+              onChanged={onChanged}
+              seenAfter={seenAfter}
+            />
           ))}
         </Section>
       )}
       {later.length > 0 && (
         <Section title="Later">
           {later.map((t) => (
-            <TaskCard key={t.id} task={t} onChanged={onChanged} />
+            <TaskCard
+              key={t.id}
+              task={t}
+              onChanged={onChanged}
+              seenAfter={seenAfter}
+            />
           ))}
         </Section>
       )}

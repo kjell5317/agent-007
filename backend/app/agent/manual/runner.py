@@ -129,7 +129,10 @@ def _backstop_required(payload: dict, *, raw_id) -> None:
 
 def _build_extract_message(raw) -> str:
     meta = raw.source_metadata or {}
-    lines = [f"Current time: {now_iso()}", f"Source: {raw.source}"]
+    lines = [
+        f"Current time: {now_iso(get_settings().user_timezone)}",
+        f"Source: {raw.source}",
+    ]
     for key in ("from", "to", "subject", "date", "thread_id", "account"):
         val = meta.get(key)
         if val:

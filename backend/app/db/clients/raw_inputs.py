@@ -50,15 +50,16 @@ def list_(
         stmt = stmt.where(RawInput.status == status)
     if source is not None:
         stmt = stmt.where(RawInput.source == source)
-    else:
-        # Manual entries are anchors for tasks created via POST /tasks — they
-        # carry no agent decision and shouldn't surface in the inbox feed.
-        stmt = stmt.where(RawInput.source != "manual")
     return list(session.execute(stmt).scalars())
 
 
 def count_since(session: Session, ts: datetime) -> int:
-    """Count non-manual raw inputs received after `ts` (matches the inbox feed)."""
+    """Count raw inputs received after `ts` for the unread badge.
+
+    Manual entries are excluded — the user just created them via POST /tasks,
+    they don't need a notification badge about their own creation. The inbox
+    feed (list_) does still surface them so they can be reopened later.
+    """
     stmt = (
         select(func.count(RawInput.id))
         .where(RawInput.received_at > ts, RawInput.source != "manual")

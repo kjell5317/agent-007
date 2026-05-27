@@ -26,6 +26,7 @@ type BadgeKind =
 interface Props {
   item: InboxItem;
   onChanged: () => Promise<void> | void;
+  seenAfter: string | null;
 }
 
 function labelFor(item: InboxItem): BadgeKind {
@@ -34,7 +35,7 @@ function labelFor(item: InboxItem): BadgeKind {
   return item.data.status as BadgeKind;
 }
 
-export function InboxCard({ item, onChanged }: Props) {
+export function InboxCard({ item, onChanged, seenAfter }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // Promote is async on the backend (queue + LLM extract) — track the in-flight
@@ -66,6 +67,14 @@ export function InboxCard({ item, onChanged }: Props) {
     "(no subject)";
   const when = fmtWhen(data.received_at);
   const source = data.source;
+  // Manual entries are excluded from the inbox unread badge (count_since
+  // filters source="manual" — the user just created them, no need to
+  // notify themselves). Suppress the per-card dot too so the two stay
+  // consistent.
+  const unread =
+    seenAfter !== null &&
+    data.source !== "manual" &&
+    new Date(data.received_at).getTime() > new Date(seenAfter).getTime();
 
   async function runTaskAction(
     call: (id: string) => Promise<unknown>,
@@ -159,7 +168,18 @@ export function InboxCard({ item, onChanged }: Props) {
           )}
 
           <div className="min-w-0 flex-1">
-            <div className="truncate font-medium leading-snug">{title}</div>
+            <div className="flex items-center gap-2">
+              {unread && (
+                <span
+                  aria-label="Unread"
+                  title="Unread"
+                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                />
+              )}
+              <div className="min-w-0 flex-1 truncate font-medium leading-snug">
+                {title}
+              </div>
+            </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <Badge variant={label}>{label}</Badge>
               <span>{source}</span>

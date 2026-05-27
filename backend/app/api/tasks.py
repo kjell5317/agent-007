@@ -2,6 +2,8 @@
 
   * GET    /tasks                       — list tasks
   * GET    /tasks/{task_id}             — fetch one
+  * GET    /tasks/unread_count          — Tasks-tab unread badge
+  * POST   /tasks/mark_seen             — reset the unread watermark
   * POST   /tasks                       — manual create (async via queue)
   * POST   /tasks/open/{raw_input_id}   — promote a raw_input to a task
   * PATCH  /tasks/{task_id}             — edit fields
@@ -14,10 +16,13 @@ the HTTP surface.
 """
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app import state
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.task import TaskCreationAccepted, TaskPromote, TaskRead, TaskUpdate
@@ -31,7 +36,12 @@ from app.services.task.update import update_task as update_task_svc
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-def _to_read(task, status_: str) -> TaskRead:
+class UnreadCount(BaseModel):
+    count: int
+    last_seen_at: datetime
+
+
+def _to_read(task, status_: str, is_manual: bool) -> TaskRead:
     return TaskRead.model_validate(
         {
             "id": task.id,
@@ -44,6 +54,7 @@ def _to_read(task, status_: str) -> TaskRead:
             "label": task.label,
             "ai_doable": task.ai_doable,
             "status": status_,
+            "is_manual": is_manual,
             "created_at": task.created_at,
             "updated_at": task.updated_at,
         }
@@ -57,7 +68,28 @@ async def list_tasks(
     session: Session = Depends(get_session),
 ) -> list[TaskRead]:
     rows = tasks_store.list_(session, status=status_filter, limit=limit)
-    return [_to_read(t, s) for t, s in rows]
+    manual_map = tasks_store.is_manual_for(session, [t.id for t, _ in rows])
+    return [_to_read(t, s, manual_map.get(t.id, False)) for t, s in rows]
+
+
+# Static paths must precede the dynamic /{task_id} GET — FastAPI matches in
+# registration order, otherwise "unread_count" / "mark_seen" would be parsed
+# as a task UUID and 422 out.
+@router.get("/unread_count", response_model=UnreadCount)
+async def get_unread_count(session: Session = Depends(get_session)) -> UnreadCount:
+    return UnreadCount(
+        count=tasks_store.count_since(session, state.last_seen_task_at),
+        last_seen_at=state.last_seen_task_at,
+    )
+
+
+@router.post("/mark_seen", response_model=UnreadCount)
+async def mark_tasks_seen(session: Session = Depends(get_session)) -> UnreadCount:
+    state.last_seen_task_at = datetime.now(timezone.utc)
+    return UnreadCount(
+        count=tasks_store.count_since(session, state.last_seen_task_at),
+        last_seen_at=state.last_seen_task_at,
+    )
 
 
 @router.get("/{task_id}", response_model=TaskRead)
@@ -66,7 +98,8 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    return _to_read(row, status_)
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual)
 
 
 @router.post(
@@ -120,7 +153,8 @@ async def update_task(
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    return _to_read(row, status_)
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual)
 
 
 @router.post("/{task_id}/close", status_code=status.HTTP_204_NO_CONTENT)

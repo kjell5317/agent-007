@@ -243,7 +243,10 @@ def _build_new_input_message(
     raw, open_tasks, not_task_hits: list[SimilarInput], closed_hits: list[SimilarInput]
 ) -> str:
     meta = raw.source_metadata or {}
-    lines = [f"Current time: {now_iso()}", f"Source: {raw.source}"]
+    lines = [
+        f"Current time: {now_iso(get_settings().user_timezone)}",
+        f"Source: {raw.source}",
+    ]
     append_meta_lines(lines, meta, include_account=True)
 
     if open_tasks:

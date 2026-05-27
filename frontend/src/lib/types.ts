@@ -13,6 +13,7 @@ export interface Task {
   label: string | null;
   ai_doable: AiDoable | null;
   status: TaskStatus;
+  is_manual: boolean;
   created_at: string;
   updated_at: string;
 }
