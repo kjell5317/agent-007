@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -294,6 +295,20 @@ async def update_task_event(
             private_properties=task_private_properties(task),
             **patch_kwargs,
         )
+    except httpx.HTTPStatusError as exc:
+        # 404 / 410 = the event we thought we owned is gone (deleted in
+        # Google Calendar UI, or never created successfully). Drop the
+        # stale id and re-create from scratch if we have a slot.
+        if exc.response.status_code in (404, 410) and start is not None and end is not None:
+            log.info(
+                "calendar update · task=%s event=%s missing (status=%s); recreating",
+                task.id, task.calendar_event_id, exc.response.status_code,
+            )
+            task.calendar_event_id = None
+            session.commit()
+            await add_task_event(session, task, start=start, end=end)
+            return
+        log.warning("calendar update failed · task=%s err=%s", task.id, exc)
     except Exception as exc:  # noqa: BLE001 — never let calendar break task updates
         log.warning("calendar update failed · task=%s err=%s", task.id, exc)
 
