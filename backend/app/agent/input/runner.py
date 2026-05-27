@@ -33,7 +33,6 @@ from app.config import get_settings
 from app.services.input.embedding import embed
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule
-from app.services.notify import notify_task_created
 from app.db.clients import notes as notes_store, raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
 
@@ -173,7 +172,6 @@ async def run_new_input_agent(
             trace["task_id"] = str(task.id)
             final_status = "open"
             final_task_id = task.id
-            await notify_task_created(task, raw)
             await schedule(session, task)
             done = True
             break

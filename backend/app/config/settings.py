@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     home_assistant_url: str = ""
     home_assistant_token: str = ""
     home_assistant_notify_service: str = "notify"
+    # Shared secret HA must send on action-callback POSTs. Empty disables the check.
+    home_assistant_action_secret: str = ""
+
+    # Fallback clickAction for notifications when a task has no `link`.
+    task_default_url: str = "https://007.kjellhanken.de"
 
     # Slack
     slack_apps: dict[str, dict[str, str]] = Field(default_factory=dict)

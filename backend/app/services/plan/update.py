@@ -1,11 +1,4 @@
-"""Re-plan a task and push the new slot to its calendar mirror.
-
-Called by `services.task.update` when a patch changes a plan-relevant
-field (due_date, estimation, location). The plain "user renamed the
-task" case bypasses this module and calls
-`calendar.update_task_event` directly without start/end — that's the
-explicit exception to the "only plan touches calendar" rule.
-"""
+"""Task update scheduling trigger logic."""
 
 from __future__ import annotations
 
@@ -28,143 +21,109 @@ async def update_task_to_calendar(
     *,
     changed_fields: Iterable[str] | None = None,
 ) -> None:
-    """Re-plan `task` and patch its calendar event with the new slot.
-    """
+    """Patch or reschedule a task after a plan-relevant edit."""
     changed = set(changed_fields or ())
-    plan_changed = changed & PLAN_TRIGGER_FIELDS
-    if not plan_changed:
-        log.debug(
-            "plan.update_task_to_calendar · no plan fields changed task=%s changed=%s",
-            task.id,
-            sorted(changed),
-        )
+    if not changed & PLAN_TRIGGER_FIELDS:
         return
     if task.due_date is None:
-        log.debug("plan.update_task_to_calendar · task=%s has no due_date", task.id)
+        log.debug("plan.update · task=%s has no due_date", task.id)
         return
 
-    from app.services.calendar import get_event, update_task_event
-    from app.services.plan.schedule import notify_no_slot, plan_task_slot
+    current = await _current_event(session, task)
+    if current is None:
+        from app.services.plan.schedule import schedule
 
-    try:
-        start, end = await plan_task_slot(session, task)
-    except ValueError:
-        await notify_no_slot(task)
+        await schedule(session, task)
         return
 
-    old_start = None
-    old_end = None
-    if task.calendar_event_id:
-        calendar_id = (get_settings().google_calendar_id or "").strip()
-        if calendar_id:
-            try:
-                current = await get_event(
-                    session,
-                    calendar_id=calendar_id,
-                    event_id=task.calendar_event_id,
-                )
-                old_start = current.start
-                old_end = current.end
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "plan.update_task_to_calendar · current event lookup failed task=%s err=%s",
-                    task.id,
-                    exc,
-                )
+    should_reschedule = await _patch_requires_reschedule(session, task, current, changed)
+    if should_reschedule:
+        from app.services.plan.schedule import schedule
 
+        await schedule(session, task)
+        return
+
+    from app.services.calendar import update_task_event
+
+    end = current.end
+    if "estimation" in changed:
+        end = current.start + timedelta(
+            minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
+        )
     await update_task_event(
         session,
         task,
-        start=start,
+        start=current.start,
         end=end,
         changed_fields=changed or None,
     )
 
-    if await _should_replan_commutes(session, task, start, end, plan_changed):
+    if "location" in changed:
         from app.services.plan.commute import plan_commutes_window_best_effort
 
+        margin = _commute_window_margin()
         event_ids = {task.calendar_event_id} if task.calendar_event_id else None
-        if (
-            event_ids
-            and old_start is not None
-            and old_end is not None
-            and not _windows_touch(old_start, old_end, start, end)
-        ):
-            old_window_start, old_window_end = _commute_window(old_start, old_end)
-            await plan_commutes_window_best_effort(
-                session,
-                window_start=old_window_start,
-                window_end=old_window_end,
-                target_event_ids=set(),
-                stale_event_ids=event_ids,
-            )
-
-        target_event_ids = (
-            {task.calendar_event_id}
-            if task.calendar_event_id and (getattr(task, "location", None) or "").strip()
-            else None
-        )
-        window_start, window_end = _commute_window(start, end)
         await plan_commutes_window_best_effort(
             session,
-            window_start=window_start,
-            window_end=window_end,
-            target_event_ids=target_event_ids,
+            window_start=current.start - margin,
+            window_end=end + margin,
+            target_event_ids=event_ids if (task.location or "").strip() else None,
             stale_event_ids=event_ids,
         )
 
 
-async def _should_replan_commutes(
-    session: Session,
-    task,
-    start,
-    end,
-    plan_changed: set[str],
-) -> bool:
-    # Location changes need a commute refresh even when the new value is empty:
-    # old commute legs may need to be removed.
-    if "location" in plan_changed:
+async def _patch_requires_reschedule(session: Session, task, current, changed: set[str]) -> bool:
+    if current.end > task.due_date:
         return True
-    if (getattr(task, "location", None) or "").strip():
-        return True
-    return await _is_close_to_other_event(session, task, start, end)
-
-
-async def _is_close_to_other_event(session: Session, task, start, end) -> bool:
-    from app.services.calendar import is_commute_event
-    from app.services.calendar.client import authorized_client, normalize
-
-    settings = get_settings()
-    calendar_ids = _busy_calendar_ids(settings)
-    if not calendar_ids:
+    if "estimation" not in changed and "due_date" not in changed:
         return False
 
-    margin = timedelta(
-        minutes=max(
-            settings.commute_bike_max_minutes,
-            settings.commute_event_buffer_minutes,
-        )
+    duration = timedelta(
+        minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
     )
-    window_start = start - margin
-    window_end = end + margin
-    current_event_id = getattr(task, "calendar_event_id", None)
+    candidate_start = current.start
+    candidate_end = candidate_start + duration
+    if candidate_end > task.due_date:
+        return True
 
-    client = await authorized_client(session, None)
-    for calendar_id in calendar_ids:
-        items = await client.list_events(
-            calendar_id,
-            time_min=window_start,
-            time_max=window_end,
-        )
-        for raw in items:
-            if raw.get("status") == "cancelled" or raw.get("transparency") == "transparent":
-                continue
-            ev = normalize(raw, calendar_id)
-            if ev.all_day or ev.id == current_event_id or is_commute_event(ev):
-                continue
-            if window_start < ev.end and ev.start < window_end:
-                return True
+    buffer = timedelta(minutes=get_settings().commute_event_buffer_minutes)
+    return await _overlaps_other_event(
+        session,
+        task,
+        candidate_start - buffer,
+        candidate_end + buffer,
+    )
+
+
+async def _overlaps_other_event(session: Session, task, start, end) -> bool:
+    from app.services.calendar import list_events_between
+
+    settings = get_settings()
+    ids = _busy_calendar_ids(settings)
+    if not ids:
+        return False
+    events = await list_events_between(session, calendar_ids=ids, time_min=start, time_max=end)
+    for ev in events:
+        if ev.all_day or ev.id == task.calendar_event_id:
+            continue
+        if ev.start < end and start < ev.end:
+            return True
     return False
+
+
+async def _current_event(session: Session, task):
+    if not task.calendar_event_id:
+        return None
+    from app.services.calendar import get_event
+
+    calendar_id = (get_settings().google_calendar_id or "").strip()
+    if not calendar_id:
+        return None
+    try:
+        return await get_event(session, calendar_id=calendar_id, event_id=task.calendar_event_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("plan.update · current event lookup failed task=%s err=%s", task.id, exc)
+        return None
 
 
 def _busy_calendar_ids(settings) -> list[str]:
@@ -178,17 +137,7 @@ def _busy_calendar_ids(settings) -> list[str]:
     return out
 
 
-def _commute_window(start, end) -> tuple:
-    margin = _commute_margin()
-    return start - margin, end + margin
-
-
-def _windows_touch(old_start, old_end, new_start, new_end) -> bool:
-    margin = _commute_margin()
-    return old_start - margin < new_end + margin and new_start - margin < old_end + margin
-
-
-def _commute_margin() -> timedelta:
+def _commute_window_margin() -> timedelta:
     settings = get_settings()
     return timedelta(
         minutes=max(

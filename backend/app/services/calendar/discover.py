@@ -23,8 +23,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.services.calendar.client import CalendarEvent, authorized_client, normalize
-from app.services.calendar.events import WINDOW_DAYS, is_managed_event
-from app.services.plan.reschedule import reschedule
+from app.services.calendar.events import WINDOW_DAYS, is_commute_event, is_managed_event
+from app.services.plan.schedule import schedule
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ async def discover_updated_events(
     for cid in ids:
         log.info(
             "discover · id=%s updated_min=%s ",
-            cid, updated_min.isoformat(), window_start.isoformat(), window_end.isoformat(),
+            cid, updated_min.isoformat(),
         )
 
         # Cheap call first: ask only for events touched since the cursor.
@@ -111,7 +111,12 @@ async def discover_updated_events(
                     ev.id,
                     overlapping.id,
                 )
-                await reschedule(
+                if is_commute_event(overlapping):
+                    log.info(
+                        "discover · read event overlaps commute=%s; refreshing commute plan",
+                        overlapping.id,
+                    )
+                await schedule(
                     session,
                     event_id=overlapping.id,
                     account_key=account_key,

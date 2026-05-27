@@ -54,8 +54,8 @@ class GoogleCalendarClient:
         self,
         calendar_id: str,
         *,
-        time_min: datetime,
-        time_max: datetime,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
         updated_min: datetime | None = None,
     ) -> list[dict]:
         """List events in `[time_min, time_max)`.
@@ -65,14 +65,16 @@ class GoogleCalendarClient:
         to find externally-edited events since a previous poll.
         """
         params: dict[str, Any] = {
-            "timeMin": rfc3339(time_min),
-            "timeMax": rfc3339(time_max),
             # Expand recurring events so callers see the actual instances in
             # the window rather than the master rule.
             "singleEvents": "true",
             "orderBy": "startTime",
             "maxResults": 250,
         }
+        if time_min is not None:
+            params["timeMin"] = rfc3339(time_min)
+        if time_max is not None:
+            params["timeMax"] = rfc3339(time_max)
         if updated_min is not None:
             params["updatedMin"] = rfc3339(updated_min)
             # Cancellations carry the updated timestamp too; surface them so

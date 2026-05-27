@@ -53,6 +53,53 @@ async def precipitation_probability_at(
     return int(value) if value is not None else None
 
 
+async def max_precipitation_probability_between(
+    lat: float,
+    lon: float,
+    start: datetime,
+    end: datetime,
+) -> int | None:
+    """Maximum precipitation probability (%) in `[start, end]`."""
+    hourly = await precipitation_probabilities_between(lat, lon, start, end)
+    return max(hourly.values()) if hourly else None
+
+
+async def precipitation_probabilities_between(
+    lat: float,
+    lon: float,
+    start: datetime,
+    end: datetime,
+) -> dict[str, int]:
+    """Hourly precipitation probabilities keyed as local `YYYY-MM-DDTHH:00`."""
+    start_hour = start.astimezone().strftime("%Y-%m-%dT%H:00")
+    end_hour = end.astimezone().strftime("%Y-%m-%dT%H:00")
+    params = {
+        "latitude": f"{lat:.5f}",
+        "longitude": f"{lon:.5f}",
+        "hourly": "precipitation_probability",
+        "timezone": "auto",
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(_BASE, params=params)
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        log.info("open-meteo range lookup failed (%s) — no weather signal", exc)
+        return {}
+
+    hourly = payload.get("hourly", {})
+    times = hourly.get("time") or []
+    series = hourly.get("precipitation_probability") or []
+    out: dict[str, int] = {}
+    for when, value in zip(times, series, strict=False):
+        if value is not None:
+            out[str(when)] = int(value)
+    return out
+
+
 async def geocode(address: str) -> tuple[float, float] | None:
     """Resolve `address` to `(lat, lon)` via Google's free-tier geocoding.
 

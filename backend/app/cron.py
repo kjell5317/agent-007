@@ -5,11 +5,9 @@ timed automation. Add a new periodic job by writing an `async def`
 coroutine and appending it to `_JOBS` below — `start` creates one
 asyncio task per job, `stop` cancels them all.
 
-Today the only job is the source-poll loop, which drives
-`poll_sources` on a fixed interval, gated by `state.auto_poll_enabled`
-so the UI can pause polling without restarting the process. One
-iteration's failure never kills the loop — exceptions are logged and
-the loop continues.
+Jobs are gated by `state.auto_poll_enabled` so the UI can pause background
+automation without restarting the process. One iteration's failure never kills
+the loop — exceptions are logged and the loop continues.
 """
 
 from __future__ import annotations
@@ -17,22 +15,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
-from datetime import datetime, time, timedelta, timezone
+from datetime import timedelta
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import state
 from app.config import get_settings
 from app.db import SessionLocal
 from app.services.calendar.discover import discover_updated_events
 from app.services.input.poll import poll_sources
-from app.services.plan import plan_commutes
+from app.services.plan import refresh_commutes_for_weather
 
 log = logging.getLogger(__name__)
 
 AUTO_POLL_INTERVAL_S = 300
 DISCOVER_INTERVAL_S = 300
-DAILY_COMMUTE_PLAN_AT = time(5, 0)
+WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 
 
 async def _auto_poll() -> None:
@@ -91,54 +88,34 @@ async def _calendar_discover() -> None:
             log.exception("calendar-discover iteration failed")
 
 
-async def _daily_commute_plan() -> None:
-    """Plan commute events once per day at 05:00 in the user's timezone."""
-    log.info("daily-commute-plan loop started · at=%s", DAILY_COMMUTE_PLAN_AT.strftime("%H:%M"))
+async def _weather_commute_refresh() -> None:
+    """Refresh existing commute events when hourly weather changes mode choice."""
+    log.info("weather-commute-refresh loop started · interval=%ds", WEATHER_INTERVAL_S)
     while True:
         try:
-            await asyncio.sleep(_seconds_until_next_daily(DAILY_COMMUTE_PLAN_AT))
+            await asyncio.sleep(WEATHER_INTERVAL_S)
             if not state.auto_poll_enabled:
-                log.debug("daily-commute-plan skipped (disabled)")
+                log.debug("weather-commute-refresh skipped (disabled)")
                 continue
             with SessionLocal() as session:
-                summary = await plan_commutes(session)
+                summary = await refresh_commutes_for_weather(session)
             log.info(
-                "daily-commute-plan done · planned=%d skipped_online=%d "
-                "skipped_unroutable=%d rescheduled_tasks=%d errors=%d",
+                "weather-commute-refresh done · planned=%d rescheduled_tasks=%d errors=%d",
                 summary["planned"],
-                summary["skipped_online"],
-                summary["skipped_unroutable"],
                 summary["rescheduled_tasks"],
                 len(summary["errors"]),
             )
         except asyncio.CancelledError:
-            log.info("daily-commute-plan loop cancelled")
+            log.info("weather-commute-refresh loop cancelled")
             raise
         except Exception:  # noqa: BLE001 — best-effort background loop
-            log.exception("daily-commute-plan iteration failed")
-
-
-def _seconds_until_next_daily(at: time) -> float:
-    now = datetime.now(_user_tz())
-    target = datetime.combine(now.date(), at, tzinfo=now.tzinfo)
-    if target <= now:
-        target += timedelta(days=1)
-    return max(1.0, (target - now).total_seconds())
-
-
-def _user_tz() -> ZoneInfo | timezone:
-    name = (get_settings().user_timezone or "UTC").strip()
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
-        log.warning("user_timezone=%r not found; falling back to UTC", name)
-        return timezone.utc
+            log.exception("weather-commute-refresh iteration failed")
 
 
 _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("auto-poll", _auto_poll),
     ("calendar-discover", _calendar_discover),
-    ("daily-commute-plan", _daily_commute_plan),
+    ("weather-commute-refresh", _weather_commute_refresh),
 ]
 
 _tasks: list[asyncio.Task] = []

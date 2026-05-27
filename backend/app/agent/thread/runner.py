@@ -26,6 +26,7 @@ from app.agent.helpers.text import append_meta_lines, now_iso, parse_iso
 from app.agent.tools import THREAD_FOLLOWUP_TOOLS
 from app.config import get_settings
 from app.db.clients import raw_inputs, tasks
+from app.services.notify import notify_agent_task_closed, notify_agent_task_updated
 
 log = logging.getLogger(__name__)
 
@@ -68,13 +69,16 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
             patch = {k: v for k, v in tu_input.items() if v is not None}
             if "due_date" in patch:
                 patch["due_date"] = parse_iso(str(patch["due_date"]))
-            tasks.update(session, task.id, **patch)
+            updated = tasks.update(session, task.id, **patch)
             trace["outcome"] = "updated"
             final_status = "open"
+            if updated is not None and patch:
+                await notify_agent_task_updated(updated, changes=patch)
         elif tu.name == "close_task":
             trace["outcome"] = "closed"
             trace["confidence"] = tu_input.get("confidence")
             final_status = "closed"
+            await notify_agent_task_closed(task)
         elif tu.name == "no_change":
             trace["outcome"] = "no_change"
             trace["confidence"] = tu_input.get("confidence")

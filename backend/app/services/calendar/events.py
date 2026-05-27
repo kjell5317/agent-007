@@ -2,16 +2,15 @@
 
 Two layers in one file:
 
-  * **Generic API ops** (`list_week_events`, `create_event`, `patch_event`,
-    `delete_event`) — operate on raw event fields. Used by commute
-    planning and by anything that creates non-task events.
+  * **Generic API ops** (`list_events_between`, `create_event`, `patch_event`,
+    `delete_event`) — operate on raw event fields. Used by commute planning
+    and by anything that creates non-task events.
 
   * **Task-mirror helpers** (`add_task_event`, `update_task_event`,
     `delete_task_event`) — translate a `Task` row into the right
     payload and call the generic ops. Pure CRUD: no planning happens
     here, callers supply `(start, end)`. The planning service is the
-    intended caller; today's callers wrap `plan_task_slot` around
-    these directly.
+    intended caller.
 
 Auth piggybacks on the same Google OAuth bundle the Gmail source uses;
 the required scope (`calendar.events`) lives in `app.auth.google`. The
@@ -25,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -52,42 +51,6 @@ KIND_COMMUTE = "commute"
 
 
 # --- Generic API ops ---------------------------------------------------------
-
-
-async def list_week_events(
-    session: Session,
-    *,
-    calendar_ids: Iterable[str],
-    week_start: datetime,
-    account_key: str | None = None,
-) -> list[CalendarEvent]:
-    """Return every event in `[week_start, week_start + 7d)` across calendars.
-
-    Pass any timezone-aware datetime as `week_start` — the window shifts with
-    it (so "this week", "next week", or any arbitrary anchor are all just
-    different `week_start` values).
-    """
-    if week_start.tzinfo is None:
-        raise ValueError("week_start must be timezone-aware")
-
-    ids = list(calendar_ids)
-    if not ids:
-        return []
-
-    time_min = week_start
-    time_max = week_start + timedelta(days=WINDOW_DAYS)
-
-    client = await authorized_client(session, account_key)
-    events: list[CalendarEvent] = []
-    for cid in ids:
-        log.info(
-            "calendar list · id=%s window=%s..%s",
-            cid, time_min.isoformat(), time_max.isoformat(),
-        )
-        items = await client.list_events(cid, time_min=time_min, time_max=time_max)
-        events.extend(normalize(it, cid) for it in items)
-    events.sort(key=lambda e: e.start)
-    return events
 
 
 async def list_events_between(

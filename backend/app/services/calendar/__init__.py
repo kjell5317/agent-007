@@ -2,7 +2,7 @@
 
 Two layers, both in `events.py`:
 
-  * Generic API ops — `list_week_events`, `create_event`, `patch_event`,
+  * Generic API ops — `list_events_between`, `create_event`, `patch_event`,
     `delete_event`.
   * Task-mirror helpers — `add_task_event`, `update_task_event`,
     `delete_task_event`. Pure CRUD against the calendar event that
@@ -27,7 +27,6 @@ from app.services.calendar.events import (
     is_managed_event,
     is_task_event,
     list_events_between,
-    list_week_events,
     patch_event,
     private_properties,
     task_private_properties,
@@ -51,7 +50,6 @@ __all__ = [
     "is_managed_event",
     "is_task_event",
     "list_events_between",
-    "list_week_events",
     "patch_event",
     "private_properties",
     "task_private_properties",

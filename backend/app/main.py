@@ -15,7 +15,15 @@ import app.services.input.gmail  # noqa: F401
 import app.services.input.slack  # noqa: F401
 from app import cron
 from app.api import auth as auth_router
-from app.api import inputs, labels, oauth, poll, settings as settings_router, tasks
+from app.api import (
+    inputs,
+    labels,
+    notifications,
+    oauth,
+    poll,
+    settings as settings_router,
+    tasks,
+)
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 from app.services.task import queue as task_queue
@@ -65,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(inputs.router)
     app.include_router(labels.router)
     app.include_router(tasks.router)
+    app.include_router(notifications.router)
     app.include_router(oauth.router)
     app.include_router(poll.sources_router)
     app.include_router(settings_router.router)

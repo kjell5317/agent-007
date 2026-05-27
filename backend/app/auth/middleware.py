@@ -26,24 +26,14 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_EXEMPT_PREFIXES = ("/auth/",)
+_EXEMPT_PREFIXES = ("/auth/", "/notifications/")
 _EXEMPT_PATHS = {"/health"}
 
 
 def _is_exempt_request(method: str, path: str) -> bool:
     if path in _EXEMPT_PATHS or path.startswith(_EXEMPT_PREFIXES):
         return True
-    if method.upper() != "POST":
-        return False
-
-    parts = path.strip("/").split("/")
-    if len(parts) != 3 or parts[0] != "tasks" or parts[2] != "close":
-        return False
-    try:
-        uuid.UUID(parts[1])
-    except ValueError:
-        return False
-    return True
+    return False
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

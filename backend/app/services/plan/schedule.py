@@ -1,315 +1,387 @@
-"""Pick a `(start, end)` slot for a task on the primary calendar.
+"""Task slot planning.
 
-Rules:
-- Aim for one week before `due_date`. If that's already in the past,
-  search forward from now.
-- Slots must lie inside the preferred daily window `10:00–20:00` (local).
-- If nothing fits before `due_date`, fall back to the extended window
-  `08:00–24:00`.
-- Slots must not overlap existing events on the primary calendar.
-- Batch planning (`plan_tasks`) processes tasks shortest-due-date first
-  so the most urgent claim the best slot.
+The planner has two phases:
 
-Local timezone is whatever `Settings.user_timezone` resolves to (default UTC).
-Container-default UTC was producing scheduling at "8:00 UTC = 10:00 CEST" and
-similar surprises; setting `USER_TIMEZONE=Europe/Berlin` fixes it without
-relying on the container's `TZ` env var.
+1. Find a clean free slot without moving anything.
+2. Only if no free slot exists before the deadline, move one less-urgent
+   managed task out of the way and place the current task in that freed slot.
 """
 
 from __future__ import annotations
 
 import logging
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.models.task import Task
 
 log = logging.getLogger(__name__)
 
-
-async def schedule(session: Session, task) -> None:
-    """Pick a slot for `task` and create its calendar mirror.
-
-    No-op when `task.due_date` is None. Calendar failures are swallowed by
-    `calendar.add_task_event`; planning failures notify the user and leave the
-    task unscheduled.
-    """
-    if task.due_date is None:
-        log.debug("plan.schedule · task=%s has no due_date, skipping", getattr(task, "id", "?"))
-        return
-
-    try:
-        start, end = await plan_task_slot(session, task)
-    except ValueError:
-        await notify_no_slot(task)
-        return
-
-    from app.services.calendar import add_task_event
-
-    await add_task_event(session, task, start=start, end=end)
-    if task.calendar_event_id:
-        from app.services.plan.commute import plan_commutes_window_best_effort
-
-        margin = _commute_window_margin()
-        await plan_commutes_window_best_effort(
-            session,
-            window_start=start - margin,
-            window_end=end + margin,
-            target_event_ids={task.calendar_event_id},
-            stale_event_ids={task.calendar_event_id},
-        )
-
-
-async def plan_task_slot(
-    session: Session,
-    task,
-    *,
-    extra_busy: list[Interval] | None = None,
-    account_key: str | None = None,
-) -> tuple[datetime, datetime]:
-    """Return the earliest valid slot for `task`.
-
-    Raises `ValueError` when the task has no due date or no slot can be found
-    in the search window.
-    """
-    if task.due_date is None:
-        raise ValueError("task has no due_date")
-
-    settings = get_settings()
-    due_local = _to_local(task.due_date)
-    now_local = datetime.now(timezone.utc).astimezone(_user_tz())
-    search_start = due_local - timedelta(days=LEAD_DAYS)
-    if search_start < now_local:
-        search_start = now_local
-    search_end = due_local if due_local > search_start else search_start + timedelta(days=LEAD_DAYS)
-
-    busy = await _fetch_busy(
-        session,
-        _busy_calendar_ids(settings),
-        search_start,
-        search_end,
-        getattr(task, "calendar_event_id", None),
-        account_key=account_key,
-    )
-    busy.extend(extra_busy or [])
-
-    slot = _pick_slot(
-        busy,
-        _duration_minutes(task, settings),
-        search_start,
-        search_end,
-    )
-    if slot is None:
-        raise ValueError("no free slot before due date")
-    return slot
-
-
-async def plan_tasks(
-    session: Session,
-    tasks,
-    *,
-    account_key: str | None = None,
-) -> dict[uuid.UUID, tuple[datetime, datetime]]:
-    """Plan many tasks urgent-first and reserve earlier picks in memory."""
-    ordered = sorted(
-        [task for task in tasks if task.due_date is not None],
-        key=lambda task: task.due_date,
-    )
-    planned: dict[uuid.UUID, tuple[datetime, datetime]] = {}
-    reserved: list[Interval] = []
-    for task in ordered:
-        try:
-            start, end = await plan_task_slot(
-                session,
-                task,
-                extra_busy=reserved,
-                account_key=account_key,
-            )
-        except ValueError:
-            await notify_no_slot(task)
-            continue
-        planned[task.id] = (start, end)
-        reserved.append(Interval(start, end))
-    return planned
-
-
-def _user_tz() -> ZoneInfo | timezone:
-    """User's configured IANA timezone, falling back to UTC if unset/invalid.
-
-    Centralized so every conversion in this module picks the same zone — the
-    scheduling windows (`PREFERRED_WINDOW`, `EXTENDED_WINDOW`) are wall-clock
-    hours and only make sense relative to a definite zone, not whatever the
-    container's local zone happens to be.
-    """
-    name = (get_settings().user_timezone or "UTC").strip()
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
-        log.warning("user_timezone=%r not found; falling back to UTC", name)
-        return timezone.utc
-
-PREFERRED_WINDOW: tuple[time, time] = (time(10, 0), time(20, 0))
-# `time(0, 0)` here means "midnight at end of day"; resolved by `_day_window`.
-EXTENDED_WINDOW: tuple[time, time] = (time(8, 0), time(0, 0))
-
 LEAD_DAYS = 7
+DAY_START = time(10, 0)
+DAY_TARGET = time(20, 0)
+# Used when the user taps the "extend" action on a no-slot notification:
+# widen each day's search window so the next attempt has more room.
+EXTENDED_DAY_START = time(8, 0)
+EXTENDED_DAY_TARGET = time(23, 59, 59)
+MAX_REPAIR_DEPTH = 8
 
 
 @dataclass(frozen=True)
 class Interval:
     start: datetime
     end: datetime
+    event_id: str | None = None
+
+
+@dataclass(frozen=True)
+class BusyEvent:
+    id: str
+    start: datetime
+    end: datetime
+    kind: str
+
+
+async def schedule(
+    session: Session,
+    task: Task | None = None,
+    *,
+    event_id: str | None = None,
+    block: Interval | None = None,
+    account_key: str | None = None,
+    extend_window: bool = False,
+    _depth: int = 0,
+) -> None:
+    """Plan `task` and create/update its calendar mirror.
+
+    `event_id` is accepted for discover/repair callers that only know the
+    managed calendar event that collided.
+
+    `extend_window=True` widens each day's search range to 08:00–24:00
+    (default 10:00–20:00). Set by the HA "extend" action button on a
+    previous no-slot notification.
+    """
+    if task is None and event_id is not None:
+        task = _task_for_event(session, event_id)
+    if task is None:
+        if event_id:
+            await _repair_commute_event(session, event_id, account_key=account_key)
+        return
+    if task.due_date is None:
+        log.debug("plan.schedule · task=%s has no due_date", task.id)
+        return
+
+    is_fresh = task.calendar_event_id is None
+
+    try:
+        start, end = await plan_task_slot(
+            session,
+            task,
+            block=block,
+            account_key=account_key,
+            extend_window=extend_window,
+            _depth=_depth,
+        )
+    except ValueError:
+        from app.services.notify import notify_no_slot
+
+        log.warning(
+            "plan.schedule · no slot for task=%s due=%s extended=%s",
+            task.id, task.due_date.isoformat(), extend_window,
+        )
+        await notify_no_slot(task, extended=extend_window)
+        return
+
+    from app.services.calendar import add_task_event, update_task_event
+    from app.services.notify import notify_task_scheduled
+
+    if task.calendar_event_id:
+        await update_task_event(session, task, start=start, end=end)
+    else:
+        await add_task_event(session, task, start=start, end=end)
+
+    await _replan_commutes_around(
+        session,
+        task,
+        start=start,
+        end=end,
+        account_key=account_key,
+    )
+
+    await notify_task_scheduled(task, start=start, end=end, is_fresh=is_fresh)
+
+
+async def plan_task_slot(
+    session: Session,
+    task: Task,
+    *,
+    extra_busy: list[Interval] | None = None,
+    block: Interval | None = None,
+    account_key: str | None = None,
+    extend_window: bool = False,
+    _depth: int = 0,
+) -> tuple[datetime, datetime]:
+    """Return a planned `(start, end)` for `task`.
+
+    The free search scans days forward from `max(now, due - 7d)`. Within
+    each day it starts at the target time and moves backward toward the
+    start time. `extend_window=True` widens the per-day range from
+    10:00–20:00 to 08:00–24:00.
+    """
+    if task.due_date is None:
+        raise ValueError("task has no due_date")
+
+    settings = get_settings()
+    due = _to_local(task.due_date)
+    now = datetime.now(timezone.utc).astimezone(_user_tz())
+    window_start = max(now, due - timedelta(days=LEAD_DAYS))
+    window_end = due
+    if window_end <= window_start:
+        raise ValueError("deadline is in the past")
+
+    busy = await _fetch_busy_events(
+        session,
+        window_start,
+        window_end,
+        exclude_event_id=task.calendar_event_id,
+        account_key=account_key,
+    )
+    for itv in extra_busy or []:
+        busy.append(BusyEvent(itv.event_id or "extra", itv.start, itv.end, "extra"))
+    if block is not None:
+        busy.append(BusyEvent(block.event_id or "block", block.start, block.end, "block"))
+
+    duration = timedelta(minutes=_duration_minutes(task, settings))
+    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
+    slot = _find_free_slot(
+        busy, duration, window_start, window_end, buffer, extend_window=extend_window
+    )
+    if slot is not None:
+        return slot
+
+    return await _repair_by_displacing_task(
+        session,
+        task,
+        busy,
+        duration=duration,
+        window_start=window_start,
+        window_end=window_end,
+        account_key=account_key,
+        depth=_depth,
+    )
+
+
+def _find_free_slot(
+    busy: list[BusyEvent],
+    duration: timedelta,
+    window_start: datetime,
+    window_end: datetime,
+    buffer: timedelta,
+    *,
+    extend_window: bool = False,
+) -> tuple[datetime, datetime] | None:
+    ordered = sorted(busy, key=lambda ev: ev.start)
+    day = window_start.date()
+    last_day = window_end.date()
+    tz = _user_tz()
+    day_start = EXTENDED_DAY_START if extend_window else DAY_START
+    day_target = EXTENDED_DAY_TARGET if extend_window else DAY_TARGET
+
+    while day <= last_day:
+        lower = datetime.combine(day, day_start, tzinfo=tz)
+        upper = datetime.combine(day, day_target, tzinfo=tz)
+        lower = max(lower, window_start)
+        upper = min(upper, window_end)
+        cursor = upper
+
+        while cursor - duration >= lower:
+            start = cursor - duration
+            end = cursor
+            conflict = _latest_conflict(ordered, start - buffer, end + buffer)
+            if conflict is None:
+                return start, end
+            cursor = min(cursor, conflict.start - buffer)
+
+        day = day + timedelta(days=1)
+
+    return None
+
+
+async def _repair_by_displacing_task(
+    session: Session,
+    task: Task,
+    busy: list[BusyEvent],
+    *,
+    duration: timedelta,
+    window_start: datetime,
+    window_end: datetime,
+    account_key: str | None,
+    depth: int,
+) -> tuple[datetime, datetime]:
+    if depth >= MAX_REPAIR_DEPTH:
+        raise ValueError("repair recursion limit reached")
+
+    victims = _movable_victims(session, task, busy, duration)
+    for victim, victim_event in victims:
+        freed = Interval(victim_event.start, victim_event.end, victim_event.id)
+        try:
+            await schedule(
+                session,
+                victim,
+                block=freed,
+                account_key=account_key,
+                _depth=depth + 1,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("plan.schedule · victim move failed task=%s err=%s", victim.id, exc)
+            continue
+
+        if freed.start < window_start or freed.end > window_end:
+            continue
+        if freed.end - duration < freed.start:
+            continue
+        return freed.end - duration, freed.end
+
+    raise ValueError("no free slot before due date")
+
+
+def _movable_victims(
+    session: Session,
+    task: Task,
+    busy: list[BusyEvent],
+    duration: timedelta,
+) -> list[tuple[Task, BusyEvent]]:
+    event_by_id = {
+        ev.id: ev for ev in busy if ev.kind == "task" and ev.end - ev.start >= duration
+    }
+    if not event_by_id:
+        return []
+    stmt = (
+        select(Task)
+        .where(Task.calendar_event_id.in_(list(event_by_id)))
+        .where(Task.id != task.id)
+        .where(Task.due_date.is_not(None))
+    )
+    rows = list(session.execute(stmt).scalars())
+    rows.sort(key=lambda row: row.due_date or datetime.max.replace(tzinfo=timezone.utc), reverse=True)
+    return [(row, event_by_id[row.calendar_event_id]) for row in rows if row.calendar_event_id]
+
+
+def _latest_conflict(events: list[BusyEvent], start: datetime, end: datetime) -> BusyEvent | None:
+    conflicts = [ev for ev in events if ev.start < end and start < ev.end]
+    if not conflicts:
+        return None
+    return max(conflicts, key=lambda ev: ev.start)
+
+
+async def _fetch_busy_events(
+    session: Session,
+    time_min: datetime,
+    time_max: datetime,
+    *,
+    exclude_event_id: str | None,
+    account_key: str | None,
+) -> list[BusyEvent]:
+    from app.services.calendar import is_commute_event, is_task_event, list_events_between
+
+    settings = get_settings()
+    ids = _busy_calendar_ids(settings)
+    if not ids:
+        return []
+    events = await list_events_between(
+        session,
+        calendar_ids=ids,
+        time_min=time_min,
+        time_max=time_max,
+        account_key=account_key,
+    )
+    out: list[BusyEvent] = []
+    for ev in events:
+        if ev.id == exclude_event_id or ev.all_day:
+            continue
+        kind = "commute" if is_commute_event(ev) else "task" if is_task_event(ev) else "busy"
+        out.append(BusyEvent(ev.id, _to_local(ev.start), _to_local(ev.end), kind))
+    return out
+
+
+async def _repair_commute_event(
+    session: Session,
+    event_id: str,
+    *,
+    account_key: str | None,
+) -> None:
+    from app.services.calendar import get_event, is_commute_event, private_properties
+    from app.services.plan.commute import plan_commutes_window_best_effort
+
+    calendar_id = (get_settings().google_calendar_id or "").strip()
+    if not calendar_id:
+        return
+    try:
+        event = await get_event(session, calendar_id=calendar_id, event_id=event_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("plan.schedule · get event failed event=%s err=%s", event_id, exc)
+        return
+    if not is_commute_event(event):
+        return
+    related = private_properties(event).get("related_event_id")
+    await plan_commutes_window_best_effort(
+        session,
+        window_start=event.start,
+        window_end=event.end,
+        target_event_ids={related} if related else None,
+        stale_event_ids={related} if related else None,
+        account_key=account_key,
+    )
+
+
+async def _replan_commutes_around(
+    session: Session,
+    task: Task,
+    *,
+    start: datetime,
+    end: datetime,
+    account_key: str | None,
+) -> None:
+    if not task.calendar_event_id:
+        return
+    from app.services.plan.commute import plan_commutes_window_best_effort
+
+    margin = _commute_window_margin()
+    event_ids = {task.calendar_event_id}
+    await plan_commutes_window_best_effort(
+        session,
+        window_start=start - margin,
+        window_end=end + margin,
+        target_event_ids=event_ids if (task.location or "").strip() else None,
+        stale_event_ids=event_ids,
+        account_key=account_key,
+    )
+
+
+def _task_for_event(session: Session, event_id: str) -> Task | None:
+    stmt = select(Task).where(Task.calendar_event_id == event_id)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def _duration_minutes(task: Task, settings) -> int:
+    raw = task.estimation or settings.google_calendar_default_event_minutes
+    return max(5, int(raw or 30))
 
 
 def _busy_calendar_ids(settings) -> list[str]:
-    target = (settings.google_calendar_id or "").strip()
-    extras = [c.strip() for c in settings.google_busy_calendar_ids if c.strip()]
     seen: set[str] = set()
     out: list[str] = []
-    for cid in [target, *extras]:
-        if cid and cid not in seen:
-            seen.add(cid)
-            out.append(cid)
+    for cid in [settings.google_calendar_id, *settings.google_busy_calendar_ids]:
+        clean = (cid or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            out.append(clean)
     return out
-
-
-async def notify_no_slot(task) -> None:
-    if task.due_date is None:
-        return
-    due_local = _to_local(task.due_date)
-    # Lazy import: `notifications` is a sibling module and pulling it at
-    # top-level would tighten the import graph for a rarely-fired path.
-    from app.services.notify import notify
-
-    title = getattr(task, "title", None) or "Task"
-    log.warning(
-        "plan.schedule · no free slot for task=%s before due=%s",
-        getattr(task, "id", "?"), due_local.isoformat(),
-    )
-    await notify(
-        title="No free slot for task",
-        message=f"{title[:120]} — due {due_local.strftime('%b %d, %H:%M')}. Schedule manually.",
-    )
-
-
-def _pick_slot(
-    busy: list[Interval],
-    duration_minutes: int,
-    search_start: datetime,
-    search_end: datetime,
-) -> tuple[datetime, datetime] | None:
-    for day_start, day_end in (PREFERRED_WINDOW, EXTENDED_WINDOW):
-        slot = _find_slot(busy, duration_minutes, search_start, search_end, day_start, day_end)
-        if slot is not None:
-            return slot
-    return None
-
-
-def _find_slot(
-    busy: list[Interval],
-    duration_minutes: int,
-    search_start: datetime,
-    search_end: datetime,
-    day_start: time,
-    day_end: time,
-) -> tuple[datetime, datetime] | None:
-    """Earliest free `duration_minutes` slot fully inside the daily window."""
-    duration = timedelta(minutes=duration_minutes)
-    ordered = sorted(busy, key=lambda i: i.start)
-
-    cursor = search_start
-    while cursor + duration <= search_end:
-        win_start, win_end = _day_window(cursor, day_start, day_end)
-        if cursor < win_start:
-            cursor = win_start
-            continue
-        if cursor >= win_end:
-            cursor = _next_day_start(cursor)
-            continue
-
-        slot_end = cursor + duration
-        if slot_end > win_end:
-            cursor = _next_day_start(cursor)
-            continue
-        if slot_end > search_end:
-            return None
-
-        conflict = next(
-            (b for b in ordered if b.start < slot_end and cursor < b.end),
-            None,
-        )
-        if conflict is None:
-            return cursor, slot_end
-        cursor = conflict.end
-
-    return None
-
-
-def _day_window(anchor: datetime, day_start: time, day_end: time) -> tuple[datetime, datetime]:
-    win_start = anchor.replace(
-        hour=day_start.hour, minute=day_start.minute, second=0, microsecond=0,
-    )
-    if day_end == time(0, 0):
-        win_end = _next_day_start(anchor)
-    else:
-        win_end = anchor.replace(
-            hour=day_end.hour, minute=day_end.minute, second=0, microsecond=0,
-        )
-    return win_start, win_end
-
-
-def _next_day_start(anchor: datetime) -> datetime:
-    return (anchor + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def _to_local(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_user_tz())
-
-
-async def _fetch_busy(
-    session: Session,
-    calendar_ids: list[str],
-    time_min: datetime,
-    time_max: datetime,
-    exclude_event_id: str | None,
-    *,
-    account_key: str | None = None,
-) -> list[Interval]:
-    from app.services.calendar.client import normalize
-    from app.services.calendar.client import authorized_client
-
-    if not calendar_ids:
-        return []
-
-    client = await authorized_client(session, account_key)
-    out: list[Interval] = []
-    for cid in calendar_ids:
-        items = await client.list_events(cid, time_min=time_min, time_max=time_max)
-        for raw in items:
-            if exclude_event_id and raw.get("id") == exclude_event_id:
-                continue
-            if raw.get("status") == "cancelled":
-                continue
-            # Events marked free (transparency=transparent) don't block other bookings.
-            if raw.get("transparency") == "transparent":
-                continue
-            ev = normalize(raw, cid)
-            if ev.all_day:
-                continue
-            tz = _user_tz()
-            out.append(Interval(ev.start.astimezone(tz), ev.end.astimezone(tz)))
-    return out
-
-
-def _duration_minutes(task, settings) -> int:
-    raw = task.estimation or settings.google_calendar_default_event_minutes
-    return max(5, int(raw or 30))
 
 
 def _commute_window_margin() -> timedelta:
@@ -321,3 +393,18 @@ def _commute_window_margin() -> timedelta:
             settings.commute_event_buffer_minutes,
         )
     )
+
+
+def _to_local(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_user_tz())
+
+
+def _user_tz() -> ZoneInfo | timezone:
+    name = (get_settings().user_timezone or "UTC").strip()
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        log.warning("user_timezone=%r not found; falling back to UTC", name)
+        return timezone.utc

@@ -21,7 +21,6 @@ async def resolve_duration(
     mode: TravelMode,
     departure: datetime | None = None,
 ) -> int | None:
-    """Return route duration in seconds, using the DB cache on hits."""
     bucket = _hour_bucket(departure)
     cached = route_cache.lookup(
         session,
@@ -42,13 +41,7 @@ async def resolve_duration(
         )
     except MapsLookupError as exc:
         if exc.cacheable:
-            log.debug(
-                "route resolver · no cacheable route %s -> %s mode=%s: %s",
-                origin,
-                destination,
-                mode,
-                exc,
-            )
+            log.debug("route resolver · no route %s -> %s mode=%s", origin, destination, mode)
             return None
         raise
 
@@ -61,6 +54,7 @@ async def resolve_duration(
         duration_seconds=duration_seconds,
         distance_meters=distance_meters,
     )
+    session.commit()
     return duration_seconds
 
 
