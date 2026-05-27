@@ -34,12 +34,107 @@ log = logging.getLogger(__name__)
 async def schedule(session: Session, task) -> None:
     """Pick a slot for `task` and create its calendar mirror.
 
-    Disabled — see the plan service's module docstring. When re-enabled,
-    plan a slot via `plan_task_slot` and mirror via
-    `calendar.add_task_event`. No-op when `task.due_date` is None.
+    No-op when `task.due_date` is None. Calendar failures are swallowed by
+    `calendar.add_task_event`; planning failures notify the user and leave the
+    task unscheduled.
     """
-    log.debug("plan.add_task_to_calendar · disabled (task=%s)", getattr(task, "id", "?"))
-    return None
+    if task.due_date is None:
+        log.debug("plan.schedule · task=%s has no due_date, skipping", getattr(task, "id", "?"))
+        return
+
+    try:
+        start, end = await plan_task_slot(session, task)
+    except ValueError:
+        await notify_no_slot(task)
+        return
+
+    from app.services.calendar import add_task_event
+
+    await add_task_event(session, task, start=start, end=end)
+    if task.calendar_event_id:
+        from app.services.plan.commute import plan_commutes_window_best_effort
+
+        margin = _commute_window_margin()
+        await plan_commutes_window_best_effort(
+            session,
+            window_start=start - margin,
+            window_end=end + margin,
+            target_event_ids={task.calendar_event_id},
+            stale_event_ids={task.calendar_event_id},
+        )
+
+
+async def plan_task_slot(
+    session: Session,
+    task,
+    *,
+    extra_busy: list[Interval] | None = None,
+    account_key: str | None = None,
+) -> tuple[datetime, datetime]:
+    """Return the earliest valid slot for `task`.
+
+    Raises `ValueError` when the task has no due date or no slot can be found
+    in the search window.
+    """
+    if task.due_date is None:
+        raise ValueError("task has no due_date")
+
+    settings = get_settings()
+    due_local = _to_local(task.due_date)
+    now_local = datetime.now(timezone.utc).astimezone(_user_tz())
+    search_start = due_local - timedelta(days=LEAD_DAYS)
+    if search_start < now_local:
+        search_start = now_local
+    search_end = due_local if due_local > search_start else search_start + timedelta(days=LEAD_DAYS)
+
+    busy = await _fetch_busy(
+        session,
+        _busy_calendar_ids(settings),
+        search_start,
+        search_end,
+        getattr(task, "calendar_event_id", None),
+        account_key=account_key,
+    )
+    busy.extend(extra_busy or [])
+
+    slot = _pick_slot(
+        busy,
+        _duration_minutes(task, settings),
+        search_start,
+        search_end,
+    )
+    if slot is None:
+        raise ValueError("no free slot before due date")
+    return slot
+
+
+async def plan_tasks(
+    session: Session,
+    tasks,
+    *,
+    account_key: str | None = None,
+) -> dict[uuid.UUID, tuple[datetime, datetime]]:
+    """Plan many tasks urgent-first and reserve earlier picks in memory."""
+    ordered = sorted(
+        [task for task in tasks if task.due_date is not None],
+        key=lambda task: task.due_date,
+    )
+    planned: dict[uuid.UUID, tuple[datetime, datetime]] = {}
+    reserved: list[Interval] = []
+    for task in ordered:
+        try:
+            start, end = await plan_task_slot(
+                session,
+                task,
+                extra_busy=reserved,
+                account_key=account_key,
+            )
+        except ValueError:
+            await notify_no_slot(task)
+            continue
+        planned[task.id] = (start, end)
+        reserved.append(Interval(start, end))
+    return planned
 
 
 def _user_tz() -> ZoneInfo | timezone:
@@ -82,7 +177,10 @@ def _busy_calendar_ids(settings) -> list[str]:
     return out
 
 
-async def _notify_no_slot(task, due_local: datetime) -> None:
+async def notify_no_slot(task) -> None:
+    if task.due_date is None:
+        return
+    due_local = _to_local(task.due_date)
     # Lazy import: `notifications` is a sibling module and pulling it at
     # top-level would tighten the import graph for a rarely-fired path.
     from app.services.notify import notify
@@ -180,16 +278,16 @@ async def _fetch_busy(
     time_min: datetime,
     time_max: datetime,
     exclude_event_id: str | None,
+    *,
+    account_key: str | None = None,
 ) -> list[Interval]:
-    # Imported lazily to break the cycle with `google_calendar.sync`, which
-    # imports this module.
     from app.services.calendar.client import normalize
-    from app.services.calendar.events import authorized_client
+    from app.services.calendar.client import authorized_client
 
     if not calendar_ids:
         return []
 
-    client = await authorized_client(session, None)
+    client = await authorized_client(session, account_key)
     out: list[Interval] = []
     for cid in calendar_ids:
         items = await client.list_events(cid, time_min=time_min, time_max=time_max)
@@ -202,6 +300,24 @@ async def _fetch_busy(
             if raw.get("transparency") == "transparent":
                 continue
             ev = normalize(raw, cid)
+            if ev.all_day:
+                continue
             tz = _user_tz()
             out.append(Interval(ev.start.astimezone(tz), ev.end.astimezone(tz)))
     return out
+
+
+def _duration_minutes(task, settings) -> int:
+    raw = task.estimation or settings.google_calendar_default_event_minutes
+    return max(5, int(raw or 30))
+
+
+def _commute_window_margin() -> timedelta:
+    settings = get_settings()
+    return timedelta(
+        minutes=max(
+            settings.commute_bike_max_minutes,
+            settings.commute_home_layover_minutes * 2,
+            settings.commute_event_buffer_minutes,
+        )
+    )

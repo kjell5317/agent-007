@@ -2,8 +2,8 @@
 
 This service is the sole funnel into `services.calendar` for slot-
 dependent work, and the sole caller of `services.commute`. Task updates,
-agent flows, the manual `POST /commute/plan` trigger — they all route
-through here instead of touching calendar or commute directly.
+agent flows, manual source polling, and daily commute cron all route through
+here instead of touching calendar or commute directly.
 
 Public surface:
 
@@ -18,12 +18,6 @@ is paused — `services.commute` uses it internally):
   * `plan_task_slot(session, task)` — pick `(start, end)` for one task.
   * `plan_tasks(session, tasks)`    — batch variant, urgent-first.
 
-**Currently disabled.** Each of the three public funnels is a no-op
-that logs at debug — the architecture is in place so callers can
-already route through here, but slot planning and calendar mirroring
-are paused until the planner is re-enabled. Flip them back on by
-restoring their original bodies (see the per-module docstrings).
-
 The one explicit exception to "only plan touches calendar": when a task
 update changes no plan-relevant field (estimation / due_date / location),
 the task service may call `calendar.update_task_event` directly so a
@@ -32,14 +26,23 @@ delete: `close` / `dismiss` go straight to
 `calendar.delete_task_event` since no planning is involved.
 """
 
+from app.services.plan.commute import plan_commutes, plan_commutes_window
 from app.services.plan.schedule import (
     Interval,
+    plan_task_slot,
+    plan_tasks,
     schedule,
 )
 from app.services.plan.reschedule import reschedule
+from app.services.plan.update import update_task_to_calendar
 
 __all__ = [
     "Interval",
+    "plan_commutes",
+    "plan_commutes_window",
+    "plan_task_slot",
+    "plan_tasks",
     "schedule",
     "reschedule",
+    "update_task_to_calendar",
 ]

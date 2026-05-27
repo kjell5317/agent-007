@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
 from app.services.calendar import update_task_event
-from app.services.plan import reschedule
+from app.services.plan import update_task_to_calendar
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +50,7 @@ async def update_task(
 
     changed = set(fields.keys())
     if changed & PLAN_TRIGGER_FIELDS:
-        if row.calendar_event_id is not None:
-            await reschedule(session, event_id=row.calendar_event_id)
+        await update_task_to_calendar(session, row, changed_fields=changed)
     else:
         await update_task_event(session, row, changed_fields=changed)
 

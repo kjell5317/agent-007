@@ -20,8 +20,8 @@ decides:
     before there's time to commute home, the inbound leg slides past the
     online's end. Chained online events repeat the same check.
 
-The planner then writes `🚲 Commute` / `🚆 Commute` events back to the
-calendar (idempotent — re-running replaces in place) and reschedules any task
+The planner then writes commute events back to the calendar (idempotent —
+re-running replaces managed commute events in place) and reschedules any task
 event that now overlaps with a commute window via
 [reschedule_for_commute][app.services.commute.reschedule.reschedule_overlapping_tasks].
 """
@@ -35,19 +35,23 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.models.task import Task
 from app.services.commute.resolver import resolve_duration
 from app.services.commute.weather import geocode, precipitation_probability_at
 from app.services.calendar import (
     WINDOW_DAYS,
     CalendarEvent,
+    commute_private_properties,
     create_event,
     delete_event,
-    list_week_events,
+    is_commute_event,
+    is_task_event,
+    list_events_between,
+    patch_event,
+    private_properties,
 )
 
 log = logging.getLogger(__name__)
-
-COMMUTE_TAG = "[commute]"
 
 
 @dataclass
@@ -79,6 +83,54 @@ async def plan_week_commutes(
     Returns a summary dict: `{planned, skipped_online, skipped_no_location,
     rescheduled_tasks, errors}`.
     """
+    anchor = (week_start or datetime.now(timezone.utc)).astimezone()
+    return await _plan_commutes(
+        session,
+        window_start=anchor,
+        window_end=anchor + timedelta(days=WINDOW_DAYS),
+        read_start=anchor,
+        read_end=anchor + timedelta(days=WINDOW_DAYS),
+        target_event_ids=None,
+        stale_event_ids=None,
+        account_key=account_key,
+    )
+
+
+async def plan_window_commutes(
+    session: Session,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    target_event_ids: set[str] | None = None,
+    stale_event_ids: set[str] | None = None,
+    account_key: str | None = None,
+) -> dict:
+    """Plan only commute events affected by a bounded time window."""
+    settings = get_settings()
+    margin = _window_context_margin(settings)
+    return await _plan_commutes(
+        session,
+        window_start=window_start,
+        window_end=window_end,
+        read_start=window_start - margin,
+        read_end=window_end + margin,
+        target_event_ids=target_event_ids,
+        stale_event_ids=stale_event_ids,
+        account_key=account_key,
+    )
+
+
+async def _plan_commutes(
+    session: Session,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    read_start: datetime,
+    read_end: datetime,
+    target_event_ids: set[str] | None,
+    stale_event_ids: set[str] | None,
+    account_key: str | None,
+) -> dict:
     settings = get_settings()
     if not settings.home_address:
         log.info("commute planner skipped — HOME_ADDRESS not set")
@@ -94,14 +146,15 @@ async def plan_week_commutes(
     # secondary calendars; write to the primary `google_calendar_id` only.
     read_calendar_ids = _read_calendar_ids(settings, write_calendar_id)
 
-    anchor = (week_start or datetime.now(timezone.utc)).astimezone()
-    events = await list_week_events(
+    events = await list_events_between(
         session,
         calendar_ids=read_calendar_ids,
-        week_start=anchor,
+        time_min=read_start,
+        time_max=read_end,
         account_key=account_key,
     )
     physical, online, existing_commutes = _partition(events, write_calendar_id)
+    hard_blockers = _hard_blockers(session, events, write_calendar_id)
     home = settings.home_address
     home_latlon = await geocode(home)
 
@@ -125,13 +178,20 @@ async def plan_week_commutes(
     # we need a chronological view to know when the user is actually free to
     # head home after a physical event.
     occupied = sorted([*physical, *online], key=lambda e: e.start)
+    target_physical = _target_physical_events(
+        physical,
+        window_start,
+        window_end,
+        target_event_ids,
+    )
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
 
     plans: list[CommutePlan] = []
-    for idx, ev in enumerate(physical):
+    for ev in target_physical:
         # `_partition` only keeps events with a non-empty location, so this is
         # always a string by the time we get here.
         assert ev.location is not None
+        idx = physical.index(ev)
         prev = physical[idx - 1] if idx > 0 else None
         outbound_origin = _outbound_origin(home, prev, ev, settings)
         plan = await _build_leg(
@@ -167,15 +227,22 @@ async def plan_week_commutes(
             if plan is not None:
                 plans.append(plan)
 
+    plans_to_write = _filter_blocked_plans(plans, hard_blockers)
     summary["planned"] = await _write_plans(
-        session, plans, write_calendar_id, existing_commutes, account_key,
+        session,
+        plans_to_write,
+        write_calendar_id,
+        existing_commutes,
+        stale_window=(window_start, window_end),
+        stale_event_ids=stale_event_ids if stale_event_ids is not None else target_event_ids,
+        account_key=account_key,
     )
 
     # Lazy import to keep the planner module loadable without sync.py side effects.
     from app.services.commute.reschedule import reschedule_overlapping_tasks
 
     summary["rescheduled_tasks"] = await reschedule_overlapping_tasks(
-        session, plans, account_key=account_key,
+        session, plans_to_write, account_key=account_key,
     )
     return summary
 
@@ -254,15 +321,34 @@ def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:
     return out
 
 
+def _window_context_margin(settings) -> timedelta:
+    minutes = max(
+        settings.commute_bike_max_minutes,
+        settings.commute_home_layover_minutes * 2,
+        settings.commute_event_buffer_minutes,
+    )
+    return timedelta(minutes=minutes)
+
+
+def _target_physical_events(
+    physical: list[CalendarEvent],
+    window_start: datetime,
+    window_end: datetime,
+    target_event_ids: set[str] | None,
+) -> list[CalendarEvent]:
+    if target_event_ids is not None:
+        return [ev for ev in physical if ev.id in target_event_ids]
+    return [ev for ev in physical if _overlaps(ev.start, ev.end, window_start, window_end)]
+
+
 def _partition(
     events: list[CalendarEvent],
     write_calendar_id: str,
 ) -> tuple[list[CalendarEvent], list[CalendarEvent], list[CalendarEvent]]:
     """Split events into (physical, online, existing_commute) lists.
 
-    Only events on the write calendar can be `existing_commute` — a tagged
-    event on a shared/secondary calendar would be re-deleted on every run,
-    which we don't own and shouldn't touch.
+    Only events on the write calendar can be `existing_commute`; ownership is
+    determined by Google Calendar private extended properties.
     """
     physical: list[CalendarEvent] = []
     online: list[CalendarEvent] = []
@@ -270,11 +356,10 @@ def _partition(
     for ev in events:
         if ev.all_day:
             continue
-        is_commute_tag = (ev.description or "").strip().startswith(COMMUTE_TAG)
-        if is_commute_tag and ev.calendar_id == write_calendar_id:
+        if is_commute_event(ev) and ev.calendar_id == write_calendar_id:
             commutes.append(ev)
             continue
-        if is_commute_tag:
+        if is_commute_event(ev) or _looks_like_legacy_commute(ev):
             continue
         if _is_online(ev):
             online.append(ev)
@@ -283,6 +368,33 @@ def _partition(
             continue
         physical.append(ev)
     return physical, online, commutes
+
+
+def _hard_blockers(
+    session: Session,
+    events: list[CalendarEvent],
+    write_calendar_id: str,
+) -> list[CalendarEvent]:
+    task_event_ids = {
+        event_id
+        for (event_id,) in session.query(Task.calendar_event_id)
+        .filter(Task.calendar_event_id.isnot(None))
+        .all()
+    }
+    blockers: list[CalendarEvent] = []
+    for ev in events:
+        if ev.all_day or is_commute_event(ev):
+            continue
+        if ev.calendar_id == write_calendar_id and (
+            is_task_event(ev) or ev.id in task_event_ids
+        ):
+            continue
+        blockers.append(ev)
+    return blockers
+
+
+def _looks_like_legacy_commute(ev: CalendarEvent) -> bool:
+    return (ev.description or "").strip().startswith("[commute]")
 
 
 def _is_online(ev: CalendarEvent) -> bool:
@@ -503,12 +615,24 @@ async def _write_plans(
     plans: list[CommutePlan],
     calendar_id: str,
     existing_commutes: list[CalendarEvent],
+    *,
+    stale_window: tuple[datetime, datetime],
+    stale_event_ids: set[str] | None,
     account_key: str | None,
 ) -> int:
-    """Persist plans as calendar events. Existing commute events are dropped
-    first so the result is idempotent — re-running with the same input gives
-    the same calendar."""
-    for stale in existing_commutes:
+    """Persist plans as calendar events by diffing managed commute keys."""
+    desired = {_commute_key_for_plan(plan): plan for plan in plans}
+    existing: dict[tuple[str, str], CalendarEvent] = {}
+    for ev in existing_commutes:
+        key = _commute_key_for_event(ev)
+        if key is not None:
+            existing[key] = ev
+
+    for key, stale in existing.items():
+        if key in desired:
+            continue
+        if not _should_delete_stale_commute(key, stale, stale_window, stale_event_ids):
+            continue
         try:
             await delete_event(
                 session,
@@ -519,27 +643,122 @@ async def _write_plans(
         except Exception as exc:  # noqa: BLE001 — best-effort cleanup
             log.warning("commute · stale event %s delete failed: %s", stale.id, exc)
 
-    written = 0
-    for plan in plans:
+    present = 0
+    for key, plan in desired.items():
         summary = _summary_for(plan)
         description = _description_for(plan)
+        props = commute_private_properties(
+            related_event_id=plan.related_event_id,
+            leg=plan.leg,
+        )
+        current = existing.get(key)
         try:
-            await create_event(
-                session,
-                calendar_id=calendar_id,
-                summary=summary,
-                start=plan.depart,
-                end=plan.arrive,
-                description=description,
-                location=plan.destination,
-                account_key=account_key,
-            )
-            written += 1
+            if current is None:
+                await create_event(
+                    session,
+                    calendar_id=calendar_id,
+                    summary=summary,
+                    start=plan.depart,
+                    end=plan.arrive,
+                    description=description,
+                    location=plan.destination,
+                    private_properties=props,
+                    account_key=account_key,
+                )
+            elif _commute_event_needs_patch(current, plan, summary, description):
+                await patch_event(
+                    session,
+                    calendar_id=calendar_id,
+                    event_id=current.id,
+                    summary=summary,
+                    start=plan.depart,
+                    end=plan.arrive,
+                    description=description,
+                    location=plan.destination,
+                    private_properties=props,
+                    account_key=account_key,
+                )
+            present += 1
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                "commute · create_event failed leg=%s err=%s", plan.leg, exc,
+                "commute · upsert event failed leg=%s err=%s", plan.leg, exc,
             )
-    return written
+    return present
+
+
+def _should_delete_stale_commute(
+    key: tuple[str, str],
+    stale: CalendarEvent,
+    stale_window: tuple[datetime, datetime],
+    stale_event_ids: set[str] | None,
+) -> bool:
+    related_event_id, _leg = key
+    if stale_event_ids is not None:
+        return related_event_id in stale_event_ids
+    window_start, window_end = stale_window
+    return _overlaps(stale.start, stale.end, window_start, window_end)
+
+
+def _commute_key_for_plan(plan: CommutePlan) -> tuple[str, str]:
+    return plan.related_event_id, plan.leg
+
+
+def _commute_key_for_event(ev: CalendarEvent) -> tuple[str, str] | None:
+    props = private_properties(ev)
+    related = props.get("related_event_id")
+    leg = props.get("leg")
+    if not related or not leg:
+        return None
+    return related, leg
+
+
+def _commute_event_needs_patch(
+    ev: CalendarEvent,
+    plan: CommutePlan,
+    summary: str,
+    description: str,
+) -> bool:
+    return (
+        ev.summary != summary
+        or (ev.description or "") != description
+        or (ev.location or "") != plan.destination
+        or _epoch_second(ev.start) != _epoch_second(plan.depart)
+        or _epoch_second(ev.end) != _epoch_second(plan.arrive)
+    )
+
+
+def _epoch_second(dt: datetime) -> int:
+    return int(dt.astimezone(timezone.utc).timestamp())
+
+
+def _filter_blocked_plans(
+    plans: list[CommutePlan],
+    blockers: list[CalendarEvent],
+) -> list[CommutePlan]:
+    out: list[CommutePlan] = []
+    for plan in plans:
+        if _overlaps_hard_blocker(plan, blockers):
+            log.info(
+                "commute · skipped %s for event=%s due hard blocker",
+                plan.leg,
+                plan.related_event_id,
+            )
+            continue
+        out.append(plan)
+    return out
+
+
+def _overlaps_hard_blocker(plan: CommutePlan, blockers: list[CalendarEvent]) -> bool:
+    for blocker in blockers:
+        if blocker.id == plan.related_event_id:
+            continue
+        if _overlaps(plan.depart, plan.arrive, blocker.start, blocker.end):
+            return True
+    return False
+
+
+def _overlaps(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and start_b < end_a
 
 
 def _summary_for(plan: CommutePlan) -> str:
@@ -549,7 +768,6 @@ def _summary_for(plan: CommutePlan) -> str:
 
 def _description_for(plan: CommutePlan) -> str:
     lines = [
-        COMMUTE_TAG,
         f"From: {plan.origin}",
         f"To: {plan.destination}",
         f"Mode: {plan.mode}",

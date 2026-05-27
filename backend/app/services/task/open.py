@@ -43,15 +43,16 @@ async def open_task_from_input(
     if raw is None:
         raise LookupError("Raw input not found")
     if raw.task_id is not None:
-        # `duplicate` (status='duplicate') and `no_change` follow-ups
-        # (status='open', trace.outcome='no_change') hold a backlink to
-        # the task they were a reference to. The user is overriding the
-        # agent ("this is actually its own task"), so break the backlink
-        # and let the worker attach a fresh task. The prior agent decision
-        # is preserved under `agent_trace.manual_override` by the queue
+        # `duplicate` (status='duplicate'), `no_change` follow-ups
+        # (status='open', trace.outcome='no_change'), and lingering
+        # `not_task` rows from a pre-fix dismiss (status='not_task' with
+        # task_id still set) all hold a backlink the user can override
+        # ("this is actually its own task"). Break the backlink and let
+        # the worker attach a fresh task. The prior agent decision is
+        # preserved under `agent_trace.manual_override` by the queue
         # worker.
         outcome = (raw.agent_trace or {}).get("outcome")
-        if raw.status == "duplicate" or outcome == "no_change":
+        if raw.status in ("duplicate", "not_task") or outcome == "no_change":
             old_task_id = raw.task_id
             raw.task_id = None
             session.commit()

@@ -16,6 +16,7 @@ SessionMiddleware populates request.session before AuthMiddleware reads it.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -29,6 +30,22 @@ _EXEMPT_PREFIXES = ("/auth/",)
 _EXEMPT_PATHS = {"/health"}
 
 
+def _is_exempt_request(method: str, path: str) -> bool:
+    if path in _EXEMPT_PATHS or path.startswith(_EXEMPT_PREFIXES):
+        return True
+    if method.upper() != "POST":
+        return False
+
+    parts = path.strip("/").split("/")
+    if len(parts) != 3 or parts[0] != "tasks" or parts[2] != "close":
+        return False
+    try:
+        uuid.UUID(parts[1])
+    except ValueError:
+        return False
+    return True
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         settings = get_settings()
@@ -36,7 +53,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in _EXEMPT_PATHS or path.startswith(_EXEMPT_PREFIXES):
+        if _is_exempt_request(request.method, path):
             return await call_next(request)
 
         email = request.session.get("email") if hasattr(request, "session") else None

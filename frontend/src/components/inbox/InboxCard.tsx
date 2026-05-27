@@ -127,10 +127,18 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
     }
   }
 
-  // No task yet → promote. Open task → dismiss (mark not_task). Closed task
-  // → reopen. Other statuses (not_task / duplicate / processing) get no
-  // action button.
-  const action = !data.task_id
+  // Promote when the input isn't the anchor of an active task: no link at
+  // all, or the link is a marker the user can override into a fresh task
+  // (`duplicate`, a `no_change` follow-up, or a `not_task` row whose
+  // task_id is still set from a pre-fix dismiss). Otherwise: open task →
+  // dismiss, closed task → reopen, anything else → no action.
+  const traceOutcome = data.agent_trace?.outcome;
+  const promotable =
+    !data.task_id ||
+    data.status === "duplicate" ||
+    data.status === "not_task" ||
+    traceOutcome === "no_change";
+  const action = promotable
     ? { label: "Make a task", Icon: CirclePlus, run: promote }
     : data.status === "open"
       ? { label: "Dismiss task", Icon: Trash2, run: dismiss }

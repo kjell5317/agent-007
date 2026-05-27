@@ -54,7 +54,12 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
 
     # --- 1. Thread shortcut --------------------------------------------------
     if thread_id:
-        prior = raw_inputs.find_by_thread(session, raw.source, thread_id)
+        prior = raw_inputs.find_by_thread(
+            session,
+            raw.source,
+            thread_id,
+            metadata_filters=_thread_lookup_filters(meta),
+        )
         if prior is not None and prior.task_id is not None:
             task = tasks.get(session, prior.task_id)
             if task is not None:
@@ -156,3 +161,12 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     return await run_new_input_agent(
         session, raw, open_hits, closed_hits, not_task_hits, query_embedding
     )
+
+
+def _thread_lookup_filters(meta: dict) -> dict[str, str]:
+    """Scope thread matches by stable source metadata when available."""
+    return {
+        key: value
+        for key in ("account", "channel_id")
+        if isinstance((value := meta.get(key)), str) and value
+    }

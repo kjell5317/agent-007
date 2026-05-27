@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth.base import get_provider
 from backend.app.db.clients import oauth_tokens
+from app.services.location import resolve_location_alias
 
 _BASE = "https://www.googleapis.com/calendar/v3"
 
@@ -38,6 +39,7 @@ class CalendarEvent:
     all_day: bool
     location: str | None
     html_link: str | None
+    private_properties: dict[str, str]
     raw: dict[str, Any]
 
 
@@ -95,6 +97,12 @@ class GoogleCalendarClient:
             resp = await client.post(
                 f"{_BASE}/calendars/{calendar_id}/events", json=body,
             )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_event(self, calendar_id: str, event_id: str) -> dict:
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.get(f"{_BASE}/calendars/{calendar_id}/events/{event_id}")
             resp.raise_for_status()
             return resp.json()
 
@@ -162,6 +170,7 @@ def tz_name(dt: datetime) -> str:
 def normalize(item: dict, calendar_id: str) -> CalendarEvent:
     start, all_day_s = _parse_time(item.get("start") or {})
     end, all_day_e = _parse_time(item.get("end") or {})
+    private_properties = (item.get("extendedProperties") or {}).get("private") or {}
     return CalendarEvent(
         id=item["id"],
         calendar_id=calendar_id,
@@ -170,8 +179,9 @@ def normalize(item: dict, calendar_id: str) -> CalendarEvent:
         start=start,
         end=end,
         all_day=all_day_s and all_day_e,
-        location=item.get("location"),
+        location=resolve_location_alias(item.get("location")),
         html_link=item.get("htmlLink"),
+        private_properties={str(k): str(v) for k, v in private_properties.items()},
         raw=item,
     )
 

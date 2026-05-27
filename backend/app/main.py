@@ -67,7 +67,6 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(oauth.router)
     app.include_router(poll.sources_router)
-    app.include_router(poll.commute_router)
     app.include_router(settings_router.router)
 
     @app.get("/health", tags=["meta"])

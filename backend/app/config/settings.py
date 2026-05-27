@@ -63,6 +63,7 @@ class Settings(BaseSettings):
 
     # Write calendar
     google_calendar_id: str = "primary"
+    google_calendar_default_event_minutes: int = 30
     # Read calendars
     google_busy_calendar_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 

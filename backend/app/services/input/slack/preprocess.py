@@ -30,8 +30,29 @@ MAX_BODY_CHARS = 8000
 #   <mailto:x@y|x@y>   — mailto
 _USER_REF_RE = re.compile(r"<@([UW][A-Z0-9]+)(?:\|([^>]+))?>")
 _CHANNEL_REF_RE = re.compile(r"<#([CG][A-Z0-9]+)(?:\|([^>]+))?>")
+_SPECIAL_REF_RE = re.compile(r"<!([^>|]+)(?:\|([^>]+))?>")
 _LINK_REF_RE = re.compile(r"<(https?://[^|>]+)(?:\|([^>]+))?>")
 _MAILTO_REF_RE = re.compile(r"<mailto:([^|>]+)(?:\|([^>]+))?>")
+_MARKDOWN_LINK_RE = re.compile(
+    r"""!?                 # optional image marker; keep only the target either way
+    \[[^\]]*]              # link title
+    \(
+        \s*
+        ([a-z][a-z0-9+.-]*:[^\s)]+)
+        (?:\s+["'][^)]*["'])?
+        \s*
+    \)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_EMOJI_RE = re.compile(r"(?<!\w):[A-Za-z0-9_+\-]+:(?!\w)")
+_QUOTE_MARKER_RE = re.compile(r"(?m)^\s*>\s?")
+_CODE_DECORATOR_RE = re.compile(r"(`{1,3})(.*?)\1", re.DOTALL)
+_EMPHASIS_DECORATOR_RES = [
+    re.compile(r"(?<!\w)(\*{1,3})(?=\S)(.*?)(?<=\S)\1(?!\w)"),
+    re.compile(r"(?<!\w)(_{1,3})(?=\S)(.*?)(?<=\S)\1(?!\w)"),
+    re.compile(r"(?<!\w)(~{1,2})(?=\S)(.*?)(?<=\S)\1(?!\w)"),
+]
 
 
 @dataclass
@@ -46,6 +67,7 @@ def preprocess_message(
     *,
     channel_id: str,
     channel_name: str | None = None,
+    workspace_name: str | None = None,
     user_names: dict[str, str] | None = None,
     authed_user_id: str | None = None,
     is_dm: bool = False,
@@ -63,6 +85,8 @@ def preprocess_message(
     directed = _directed_at_me(raw_text, authed_user_id, is_dm)
 
     text, urls = _normalize_refs(raw_text, user_names)
+    text = _strip_emoji_shortcodes(text)
+    text = _strip_markdown_decorators(text)
     text = _collapse_whitespace(text)
 
     truncated = False
@@ -71,14 +95,11 @@ def preprocess_message(
         truncated = True
 
     user_id = raw_message.get("user")
+    sender = user_names.get(str(user_id), user_id)
     metadata: dict[str, Any] = {
-        "from": user_names.get(user_id, user_id),
-        "from_id": user_id,
+        "from": _append_workspace_name(sender, workspace_name),
         "channel_id": channel_id,
         "channel_name": channel_name,
-        "ts": raw_message.get("ts"),
-        # `thread_ts` is the parent message's ts. Use it as `thread_id` so the
-        # agent's Gmail-style thread-shortcut works the same way.
         "thread_id": raw_message.get("thread_ts") or raw_message.get("ts"),
         "subtype": raw_message.get("subtype"),
         "bot_id": raw_message.get("bot_id"),
@@ -87,6 +108,15 @@ def preprocess_message(
         "directed_at_me": directed,
     }
     return PreprocessResult(body=text, metadata=metadata, truncated=truncated)
+
+
+def _append_workspace_name(sender: str | None, workspace_name: str | None) -> str | None:
+    if not sender:
+        return None
+    workspace = workspace_name.strip() if workspace_name else ""
+    if not workspace:
+        return sender
+    return f"{sender} ({workspace})"
 
 
 # DM is treated as direct. `<@user_id>` and `<!channel>` are the literal
@@ -115,6 +145,11 @@ def _normalize_refs(text: str, user_names: dict[str, str]) -> tuple[str, list[st
     urls: list[str] = []
     seen: set[str] = set()
 
+    def _remember_url(url: str) -> None:
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+
     def _user(m: re.Match) -> str:
         uid = m.group(1)
         label = m.group(2) or user_names.get(uid)
@@ -124,22 +159,45 @@ def _normalize_refs(text: str, user_names: dict[str, str]) -> tuple[str, list[st
         label = m.group(2) or m.group(1)
         return f"#{label}"
 
+    def _special(m: re.Match) -> str:
+        label = m.group(2) or m.group(1)
+        label = label.removeprefix("!")
+        return label if label.startswith("@") else f"@{label}"
+
     def _link(m: re.Match) -> str:
-        url, label = m.group(1), m.group(2)
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
-        return f"{label} ({url})" if label and label != url else url
+        url = m.group(1)
+        _remember_url(url)
+        return url
 
     def _mailto(m: re.Match) -> str:
         addr = m.group(1)
-        return m.group(2) or addr
+        return addr
+
+    def _markdown_link(m: re.Match) -> str:
+        url = m.group(1)
+        if url.startswith(("http://", "https://")):
+            _remember_url(url)
+        return url
 
     text = _USER_REF_RE.sub(_user, text)
     text = _CHANNEL_REF_RE.sub(_channel, text)
+    text = _SPECIAL_REF_RE.sub(_special, text)
     text = _LINK_REF_RE.sub(_link, text)
     text = _MAILTO_REF_RE.sub(_mailto, text)
+    text = _MARKDOWN_LINK_RE.sub(_markdown_link, text)
     return text, urls
+
+
+def _strip_emoji_shortcodes(text: str) -> str:
+    return _EMOJI_RE.sub("", text)
+
+
+def _strip_markdown_decorators(text: str) -> str:
+    text = _QUOTE_MARKER_RE.sub("", text)
+    text = _CODE_DECORATOR_RE.sub(r"\2", text)
+    for pattern in _EMPHASIS_DECORATOR_RES:
+        text = pattern.sub(r"\2", text)
+    return text
 
 
 def _collapse_whitespace(text: str) -> str:

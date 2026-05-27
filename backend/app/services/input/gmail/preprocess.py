@@ -120,7 +120,6 @@ def preprocess_message(
         "message_id_header": headers.get("message-id"),
         "thread_id": raw_message.get("threadId"),
         "label_ids": raw_message.get("labelIds", []),
-        "snippet": raw_message.get("snippet"),
         "urls": urls,
         "has_attachments": _has_attachments(payload),
         "directed_at_me": _directed_at_me(headers, account_email),

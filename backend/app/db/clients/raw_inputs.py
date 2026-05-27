@@ -114,15 +114,25 @@ def latest_for_task(session: Session, task_id: uuid.UUID) -> RawInput | None:
 
 
 def find_by_thread(
-    session: Session, source: str, thread_id: str
+    session: Session,
+    source: str,
+    thread_id: str,
+    *,
+    metadata_filters: dict[str, str] | None = None,
 ) -> RawInput | None:
-    """Return the most-recent raw_input on (source, thread_id) that linked to a task."""
+    """Return the most-recent raw_input on a scoped thread that linked to a task."""
+    metadata_filters = metadata_filters or {}
+    metadata_clauses = [
+        RawInput.source_metadata[key].as_string() == value
+        for key, value in metadata_filters.items()
+    ]
     stmt = (
         select(RawInput)
         .where(
             RawInput.source == source,
             RawInput.task_id.is_not(None),
             text("source_metadata->>'thread_id' = :thread_id"),
+            *metadata_clauses,
         )
         .order_by(RawInput.received_at.desc())
         .limit(1)

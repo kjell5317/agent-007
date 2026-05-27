@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.labels import color_for
+from app.services.location import resolve_location_alias
 from app.services.calendar.client import (
     CalendarEvent,
     authorized_client,
@@ -43,6 +44,11 @@ from app.services.calendar.client import (
 log = logging.getLogger(__name__)
 
 WINDOW_DAYS = 7
+MANAGED_BY = "plan_service"
+PROP_MANAGED_BY = "managed_by"
+PROP_KIND = "kind"
+KIND_TASK = "task"
+KIND_COMMUTE = "commute"
 
 
 # --- Generic API ops ---------------------------------------------------------
@@ -84,6 +90,37 @@ async def list_week_events(
     return events
 
 
+async def list_events_between(
+    session: Session,
+    *,
+    calendar_ids: Iterable[str],
+    time_min: datetime,
+    time_max: datetime,
+    account_key: str | None = None,
+) -> list[CalendarEvent]:
+    """Return every event in `[time_min, time_max)` across calendars."""
+    if time_min.tzinfo is None or time_max.tzinfo is None:
+        raise ValueError("time_min and time_max must be timezone-aware")
+    if time_max <= time_min:
+        raise ValueError("time_max must be after time_min")
+
+    ids = list(calendar_ids)
+    if not ids:
+        return []
+
+    client = await authorized_client(session, account_key)
+    events: list[CalendarEvent] = []
+    for cid in ids:
+        log.info(
+            "calendar list · id=%s window=%s..%s",
+            cid, time_min.isoformat(), time_max.isoformat(),
+        )
+        items = await client.list_events(cid, time_min=time_min, time_max=time_max)
+        events.extend(normalize(it, cid) for it in items)
+    events.sort(key=lambda e: e.start)
+    return events
+
+
 async def create_event(
     session: Session,
     *,
@@ -94,6 +131,7 @@ async def create_event(
     description: str | None = None,
     location: str | None = None,
     color_id: str | None = None,
+    private_properties: dict[str, str] | None = None,
     account_key: str | None = None,
 ) -> CalendarEvent:
     """Create an event on `calendar_id`. `start`/`end` must be tz-aware."""
@@ -110,13 +148,28 @@ async def create_event(
     if description:
         body["description"] = description
     if location:
-        body["location"] = location
+        body["location"] = resolve_location_alias(location)
     if color_id:
         body["colorId"] = color_id
+    if private_properties:
+        body["extendedProperties"] = {"private": _clean_private_properties(private_properties)}
 
     client = await authorized_client(session, account_key)
     log.info("calendar insert · calendar=%s summary=%r", calendar_id, summary)
     raw = await client.insert_event(calendar_id, body)
+    return normalize(raw, calendar_id)
+
+
+async def get_event(
+    session: Session,
+    *,
+    calendar_id: str,
+    event_id: str,
+    account_key: str | None = None,
+) -> CalendarEvent:
+    """Fetch one event by id."""
+    client = await authorized_client(session, account_key)
+    raw = await client.get_event(calendar_id, event_id)
     return normalize(raw, calendar_id)
 
 
@@ -131,6 +184,7 @@ async def patch_event(
     description: str | None = None,
     location: str | None = None,
     color_id: str | None = None,
+    private_properties: dict[str, str] | None = None,
     account_key: str | None = None,
 ) -> CalendarEvent:
     """Patch an existing event on `calendar_id`. Only provided fields change."""
@@ -148,9 +202,11 @@ async def patch_event(
     if description is not None:
         body["description"] = description
     if location is not None:
-        body["location"] = location
+        body["location"] = resolve_location_alias(location) or ""
     if color_id is not None:
         body["colorId"] = color_id
+    if private_properties is not None:
+        body["extendedProperties"] = {"private": _clean_private_properties(private_properties)}
 
     client = await authorized_client(session, account_key)
     log.info("calendar patch · calendar=%s event=%s", calendar_id, event_id)
@@ -199,8 +255,9 @@ async def add_task_event(
             start=start,
             end=end,
             description=_task_description(task),
-            location=task.location,
+            location=resolve_location_alias(task.location),
             color_id=color_for(task.label),
+            private_properties=task_private_properties(task),
         )
     except Exception as exc:  # noqa: BLE001 — never let calendar break task creation
         log.warning("calendar add failed · task=%s err=%s", task.id, exc)
@@ -254,7 +311,7 @@ async def update_task_event(
     if _changed("description") or _changed("link"):
         patch_kwargs["description"] = _task_description(task) or ""
     if _changed("location"):
-        patch_kwargs["location"] = task.location or ""
+        patch_kwargs["location"] = resolve_location_alias(task.location) or ""
     if _changed("label"):
         patch_kwargs["color_id"] = color_for(task.label)
     if start is not None:
@@ -271,6 +328,7 @@ async def update_task_event(
             session,
             calendar_id=calendar_id,
             event_id=task.calendar_event_id,
+            private_properties=task_private_properties(task),
             **patch_kwargs,
         )
     except Exception as exc:  # noqa: BLE001 — never let calendar break task updates
@@ -306,3 +364,46 @@ def _task_description(task) -> str | None:
     if task.link:
         parts.append(task.link)
     return "\n\n".join(parts) or None
+
+
+def task_private_properties(task) -> dict[str, str]:
+    return {
+        PROP_MANAGED_BY: MANAGED_BY,
+        PROP_KIND: KIND_TASK,
+        "task_id": str(task.id),
+    }
+
+
+def commute_private_properties(*, related_event_id: str, leg: str) -> dict[str, str]:
+    return {
+        PROP_MANAGED_BY: MANAGED_BY,
+        PROP_KIND: KIND_COMMUTE,
+        "related_event_id": related_event_id,
+        "leg": leg,
+    }
+
+
+def private_properties(event: CalendarEvent) -> dict[str, str]:
+    return event.private_properties
+
+
+def is_managed_event(event: CalendarEvent) -> bool:
+    return private_properties(event).get(PROP_MANAGED_BY) == MANAGED_BY
+
+
+def is_task_event(event: CalendarEvent) -> bool:
+    props = private_properties(event)
+    return props.get(PROP_MANAGED_BY) == MANAGED_BY and props.get(PROP_KIND) == KIND_TASK
+
+
+def is_commute_event(event: CalendarEvent) -> bool:
+    props = private_properties(event)
+    return props.get(PROP_MANAGED_BY) == MANAGED_BY and props.get(PROP_KIND) == KIND_COMMUTE
+
+
+def _clean_private_properties(props: dict[str, str]) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in props.items()
+        if key is not None and value is not None
+    }

@@ -55,10 +55,12 @@ class SlackSource(IngestionSource):
         account_key: str,
         access_token: str,
         authed_user_id: str | None,
+        workspace_name: str | None = None,
         watermarks: dict[str, str] | None = None,
     ):
         self.account_key = account_key
         self.authed_user_id = authed_user_id
+        self.workspace_name = workspace_name
         self.client = SlackClient(access_token)
         self.watermarks = dict(watermarks or {})
         # Populated during fetch(); caller persists after a successful drain.
@@ -113,6 +115,7 @@ class SlackSource(IngestionSource):
                         msg,
                         channel_id=channel_id,
                         channel_name=channel_name,
+                        workspace_name=self.workspace_name,
                         user_names=self._user_cache,
                         authed_user_id=self.authed_user_id,
                         is_dm=is_dm,

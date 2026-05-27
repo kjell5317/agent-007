@@ -53,7 +53,7 @@ async def poll(session: Session, account_key: str | None) -> dict:
         assert token is not None
 
     history_id = (token.extra or {}).get("history_id")
-    log.info(
+    log.debug(
         "gmail poll start · account=%s history_id=%s",
         token.account_key, history_id or "(bootstrap)",
     )

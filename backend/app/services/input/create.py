@@ -58,7 +58,7 @@ async def drain(source, session: Session) -> dict:
         async for envelope in source.fetch():
             summary["fetched"] += 1
             subject = (envelope.source_metadata or {}).get("subject")
-            log.info(
+            log.debug(
                 "envelope · %s external_id=%s%s",
                 envelope.source,
                 envelope.external_id,
@@ -143,7 +143,7 @@ async def create_raw_input(session: Session, envelope: RawInputCreate) -> RawInp
     log.debug("embed · raw=%s len=%d", raw.id, len(query_text))
     vector = await embed(query_text)
     if vector is None:
-        log.info("embed · raw=%s NO embedding (no api key or empty text)", raw.id)
+        log.warning("embed · raw=%s NO embedding (no api key or empty text)", raw.id)
         return raw
 
     raw_inputs.set_embedding(session, raw.id, vector)

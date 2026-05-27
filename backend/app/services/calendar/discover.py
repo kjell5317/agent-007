@@ -20,9 +20,10 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.services.calendar.client import CalendarEvent, authorized_client, normalize
-from app.services.calendar.events import WINDOW_DAYS
+from app.services.calendar.events import WINDOW_DAYS, is_managed_event
 from app.services.plan.reschedule import reschedule
 
 log = logging.getLogger(__name__)
@@ -48,8 +49,10 @@ async def discover_updated_events(
       * `overlapping`  — updated events that triggered a reschedule call
       * `cursor`       — ISO timestamp of the new cursor we persisted
     """
-    ids = list(calendar_ids)
-    if not ids:
+    settings = get_settings()
+    write_id = (settings.google_calendar_id or "").strip()
+    ids = _read_calendar_ids(calendar_ids, write_id)
+    if not ids or not write_id:
         return _empty_summary()
 
     token = oauth_tokens.get_decrypted(session, provider="google", account_key=account_key)
@@ -74,7 +77,7 @@ async def discover_updated_events(
 
     for cid in ids:
         log.info(
-            "calendar discover · id=%s updated_min=%s window=%s..%s",
+            "discover · id=%s updated_min=%s ",
             cid, updated_min.isoformat(), window_start.isoformat(), window_end.isoformat(),
         )
 
@@ -89,25 +92,28 @@ async def discover_updated_events(
         )
         if not updated_items:
             continue
-        updated_events = [normalize(it, cid) for it in updated_items]
+        updated_events = _active_events(updated_items, cid)
         summary["updated"] += len(updated_events)
 
-        # Something changed → now pull the full window so we have neighbours
-        # to check overlaps against.
-        items = await client.list_events(cid, time_min=window_start, time_max=window_end)
-        all_events = [normalize(it, cid) for it in items]
-        summary["checked"] += len(all_events)
+        # Something changed in a read calendar. Pull the write calendar and
+        # only move events we own there; read events and manual write events
+        # are hard blockers.
+        items = await client.list_events(write_id, time_min=window_start, time_max=window_end)
+        write_events = _active_events(items, write_id)
+        summary["checked"] += len(write_events)
 
         for ev in updated_events:
-            if _overlaps_any(ev, all_events):
+            overlapping = _first_managed_overlap(ev, write_events)
+            if overlapping is not None:
                 summary["overlapping"] += 1
                 log.info(
-                    "discover · event=%s overlaps another in window; triggering reschedule",
+                    "discover · read event=%s overlaps write event=%s",
                     ev.id,
+                    overlapping.id,
                 )
                 await reschedule(
                     session,
-                    event_id=ev.id,
+                    event_id=overlapping.id,
                     account_key=account_key,
                 )
 
@@ -125,20 +131,46 @@ async def discover_updated_events(
     return summary
 
 
-def _overlaps_any(event: CalendarEvent, others: Iterable[CalendarEvent]) -> bool:
-    """True if `event` overlaps in time with any *other* event in `others`.
+def _first_managed_overlap(
+    event: CalendarEvent,
+    others: Iterable[CalendarEvent],
+) -> CalendarEvent | None:
+    """Return the first managed write event overlapping `event`.
 
     Skips all-day events and skips comparing the event against itself. Two
     intervals [a, b) overlap iff `a.start < b.end and b.start < a.end`.
     """
     if event.all_day:
-        return False
+        return None
     for other in others:
-        if other.id == event.id or other.all_day:
+        if other.id == event.id or other.all_day or not is_managed_event(other):
             continue
         if event.start < other.end and other.start < event.end:
-            return True
-    return False
+            return other
+    return None
+
+
+def _active_events(items: Iterable[dict], calendar_id: str) -> list[CalendarEvent]:
+    out: list[CalendarEvent] = []
+    for item in items:
+        if item.get("status") == "cancelled":
+            continue
+        if item.get("transparency") == "transparent":
+            continue
+        out.append(normalize(item, calendar_id))
+    return out
+
+
+def _read_calendar_ids(calendar_ids: Iterable[str], write_id: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for cid in calendar_ids:
+        clean = (cid or "").strip()
+        if not clean or clean == write_id or clean in seen:
+            continue
+        seen.add(clean)
+        out.append(clean)
+    return out
 
 
 def _empty_summary() -> dict:

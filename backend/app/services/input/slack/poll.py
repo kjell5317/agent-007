@@ -37,7 +37,7 @@ async def poll(session: Session, account_key: str | None) -> dict:
     if not account_keys:
         return _empty_setup("no Slack workspace connected")
 
-    log.info("slack poll start · %d workspace(s): %s", len(account_keys), account_keys)
+    log.debug("slack poll start · %d workspace(s): %s", len(account_keys), account_keys)
     aggregate: dict = {
         "fetched": 0, "agent_runs": 0, "tasks_created": 0, "skipped": 0,
         "errors": [], "per_account": {},
@@ -49,7 +49,7 @@ async def poll(session: Session, account_key: str | None) -> dict:
             continue
 
         extra = token.extra or {}
-        log.info(
+        log.debug(
             "slack poll · account=%s known_watermarks=%d",
             ak, len(extra.get("channels") or {}),
         )
@@ -57,6 +57,7 @@ async def poll(session: Session, account_key: str | None) -> dict:
             account_key=token.account_key,
             access_token=token.access_token,
             authed_user_id=extra.get("authed_user_id"),
+            workspace_name=(extra.get("team") or {}).get("name"),
             watermarks=extra.get("channels") or {},
         )
 
