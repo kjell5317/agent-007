@@ -42,12 +42,15 @@ async def notify(
     url: str | None = None,
     tag: str | None = None,
     actions: list[dict[str, str]] | None = None,
+    sticky: bool = False,
 ) -> None:
     """Send a single notification through HA's notify.<service>.
 
     `tag` lets the companion app replace stale notifications.
     `url` becomes `data.clickAction` (Android opens it on tap).
     `actions` becomes `data.actions` — buttons on the notification.
+    `sticky=True` keeps the notification visible after the user taps the
+    body or an action — without it the companion app dismisses on tap.
     """
     s = get_settings()
     if not s.home_assistant_url or not s.home_assistant_token:
@@ -65,6 +68,8 @@ async def notify(
         data["tag"] = tag
     if actions:
         data["actions"] = actions
+    if sticky:
+        data["sticky"] = "true"
     payload: dict[str, Any] = {"title": title, "message": message}
     if data:
         payload["data"] = data
@@ -88,9 +93,25 @@ def task_tag(task_id: UUID | str) -> str:
     return f"task-{task_id}"
 
 
-def _task_url(task) -> str:
+# Cap on URI action buttons we attach to a task notification. Android allows
+# three actions total per notification; the EXTEND button can occupy one of
+# them on no-slot notifications, so two URI slots leaves us room without
+# clipping.
+MAX_LINK_ACTIONS = 2
+
+
+def _link_actions(task) -> list[dict[str, str]]:
+    """URI buttons for opening task-related links in the phone browser.
+
+    Currently we only surface `task.link`. The list is capped so callers
+    can blindly extend it with other actions (EXTEND_WINDOW etc.) without
+    blowing past Android's per-notification action limit.
+    """
+    actions: list[dict[str, str]] = []
     link = (task.link or "").strip()
-    return link or get_settings().task_default_url
+    if link:
+        actions.append({"action": "URI", "title": "Open link", "uri": link})
+    return actions[:MAX_LINK_ACTIONS]
 
 
 async def notify_task_scheduled(
@@ -108,8 +129,10 @@ async def notify_task_scheduled(
     await notify(
         title=f"{kind}: {_short_title(task)}",
         message=" · ".join(parts),
-        url=_task_url(task),
+        url=get_settings().task_default_url,
         tag=task_tag(task.id),
+        actions=_link_actions(task) or None,
+        sticky=True,
     )
 
 
@@ -121,17 +144,17 @@ async def notify_no_slot(task, *, extended: bool = False) -> None:
         return
     due = to_user_tz(task.due_date)
     title = "Could not schedule" + (" (extended)" if extended else "")
-    actions: list[dict[str, str]] | None = None
+    actions: list[dict[str, str]] = []
     if not extended:
-        actions = [
-            {"action": ACTION_EXTEND_WINDOW, "title": "Extend 08–24"},
-        ]
+        actions.append({"action": ACTION_EXTEND_WINDOW, "title": "Try 20–24 & 8–10"})
+    actions.extend(_link_actions(task))
     await notify(
         title=title,
         message=f"{_short_title(task)} · due {_fmt_when(due)}",
-        url=_task_url(task),
+        url=get_settings().task_default_url,
         tag=task_tag(task.id),
-        actions=actions,
+        actions=actions or None,
+        sticky=True,
     )
 
 
@@ -154,6 +177,7 @@ async def notify_batch_rescheduled(items: list[tuple[Any, datetime, datetime]]) 
         message="\n".join(lines),
         url=get_settings().task_default_url,
         tag="batch-reschedule",
+        sticky=True,
     )
 
 
@@ -172,8 +196,10 @@ async def notify_agent_task_updated(task, *, changes: dict) -> None:
     await notify(
         title=f"Agent updated: {_short_title(task)}",
         message=f"Changed: {fields}",
-        url=_task_url(task),
+        url=get_settings().task_default_url,
         tag=task_tag(task.id),
+        actions=_link_actions(task) or None,
+        sticky=True,
     )
 
 
@@ -181,8 +207,10 @@ async def notify_agent_task_closed(task) -> None:
     await notify(
         title=f"Agent closed: {_short_title(task)}",
         message="Marked complete by follow-up",
-        url=_task_url(task),
+        url=get_settings().task_default_url,
         tag=task_tag(task.id),
+        actions=_link_actions(task) or None,
+        sticky=True,
     )
 
 

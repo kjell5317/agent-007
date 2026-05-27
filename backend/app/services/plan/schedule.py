@@ -37,10 +37,15 @@ log = logging.getLogger(__name__)
 LEAD_DAYS = 7
 DAY_START = time(10, 0)
 DAY_TARGET = time(20, 0)
-# Used when the user taps the "extend" action on a no-slot notification:
-# widen each day's search window so the next attempt has more room.
-EXTENDED_DAY_START = time(8, 0)
-EXTENDED_DAY_TARGET = time(23, 59, 59)
+# Extended-mode bounds. The normal `[DAY_START, DAY_TARGET]` range is
+# skipped in extended mode (it was already exhausted on the first attempt
+# that triggered the "no slot" notification). Instead, each day is
+# scanned in two phases:
+#   1. late evening — forward from DAY_TARGET to END_OF_DAY (20→24)
+#   2. early morning — backward from DAY_START to EARLY_MORNING (10→8)
+# then the next day, same procedure.
+EARLY_MORNING = time(8, 0)
+END_OF_DAY = time(23, 59, 59)
 MAX_REPAIR_DEPTH = 8
 
 # Per-task lock table. The planner is the only async-concurrent writer to
@@ -254,26 +259,80 @@ def _find_free_slot(
     day = window_start.date()
     last_day = window_end.date()
     tz = user_tz()
-    day_start = EXTENDED_DAY_START if extend_window else DAY_START
-    day_target = EXTENDED_DAY_TARGET if extend_window else DAY_TARGET
 
     while day <= last_day:
-        lower = datetime.combine(day, day_start, tzinfo=tz)
-        upper = datetime.combine(day, day_target, tzinfo=tz)
-        lower = max(lower, window_start)
-        upper = min(upper, window_end)
-        cursor = upper
+        if extend_window:
+            # Phase 1: late evening forward sweep, 20:00 → 24:00.
+            lower, upper = _day_bounds(day, DAY_TARGET, END_OF_DAY, tz, window_start, window_end)
+            slot = _sweep_forward(ordered, duration, buffer, lower, upper)
+            if slot is not None:
+                return slot
+            # Phase 2: early morning backward sweep, 10:00 → 08:00.
+            lower, upper = _day_bounds(day, EARLY_MORNING, DAY_START, tz, window_start, window_end)
+            slot = _sweep_backward(ordered, duration, buffer, lower, upper)
+            if slot is not None:
+                return slot
+        else:
+            lower, upper = _day_bounds(day, DAY_START, DAY_TARGET, tz, window_start, window_end)
+            slot = _sweep_backward(ordered, duration, buffer, lower, upper)
+            if slot is not None:
+                return slot
 
-        while cursor - duration >= lower:
-            start = cursor - duration
-            end = cursor
-            conflict = _latest_conflict(ordered, start - buffer, end + buffer)
-            if conflict is None:
-                return start, end
-            cursor = min(cursor, conflict.start - buffer)
+        day += timedelta(days=1)
 
-        day = day + timedelta(days=1)
+    return None
 
+
+def _day_bounds(
+    day,
+    lower_time: time,
+    upper_time: time,
+    tz,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[datetime, datetime]:
+    lower = max(datetime.combine(day, lower_time, tzinfo=tz), window_start)
+    upper = min(datetime.combine(day, upper_time, tzinfo=tz), window_end)
+    return lower, upper
+
+
+def _sweep_backward(
+    busy: list[BusyEvent],
+    duration: timedelta,
+    buffer: timedelta,
+    lower: datetime,
+    upper: datetime,
+) -> tuple[datetime, datetime] | None:
+    """Walk the cursor from `upper` down toward `lower`, looking for a
+    `(cursor - duration, cursor)` slot that doesn't collide with `busy`."""
+    cursor = upper
+    while cursor - duration >= lower:
+        start = cursor - duration
+        end = cursor
+        conflict = _latest_conflict(busy, start - buffer, end + buffer)
+        if conflict is None:
+            return start, end
+        cursor = min(cursor, conflict.start - buffer)
+    return None
+
+
+def _sweep_forward(
+    busy: list[BusyEvent],
+    duration: timedelta,
+    buffer: timedelta,
+    lower: datetime,
+    upper: datetime,
+) -> tuple[datetime, datetime] | None:
+    """Walk the cursor from `lower` up toward `upper`, looking for a
+    `(cursor, cursor + duration)` slot that doesn't collide with `busy`."""
+    cursor = lower
+    while cursor + duration <= upper:
+        start = cursor
+        end = cursor + duration
+        conflict = _earliest_conflict(busy, start - buffer, end + buffer)
+        if conflict is None:
+            return start, end
+        cursor = max(cursor, conflict.end + buffer)
     return None
 
 
@@ -342,6 +401,13 @@ def _latest_conflict(events: list[BusyEvent], start: datetime, end: datetime) ->
     if not conflicts:
         return None
     return max(conflicts, key=lambda ev: ev.start)
+
+
+def _earliest_conflict(events: list[BusyEvent], start: datetime, end: datetime) -> BusyEvent | None:
+    conflicts = [ev for ev in events if ev.start < end and start < ev.end]
+    if not conflicts:
+        return None
+    return min(conflicts, key=lambda ev: ev.end)
 
 
 async def _fetch_busy_events(
