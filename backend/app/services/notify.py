@@ -24,6 +24,7 @@ from uuid import UUID
 import httpx
 
 from app.config import get_settings
+from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ async def notify_no_slot(task, *, extended: bool = False) -> None:
     applied, drops the button (nothing more to widen automatically)."""
     if task.due_date is None:
         return
-    due = task.due_date.astimezone()
+    due = to_user_tz(task.due_date)
     title = "Could not schedule" + (" (extended)" if extended else "")
     actions: list[dict[str, str]] | None = None
     if not extended:
@@ -131,6 +132,38 @@ async def notify_no_slot(task, *, extended: bool = False) -> None:
         url=_task_url(task),
         tag=task_tag(task.id),
         actions=actions,
+    )
+
+
+async def notify_batch_rescheduled(items: list[tuple[Any, datetime, datetime]]) -> None:
+    """Single summary for many tasks moved at once (e.g. commute replan).
+
+    Uses a fixed `batch-reschedule` tag so consecutive batches replace
+    each other rather than piling up. Per-task notifications are still
+    available via `notify_task_scheduled` for callers that prefer them.
+    """
+    if not items:
+        return
+    lines = []
+    for task, start, _end in items[:5]:
+        lines.append(f"• {_short_title(task)} → {_fmt_when(start)}")
+    if len(items) > 5:
+        lines.append(f"+ {len(items) - 5} more")
+    await notify(
+        title=f"Rescheduled {len(items)} tasks",
+        message="\n".join(lines),
+        url=get_settings().task_default_url,
+        tag="batch-reschedule",
+    )
+
+
+async def clear_task_notification(task_id: UUID | str) -> None:
+    """Tell the HA companion app to remove the lingering notification for a
+    task. Sent via the magic `message="clear_notification"` payload."""
+    await notify(
+        title="",
+        message="clear_notification",
+        tag=task_tag(task_id),
     )
 
 
@@ -172,7 +205,7 @@ def _short_title(task) -> str:
 
 
 def _fmt_when(dt: datetime) -> str:
-    local = dt.astimezone()
+    local = to_user_tz(dt)
     now = datetime.now(local.tzinfo)
     if local.date() == now.date():
         return local.strftime("%H:%M")
@@ -182,8 +215,8 @@ def _fmt_when(dt: datetime) -> str:
 
 
 def _fmt_range(start: datetime, end: datetime) -> str:
-    s = start.astimezone()
-    e = end.astimezone()
+    s = to_user_tz(start)
+    e = to_user_tz(end)
     if s.date() == e.date():
         return f"{_fmt_when(s)}–{e.strftime('%H:%M')}"
     return f"{_fmt_when(s)} → {_fmt_when(e)}"

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
-from app.services.plan import schedule
+from app.services.plan import schedule_task
 
 
 async def reopen_task(session: Session, task_id: uuid.UUID) -> None:
@@ -27,4 +27,4 @@ async def reopen_task(session: Session, task_id: uuid.UUID) -> None:
     # If there's no anchor raw_input (orphan task), the task already
     # surfaces as "open" by default in tasks.list_, so no flip is
     # needed — fall through to re-mirror it on the calendar.
-    await schedule(session, task)
+    await schedule_task(session, task)

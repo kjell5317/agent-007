@@ -24,7 +24,7 @@ from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.services.calendar.client import CalendarEvent, authorized_client, normalize
 from app.services.calendar.events import WINDOW_DAYS, is_commute_event, is_managed_event
-from app.services.plan.schedule import schedule
+from app.services.plan.schedule import reschedule_event
 
 log = logging.getLogger(__name__)
 
@@ -116,9 +116,9 @@ async def discover_updated_events(
                         "discover · read event overlaps commute=%s; refreshing commute plan",
                         overlapping.id,
                     )
-                await schedule(
+                await reschedule_event(
                     session,
-                    event_id=overlapping.id,
+                    overlapping.id,
                     account_key=account_key,
                 )
 

@@ -21,6 +21,10 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.3",
     "itsdangerous>=2.2",
+    # Bundled IANA timezone database — `zoneinfo.ZoneInfo("Europe/Berlin")`
+    # otherwise raises on minimal Python images that omit /usr/share/zoneinfo,
+    # silently degrading every planner/notification path to UTC.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

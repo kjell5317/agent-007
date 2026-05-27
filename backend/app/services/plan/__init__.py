@@ -7,7 +7,9 @@ here instead of touching calendar or commute directly.
 
 Public surface:
 
-  * `schedule(session, task)` — plan + create/update the mirror.
+  * `schedule_task(session, task, ...)` — plan + create/update the mirror.
+  * `reschedule_event(session, event_id, ...)` — discover dispatcher: task
+    event → schedule_task; commute event → recompute commute plan.
   * `update_task_to_calendar(session, task, *, changed_fields=None)`
   * `refresh_commutes_for_weather(session)` — hourly weather-driven refresh.
   * `plan_task_slot(session, task)` — pick `(start, end)` for one task.
@@ -26,7 +28,8 @@ from app.services.plan.commute import (
 from app.services.plan.schedule import (
     Interval,
     plan_task_slot,
-    schedule,
+    reschedule_event,
+    schedule_task,
 )
 from app.services.plan.update import update_task_to_calendar
 
@@ -34,6 +37,7 @@ __all__ = [
     "Interval",
     "refresh_commutes_for_weather",
     "plan_task_slot",
-    "schedule",
+    "reschedule_event",
+    "schedule_task",
     "update_task_to_calendar",
 ]

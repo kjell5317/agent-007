@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.services.calendar import delete_task_event
+from app.services.notify import clear_task_notification
 
 
 async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
@@ -25,6 +26,7 @@ async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     # Best-effort calendar cleanup first, while task.calendar_event_id is
     # still readable. Errors are swallowed inside delete_task_event.
     await delete_task_event(session, task)
+    await clear_task_notification(task_id)
     # If an anchor raw_input still exists, flip it to `not_task` so the
     # inbox card reflects the dismissal. Orphan tasks (anchor promoted
     # away via no_change override, etc.) skip this — the deletion below

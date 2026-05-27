@@ -14,5 +14,5 @@
 
 	# Everything else (including index.html) goes to the app — FastAPI serves
 	# the SPA shell at / and the API routes at /tasks, /inputs, /sources, etc.
-	reverse_proxy app:8000
+	reverse_proxy app:8001
 }

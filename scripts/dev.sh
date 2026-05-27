@@ -42,9 +42,9 @@ done
 echo "→ alembic upgrade head…"
 uv run alembic upgrade head
 
-echo "→ uvicorn (http://127.0.0.1:8000) — Ctrl-C to stop"
+echo "→ uvicorn (http://127.0.0.1:8001) — Ctrl-C to stop"
 exec uv run uvicorn app.main:app \
   --reload \
   --reload-dir backend \
   --host 127.0.0.1 \
-  --port 8000
+  --port 8001

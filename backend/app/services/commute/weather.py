@@ -17,6 +17,8 @@ from datetime import datetime
 
 import httpx
 
+from app.timezones import to_user_tz
+
 log = logging.getLogger(__name__)
 
 _BASE = "https://api.open-meteo.com/v1/forecast"
@@ -27,8 +29,7 @@ async def precipitation_probability_at(
     lat: float, lon: float, when: datetime
 ) -> int | None:
     """Probability of precipitation (%) at the given hour."""
-    when_local = when.astimezone()
-    iso_hour = when_local.strftime("%Y-%m-%dT%H:00")
+    iso_hour = to_user_tz(when).strftime("%Y-%m-%dT%H:00")
     params = {
         "latitude": f"{lat:.5f}",
         "longitude": f"{lon:.5f}",
@@ -71,8 +72,8 @@ async def precipitation_probabilities_between(
     end: datetime,
 ) -> dict[str, int]:
     """Hourly precipitation probabilities keyed as local `YYYY-MM-DDTHH:00`."""
-    start_hour = start.astimezone().strftime("%Y-%m-%dT%H:00")
-    end_hour = end.astimezone().strftime("%Y-%m-%dT%H:00")
+    start_hour = to_user_tz(start).strftime("%Y-%m-%dT%H:00")
+    end_hour = to_user_tz(end).strftime("%Y-%m-%dT%H:00")
     params = {
         "latitude": f"{lat:.5f}",
         "longitude": f"{lon:.5f}",

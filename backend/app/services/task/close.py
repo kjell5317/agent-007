@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.services.calendar import delete_task_event
+from app.services.notify import clear_task_notification
 
 
 async def close_task(session: Session, task_id: uuid.UUID) -> None:
@@ -31,3 +32,4 @@ async def close_task(session: Session, task_id: uuid.UUID) -> None:
         session.delete(task)
         session.commit()
     await delete_task_event(session, task)
+    await clear_task_notification(task_id)

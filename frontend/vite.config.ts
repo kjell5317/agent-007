@@ -17,14 +17,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/health": "http://localhost:8000",
-      "/auth": "http://localhost:8000",
-      "/tasks": "http://localhost:8000",
-      "/inputs": "http://localhost:8000",
-      "/sources": "http://localhost:8000",
-      "/oauth": "http://localhost:8000",
-      "/labels": "http://localhost:8000",
-      "/settings": "http://localhost:8000",
+      "/health": "http://localhost:8001",
+      "/auth": "http://localhost:8001",
+      "/tasks": "http://localhost:8001",
+      "/inputs": "http://localhost:8001",
+      "/sources": "http://localhost:8001",
+      "/oauth": "http://localhost:8001",
+      "/labels": "http://localhost:8001",
+      "/notifications": "http://localhost:8001",
+      "/settings": "http://localhost:8001",
     },
   },
 });

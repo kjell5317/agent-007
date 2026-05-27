@@ -32,7 +32,7 @@ services:
       # instead of localhost.
       DATABASE_URL: postgresql+psycopg://taskagent:taskagent@postgres:5432/taskagent
       APP_HOST: 0.0.0.0
-      APP_PORT: "8000"
+      APP_PORT: "8001"
     depends_on:
       postgres:
         condition: service_healthy

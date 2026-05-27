@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     app_env: str = "dev"
     app_host: str = "127.0.0.1"
-    app_port: int = 8000
+    app_port: int = 8001
     log_level: str = "INFO"
 
     database_url: str
@@ -46,9 +46,9 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     # Gmail & Calendar
-    google_oauth_redirect_uri: str = "http://localhost:8000/oauth/google/callback"
+    google_oauth_redirect_uri: str = "http://localhost:8001/oauth/google/callback"
     # Login
-    google_oauth_login_redirect_uri: str = "http://localhost:8000/auth/callback"
+    google_oauth_login_redirect_uri: str = "http://localhost:8001/auth/callback"
     auth_allowed_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator("auth_allowed_emails", mode="before")
@@ -74,6 +74,11 @@ class Settings(BaseSettings):
             return [c.strip() for c in v.split(",") if c.strip()]
         return v
 
+    # Commute planning. Disabled by default — the feature is parked while
+    # we sort out a TZ/routing reliability issue. Flip to true to re-enable
+    # weather refresh, commute events, and the location-driven replan path.
+    commute_enabled: bool = False
+
     # Google Maps
     google_maps_api_key: str = ""
     commute_bike_max_minutes: int = 25
@@ -94,7 +99,7 @@ class Settings(BaseSettings):
 
     # Slack
     slack_apps: dict[str, dict[str, str]] = Field(default_factory=dict)
-    slack_oauth_redirect_uri: str = "http://localhost:8000/oauth/slack/callback"
+    slack_oauth_redirect_uri: str = "http://localhost:8001/oauth/slack/callback"
     slack_bootstrap_days: int = 1
 
 

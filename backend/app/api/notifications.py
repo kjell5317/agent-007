@@ -26,7 +26,7 @@ from app.config import get_settings
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
 from app.services.notify import ACTION_EXTEND_WINDOW
-from app.services.plan.schedule import schedule
+from app.services.plan.schedule import schedule_task
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ async def handle_action(
 
     if payload.action == ACTION_EXTEND_WINDOW:
         log.info("notify action · extend_window task=%s", task.id)
-        await schedule(session, task, extend_window=True)
+        await schedule_task(session, task, extend_window=True)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     raise HTTPException(

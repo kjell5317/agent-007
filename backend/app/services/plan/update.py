@@ -31,16 +31,16 @@ async def update_task_to_calendar(
 
     current = await _current_event(session, task)
     if current is None:
-        from app.services.plan.schedule import schedule
+        from app.services.plan.schedule import schedule_task
 
-        await schedule(session, task)
+        await schedule_task(session, task)
         return
 
     should_reschedule = await _patch_requires_reschedule(session, task, current, changed)
     if should_reschedule:
-        from app.services.plan.schedule import schedule
+        from app.services.plan.schedule import schedule_task
 
-        await schedule(session, task)
+        await schedule_task(session, task)
         return
 
     from app.services.calendar import update_task_event
@@ -59,9 +59,12 @@ async def update_task_to_calendar(
     )
 
     if "location" in changed:
-        from app.services.plan.commute import plan_commutes_window_best_effort
+        from app.services.plan.commute import (
+            commute_window_margin,
+            plan_commutes_window_best_effort,
+        )
 
-        margin = _commute_window_margin()
+        margin = commute_window_margin()
         event_ids = {task.calendar_event_id} if task.calendar_event_id else None
         await plan_commutes_window_best_effort(
             session,
@@ -135,14 +138,3 @@ def _busy_calendar_ids(settings) -> list[str]:
             seen.add(clean)
             out.append(clean)
     return out
-
-
-def _commute_window_margin() -> timedelta:
-    settings = get_settings()
-    return timedelta(
-        minutes=max(
-            settings.commute_bike_max_minutes,
-            settings.commute_home_layover_minutes * 2,
-            settings.commute_event_buffer_minutes,
-        )
-    )

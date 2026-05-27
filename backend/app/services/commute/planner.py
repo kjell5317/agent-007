@@ -478,7 +478,9 @@ def _commute_mode(ev: CalendarEvent) -> str | None:
 
 
 def _rain_at(hourly_rain: dict[str, int], when: datetime) -> int | None:
-    return hourly_rain.get(when.astimezone().strftime("%Y-%m-%dT%H:00"))
+    from app.timezones import to_user_tz
+
+    return hourly_rain.get(to_user_tz(when).strftime("%Y-%m-%dT%H:00"))
 
 
 def _overlaps(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:

@@ -118,15 +118,24 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("weather-commute-refresh", _weather_commute_refresh),
 ]
 
+# Names of jobs that only make sense with commute enabled.
+_COMMUTE_JOBS = {"weather-commute-refresh"}
+
 _tasks: list[asyncio.Task] = []
 
 
 async def start() -> None:
     if _tasks:
         return
-    for name, runner in _JOBS:
+    settings = get_settings()
+    jobs = [
+        (name, runner)
+        for name, runner in _JOBS
+        if settings.commute_enabled or name not in _COMMUTE_JOBS
+    ]
+    for name, runner in jobs:
         _tasks.append(asyncio.create_task(runner(), name=name))
-    log.info("cron jobs started · %s", ", ".join(name for name, _ in _JOBS))
+    log.info("cron jobs started · %s", ", ".join(name for name, _ in jobs))
 
 
 async def stop() -> None:

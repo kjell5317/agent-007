@@ -30,7 +30,7 @@ from typing import Any
 from app.agent import extract_task_fields
 from app.db import SessionLocal
 from app.db.schemas.task import TaskCreate
-from app.services.plan import schedule
+from app.services.plan import schedule_task
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 log = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
             raw.agent_trace = {**override_entry, "branch": "manual"}
 
         session.commit()
-        await schedule(session, task)
+        await schedule_task(session, task)
 
 
 def _mark_failed(raw_input_id: uuid.UUID) -> None:

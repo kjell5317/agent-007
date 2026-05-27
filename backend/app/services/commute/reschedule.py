@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.task import Task
 from app.services.commute.planner import CommutePlan
-from app.services.plan.schedule import Interval, schedule
+from app.services.plan.schedule import Interval, schedule_task
 
 log = logging.getLogger(__name__)
+
+# Above this many simultaneously-moved tasks we collapse the per-task
+# "Rescheduled" notifications into one summary.
+BATCH_NOTIFY_THRESHOLD = 2
 
 
 async def reschedule_overlapping_tasks(
@@ -32,17 +37,46 @@ async def reschedule_overlapping_tasks(
     )
     tasks = list(session.execute(stmt).scalars())
 
-    moved = 0
+    affected: list[Task] = []
     for task in tasks:
+        current = await _current_interval(session, task)
+        if current is None:
+            continue
+        if _first_overlap(current, intervals) is None:
+            continue
+        affected.append(task)
+
+    if not affected:
+        return 0
+
+    # Suppress per-task notifications when we're moving many at once — one
+    # aggregate notification beats a notification storm. The per-task tag
+    # stays available for the summary fallback path.
+    batch = len(affected) > BATCH_NOTIFY_THRESHOLD
+    moved_slots: list[tuple[Task, datetime, datetime]] = []
+    for task in affected:
         current = await _current_interval(session, task)
         if current is None:
             continue
         overlap = _first_overlap(current, intervals)
         if overlap is None:
             continue
-        await schedule(session, task, block=overlap, account_key=account_key)
-        moved += 1
-    return moved
+        result = await schedule_task(
+            session,
+            task,
+            block=overlap,
+            account_key=account_key,
+            notify=not batch,
+        )
+        if result is not None:
+            moved_slots.append((task, result[0], result[1]))
+
+    if batch and moved_slots:
+        from app.services.notify import notify_batch_rescheduled
+
+        await notify_batch_rescheduled(moved_slots)
+
+    return len(moved_slots)
 
 
 async def _current_interval(session: Session, task: Task) -> Interval | None:

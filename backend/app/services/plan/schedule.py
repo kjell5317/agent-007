@@ -5,20 +5,32 @@ The planner has two phases:
 1. Find a clean free slot without moving anything.
 2. Only if no free slot exists before the deadline, move one less-urgent
    managed task out of the way and place the current task in that freed slot.
+
+Two entry points:
+
+  * `schedule_task(task, ...)` — caller has a Task. All in-app paths use this.
+  * `reschedule_event(event_id, ...)` — caller only knows the calendar event
+    id (calendar-discover). Dispatches to schedule_task when the event maps
+    to a Task, or repairs the commute plan when it doesn't.
+
+`schedule_task` is serialized per task via an asyncio.Lock so concurrent
+triggers (cron polls, HA action, queue worker) don't race on the same row.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.models.task import Task
+from app.timezones import to_user_tz, user_tz
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +42,18 @@ DAY_TARGET = time(20, 0)
 EXTENDED_DAY_START = time(8, 0)
 EXTENDED_DAY_TARGET = time(23, 59, 59)
 MAX_REPAIR_DEPTH = 8
+
+# Per-task lock table. The planner is the only async-concurrent writer to
+# a task's calendar event; serializing same-task calls is enough.
+_task_locks: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+def _lock_for(task_id: uuid.UUID) -> asyncio.Lock:
+    lock = _task_locks.get(task_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _task_locks[task_id] = lock
+    return lock
 
 
 @dataclass(frozen=True)
@@ -47,35 +71,54 @@ class BusyEvent:
     kind: str
 
 
-async def schedule(
+async def schedule_task(
     session: Session,
-    task: Task | None = None,
+    task: Task,
     *,
-    event_id: str | None = None,
     block: Interval | None = None,
     account_key: str | None = None,
     extend_window: bool = False,
+    notify: bool = True,
     _depth: int = 0,
-) -> None:
+) -> tuple[datetime, datetime] | None:
     """Plan `task` and create/update its calendar mirror.
-
-    `event_id` is accepted for discover/repair callers that only know the
-    managed calendar event that collided.
 
     `extend_window=True` widens each day's search range to 08:00–24:00
     (default 10:00–20:00). Set by the HA "extend" action button on a
     previous no-slot notification.
+
+    `notify=False` suppresses the per-task scheduled/no-slot notification —
+    batch callers (commute reschedule of many tasks) handle their own
+    aggregated notification.
+
+    Returns the placed `(start, end)` on success, `None` otherwise.
     """
-    if task is None and event_id is not None:
-        task = _task_for_event(session, event_id)
-    if task is None:
-        if event_id:
-            await _repair_commute_event(session, event_id, account_key=account_key)
-        return
     if task.due_date is None:
         log.debug("plan.schedule · task=%s has no due_date", task.id)
-        return
+        return None
 
+    async with _lock_for(task.id):
+        return await _schedule_task_locked(
+            session,
+            task,
+            block=block,
+            account_key=account_key,
+            extend_window=extend_window,
+            notify=notify,
+            _depth=_depth,
+        )
+
+
+async def _schedule_task_locked(
+    session: Session,
+    task: Task,
+    *,
+    block: Interval | None,
+    account_key: str | None,
+    extend_window: bool,
+    notify: bool,
+    _depth: int,
+) -> tuple[datetime, datetime] | None:
     is_fresh = task.calendar_event_id is None
 
     try:
@@ -88,17 +131,17 @@ async def schedule(
             _depth=_depth,
         )
     except ValueError:
-        from app.services.notify import notify_no_slot
-
         log.warning(
             "plan.schedule · no slot for task=%s due=%s extended=%s",
-            task.id, task.due_date.isoformat(), extend_window,
+            task.id, task.due_date.isoformat() if task.due_date else None, extend_window,
         )
-        await notify_no_slot(task, extended=extend_window)
-        return
+        if notify:
+            from app.services.notify import notify_no_slot
+
+            await notify_no_slot(task, extended=extend_window)
+        return None
 
     from app.services.calendar import add_task_event, update_task_event
-    from app.services.notify import notify_task_scheduled
 
     if task.calendar_event_id:
         await update_task_event(session, task, start=start, end=end)
@@ -113,7 +156,29 @@ async def schedule(
         account_key=account_key,
     )
 
-    await notify_task_scheduled(task, start=start, end=end, is_fresh=is_fresh)
+    if notify:
+        from app.services.notify import notify_task_scheduled
+
+        await notify_task_scheduled(task, start=start, end=end, is_fresh=is_fresh)
+    return start, end
+
+
+async def reschedule_event(
+    session: Session,
+    event_id: str,
+    *,
+    account_key: str | None = None,
+) -> None:
+    """Dispatch a calendar-discover overlap.
+
+    If the event maps to a Task, re-plan that task. Otherwise treat it as a
+    managed commute event and recompute the commute plan around it.
+    """
+    task = _task_for_event(session, event_id)
+    if task is not None:
+        await schedule_task(session, task, account_key=account_key)
+        return
+    await _repair_commute_event(session, event_id, account_key=account_key)
 
 
 async def plan_task_slot(
@@ -137,8 +202,8 @@ async def plan_task_slot(
         raise ValueError("task has no due_date")
 
     settings = get_settings()
-    due = _to_local(task.due_date)
-    now = datetime.now(timezone.utc).astimezone(_user_tz())
+    due = to_user_tz(task.due_date)
+    now = datetime.now(user_tz())
     window_start = max(now, due - timedelta(days=LEAD_DAYS))
     window_end = due
     if window_end <= window_start:
@@ -188,7 +253,7 @@ def _find_free_slot(
     ordered = sorted(busy, key=lambda ev: ev.start)
     day = window_start.date()
     last_day = window_end.date()
-    tz = _user_tz()
+    tz = user_tz()
     day_start = EXTENDED_DAY_START if extend_window else DAY_START
     day_target = EXTENDED_DAY_TARGET if extend_window else DAY_TARGET
 
@@ -230,7 +295,7 @@ async def _repair_by_displacing_task(
     for victim, victim_event in victims:
         freed = Interval(victim_event.start, victim_event.end, victim_event.id)
         try:
-            await schedule(
+            await schedule_task(
                 session,
                 victim,
                 block=freed,
@@ -305,7 +370,7 @@ async def _fetch_busy_events(
         if ev.id == exclude_event_id or ev.all_day:
             continue
         kind = "commute" if is_commute_event(ev) else "task" if is_task_event(ev) else "busy"
-        out.append(BusyEvent(ev.id, _to_local(ev.start), _to_local(ev.end), kind))
+        out.append(BusyEvent(ev.id, to_user_tz(ev.start), to_user_tz(ev.end), kind))
     return out
 
 
@@ -315,6 +380,8 @@ async def _repair_commute_event(
     *,
     account_key: str | None,
 ) -> None:
+    if not get_settings().commute_enabled:
+        return
     from app.services.calendar import get_event, is_commute_event, private_properties
     from app.services.plan.commute import plan_commutes_window_best_effort
 
@@ -349,15 +416,19 @@ async def _replan_commutes_around(
 ) -> None:
     if not task.calendar_event_id:
         return
-    from app.services.plan.commute import plan_commutes_window_best_effort
+    # Task events without a location are never commute targets, and no
+    # commutes are keyed to them, so the window scan would be pure waste.
+    if not (task.location or "").strip():
+        return
+    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
 
-    margin = _commute_window_margin()
+    margin = commute_window_margin()
     event_ids = {task.calendar_event_id}
     await plan_commutes_window_best_effort(
         session,
         window_start=start - margin,
         window_end=end + margin,
-        target_event_ids=event_ids if (task.location or "").strip() else None,
+        target_event_ids=event_ids,
         stale_event_ids=event_ids,
         account_key=account_key,
     )
@@ -384,27 +455,3 @@ def _busy_calendar_ids(settings) -> list[str]:
     return out
 
 
-def _commute_window_margin() -> timedelta:
-    settings = get_settings()
-    return timedelta(
-        minutes=max(
-            settings.commute_bike_max_minutes,
-            settings.commute_home_layover_minutes * 2,
-            settings.commute_event_buffer_minutes,
-        )
-    )
-
-
-def _to_local(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_user_tz())
-
-
-def _user_tz() -> ZoneInfo | timezone:
-    name = (get_settings().user_timezone or "UTC").strip()
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
-        log.warning("user_timezone=%r not found; falling back to UTC", name)
-        return timezone.utc

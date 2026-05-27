@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.clients import route_cache
 from app.services.commute.client import MapsLookupError, TravelMode, distance
+from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +60,5 @@ async def resolve_duration(
 
 
 def _hour_bucket(departure: datetime | None) -> int:
-    when = departure or datetime.now(timezone.utc)
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    local = when.astimezone()
+    local = to_user_tz(departure or datetime.now(timezone.utc))
     return local.weekday() * 24 + local.hour

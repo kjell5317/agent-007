@@ -32,7 +32,7 @@ from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
 from app.services.input.embedding import embed
 from app.db.schemas.task import TaskCreate
-from app.services.plan import schedule
+from app.services.plan import schedule_task
 from app.db.clients import notes as notes_store, raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
 
@@ -172,7 +172,7 @@ async def run_new_input_agent(
             trace["task_id"] = str(task.id)
             final_status = "open"
             final_task_id = task.id
-            await schedule(session, task)
+            await schedule_task(session, task)
             done = True
             break
         if tu.name == "mark_duplicate":
