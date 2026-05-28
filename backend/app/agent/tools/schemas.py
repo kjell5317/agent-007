@@ -2,11 +2,13 @@
 
 Two contexts, two tool sets:
 
-* **New-input context** (raw_input has no matching thread):
-  `create_task`, `mark_duplicate`, `mark_not_task`.
+* **New-input context** (raw_input has no matching thread): `create_task`,
+  `mark_not_task`, and — when the input duplicates a candidate task — the
+  same `update_task` / `close_task` / `no_change` trio the thread context
+  uses, except here each carries `existing_task_id` to name the target.
 
 * **Thread-follow-up context** (raw_input matches an existing task by thread_id):
-  `update_task`, `close_task`, `no_change`.
+  `update_task`, `close_task`, `no_change` (target task is implicit).
 
 All tools are terminal — the runner stops after the first tool call.
 
@@ -136,6 +138,12 @@ _update_label = _label_schema(required=False)
 if _update_label:
     _UPDATE_TASK_PROPS["label"] = _update_label
 
+_EXISTING_TASK_ID_SCHEMA = {
+    "type": "string",
+    "format": "uuid",
+    "description": "Id of the matching task — must come from the CANDIDATE TASKS list.",
+}
+
 
 NEW_INPUT_TOOLS = [
     {
@@ -147,7 +155,7 @@ NEW_INPUT_TOOLS = [
             "you might have recorded earlier. Returns the top matching notes "
             "by semantic similarity. Non-terminal — you can call it more than "
             "once and you still need a terminal tool (`create_task`, "
-            "`mark_duplicate`, or `mark_not_task`) to finish."
+            "`mark_not_task`, or a duplicate action) to finish."
         ),
         "input_schema": {
             "type": "object",
@@ -173,15 +181,45 @@ NEW_INPUT_TOOLS = [
         },
     },
     {
-        "name": "mark_duplicate",
+        "name": "no_change",
         "description": (
-            "Record that the current input duplicates an existing task instead of "
-            "creating a new one. `existing_task_id` must come from the candidate list."
+            "The current input duplicates one of the CANDIDATE TASKS and adds "
+            "nothing new — e.g. the same message arriving again or from another "
+            "source. Record the duplicate and leave the task untouched. This is "
+            "the common duplicate case."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "existing_task_id": {"type": "string", "format": "uuid"},
+                "existing_task_id": _EXISTING_TASK_ID_SCHEMA,
+                "reason": {"type": "string"},
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
+            "required": ["existing_task_id"],
+        },
+    },
+    {
+        "name": "update_task",
+        "description": (
+            "The current input duplicates one of the CANDIDATE TASKS but adds new "
+            "information. Patch that task — include only the fields that change."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {**_UPDATE_TASK_PROPS, "existing_task_id": _EXISTING_TASK_ID_SCHEMA},
+            "required": ["existing_task_id"],
+        },
+    },
+    {
+        "name": "close_task",
+        "description": (
+            "The current input duplicates one of the CANDIDATE TASKS and indicates "
+            "it is already done or no longer needed. Close that task."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "existing_task_id": _EXISTING_TASK_ID_SCHEMA,
                 "reason": {"type": "string"},
                 "confidence": _CONFIDENCE_SCHEMA,
             },

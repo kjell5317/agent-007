@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import String, bindparam, select, text
 from sqlalchemy.orm import Session
 
+from app.config.settings import get_settings
 from app.db.models.note import Note
 
 
@@ -43,7 +44,11 @@ _SIMILAR_NOTES_SQL = text(
       1.0 - (embedding <=> CAST(:emb AS vector)) AS similarity
     FROM notes
     WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> CAST(:emb AS vector)
+    ORDER BY
+      (1.0 - (embedding <=> CAST(:emb AS vector)))
+        * exp(- EXTRACT(EPOCH FROM (now() - created_at))
+              / (:half_life_days * 86400.0))
+      DESC
     LIMIT :k
     """
 ).bindparams(bindparam("emb", type_=String()))
@@ -52,9 +57,13 @@ _SIMILAR_NOTES_SQL = text(
 def search_similar(
     session: Session, *, embedding: list[float], k: int = 5
 ) -> list[SimilarNote]:
-    """Top-k notes by cosine similarity."""
+    """Top-k notes by cosine similarity, lightly re-ranked toward recent notes."""
     emb_literal = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
-    rows = session.execute(_SIMILAR_NOTES_SQL, {"emb": emb_literal, "k": k}).all()
+    half_life_days = get_settings().notes_similarity_half_life_days
+    rows = session.execute(
+        _SIMILAR_NOTES_SQL,
+        {"emb": emb_literal, "k": k, "half_life_days": half_life_days},
+    ).all()
     return [
         SimilarNote(
             id=r.id,

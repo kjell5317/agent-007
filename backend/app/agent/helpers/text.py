@@ -33,6 +33,34 @@ def parse_iso(value: str | datetime | None) -> datetime | None:
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
+def task_field_lines(task, *, indent: str = "  ") -> list[str]:
+    """Render an existing task's fields for the agent prompt.
+
+    Shared by the thread-follow-up flow (single linked task) and the
+    new-input flow (each duplicate candidate), so the agent sees enough
+    detail to decide whether to update, close, or leave a task alone.
+    """
+    lines = [f"{indent}id: {task.id}", f"{indent}title: {task.title}"]
+    if task.description:
+        desc = task.description.strip().replace("\n", " ")
+        if len(desc) > 200:
+            desc = desc[:200] + "…"
+        lines.append(f"{indent}description: {desc}")
+    if task.due_date:
+        lines.append(f"{indent}due_date: {task.due_date.isoformat()}")
+    if task.estimation is not None:
+        lines.append(f"{indent}estimation: {task.estimation} min")
+    if task.location:
+        lines.append(f"{indent}location: {task.location}")
+    if task.link:
+        lines.append(f"{indent}link: {task.link}")
+    if task.label:
+        lines.append(f"{indent}label: {task.label}")
+    if getattr(task, "ai_doable", None):
+        lines.append(f"{indent}ai_doable: {task.ai_doable}")
+    return lines
+
+
 # Metadata keys surfaced to the agent. Source-agnostic: missing keys are
 # silently skipped (Gmail has subject/to/cc; Slack has channel_name; etc).
 _META_KEYS = ("from", "to", "cc", "subject", "channel_name", "date", "thread_id")

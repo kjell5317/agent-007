@@ -204,29 +204,25 @@ async def add_task_event(
     """Create the calendar mirror for `task` spanning `[start, end)`.
 
     Persists the new event id on `task.calendar_event_id`. No-op when no
-    calendar is configured. Best-effort: calendar failures are logged and
-    swallowed so they can't break task creation.
+    calendar is configured. Raises on calendar API failure so the planner
+    can surface the problem rather than firing a "Scheduled" notification
+    for an event that never got created.
     """
     settings = get_settings()
     calendar_id = (settings.google_calendar_id or "").strip()
     if not calendar_id:
         return
-    try:
-        event = await create_event(
-            session,
-            calendar_id=calendar_id,
-            summary=task.title,
-            start=start,
-            end=end,
-            description=_task_description(task),
-            location=resolve_location_alias(task.location),
-            color_id=color_for(task.label),
-            private_properties=task_private_properties(task),
-        )
-    except Exception as exc:  # noqa: BLE001 — never let calendar break task creation
-        log.warning("calendar add failed · task=%s err=%s", task.id, exc)
-        return
-
+    event = await create_event(
+        session,
+        calendar_id=calendar_id,
+        summary=task.title,
+        start=start,
+        end=end,
+        description=_task_description(task),
+        location=resolve_location_alias(task.location),
+        color_id=color_for(task.label),
+        private_properties=task_private_properties(task),
+    )
     task.calendar_event_id = event.id
     session.commit()
 
@@ -253,7 +249,8 @@ async def update_task_event(
     No-op when no calendar is configured. If the task has no mirrored
     event yet, fall back to `add_task_event` — but only when both
     `start` and `end` are supplied (without them, we can't create an
-    event). Best-effort: calendar failures are logged and swallowed.
+    event). Raises on calendar API failure (other than 404/410, which is
+    treated as a stale-id and recovered via re-create).
     """
     settings = get_settings()
     calendar_id = (settings.google_calendar_id or "").strip()
@@ -308,9 +305,7 @@ async def update_task_event(
             session.commit()
             await add_task_event(session, task, start=start, end=end)
             return
-        log.warning("calendar update failed · task=%s err=%s", task.id, exc)
-    except Exception as exc:  # noqa: BLE001 — never let calendar break task updates
-        log.warning("calendar update failed · task=%s err=%s", task.id, exc)
+        raise
 
 
 async def delete_task_event(session: Session, task) -> None:

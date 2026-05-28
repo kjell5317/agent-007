@@ -23,8 +23,21 @@ Given a single semi-structured input from one of the user's sources
 
   Optional: description, location (home is possible), link (most relevant source URL).
 
-- `mark_duplicate` — if the input clearly restates one of the CANDIDATE TASKS
-  listed in the user message. `existing_task_id` must come from that list.
+When the input matches one of the CANDIDATE TASKS in the user message (same
+underlying task — a re-send, a copy from another source, or a follow-up on it),
+do NOT call `create_task`. Act on the matching candidate instead and pass its
+id as `existing_task_id`:
+
+- `no_change` — the input adds nothing new (a duplicate or near-identical
+  restatement). Record the duplicate and leave the task untouched. This is the
+  common case.
+
+- `update_task` — the input restates the task but adds new information (a firmer
+  due date, a refined estimate, a clarified location). Patch only the fields
+  that actually change; don't rewrite fields the input doesn't touch.
+
+- `close_task` — the input indicates the matching task is already done or no
+  longer needed.
 
 - `mark_not_task` — if the input is informational, conversational, or
   directed at someone else. Also use this when none of the available
@@ -54,6 +67,7 @@ with many recipients, channel message without an @-mention), most inputs are
 informational and should be `mark_not_task` unless the body clearly asks the
 user to do something specific. When it's "yes", lean toward `create_task`.
 
-Emit one terminal tool call (`create_task` / `mark_duplicate` / `mark_not_task`)
-and stop. Do not narrate.
+Emit one terminal tool call (`create_task`, a duplicate action —
+`no_change` / `update_task` / `close_task` — or `mark_not_task`) and stop.
+Do not narrate.
 """

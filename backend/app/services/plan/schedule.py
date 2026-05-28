@@ -148,10 +148,29 @@ async def _schedule_task_locked(
 
     from app.services.calendar import add_task_event, update_task_event
 
-    if task.calendar_event_id:
-        await update_task_event(session, task, start=start, end=end)
-    else:
-        await add_task_event(session, task, start=start, end=end)
+    try:
+        if task.calendar_event_id:
+            await update_task_event(session, task, start=start, end=end)
+        else:
+            await add_task_event(session, task, start=start, end=end)
+    except Exception as exc:  # noqa: BLE001
+        # A "Scheduled" notification past this point would lie — the slot
+        # exists in the planner's head but not on the calendar. Log loudly
+        # and surface to the phone so the user notices instead of finding
+        # out the next time they open Google Calendar.
+        log.error(
+            "plan.schedule · calendar write failed task=%s err=%s",
+            task.id, exc, exc_info=True,
+        )
+        if notify:
+            from app.services.notify import notify_error
+
+            await notify_error(
+                f"Calendar write failed: {task.title[:80]}",
+                exc,
+                context=f"task_id={task.id}",
+            )
+        return None
 
     await _replan_commutes_around(
         session,
@@ -208,7 +227,7 @@ async def plan_task_slot(
 
     settings = get_settings()
     due = to_user_tz(task.due_date)
-    now = datetime.now(user_tz())
+    now = datetime.now(user_tz()) + timedelta(minutes=settings.commute_event_buffer_minutes)
     window_start = max(now, due - timedelta(days=LEAD_DAYS))
     window_end = due
     if window_end <= window_start:
@@ -350,28 +369,62 @@ async def _repair_by_displacing_task(
     if depth >= MAX_REPAIR_DEPTH:
         raise ValueError("repair recursion limit reached")
 
-    victims = _movable_victims(session, task, busy, duration)
-    for victim, victim_event in victims:
-        freed = Interval(victim_event.start, victim_event.end, victim_event.id)
+    settings = get_settings()
+    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
+    victims = _movable_victims(
+        session, task, busy, duration, buffer, window_start, window_end,
+    )
+    for victim, victim_event, freed_range in victims:
+        block = Interval(victim_event.start, victim_event.end, victim_event.id)
         try:
-            await schedule_task(
+            victim_slot = await schedule_task(
                 session,
                 victim,
-                block=freed,
+                block=block,
                 account_key=account_key,
                 _depth=depth + 1,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("plan.schedule · victim move failed task=%s err=%s", victim.id, exc)
             continue
+        if victim_slot is None:
+            # Victim couldn't be rescheduled — its old slot still holds.
+            continue
 
-        if freed.start < window_start or freed.end > window_end:
-            continue
-        if freed.end - duration < freed.start:
-            continue
-        return freed.end - duration, freed.end
+        # Rebuild the busy view: the victim vacated its old position and
+        # moved to `victim_slot`. Then sweep the freed range (clamped to
+        # the per-day working window) for the new task's slot.
+        new_busy = [ev for ev in busy if ev.id != victim_event.id]
+        new_busy.append(
+            BusyEvent(victim_event.id, victim_slot[0], victim_slot[1], "task")
+        )
+        slot = _slot_in_range(new_busy, duration, buffer, freed_range)
+        if slot is not None:
+            return slot
 
     raise ValueError("no free slot before due date")
+
+
+def _slot_in_range(
+    busy: list[BusyEvent],
+    duration: timedelta,
+    buffer: timedelta,
+    freed_range: Interval,
+) -> tuple[datetime, datetime] | None:
+    """Latest-fitting slot inside `freed_range`, clamped to the per-day
+    working window. Same backward sweep as the normal-mode free search."""
+    tz = user_tz()
+    day = freed_range.start.date()
+    last_day = freed_range.end.date()
+    while day <= last_day:
+        lower, upper = _day_bounds(
+            day, DAY_START, DAY_TARGET, tz, freed_range.start, freed_range.end,
+        )
+        slot = _sweep_backward(busy, duration, buffer, lower, upper)
+        if slot is not None:
+            return slot
+        day += timedelta(days=1)
+    return None
 
 
 def _movable_victims(
@@ -379,21 +432,63 @@ def _movable_victims(
     task: Task,
     busy: list[BusyEvent],
     duration: timedelta,
-) -> list[tuple[Task, BusyEvent]]:
-    event_by_id = {
-        ev.id: ev for ev in busy if ev.kind == "task" and ev.end - ev.start >= duration
-    }
-    if not event_by_id:
+    buffer: timedelta,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[tuple[Task, BusyEvent, Interval]]:
+    """Task events whose displacement would free a contiguous range large
+    enough for the new task. The freed range counts adjacent gaps — a 30min
+    victim sitting in a 1h hole between busy neighbours is still a candidate
+    for a 1h task because moving it consolidates the surrounding free time.
+    """
+    min_span = duration + 2 * buffer
+    candidates: list[tuple[BusyEvent, Interval]] = []
+    for ev in busy:
+        if ev.kind != "task":
+            continue
+        freed = _effective_freed_range(ev, busy, window_start, window_end)
+        if freed.end - freed.start < min_span:
+            continue
+        candidates.append((ev, freed))
+    if not candidates:
         return []
+
+    by_event_id = {ev.id: (ev, freed) for ev, freed in candidates}
     stmt = (
         select(Task)
-        .where(Task.calendar_event_id.in_(list(event_by_id)))
+        .where(Task.calendar_event_id.in_(list(by_event_id)))
         .where(Task.id != task.id)
         .where(Task.due_date.is_not(None))
     )
     rows = list(session.execute(stmt).scalars())
     rows.sort(key=lambda row: row.due_date or datetime.max.replace(tzinfo=timezone.utc), reverse=True)
-    return [(row, event_by_id[row.calendar_event_id]) for row in rows if row.calendar_event_id]
+    return [
+        (row, *by_event_id[row.calendar_event_id])
+        for row in rows if row.calendar_event_id in by_event_id
+    ]
+
+
+def _effective_freed_range(
+    victim: BusyEvent,
+    busy: list[BusyEvent],
+    window_start: datetime,
+    window_end: datetime,
+) -> Interval:
+    """Contiguous time that opens up if `victim` moves elsewhere.
+
+    Bounded by the nearest non-overlapping busy event before / after the
+    victim, falling back to the planning window edges when none exist.
+    """
+    prev_end = window_start
+    next_start = window_end
+    for ev in busy:
+        if ev.id == victim.id:
+            continue
+        if ev.end <= victim.start and ev.end > prev_end:
+            prev_end = ev.end
+        if ev.start >= victim.end and ev.start < next_start:
+            next_start = ev.start
+    return Interval(prev_end, next_start, victim.id)
 
 
 def _latest_conflict(events: list[BusyEvent], start: datetime, end: datetime) -> BusyEvent | None:

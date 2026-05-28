@@ -23,7 +23,7 @@ MAX_TOKENS = 1024
 TEMPERATURE = 0.4
 
 TERMINAL_TOOLS = frozenset({
-    "create_task", "mark_duplicate", "mark_not_task",
+    "create_task", "mark_not_task",
     "update_task", "close_task", "no_change",
 })
 

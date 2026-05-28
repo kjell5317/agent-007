@@ -22,13 +22,11 @@ from app.agent.helpers.llm import (
     cached_tools,
     create_message,
 )
-from app.agent.helpers.text import append_meta_lines, now_iso, parse_iso
+from app.agent.helpers.dispatch import apply_task_action
+from app.agent.helpers.text import append_meta_lines, now_iso, task_field_lines
 from app.agent.tools import THREAD_FOLLOWUP_TOOLS
 from app.config import get_settings
 from app.db.clients import raw_inputs
-from app.services.notify import notify_agent_task_closed, notify_agent_task_updated
-from app.services.task.close import close_task as close_task_svc
-from app.services.task.update import PLAN_TRIGGER_FIELDS, update_task as update_task_svc
 
 log = logging.getLogger(__name__)
 
@@ -66,40 +64,9 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
         trace["outcome"] = "no_tool_call"
     else:
         tu = tool_uses[0]
-        tu_input = tu.input or {}
-        if tu.name == "update_task":
-            patch = {k: v for k, v in tu_input.items() if v is not None}
-            if "due_date" in patch:
-                patch["due_date"] = parse_iso(str(patch["due_date"]))
-            updated = None
-            if patch:
-                try:
-                    updated = await update_task_svc(session, task.id, patch)
-                except LookupError:
-                    updated = None
-            trace["outcome"] = "updated"
-            final_status = "open"
-            # Plan-relevant edits route through `schedule_task`, which fires
-            # its own "Rescheduled" notification with the new slot. Don't
-            # also fire the generic "Agent updated" — the second one would
-            # replace the first via the shared task tag and lose the slot.
-            if updated is not None and patch and not (patch.keys() & PLAN_TRIGGER_FIELDS):
-                await notify_agent_task_updated(updated, changes=patch)
-        elif tu.name == "close_task":
-            trace["outcome"] = "closed"
-            trace["confidence"] = tu_input.get("confidence")
-            final_status = "closed"
-            try:
-                await close_task_svc(session, task.id)
-            except LookupError:
-                pass
-            await notify_agent_task_closed(task)
-        elif tu.name == "no_change":
-            trace["outcome"] = "no_change"
-            trace["confidence"] = tu_input.get("confidence")
-            final_status = "open"
-        else:
-            trace["outcome"] = f"unknown_tool:{tu.name}"
+        frag = await apply_task_action(session, task, tu.name, tu.input or {})
+        trace.update(frag)
+        final_status = "closed" if frag["outcome"] == "closed" else "open"
 
     raw_inputs.finalize(
         session, raw.id, status=final_status, task_id=final_task_id, agent_trace=trace
@@ -118,18 +85,7 @@ def _build_thread_user_message(raw, task) -> str:
 
     lines.append("")
     lines.append("Current task:")
-    lines.append(f"  id: {task.id}")
-    lines.append(f"  title: {task.title}")
-    if task.description:
-        lines.append(f"  description: {task.description}")
-    if task.due_date:
-        lines.append(f"  due_date: {task.due_date.isoformat()}")
-    if task.estimation is not None:
-        lines.append(f"  estimation: {task.estimation} min")
-    if task.location:
-        lines.append(f"  location: {task.location}")
-    if task.link:
-        lines.append(f"  link: {task.link}")
+    lines.extend(task_field_lines(task))
 
     lines.append("")
     lines.append("Follow-up body:")

@@ -26,8 +26,9 @@ from app.agent.helpers.llm import (
     cached_tools,
     create_message,
 )
+from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.notes_lookup import run_search_notes
-from app.agent.helpers.text import append_meta_lines, now_iso, parse_iso
+from app.agent.helpers.text import append_meta_lines, now_iso, parse_iso, task_field_lines
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
 from app.services.input.embedding import embed
@@ -175,12 +176,26 @@ async def run_new_input_agent(
             await schedule_task(session, task)
             done = True
             break
-        if tu.name == "mark_duplicate":
-            existing_id = uuid.UUID(tu_input["existing_task_id"])
-            trace["outcome"] = "duplicate"
+        if tu.name in ("no_change", "update_task", "close_task"):
+            # Duplicate-handling: act on the named candidate task. The current
+            # input stays status="duplicate" linked to that task regardless of
+            # the action — the action mutates the task's anchor row, not this one.
+            existing_raw = tu_input.get("existing_task_id")
+            existing_id = uuid.UUID(str(existing_raw)) if existing_raw else None
+            existing_task = tasks.get(session, existing_id) if existing_id else None
+            if existing_task is None:
+                log.warning(
+                    "duplicate action %s · raw=%s missing/invalid existing_task_id=%s",
+                    tu.name, raw.id, existing_raw,
+                )
+                trace["outcome"] = "duplicate_target_missing"
+                final_status = "no_change"
+                done = True
+                break
+            frag = await apply_task_action(session, existing_task, tu.name, tu_input)
+            trace.update(frag)
             trace["existing_task_id"] = str(existing_id)
-            trace["confidence"] = tu_input.get("confidence")
-            final_status = "duplicate"
+            final_status = "no_change"
             final_task_id = existing_id
             done = True
             break
@@ -249,12 +264,14 @@ def _build_new_input_message(
 
     if open_tasks:
         lines.append("")
-        lines.append("Candidate existing tasks (use `mark_duplicate` if one matches):")
+        lines.append(
+            "Candidate existing tasks — if the input duplicates one of these, "
+            "act on it with `no_change` / `update_task` / `close_task` and pass "
+            "its id as `existing_task_id` instead of calling `create_task`:"
+        )
         for t in open_tasks:
-            desc = (t.description or "").strip().replace("\n", " ")
-            if len(desc) > 160:
-                desc = desc[:160] + "…"
-            lines.append(f"- {t.id} | {t.title}" + (f" — {desc}" if desc else ""))
+            lines.append("")
+            lines.extend(task_field_lines(t))
 
     precedent_lines: list[str] = []
     for p in not_task_hits[:3]:

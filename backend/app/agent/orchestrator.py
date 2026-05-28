@@ -127,8 +127,12 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
 
     if open_hits and open_hits[0].similarity >= auto_threshold and open_hits[0].task_id:
         top = open_hits[0]
+        # A near-identical input to one we already linked to an open task is
+        # almost always the same message arriving again / from another source.
+        # It carries no new information, so the outcome is `no_change`: record
+        # the duplicate link, touch nothing on the task.
         trace = {
-            "outcome": "duplicate",
+            "outcome": "no_change",
             "auto_decided": True,
             "precedent_id": str(top.id),
             "precedent_similarity": round(top.similarity, 4),

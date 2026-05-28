@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Auto- decison theshold
     input_dedup_threshold: float = 0.88
 
+    # Notes similarity recency boost. Long half-life → small bias toward
+    # recent notes when re-ranking equally-similar hits.
+    notes_similarity_half_life_days: float = 365.0
+
     # Google OAuth
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
