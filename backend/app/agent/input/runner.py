@@ -189,13 +189,13 @@ async def run_new_input_agent(
                     tu.name, raw.id, existing_raw,
                 )
                 trace["outcome"] = "duplicate_target_missing"
-                final_status = "no_change"
+                final_status = "duplicate"
                 done = True
                 break
             frag = await apply_task_action(session, existing_task, tu.name, tu_input)
             trace.update(frag)
             trace["existing_task_id"] = str(existing_id)
-            final_status = "no_change"
+            final_status = "duplicate"
             final_task_id = existing_id
             done = True
             break
