@@ -14,8 +14,8 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
-from backend.app.auth.base import get_provider
-from backend.app.db.clients import oauth_tokens
+from app.auth.base import get_provider
+from app.db.clients import oauth_tokens
 from app.services.location import resolve_location_alias
 
 _BASE = "https://www.googleapis.com/calendar/v3"

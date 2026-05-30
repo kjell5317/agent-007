@@ -13,6 +13,7 @@ import app.auth.google  # noqa: F401
 import app.auth.slack  # noqa: F401
 import app.services.input.gmail  # noqa: F401
 import app.services.input.slack  # noqa: F401
+import app.services.input.whatsapp  # noqa: F401
 from app import cron
 from app.api import auth as auth_router
 from app.api import (
@@ -24,6 +25,7 @@ from app.api import (
     poll,
     settings as settings_router,
     tasks,
+    webhooks,
 )
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
@@ -79,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(oauth.router)
     app.include_router(poll.sources_router)
     app.include_router(settings_router.router)
+    app.include_router(webhooks.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:
