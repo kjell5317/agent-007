@@ -18,6 +18,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/health": "http://localhost:8001",
+      "/events": "http://localhost:8001",
       "/auth": "http://localhost:8001",
       "/tasks": "http://localhost:8001",
       "/inputs": "http://localhost:8001",

@@ -22,6 +22,7 @@ from app.db.clients import (
     raw_inputs as raw_inputs_store,
     tasks as tasks_store,
 )
+from app.events import publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.task.queue import enqueue
 
@@ -69,6 +70,7 @@ async def open_task_from_input(
                     await delete_task_event(session, old_task)
                     session.delete(old_task)
                     session.commit()
+                    publish_task_removed(old_task_id)
         else:
             raise ValueError("Raw input is already linked to a task")
     await enqueue(raw_input_id, user_fields)

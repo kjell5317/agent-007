@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
+from app.events import publish_input, publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.notify import clear_task_notification
 
@@ -25,11 +26,14 @@ async def close_task(session: Session, task_id: uuid.UUID) -> None:
         latest.status = "closed"
         latest.processed_at = datetime.now(timezone.utc)
         session.commit()
+        publish_task(session, task_id)
+        publish_input(session, latest.id)
     else:
         # Orphan task (no non-duplicate raw_input — e.g. anchor promoted
         # away via no_change override). With nothing to flip, drop the
         # row outright so it stops surfacing as "open" by default.
         session.delete(task)
         session.commit()
+        publish_task_removed(task_id)
     await delete_task_event(session, task)
     await clear_task_notification(task_id)

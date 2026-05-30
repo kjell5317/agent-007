@@ -42,23 +42,7 @@ class UnreadCount(BaseModel):
 
 
 def _to_read(task, status_: str, is_manual: bool) -> TaskRead:
-    return TaskRead.model_validate(
-        {
-            "id": task.id,
-            "title": task.title,
-            "description": task.description,
-            "link": task.link,
-            "due_date": task.due_date,
-            "estimation": task.estimation,
-            "location": task.location,
-            "label": task.label,
-            "ai_doable": task.ai_doable,
-            "status": status_,
-            "is_manual": is_manual,
-            "created_at": task.created_at,
-            "updated_at": task.updated_at,
-        }
-    )
+    return TaskRead.build(task, status_, is_manual)
 
 
 @router.get("", response_model=list[TaskRead])

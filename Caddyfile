@@ -5,14 +5,26 @@
 #   - APP_DOMAIN=your.domain.com     → Caddy fetches a Let's Encrypt cert
 
 {$APP_DOMAIN:localhost} {
-	encode gzip zstd
+	# Compress everything except the SSE stream — gzip buffers the response,
+	# which would hold events back instead of flushing them as they arrive.
+	@compressible not path /events
+	encode @compressible gzip zstd
 
 	# Long-lived hashed assets from Vite. /assets/* file names contain a content
 	# hash, so we can safely cache them aggressively.
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable"
 
+	# SSE stream: flush each event immediately rather than buffering.
+	handle /events {
+		reverse_proxy app:8001 {
+			flush_interval -1
+		}
+	}
+
 	# Everything else (including index.html) goes to the app — FastAPI serves
 	# the SPA shell at / and the API routes at /tasks, /inputs, /sources, etc.
-	reverse_proxy app:8001
+	handle {
+		reverse_proxy app:8001
+	}
 }

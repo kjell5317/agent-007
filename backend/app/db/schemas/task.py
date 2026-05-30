@@ -64,3 +64,26 @@ class TaskRead(TaskBase):
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def build(cls, task, status_: str, is_manual: bool) -> "TaskRead":
+        """Assemble the read model from an ORM row plus its derived
+        `status` / `is_manual` (both come from separate queries — see
+        `tasks.latest_status_for` / `tasks.is_manual_for`)."""
+        return cls.model_validate(
+            {
+                "id": task.id,
+                "title": task.title,
+                "description": task.description,
+                "link": task.link,
+                "due_date": task.due_date,
+                "estimation": task.estimation,
+                "location": task.location,
+                "label": task.label,
+                "ai_doable": task.ai_doable,
+                "status": status_,
+                "is_manual": is_manual,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+            }
+        )

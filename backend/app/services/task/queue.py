@@ -29,6 +29,7 @@ from typing import Any
 
 from app.agent import extract_task_fields
 from app.db import SessionLocal
+from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
@@ -137,6 +138,8 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
 
         session.commit()
         await schedule_task(session, task)
+        publish_task(session, task.id)
+        publish_input(session, raw_input_id)
 
 
 def _mark_failed(raw_input_id: uuid.UUID) -> None:
@@ -161,5 +164,6 @@ def _mark_failed(raw_input_id: uuid.UUID) -> None:
                 trace["manual_override"] = {"outcome": "task_creation_failed"}
             raw.agent_trace = trace
             session.commit()
+            publish_input(session, raw_input_id)
     except Exception:  # noqa: BLE001
         log.exception("failed to mark raw_input failed id=%s", raw_input_id)

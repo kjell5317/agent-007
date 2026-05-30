@@ -22,6 +22,7 @@ its job" and "the agent decides what happens next".
 from __future__ import annotations
 
 import logging
+import uuid
 
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,7 @@ from app.agent import process_raw_input
 from app.db.clients import raw_inputs
 from app.db.models.raw_input import RawInput
 from app.db.schemas.raw_input import RawInputCreate
+from app.events import publish_input, publish_task
 from app.services.input.embedding import candidate_query_text, embed
 from app.services.notify import notify_error
 
@@ -91,6 +93,10 @@ async def drain(source, session: Session) -> dict:
                     outcome,
                     trace.get("task_id") or trace.get("existing_task_id") or "—",
                 )
+                publish_input(session, raw.id)
+                affected_task = trace.get("task_id") or trace.get("existing_task_id")
+                if affected_task:
+                    publish_task(session, uuid.UUID(str(affected_task)))
             except Exception as exc:  # noqa: BLE001 — best-effort batch processing
                 summary["errors"].append(
                     {"external_id": envelope.external_id, "error": str(exc)}

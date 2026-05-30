@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
+from app.events import publish_input, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.notify import clear_task_notification
 
@@ -32,6 +33,7 @@ async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     # away via no_change override, etc.) skip this — the deletion below
     # is enough to make them disappear.
     latest = raw_inputs_store.latest_for_task(session, task_id)
+    latest_id = latest.id if latest is not None else None
     if latest is not None:
         latest.status = "not_task"
         latest.processed_at = datetime.now(timezone.utc)
@@ -42,3 +44,6 @@ async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     # clears in one statement.
     session.delete(task)
     session.commit()
+    publish_task_removed(task_id)
+    if latest_id is not None:
+        publish_input(session, latest_id)

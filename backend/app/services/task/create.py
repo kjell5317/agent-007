@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db.models.raw_input import RawInput
+from app.events import publish_input
 from app.services.task.queue import enqueue
 
 
@@ -41,5 +42,6 @@ async def create_manual_task(session: Session, user_fields: dict[str, Any]) -> R
     session.commit()
     session.refresh(raw)
 
+    publish_input(session, raw.id)
     await enqueue(raw.id, user_fields)
     return raw

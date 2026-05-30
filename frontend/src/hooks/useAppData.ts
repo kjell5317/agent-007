@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { subscribeEvents } from "@/lib/events";
 import type { RawInput, Task } from "@/lib/types";
 
 const INPUTS_PAGE_SIZE = 20;
-// Multi-device sync: refetch while the tab is visible. 20s is a compromise
-// between "another device's edit shows up quickly" and "we don't hammer the
-// API". When the tab is hidden we stop polling; when it becomes visible we
-// fire one immediate refresh and resume the interval.
-const POLL_INTERVAL_MS = 20_000;
 
 export interface AppData {
   tasks: Task[];
@@ -16,6 +12,21 @@ export interface AppData {
   refresh: () => Promise<void>;
   loadMoreInputs: () => Promise<void>;
   hasMoreInputs: boolean;
+}
+
+// Server lists are ordered newest-first (tasks by created_at, inputs by
+// received_at). Live upserts re-sort to match so a pushed row lands where a
+// refetch would have put it. ISO-8601 strings sort lexicographically by time.
+function upsertTask(list: Task[], task: Task): Task[] {
+  const rest = list.filter((t) => t.id !== task.id);
+  // The hook only holds *open* tasks; a non-open push means it left the list.
+  if (task.status !== "open") return rest;
+  return [...rest, task].sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+function upsertInput(list: RawInput[], input: RawInput): RawInput[] {
+  const rest = list.filter((r) => r.id !== input.id);
+  return [...rest, input].sort((a, b) => b.received_at.localeCompare(a.received_at));
 }
 
 export function useAppData(): AppData {
@@ -50,14 +61,29 @@ export function useAppData(): AppData {
     refresh();
   }, [refresh]);
 
-  // Multi-device sync. Strategy:
-  //   1. Periodic poll while the document is visible.
-  //   2. Immediate refresh on focus / visibilitychange-to-visible — gives a
-  //      crisp "I unlocked my phone, show me the latest" feel.
-  // We track in-flight requests with a ref so overlapping refreshes from
-  // the timer + a focus event don't double-fire.
+  // Live updates over the shared SSE stream replace periodic polling: the
+  // backend pushes the full Task / RawInput on every mutation and we patch
+  // state in place. EventSource reconnects on its own after a drop; the
+  // focus/visibility refetch below closes any gap of events missed while
+  // disconnected (and gives the "I just unlocked my phone" instant refresh).
   useEffect(() => {
-    let timer: number | null = null;
+    const unsubscribe = subscribeEvents((event) => {
+      switch (event.type) {
+        case "task":
+          setTasks((prev) => upsertTask(prev, event.data));
+          break;
+        case "task_removed":
+          setTasks((prev) => prev.filter((t) => t.id !== event.id));
+          break;
+        case "input":
+          setInputs((prev) => upsertInput(prev, event.data));
+          break;
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     let inFlight = false;
 
@@ -67,43 +93,23 @@ export function useAppData(): AppData {
       try {
         await refresh();
       } catch {
-        // Swallow — periodic refresh failures shouldn't toast or surface.
+        // Swallow — background refresh failures shouldn't toast or surface.
       } finally {
         inFlight = false;
       }
     };
 
-    const startTimer = () => {
-      if (timer !== null) return;
-      timer = window.setInterval(safeRefresh, POLL_INTERVAL_MS);
-    };
-    const stopTimer = () => {
-      if (timer === null) return;
-      window.clearInterval(timer);
-      timer = null;
-    };
-
     const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        safeRefresh();
-        startTimer();
-      } else {
-        stopTimer();
-      }
-    };
-    const onFocus = () => {
-      safeRefresh();
+      if (document.visibilityState === "visible") safeRefresh();
     };
 
-    if (document.visibilityState === "visible") startTimer();
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", onFocus);
+    window.addEventListener("focus", safeRefresh);
 
     return () => {
       cancelled = true;
-      stopTimer();
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", safeRefresh);
     };
   }, [refresh]);
 

@@ -1,7 +1,8 @@
 import { api } from "./api";
+import { subscribeEvents } from "./events";
+import type { RawInput } from "./types";
 
-const POLL_INTERVAL_MS = 1000;
-const POLL_TIMEOUT_MS = 120_000;
+const TIMEOUT_MS = 120_000;
 
 export interface PollHandle {
   cancel: () => void;
@@ -13,77 +14,79 @@ export interface PollCallbacks {
   onTimeout: () => void;
 }
 
+type Trace =
+  | { outcome?: string; manual_override?: { outcome?: string } }
+  | null
+  | undefined;
+
+function terminal(input: Pick<RawInput, "task_id" | "agent_trace">):
+  | "success"
+  | "failure"
+  | null {
+  if (input.task_id) return "success";
+  const trace = input.agent_trace as Trace;
+  const failed =
+    trace?.outcome === "task_creation_failed" ||
+    trace?.manual_override?.outcome === "task_creation_failed";
+  return failed ? "failure" : null;
+}
+
 /**
- * Poll a raw_input until the task-creation worker is done.
+ * Resolve when the task-creation worker finishes a given raw_input.
  *
  * Works for both flows that enqueue on the task-creation queue:
  *   - POST /tasks               (fresh manual create)
  *   - POST /tasks/open/{id}     (manual override of an existing input)
  *
- * Completion is detected by:
- *   - `task_id` becomes non-null              → success
- *   - `agent_trace.outcome` === "task_creation_failed"
- *     OR `agent_trace.manual_override.outcome` === "task_creation_failed"
+ * Driven by the shared SSE stream — the worker pushes the updated RawInput
+ * when it's done, so there's no polling. One immediate `getInput` covers the
+ * race where the worker finished between the POST returning and us
+ * subscribing. Completion:
+ *   - `task_id` set                          → success
+ *   - `agent_trace(.manual_override).outcome` === "task_creation_failed"
  *                                             → failure
  *
- * Callers MUST invoke `cancel()` on unmount, otherwise the in-flight
- * setTimeout keeps the closure alive past the component's lifecycle.
+ * Callers MUST invoke `cancel()` on unmount to drop the subscription.
  */
 export function pollTaskCreation(
   rawInputId: string,
   callbacks: PollCallbacks,
 ): PollHandle {
-  let cancelled = false;
+  let done = false;
+  let unsubscribe: (() => void) | null = null;
   let timeoutId: number | null = null;
-  const startedAt = Date.now();
 
-  const tick = async () => {
-    if (cancelled) return;
-    try {
-      const input = await api.getInput(rawInputId);
-      if (cancelled) return;
+  const finish = (run: () => void) => {
+    if (done) return;
+    done = true;
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
+    if (unsubscribe) unsubscribe();
+    run();
+  };
 
-      if (input.task_id) {
-        callbacks.onSuccess();
-        return;
-      }
+  const evaluate = (input: Pick<RawInput, "task_id" | "agent_trace">) => {
+    const state = terminal(input);
+    if (state === "success") finish(callbacks.onSuccess);
+    else if (state === "failure")
+      finish(() => callbacks.onFailure("Task creation failed"));
+  };
 
-      const trace = input.agent_trace as
-        | { outcome?: string; manual_override?: { outcome?: string } }
-        | null
-        | undefined;
-      const failed =
-        trace?.outcome === "task_creation_failed" ||
-        trace?.manual_override?.outcome === "task_creation_failed";
-      if (failed) {
-        callbacks.onFailure("Task creation failed");
-        return;
-      }
+  timeoutId = window.setTimeout(() => finish(callbacks.onTimeout), TIMEOUT_MS);
 
-      if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
-        callbacks.onTimeout();
-        return;
-      }
-
-      timeoutId = window.setTimeout(() => {
-        timeoutId = null;
-        void tick();
-      }, POLL_INTERVAL_MS);
-    } catch (err) {
-      if (cancelled) return;
-      callbacks.onFailure((err as Error).message);
+  unsubscribe = subscribeEvents((event) => {
+    if (event.type === "input" && event.data.id === rawInputId) {
+      evaluate(event.data);
     }
-  };
+  });
 
-  void tick();
+  // Catch the case where the worker already finished before we subscribed.
+  api
+    .getInput(rawInputId)
+    .then(evaluate)
+    .catch(() => {
+      // Ignore — the SSE stream is the primary signal; a failed one-shot
+      // check just means we wait for the push (or time out).
+    });
 
-  return {
-    cancel: () => {
-      cancelled = true;
-      if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    },
-  };
+  return { cancel: () => finish(() => {}) };
 }

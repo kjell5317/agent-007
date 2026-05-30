@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
+from app.events import publish_task
 from app.services.calendar import update_task_event
 from app.services.plan import update_task_to_calendar
 
@@ -54,4 +55,5 @@ async def update_task(
     else:
         await update_task_event(session, row, changed_fields=changed)
 
+    publish_task(session, task_id)
     return row
