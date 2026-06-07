@@ -172,12 +172,72 @@ NEW_INPUT_TOOLS = [
         },
     },
     {
+        "name": "find_calendar_events",
+        "description": (
+            "List events already on the user's primary calendar inside a time "
+            "window. Call this before `create_event` to check whether the event "
+            "the current input describes is already there, so you don't create a "
+            "duplicate. Non-terminal — you still need a terminal tool "
+            "(`create_task`, `mark_not_task`, or a duplicate action) to finish."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time_min": {
+                    "type": "string",
+                    "description": "ISO 8601 start of the search window (inclusive).",
+                },
+                "time_max": {
+                    "type": "string",
+                    "description": "ISO 8601 end of the search window (exclusive).",
+                },
+            },
+            "required": ["time_min", "time_max"],
+        },
+    },
+    {
         "name": "create_task",
         "description": "Persist a new task extracted from the current raw input.",
         "input_schema": {
             "type": "object",
             "properties": _CREATE_TASK_PROPS,
             "required": _CREATE_TASK_REQUIRED,
+        },
+    },
+    {
+        "name": "create_event",
+        "description": (
+            "Add an event to the user's primary calendar — use for invitations, "
+            "appointments, talks, or announcements the user should see on their "
+            "calendar but that are not themselves tasks. Check "
+            "`find_calendar_events` first so you don't duplicate an event that "
+            "already exists. Non-terminal: creating the event does NOT finish "
+            "the run. If attending requires no action from the user, follow up "
+            "with `mark_not_task`; if it needs registration or preparation, also "
+            "call `create_task` for that work."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "description": "Event title."},
+                "start": {
+                    "type": "string",
+                    "description": (
+                        "ISO 8601 start. Use the user's local zone unless the "
+                        "input names another."
+                    ),
+                },
+                "end": {
+                    "type": "string",
+                    "description": (
+                        "ISO 8601 end. If the input doesn't state one, omit it "
+                        "and a default duration is applied."
+                    ),
+                },
+                "description": {"type": "string"},
+                "location": {"type": "string"},
+            },
+            "required": ["summary", "start"],
         },
     },
     {

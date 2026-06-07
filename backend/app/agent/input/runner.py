@@ -27,6 +27,7 @@ from app.agent.helpers.llm import (
     create_message,
 )
 from app.agent.helpers.dispatch import apply_task_action
+from app.agent.tools.calendar_lookup import run_create_event, run_find_calendar_events
 from app.agent.tools.notes_lookup import run_search_notes
 from app.agent.helpers.text import append_meta_lines, now_iso, parse_iso, task_field_lines
 from app.agent.tools import NEW_INPUT_TOOLS
@@ -109,15 +110,36 @@ async def run_new_input_agent(
         terminal_uses = [b for b in all_tool_uses if b.name in TERMINAL_TOOLS]
         non_terminal_uses = [b for b in all_tool_uses if b.name not in TERMINAL_TOOLS]
 
-        # Handle non-terminal tools (search_notes) by appending tool_results
-        # and continuing the loop. If the same response also contains a
-        # terminal tool, we still let that win below — the agent can do both
-        # in one turn.
-        if non_terminal_uses and not terminal_uses:
+        # Run non-terminal tools (lookups + event creation). Their results feed
+        # the next decision, so we run them whether or not a terminal tool rode
+        # along in the same response — a `create_event` emitted next to
+        # `mark_not_task` must still take effect. When no terminal tool is
+        # present we feed the results back and loop; when one is present we fall
+        # through to handle it (the run ends, so no further API call is made and
+        # the tool_results don't need to be appended).
+        if non_terminal_uses:
             results = []
             for tu in non_terminal_uses:
+                tin = tu.input or {}
                 if tu.name == "search_notes":
-                    out = await run_search_notes(session, str((tu.input or {}).get("query") or ""))
+                    out = await run_search_notes(session, str(tin.get("query") or ""))
+                elif tu.name == "find_calendar_events":
+                    out = await run_find_calendar_events(
+                        session,
+                        str(tin.get("time_min") or ""),
+                        str(tin.get("time_max") or ""),
+                    )
+                elif tu.name == "create_event":
+                    out, event_id = await run_create_event(
+                        session,
+                        summary=str(tin.get("summary") or ""),
+                        start=str(tin.get("start") or ""),
+                        end=str(tin.get("end")) if tin.get("end") else None,
+                        description=str(tin.get("description")) if tin.get("description") else None,
+                        location=str(tin.get("location")) if tin.get("location") else None,
+                    )
+                    if event_id:
+                        trace.setdefault("events_created", []).append(event_id)
                 else:
                     out = f"unknown tool: {tu.name}"
                 iter_log.setdefault("tool_results", []).append(
@@ -128,9 +150,10 @@ async def run_new_input_agent(
                     "tool_use_id": tu.id,
                     "content": out,
                 })
-            messages.append({"role": "assistant", "content": resp.content})
-            messages.append({"role": "user", "content": results})
-            continue
+            if not terminal_uses:
+                messages.append({"role": "assistant", "content": resp.content})
+                messages.append({"role": "user", "content": results})
+                continue
 
         if not terminal_uses:
             trace["outcome"] = trace["outcome"] or "no_tool_call"
@@ -216,6 +239,12 @@ async def run_new_input_agent(
         break
     if not done:
         trace["outcome"] = trace["outcome"] or "max_iterations"
+
+    # An input that only produced a calendar event (attending needs no action)
+    # finalizes as "event" rather than "not_task", which would misrepresent it.
+    # When a task was created or a duplicate handled, that record takes priority.
+    if trace.get("events_created") and final_status == "not_task":
+        final_status = "event"
 
     raw_inputs.finalize(
         session,

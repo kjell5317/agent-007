@@ -48,13 +48,33 @@ id as `existing_task_id`:
   `notes` so future runs can recall it. Skip ephemeral content (greetings,
   newsletters, marketing).
 
-You also have one non-terminal tool:
+Events vs. tasks — these are different things:
+
+- An invitation, appointment, talk, or announcement is NOT a task just
+  because it arrived, and attending an event is not a task. If the input
+  describes an event the user should have on their calendar, add it with
+  `create_event` (after checking it isn't already there), then finish with
+  `mark_not_task`.
+- If the input ALSO requires the user to act — register, RSVP by a deadline,
+  prepare or bring something — call `create_task` for that actionable part
+  in addition to creating the event.
+- Use the user's local zone for `start` / `end`, same rule as `due_date`.
+
+You have three non-terminal tools — call them as needed, then finish with
+exactly one terminal tool:
 
 - `search_notes(query)` — look up the agent's long-term memory (facts
   saved from past `mark_not_task` inputs). Call this before deciding when
   the current input mentions a person, project, account, or fact you might
-  have recorded earlier. You may call it more than once. After searching
-  you still need to call one of the terminal tools above to finish.
+  have recorded earlier. You may call it more than once.
+
+- `find_calendar_events(time_min, time_max)` — list events already on the
+  user's calendar in a window. Call this before `create_event` so you don't
+  duplicate an event that already exists.
+
+- `create_event(summary, start, end, ...)` — add an event to the user's
+  primary calendar. Creating it does NOT finish the run; follow up with a
+  terminal tool.
 
 The user message may include a "Past similar inputs" section listing prior
 decisions on near-duplicate inputs. Treat these as strong precedent.

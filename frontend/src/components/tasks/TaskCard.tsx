@@ -222,7 +222,7 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
                 >
                   <MapPin className="h-3 w-3" />
                   {task.location.length > 10
-                    ? `${String(task.location).charAt(1).toUpperCase() + String(task.location).slice(1, 10)}...`
+                    ? `${String(task.location).charAt(0).toUpperCase() + String(task.location).slice(1, 10)}...`
                     : String(task.location).charAt(0).toUpperCase() +
                       String(task.location).slice(1)}
                 </span>
@@ -358,4 +358,3 @@ function AiDoableDot({ value }: { value: AiDoable }) {
     />
   );
 }
-
