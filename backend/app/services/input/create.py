@@ -11,8 +11,8 @@ source. Two public functions:
   * `create_raw_input(session, envelope)` — single-envelope step:
     persist via `raw_inputs.create`, build the canonical embedding text,
     call `embed`, write the vector back. Exposed separately for future
-    callers (webhooks, manual submitters) that don't have a source
-    iterator but still want the same insert pipeline.
+    callers (e.g. manual submitters) that don't have a source iterator
+    but still want the same insert pipeline.
 
 The agent handoff is the section marked `=== Hand off to the agent ===`
 inside `drain` — that's the boundary between "the input service has done

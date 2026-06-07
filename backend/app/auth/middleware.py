@@ -26,7 +26,7 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_EXEMPT_PREFIXES = ("/auth/", "/notifications/", "/webhooks/")
+_EXEMPT_PREFIXES = ("/auth/", "/notifications/")
 _EXEMPT_PATHS = {"/health"}
 
 

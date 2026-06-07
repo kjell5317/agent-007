@@ -106,14 +106,6 @@ class Settings(BaseSettings):
     slack_oauth_redirect_uri: str = "http://localhost:8001/oauth/slack/callback"
     slack_bootstrap_days: int = 1
 
-    # WhatsApp Business (Meta Cloud API) — webhook-driven, no OAuth. The
-    # app secret verifies the X-Hub-Signature-256 on every inbound POST; the
-    # verify token is echoed back during Meta's GET subscription handshake.
-    # Both empty disables the integration (and skips signature verification
-    # in local dev — never leave app_secret empty in production).
-    whatsapp_app_secret: str = ""
-    whatsapp_verify_token: str = ""
-
 
 @lru_cache
 def get_settings() -> Settings:
