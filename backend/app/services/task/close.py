@@ -6,6 +6,7 @@ mirrored calendar event.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -15,12 +16,22 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.events import publish_input, publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.notify import clear_task_notification
+from app.services.points import award_for_task
+
+log = logging.getLogger(__name__)
 
 
 async def close_task(session: Session, task_id: uuid.UUID) -> None:
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
+    # Award completion points before any status flip / orphan delete, so we
+    # still have the task's estimation in hand. Idempotent per task and
+    # best-effort — never let points bookkeeping block closing a task.
+    try:
+        award_for_task(session, task)
+    except Exception:  # noqa: BLE001
+        log.exception("points award failed · task=%s", task_id)
     latest = raw_inputs_store.latest_for_task(session, task_id)
     if latest is not None:
         latest.status = "closed"

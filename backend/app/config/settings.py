@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # Labels
     labels_config_path: str = "config/labels.toml"
 
+    # Points actions + task-completion factor (see app.points)
+    points_config_path: str = "config/points.yaml"
+
     # Write calendar
     google_calendar_id: str = "primary"
     google_calendar_default_event_minutes: int = 30

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { PointsPanel } from "@/components/points/PointsPanel";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -100,7 +101,7 @@ export function App() {
       <Topbar onSynced={onSyncedAndRefreshUnread} />
       <main className="mx-auto max-w-2xl px-4 py-4">
         <Tabs defaultValue="tasks" onValueChange={onTabChange}>
-          <TabsList className="mb-4 grid w-full grid-cols-2">
+          <TabsList className="mb-4 grid w-full grid-cols-3">
             <TabsTrigger value="tasks">
               Tasks
               {tasks.length > 0 && (
@@ -122,6 +123,7 @@ export function App() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="points">Points</TabsTrigger>
           </TabsList>
           <TabsContent value="tasks">
             <TasksPanel
@@ -138,6 +140,9 @@ export function App() {
               hasMore={hasMoreInputs}
               seenAfter={seenInboxAt}
             />
+          </TabsContent>
+          <TabsContent value="points">
+            <PointsPanel />
           </TabsContent>
         </Tabs>
       </main>

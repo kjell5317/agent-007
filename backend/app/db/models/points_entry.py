@@ -1,0 +1,32 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, Float, String, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db import Base
+
+
+class PointsEntry(Base):
+    """One points-earning event — an action submission or a completed task.
+
+    The current total is `SUM(amount)`. `task_id` is set for task-completion
+    awards (no FK — the task row can be deleted on close) and lets us award
+    each task at most once, so a reopen→close cycle doesn't double-count.
+    """
+
+    __tablename__ = "points_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    source: Mapped[str] = mapped_column(String(16))  # "action" | "task"
+    section: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    action_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+
+    factor: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float] = mapped_column(Float)
+    amount: Mapped[float] = mapped_column(Float)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
