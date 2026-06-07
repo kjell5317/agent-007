@@ -50,12 +50,13 @@ def submit_action(session: Session, *, section: str, name: str, quantity: float 
 def award_for_task(session: Session, task) -> None:
     """Award `task_done_factor × estimated minutes` for a completed task.
 
-    No-op when the factor is unset, the task has no estimation, or the task
-    was already awarded (so a reopen→close cycle doesn't double-count).
+    No-op when the factor is 0 (disabled), the task has no estimation, or the
+    task was already awarded (so a reopen→close cycle doesn't double-count). A
+    negative factor is allowed and subtracts points on completion.
     """
     factor = load_points_config().task_done_factor
     minutes = task.estimation or 0
-    if factor <= 0 or minutes <= 0:
+    if factor == 0 or minutes <= 0:
         return
     if points_store.has_task_entry(session, task.id):
         return

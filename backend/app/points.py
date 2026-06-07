@@ -81,7 +81,9 @@ def _parse_actions(section: str, raw: object) -> list[PointAction]:
             continue
         name = str(body.get("name") or "").strip()
         factor = _coerce_factor(body.get("factor"))
-        if not name or factor <= 0:
+        # Negative factors are allowed (an action that costs points, e.g.
+        # "Sweets"); only a missing name or a zero/unparseable factor is invalid.
+        if not name or factor == 0:
             log.warning("points action in %r missing name or valid factor — skipped", section)
             continue
         unit = str(body.get("unit") or "").strip() or None

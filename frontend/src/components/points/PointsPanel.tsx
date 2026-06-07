@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { PointAction, PointsData } from "@/lib/types";
 
 function formatPoints(n: number): string {
@@ -124,7 +125,9 @@ function ActionRow({
       });
       const gained = action.factor * (hasUnit ? (quantity as number) : 1);
       onTotal(res.total);
-      toast.success(`+${formatPoints(gained)} · ${action.name}`);
+      // formatPoints already carries the minus for negatives; only add a plus.
+      const sign = gained >= 0 ? "+" : "";
+      toast.success(`${sign}${formatPoints(gained)} · ${action.name}`);
     } catch (err) {
       toast.error(`Failed: ${(err as Error).message}`);
     } finally {
@@ -136,7 +139,12 @@ function ActionRow({
     <Card className="flex items-center gap-3 p-3">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{action.name}</div>
-        <div className="text-xs text-muted-foreground">
+        <div
+          className={cn(
+            "text-xs",
+            action.factor < 0 ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
           ×{formatPoints(action.factor)}
           {hasUnit ? ` per ${action.unit}` : ""}
         </div>
