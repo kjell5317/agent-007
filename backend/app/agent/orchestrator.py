@@ -107,55 +107,61 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
             k=SIMILAR_K,
         )
 
-    if not_task_hits and not_task_hits[0].similarity >= auto_threshold:
-        top = not_task_hits[0]
-        reason = (top.agent_trace or {}).get("reason") or "matched earlier not_task input"
-        trace = {
-            "outcome": "not_task",
-            "auto_decided": True,
-            "precedent_id": str(top.id),
-            "precedent_similarity": round(top.similarity, 4),
-            "reason": reason,
-        }
-        log.info(
-            "branch=auto_not_task · raw=%s precedent=%s sim=%.3f (threshold=%.2f)",
-            raw_input_id, top.id, top.similarity, auto_threshold,
-        )
-        raw_inputs.finalize(session, raw_input_id, status="not_task", agent_trace=trace)
-        session.commit()
-        return trace
+    # Auto-decide against the strongest precedent over the threshold. The
+    # not_task and open(=duplicate) candidates compete on similarity — the
+    # higher one wins, rather than not_task always taking precedence. Open
+    # wins exact ties: acting on an existing task is safer than silently
+    # dropping the input as not-a-task.
+    top_not_task = not_task_hits[0].similarity if not_task_hits else 0.0
+    top_open = (
+        open_hits[0].similarity if open_hits and open_hits[0].task_id else 0.0
+    )
 
-    if open_hits and open_hits[0].similarity >= auto_threshold and open_hits[0].task_id:
-        top = open_hits[0]
-        # A near-identical input to one we already linked to an open task is
-        # almost always the same message arriving again / from another source.
-        # It carries no new information, so the outcome is `no_change`: record
-        # the duplicate link, touch nothing on the task.
-        trace = {
-            "outcome": "no_change",
-            "auto_decided": True,
-            "precedent_id": str(top.id),
-            "precedent_similarity": round(top.similarity, 4),
-            "existing_task_id": str(top.task_id),
-        }
-        log.info(
-            "branch=auto_duplicate · raw=%s precedent=%s sim=%.3f task=%s",
-            raw_input_id, top.id, top.similarity, top.task_id,
-        )
-        raw_inputs.finalize(
-            session,
-            raw_input_id,
-            status="duplicate",
-            task_id=top.task_id,
-            agent_trace=trace,
-        )
+    if max(top_not_task, top_open) >= auto_threshold:
+        if top_open >= top_not_task:
+            top = open_hits[0]
+            # A near-identical input to one we already linked to an open task is
+            # almost always the same message arriving again / from another
+            # source. It carries no new information, so the outcome is
+            # `no_change`: record the duplicate link, touch nothing on the task.
+            trace = {
+                "outcome": "no_change",
+                "auto_decided": True,
+                "precedent_id": str(top.id),
+                "precedent_similarity": round(top.similarity, 4),
+                "existing_task_id": str(top.task_id),
+            }
+            log.info(
+                "branch=auto_duplicate · raw=%s precedent=%s sim=%.3f task=%s",
+                raw_input_id, top.id, top.similarity, top.task_id,
+            )
+            raw_inputs.finalize(
+                session,
+                raw_input_id,
+                status="duplicate",
+                task_id=top.task_id,
+                agent_trace=trace,
+            )
+        else:
+            top = not_task_hits[0]
+            reason = (top.agent_trace or {}).get("reason") or "matched earlier not_task input"
+            trace = {
+                "outcome": "not_task",
+                "auto_decided": True,
+                "precedent_id": str(top.id),
+                "precedent_similarity": round(top.similarity, 4),
+                "reason": reason,
+            }
+            log.info(
+                "branch=auto_not_task · raw=%s precedent=%s sim=%.3f (threshold=%.2f)",
+                raw_input_id, top.id, top.similarity, auto_threshold,
+            )
+            raw_inputs.finalize(session, raw_input_id, status="not_task", agent_trace=trace)
         session.commit()
         return trace
 
     # No auto-decide path matched.
     if open_hits or not_task_hits:
-        top_not_task = not_task_hits[0].similarity if not_task_hits else 0.0
-        top_open = open_hits[0].similarity if open_hits else 0.0
         log.debug(
             "auto-decide miss · raw=%s top_not_task=%.3f top_open=%.3f threshold=%.2f",
             raw_input_id, top_not_task, top_open, auto_threshold,
