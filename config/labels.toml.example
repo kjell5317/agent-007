@@ -1,0 +1,33 @@
+# Task labels.
+#
+# Every task the agent extracts gets exactly one label from this file. The
+# label drives two things:
+#   * the short description below is shown to the agent so it can pick a fit
+#   * the color is the Google Calendar event colorId used when the task is
+#     mirrored to Calendar
+#
+# Google Calendar colorIds (event-scope) are 1..11:
+#   1=Lavender 2=Sage 3=Grape 4=Flamingo 5=Banana 6=Tangerine
+#   7=Peacock 8=Graphite 9=Blueberry 10=Basil 11=Tomato
+#
+# If the agent cannot find any label that plausibly fits a new input, that
+# is itself a signal the input is unlikely to apply to the user — the agent
+# is instructed to call `mark_not_task` in that case rather than guess.
+#
+# Replace the examples below with your own labels.
+
+[labels.Work]
+description = "anything related to your job or main occupation"
+color = "9"
+
+[labels.Personal]
+description = "errands and todos you're doing for yourself"
+color = "1"
+
+[labels.Social]
+description = "family and friend activities, going out, community events"
+color = "3"
+
+[labels.Health]
+description = "doctors appointments or corresponding todos"
+color = "7"

@@ -33,6 +33,11 @@ services:
       DATABASE_URL: postgresql+psycopg://taskagent:taskagent@postgres:5432/taskagent
       APP_HOST: 0.0.0.0
       APP_PORT: "8001"
+    # labels.toml / points.yaml are personal and git-ignored, so they aren't
+    # baked into the published image. Mount them from the host at runtime
+    # (copy from the config/*.example templates first).
+    volumes:
+      - ./config:/app/config:ro
     depends_on:
       postgres:
         condition: service_healthy
