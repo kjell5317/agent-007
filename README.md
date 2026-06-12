@@ -1,51 +1,163 @@
-# task-agent
+# Task Agent
 
-Personal task-extraction agent over semi-structured inputs.
+A personal task-extraction agent. It watches your message sources (Gmail,
+Slack), uses Claude to decide whether each message is actually a task **for
+you**, and — when it is — extracts a structured task, files it without
+creating duplicates, and mirrors it to your calendar.
+
+It's built for a single user (me), but the architecture is deliberately
+source-agnostic: adding a new input source or OAuth provider is a single
+self-registering file, with no changes to the agent, storage, or API.
+
+> **Heads up:** this is a personal project shared for reference. There's no
+> multi-tenant auth, and it expects you to bring your own API keys. See
+> [Configuration](#configuration).
+
+## What it does
+
+- **Multi-source ingestion** — pulls messages from Gmail and Slack over OAuth,
+  normalizing every source into one internal envelope before anything
+  source-specific can leak downstream.
+- **Task vs. noise, decided by Claude** — the agent reads an input plus
+  similar past inputs and decides `task` / `not a task` / `duplicate`. For real
+  tasks it extracts a title, label, due date, time estimate, how much of it is
+  AI-doable (0–1), and a confidence score.
+- **Semantic de-duplication** — inputs and tasks are embedded (Gemini) and
+  compared with pgvector cosine similarity, so the same request arriving twice
+  doesn't become two tasks. High-similarity inputs can reuse a past decision
+  without spending an LLM call.
+- **Calendar mirroring** — extracted tasks become Google Calendar events,
+  color-coded by label.
+- **Commute planning** — events with a location get weather-aware travel time
+  blocked out, and rescheduling when an edit creates an overlap.
+- **Gamification** — a configurable points system for habits and completed
+  tasks.
+- **Push notifications** — errors and updates are pushed via a Home Assistant
+  notify service (nothing fails silently).
+- **Web UI** — a React/Vite single-page app for the inbox, tasks, and points.
 
 ## Architecture
 
-```md
-[Sources]  →  [Ingestion]  →  [Queue]  →  [Agent]  →  [Storage]  →  [API]
- (TBD)        FastAPI         RQ +        Claude       Postgres     FastAPI
-                              Redis      + tools     + pgvector     REST
+```text
+[Sources]  →  [Ingestion]  →  [Agent]      →  [Storage]    →  [API + SPA]
+ Gmail         normalize       Claude           Postgres        FastAPI
+ Slack         to RawInput     + tools          + pgvector      React/Vite
+                               (in-proc queue)
 ```
 
-Layout:
+- Every source normalizes into a `RawInput` envelope at the ingestion boundary.
+- Sources and OAuth providers self-register via `@register_source` /
+  `@register_provider` decorators; a side-effect import in
+  [`main.py`](backend/app/main.py) is all that wires one in.
+- All DB access lives in `app.db.clients`; routers stay thin and the agent
+  runner and API call the same storage functions.
+- Tools the agent may call are declared with explicit JSON schemas in
+  [`agent/tools/`](backend/app/agent/tools/); the runner dispatches by name.
+- A background asyncio worker processes inputs; a small cron loop handles
+  polling, calendar discovery, and the weather/commute refresh.
 
-| Path                  | Purpose                                                       |
-|-----------------------|---------------------------------------------------------------|
-| `src/app/config.py`   | Settings (`pydantic-settings`)                                |
-| `src/app/db.py`       | SQLAlchemy engine + session                                   |
-| `src/app/models/`     | ORM models: `Task`, `RawInput`, `Feedback`, `OAuthToken`      |
-| `src/app/schemas/`    | Pydantic DTOs for the API                                     |
-| `src/app/api/`        | FastAPI routers: tasks, inputs, feedback, oauth               |
-| `src/app/ingestion/`  | Generic source contract + registry (no source implemented)    |
-| `src/app/auth/`       | Generic OAuth contract + registry + token encryption          |
-| `src/app/agent/`      | Claude runner + tool schemas + system prompt                  |
-| `src/app/queue/`      | RQ client + jobs + worker entry point                         |
-| `src/app/storage/`    | DB-facing CRUD + vector search (stubbed)                      |
-| `migrations/`         | Alembic                                                       |
+## Tech stack
 
-## Status
+Python 3.12 · FastAPI · SQLAlchemy 2 · Postgres + pgvector · Anthropic Claude
+(via the Claude Agent SDK) · Gemini embeddings · Authlib + httpx for OAuth ·
+React + Vite + Tailwind · Docker Compose + Caddy · Terraform (Hetzner +
+Cloudflare) for deployment.
 
-Skeleton only — every behavior is a `TODO`. The structure is generic so a
-specific source can be added without touching the agent, storage, or API.
-
-## First-run setup
+## Quick start (Docker)
 
 ```bash
-docker compose up -d                # Postgres (+pgvector) and Redis
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env                # then set TOKEN_ENCRYPTION_KEY and ANTHROPIC_API_KEY
-alembic revision --autogenerate -m "initial schema"   # after implementing models
-alembic upgrade head
-uvicorn app.main:app --reload
+git clone https://github.com/kjell5317/agent-007.git
+cd agent-007
+
+cp .env.example .env                         # then fill in the secrets below
+cp config/labels.toml.example config/labels.toml
+cp config/points.yaml.example config/points.yaml
+
+docker compose up -d --build                 # Postgres + app + Caddy
 ```
 
-## Adding a source
+Migrations run automatically on startup. The app is then reachable through
+Caddy (`https://localhost` by default). The API's OpenAPI docs live at
+`/docs`.
 
-1. Subclass `IngestionSource` under `src/app/ingestion/<name>.py`.
-2. Decorate with `@register_source("name")`.
-3. Import it from `app.main.create_app` so it registers at startup.
-4. If the source uses OAuth, also add a provider under `src/app/auth/<name>.py`.
+## Local development
+
+Requires [uv](https://docs.astral.sh/uv/) and Node.js.
+
+```bash
+scripts/setup.sh                # uv venv, Python + frontend deps, .env scaffold
+scripts/dev.sh                  # Postgres in Docker, migrations, backend (reload)
+cd frontend && npm run dev      # frontend, separate terminal
+```
+
+The backend serves on `http://127.0.0.1:8001`; the Vite dev server proxies to
+it. `scripts/dev.sh` seeds a `.env.dev` overlay (loaded after `.env`) for
+dev-only overrides like OAuth redirect URIs.
+
+## Configuration
+
+All secrets come from environment variables — see
+[`.env.example`](.env.example) for the full list and inline notes. The
+essentials:
+
+| Variable | Purpose |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Claude API access for the agent |
+| `GEMINI_API_KEY` | Embeddings for de-duplication |
+| `TOKEN_ENCRYPTION_KEY` | Fernet key — OAuth tokens are stored encrypted at rest |
+| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Gmail access + Google SSO login |
+| `SLACK_APPS` | Per-workspace Slack OAuth apps (JSON) |
+| `HOME_ADDRESS` | Origin/destination for commute planning |
+| `HOME_ASSISTANT_URL` / `_TOKEN` | Push notifications (optional) |
+| `AUTH_ALLOWED_EMAILS` / `SESSION_SECRET` | Google-SSO email allowlist for the UI |
+
+Runtime config that isn't secret lives in [`config/`](config/) — task
+`labels.toml` and the `points.yaml` scoring. These are personal and
+git-ignored; copy the `*.example` templates and edit. See
+[`config/README.md`](config/README.md).
+
+## Project structure
+
+```text
+backend/app/
+  api/            FastAPI routers (thin: validate → storage/agent → return)
+  agent/          Claude runners, prompts, tool schemas
+  auth/           OAuth contract + per-provider + token encryption
+  services/
+    input/        ingestion: source contract + Gmail/Slack subpackages
+    calendar/     Google Calendar sync
+    commute/      travel-time + weather planning
+    plan/         scheduling
+  db/             SQLAlchemy models, clients (CRUD + vector search), schemas
+  config/         pydantic-settings
+  cron.py         background polling / refresh loop
+migrations/       Alembic
+frontend/         React + Vite + Tailwind SPA
+terraform/        Hetzner + Cloudflare deployment
+```
+
+## Extending it
+
+**Add an input source:** create
+`backend/app/services/input/<name>/source.py`, subclass `IngestionSource`,
+decorate with `@register_source("name")`, and add a side-effect import to
+`main.py`. Keep any non-trivial parsing in a pure `preprocess.py` so it's
+unit-testable from fixtures.
+
+**Add an OAuth provider:** create `backend/app/auth/<name>.py`, subclass
+`OAuthProvider`, decorate with `@register_provider("name")`, implement
+`authorize_url` / `exchange_code` / `refresh` / `identify`, add config fields,
+and import it in `main.py`.
+
+## Deployment
+
+[`terraform/`](terraform/) provisions a Hetzner Cloud server with a Cloudflare
+DNS record, clones the repo, and runs the Docker Compose stack behind Caddy
+(automatic Let's Encrypt TLS when `APP_DOMAIN` is a real domain). You supply
+`.env` and the `config/` files out of band, the same way they're kept out of
+git.
+
+## License
+
+No license is granted — this is a personal project published for reference.
+If you'd like to reuse part of it, open an issue.
