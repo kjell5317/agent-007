@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
+import { toYaml } from "@/lib/format";
 import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
@@ -172,7 +173,7 @@ export function InputBody({ data }: { data: RawInput }) {
             metadata
           </summary>
           <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
-            {JSON.stringify(data.source_metadata, null, 2)}
+            {toYaml(data.source_metadata)}
           </pre>
         </details>
       )}
@@ -192,7 +193,7 @@ export function InputBody({ data }: { data: RawInput }) {
             agent trace
           </summary>
           <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
-            {JSON.stringify(data.agent_trace, null, 2)}
+            {toYaml(data.agent_trace)}
           </pre>
         </details>
       )}
