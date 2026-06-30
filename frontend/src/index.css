@@ -40,3 +40,22 @@
     overscroll-behavior-y: contain;
   }
 }
+
+/* Points celebration: a quick scale "pop" on the score plus a floating
+   delta that rises and fades when the total changes. */
+@keyframes points-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+@keyframes points-float {
+  0% { transform: translate(-50%, 2px); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(-50%, -18px); opacity: 0; }
+}
+.animate-points-pop { animation: points-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.animate-points-float { animation: points-float 0.9s ease-out forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-points-pop, .animate-points-float { animation: none; }
+}

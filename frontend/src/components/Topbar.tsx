@@ -22,12 +22,31 @@ function formatPoints(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
+// Minimal invented points glyph — a four-point sparkle.
+function PointsIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+      className={className}
+    >
+      <path d="M12 2c.5 5.5 4 9 9.5 10C16 13 12.5 16.5 12 22c-.5-5.5-4-9-9.5-10C8 11 11.5 7.5 12 2Z" />
+    </svg>
+  );
+}
+
 export function Topbar() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
   const [points, setPoints] = useState<number | null>(null);
   const [pointsOpen, setPointsOpen] = useState(false);
+  // A short-lived "+N / −N" burst keyed by a counter so each change replays
+  // the float + pop animation even when the same delta repeats.
+  const [flash, setFlash] = useState<{ key: number; delta: number } | null>(null);
+  const prevPoints = useRef<number | null>(null);
+  const flashSeq = useRef(0);
 
   useEffect(() => {
     api
@@ -44,15 +63,25 @@ export function Topbar() {
       .catch(() => setAutoPoll(null));
     api
       .getPoints()
-      .then((r) => setPoints(r.total))
+      .then((r) => {
+        setPoints(r.total);
+        prevPoints.current = r.total;
+      })
       .catch(() => setPoints(null));
   }, []);
 
   // Live points: the backend pushes a `points` event whenever the total
-  // changes (task crossed off, manual adjust, Home Assistant).
+  // changes (task crossed off, manual adjust, Home Assistant). Animate the
+  // difference, but never on the very first value we learn.
   useEffect(() => {
     return subscribeEvents((event) => {
-      if (event.type === "points") setPoints(event.total);
+      if (event.type !== "points") return;
+      const prev = prevPoints.current;
+      prevPoints.current = event.total;
+      setPoints(event.total);
+      if (prev != null && event.total !== prev) {
+        setFlash({ key: ++flashSeq.current, delta: event.total - prev });
+      }
     });
   }, []);
 
@@ -94,15 +123,36 @@ export function Topbar() {
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
         {points != null && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setPointsOpen(true)}
-            className="tabular-nums"
-            title="Adjust points"
-          >
-            {formatPoints(points)} pts
-          </Button>
+          <div className="relative">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPointsOpen(true)}
+              className="gap-1.5 tabular-nums"
+              title="Adjust points"
+            >
+              <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
+              <span
+                key={flash?.key ?? "idle"}
+                className={cn("inline-block", flash && "animate-points-pop")}
+              >
+                {formatPoints(points)}
+              </span>
+            </Button>
+            {flash && (
+              <span
+                key={flash.key}
+                onAnimationEnd={() => setFlash(null)}
+                className={cn(
+                  "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
+                  flash.delta >= 0 ? "text-emerald-500" : "text-destructive",
+                )}
+              >
+                {flash.delta >= 0 ? "+" : "−"}
+                {formatPoints(Math.abs(flash.delta))}
+              </span>
+            )}
+          </div>
         )}
         {email && (
           <AccountMenu
