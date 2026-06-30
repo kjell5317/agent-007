@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.auth import get_provider
+from app.auth.google_tokens import (
+    GoogleReauthorizationRequired,
+    GoogleTokenMissing,
+    get_fresh_google_token,
+)
 from app.db.clients import oauth_tokens
 from app.services.input.create import drain
 from app.services.input.gmail.source import GmailSource
@@ -30,27 +34,12 @@ def _empty(setup_error: str) -> dict:
 
 
 async def poll(session: Session, account_key: str | None) -> dict:
-    token = oauth_tokens.get_decrypted(session, provider="google", account_key=account_key)
-    if token is None:
+    try:
+        token = await get_fresh_google_token(session, account_key=account_key)
+    except GoogleReauthorizationRequired:
+        return _empty("Gmail access token expired; re-authorize")
+    except GoogleTokenMissing:
         return _empty("no Google account connected")
-
-    if token.is_expired:
-        if not token.refresh_token:
-            return _empty("Gmail access token expired; re-authorize")
-        provider = get_provider("google")()
-        bundle = await provider.refresh(token.refresh_token)
-        oauth_tokens.upsert(
-            session,
-            provider="google",
-            account_key=token.account_key,
-            bundle=bundle,
-            extra_merge=token.extra,
-        )
-        session.commit()
-        token = oauth_tokens.get_decrypted(
-            session, provider="google", account_key=token.account_key
-        )
-        assert token is not None
 
     history_id = (token.extra or {}).get("history_id")
     log.debug(
