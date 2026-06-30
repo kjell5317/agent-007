@@ -104,6 +104,10 @@ async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
         "type": "tool",
         "name": "search_notes",
     }
+    # System message carries the ephemeral cache breakpoint so Anthropic caches
+    # the tools → system prefix across iterations and runs.
+    system_message = captured["messages"][0]
+    assert system_message.meta["cache_control"] == {"type": "ephemeral"}
     assert captured["tools"][0].name == "search_notes"
     assert captured["tools"][0].parameters["required"] == ["query"]
     assert response.text == "checking"

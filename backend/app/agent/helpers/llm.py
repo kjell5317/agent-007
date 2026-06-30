@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Literal
 
 from haystack.dataclasses import ChatMessage, ToolCall as HaystackToolCall
@@ -18,6 +19,13 @@ log = logging.getLogger(__name__)
 MAX_TOOL_ITERATIONS = 3
 MAX_TOKENS = 1024
 TEMPERATURE = 0.4
+
+# Anthropic caches the tools → system prefix up to the first cache breakpoint,
+# so a single ephemeral marker on the system message covers both the tool
+# schemas and the system prompt — the bulk of every call, re-sent each
+# iteration and across runs. Below the model's minimum cacheable size it's a
+# silent no-op, so it's safe to always set.
+CACHE_CONTROL = {"type": "ephemeral"}
 
 TERMINAL_TOOLS = frozenset({
     "create_task", "mark_not_task",
@@ -122,11 +130,15 @@ def _build_generator(settings: Settings):
     if provider == "anthropic":
         if not settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is required for LLM_PROVIDER=anthropic")
-        return AnthropicChatGenerator(
-            api_key=Secret.from_token(settings.anthropic_api_key),
-            model=settings.effective_llm_model,
+        return _anthropic_generator(
+            settings.effective_llm_model, settings.anthropic_api_key
         )
     raise ValueError(f"Unsupported LLM_PROVIDER: {settings.llm_provider!r}")
+
+
+@lru_cache(maxsize=4)
+def _anthropic_generator(model: str, api_key: str) -> AnthropicChatGenerator:
+    return AnthropicChatGenerator(api_key=Secret.from_token(api_key), model=model)
 
 
 def _tool_choice(provider: str, tool_name: str) -> dict[str, Any]:
@@ -136,7 +148,7 @@ def _tool_choice(provider: str, tool_name: str) -> dict[str, Any]:
 
 
 def _to_haystack_messages(system_prompt: str, messages: list[LLMMessage]) -> list[ChatMessage]:
-    out = [ChatMessage.from_system(system_prompt)]
+    out = [ChatMessage.from_system(system_prompt, meta={"cache_control": CACHE_CONTROL})]
     out.extend(_to_haystack_message(message) for message in messages)
     return out
 

@@ -36,10 +36,9 @@ async def extract_task_fields(session: Session, raw, *, context_inputs=()) -> di
     group. When present, the agent sees the whole conversation (oldest first)
     and is told to produce ONE task capturing it.
 
-    Multi-step loop so the model can call `search_notes` (and any configured
-    MCP tools — those run server-side) before finalizing with `create_task`.
-    The last iteration forces `create_task` via tool_choice so we always end
-    with a populated payload."""
+    Multi-step loop so the model can call `search_notes` before finalizing
+    with `create_task`. The last iteration forces `create_task` via tool_choice
+    so we always end with a populated payload."""
     settings = get_settings()
 
     user_msg = _build_extract_message(raw, context_inputs)
