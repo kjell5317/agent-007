@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
 
 from app.db.models.raw_input import RawInput
@@ -137,24 +137,38 @@ def list_(
 ) -> list[tuple[Task, str]]:
     """Return tasks with their derived status.
 
-    If `status` is given, filter by the latest-raw_input status.
+    If `status` is given, filter by the latest-raw_input status. The filter
+    runs in SQL (not after `limit`) so `limit` bounds the matching rows — else
+    an early row could evict every open task out of the window.
     """
     display_date = func.coalesce(Task.scheduled_date, Task.due_date)
-    stmt = (
-        select(Task)
-        .order_by(
-            display_date.is_(None),
-            display_date.asc(),
-            Task.created_at.desc(),
+    stmt = select(Task)
+    if status is not None:
+        latest = (
+            select(
+                RawInput.task_id.label("task_id"),
+                RawInput.status.label("status"),
+                func.row_number()
+                .over(
+                    partition_by=RawInput.task_id,
+                    order_by=RawInput.received_at.desc(),
+                )
+                .label("rn"),
+            )
+            .where(RawInput.status != "duplicate")
+            .subquery()
         )
-        .limit(limit)
-    )
+        stmt = stmt.outerjoin(
+            latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1)
+        ).where(func.coalesce(latest.c.status, "open") == status)
+    stmt = stmt.order_by(
+        display_date.is_(None),
+        display_date.asc(),
+        Task.created_at.desc(),
+    ).limit(limit)
     rows = list(session.execute(stmt).scalars())
     statuses = latest_status_for(session, [r.id for r in rows])
-    out = [(r, statuses.get(r.id, "open")) for r in rows]
-    if status is not None:
-        out = [t for t in out if t[1] == status]
-    return out
+    return [(r, statuses.get(r.id, "open")) for r in rows]
 
 
 def overdue_scheduled_open(
