@@ -4,11 +4,15 @@ Two contexts, two tool sets:
 
 * **New-input context** (raw_input has no matching thread): `create_task`,
   `mark_not_task`, and — when the input duplicates a candidate task — the
-  same `update_task` / `close_task` / `no_change` trio the thread context
-  uses, except here each carries `existing_task_id` to name the target.
+  same `update_task` / `no_change` pair the thread context uses, except here
+  each carries `existing_task_id` to name the target.
 
 * **Thread-follow-up context** (raw_input matches an existing task by thread_id):
-  `update_task`, `close_task`, `no_change` (target task is implicit).
+  `update_task`, `no_change` (target task is implicit).
+
+`update_task` carries an optional `status` (`open` / `closed`) so a single
+tool both edits fields and drives the lifecycle: close a task that's done, or
+reopen a closed one. `no_change` is genuinely inert — it touches nothing.
 
 All tools are terminal — the runner stops after the first tool call.
 
@@ -92,6 +96,16 @@ _UPDATE_TASK_PROPS: dict = {
     "description": {"type": "string"},
     "estimation": {"type": "integer"},
     "due_date": {"type": "string", "description": "ISO 8601 timestamp"},
+    "status": {
+        "type": "string",
+        "enum": ["open", "closed"],
+        "description": (
+            "Lifecycle change for the task. `closed` = the task is done or no "
+            "longer needed; `open` = reopen a task that was previously closed. "
+            "Omit to leave the current state unchanged. Can be combined with "
+            "field edits in the same call."
+        ),
+    },
     "location": {"type": "string"},
     "link": {
         "type": "string",
@@ -238,28 +252,14 @@ NEW_INPUT_TOOLS = [
     {
         "name": "update_task",
         "description": (
-            "The current input duplicates one of the CANDIDATE TASKS but adds new "
-            "information. Patch that task — include only the fields that change."
+            "The current input refers to one of the CANDIDATE TASKS and changes "
+            "it. Patch the fields that change and/or set `status` to drive the "
+            "lifecycle: `closed` when it's done or cancelled, `open` to reopen a "
+            "CLOSED candidate the input revives. Include only what changes."
         ),
         "input_schema": {
             "type": "object",
             "properties": {**_UPDATE_TASK_PROPS, "existing_task_id": _EXISTING_TASK_ID_SCHEMA},
-            "required": ["existing_task_id"],
-        },
-    },
-    {
-        "name": "close_task",
-        "description": (
-            "The current input duplicates one of the CANDIDATE TASKS and indicates "
-            "it is already done or no longer needed. Close that task."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "existing_task_id": _EXISTING_TASK_ID_SCHEMA,
-                "reason": {"type": "string"},
-                "confidence": _CONFIDENCE_SCHEMA,
-            },
             "required": ["existing_task_id"],
         },
     },
@@ -298,23 +298,14 @@ THREAD_FOLLOWUP_TOOLS = [
     {
         "name": "update_task",
         "description": (
-            "Apply patches to the existing task because the follow-up input adds "
-            "new information. Only include fields that should change."
+            "The follow-up changes the existing task. Patch the fields that "
+            "change and/or set `status`: `closed` when the follow-up indicates "
+            "completion or cancellation, `open` to reopen a task that was closed. "
+            "Include only what changes."
         ),
         "input_schema": {
             "type": "object",
             "properties": _UPDATE_TASK_PROPS,
-        },
-    },
-    {
-        "name": "close_task",
-        "description": "Mark the linked task as done; the follow-up indicates completion.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
-                "confidence": _CONFIDENCE_SCHEMA,
-            },
         },
     },
     {

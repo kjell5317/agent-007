@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, CirclePlus, RotateCcw, Trash2 } from "lucide
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { ActionButton, InputBody } from "@/components/inbox/InboxCard";
+import { ActionButton, InputBody, MetaDot } from "@/components/inbox/InboxCard";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
@@ -96,10 +96,12 @@ export function InboxGroup({ group, onChanged, seenAfter }: Props) {
               </div>
               <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Badge variant={badge}>{badge}</Badge>
-              <span className="truncate">{sendersLabel}</span>
-              <span>{fmtWhen(newest.received_at)}</span>
+              <span className="truncate font-medium">{sendersLabel}</span>
+              <MetaDot />
+              <span className="font-medium">{fmtWhen(newest.received_at)}</span>
+              <MetaDot />
               <span className="font-medium">{members.length} messages</span>
             </div>
           </div>

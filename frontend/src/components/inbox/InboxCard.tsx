@@ -96,10 +96,11 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
                 {title}
               </div>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Badge variant={label}>{label}</Badge>
-              <span className="truncate">{senderName(data)}</span>
-              <span>{when}</span>
+              <span className="truncate font-medium">{senderName(data)}</span>
+              <MetaDot />
+              <span className="font-medium">{when}</span>
             </div>
           </div>
         </div>
@@ -114,6 +115,15 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
         </Collapsible>
       </CardContent>
     </Card>
+  );
+}
+
+// Separator between meta labels — keeps the gaps legible.
+export function MetaDot() {
+  return (
+    <span aria-hidden className="text-muted-foreground/40">
+      ·
+    </span>
   );
 }
 

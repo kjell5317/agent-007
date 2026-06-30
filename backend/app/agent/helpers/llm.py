@@ -24,7 +24,7 @@ TEMPERATURE = 0.4
 
 TERMINAL_TOOLS = frozenset({
     "create_task", "mark_not_task",
-    "update_task", "close_task", "no_change",
+    "update_task", "no_change",
 })
 
 

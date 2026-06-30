@@ -2,7 +2,7 @@
 
 When a raw input arrives on a thread we've already linked to a task, we skip
 embedding + candidate search entirely and ask the LLM to pick one of:
-`update_task`, `close_task`, `no_change`.
+`update_task` (edit fields and/or change `status`) or `no_change`.
 """
 
 from __future__ import annotations
@@ -37,8 +37,6 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
 
     user_msg = _build_thread_user_message(raw, task)
     trace: dict[str, Any] = {"outcome": None, "branch": "thread_followup", "task_id": str(task.id)}
-    final_status = "open"
-    final_task_id = task.id
 
     messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
     log.info("llm call · branch=thread_followup raw=%s task=%s", raw.id, task.id)
@@ -66,10 +64,13 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
         tu = tool_uses[0]
         frag = await apply_task_action(session, task, tu.name, tu.input or {})
         trace.update(frag)
-        final_status = "closed" if frag["outcome"] == "closed" else "open"
 
+    # The follow-up references an existing task; its lifecycle state lives on
+    # that task's own anchor row, which close/reopen flip directly. Recording
+    # the follow-up as a `duplicate` keeps it out of status derivation, so a
+    # `no_change` (or a fields-only edit) never flips the task's state.
     raw_inputs.finalize(
-        session, raw.id, status=final_status, task_id=final_task_id, agent_trace=trace
+        session, raw.id, status="duplicate", task_id=task.id, agent_trace=trace
     )
     session.commit()
     return trace

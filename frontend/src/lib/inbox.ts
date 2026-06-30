@@ -15,8 +15,9 @@ export function senderName(data: RawInput): string {
   const from = typeof raw === "string" ? raw.trim() : "";
   if (from) {
     const m = from.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
-    if (m) return m[1].trim() || m[2].trim();
-    return from;
+    const name = m ? m[1].trim() || m[2].trim() : from;
+    // Drop a trailing parenthetical (e.g. Slack's "(workspace)" suffix).
+    return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
   }
   return data.source === "manual" ? "Manual" : data.source;
 }

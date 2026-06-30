@@ -12,9 +12,10 @@ Flow:
      b. Else if a past raw_input with status='open' (i.e. linked to an open
         task) is similar enough → auto mark this input duplicate of that task.
         Zero LLM calls.
-     c. Otherwise → run the new-input agent. One LLM call. Candidates include
-        similar past inputs against closed tasks (which usually means "create
-        a follow-up task") or no similarity at all.
+     c. Otherwise → run the new-input agent. One LLM call. It's handed the few
+        most-similar past items across all statuses (open/closed/not_task),
+        each tagged with its status, so it can act on a matching task or judge
+        the input against precedent.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from app.db.clients.raw_inputs import SimilarInput
 log = logging.getLogger(__name__)
 
 SIMILAR_K = 4
+# How many ranked candidates (across all statuses) the new-input agent sees.
+CANDIDATE_K = 5
 
 
 async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
@@ -168,9 +171,16 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         )
 
     # --- 4. Otherwise: new-input agent ---------------------------------------
-    return await run_new_input_agent(
-        session, raw, open_hits, closed_hits, not_task_hits, query_embedding
-    )
+    # Hand the agent the few most-similar past items regardless of status,
+    # each tagged with its status — rather than a fixed quota per status,
+    # which dilutes the strong hits with low-similarity noise from a status
+    # that doesn't matter here.
+    candidates = sorted(
+        [*open_hits, *closed_hits, *not_task_hits],
+        key=lambda h: h.similarity,
+        reverse=True,
+    )[:CANDIDATE_K]
+    return await run_new_input_agent(session, raw, candidates, query_embedding)
 
 
 def _thread_lookup_filters(meta: dict) -> dict[str, str]:

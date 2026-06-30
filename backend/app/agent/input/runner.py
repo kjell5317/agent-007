@@ -2,9 +2,9 @@
 
 Reached when the thread shortcut didn't apply and similarity-based auto
 precedents didn't fire (see `orchestrator.process_raw_input`). The agent is
-given the input plus three candidate sets — open tasks (possible
-duplicates), past not_task precedents, and closed-task precedents (signal
-to consider a follow-up).
+given the input plus the few most-similar past items, each tagged with its
+status: OPEN / CLOSED tasks are actionable candidates (`update_task` can edit
+fields and close/reopen them), while NOT_TASK items are precedent signals.
 """
 
 from __future__ import annotations
@@ -44,36 +44,39 @@ log = logging.getLogger(__name__)
 async def run_new_input_agent(
     session: Session,
     raw,
-    open_hits: list[SimilarInput],
-    closed_hits: list[SimilarInput],
-    not_task_hits: list[SimilarInput],
+    candidates: list[SimilarInput],
     query_embedding: list[float] | None,
 ) -> dict:
     settings = get_settings()
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-    # Open-task candidates: deduplicate by task_id; load fields for the prompt.
-    open_task_ids: list[uuid.UUID] = []
-    seen: set[uuid.UUID] = set()
-    for hit in open_hits:
-        if hit.task_id and hit.task_id not in seen:
-            seen.add(hit.task_id)
-            open_task_ids.append(hit.task_id)
+    # Split the ranked candidates: OPEN/CLOSED tasks are actionable (load their
+    # fields, dedup by task_id, keep similarity order), NOT_TASK items are
+    # precedent signals.
+    task_candidates: list[tuple[SimilarInput, Any]] = []
+    seen_tasks: set[uuid.UUID] = set()
+    for hit in candidates:
+        if hit.task_id and hit.status in ("open", "closed") and hit.task_id not in seen_tasks:
+            t = tasks.get(session, hit.task_id)
+            if t is not None:
+                seen_tasks.add(hit.task_id)
+                task_candidates.append((hit, t))
+    not_task_signals = [h for h in candidates if h.status == "not_task"]
 
-    open_tasks = [tasks.get(session, tid) for tid in open_task_ids]
-    open_tasks = [t for t in open_tasks if t is not None]
-
-    user_msg = _build_new_input_message(
-        raw, open_tasks, not_task_hits, closed_hits
-    )
+    user_msg = _build_new_input_message(raw, task_candidates, not_task_signals)
 
     trace: dict[str, Any] = {
         "outcome": None,
         "branch": "new_input",
         "embedded_query": query_embedding is not None,
-        "top_sim_open": round(open_hits[0].similarity, 4) if open_hits else None,
-        "top_sim_not_task": round(not_task_hits[0].similarity, 4) if not_task_hits else None,
-        "top_sim_closed": round(closed_hits[0].similarity, 4) if closed_hits else None,
+        "candidates": [
+            {
+                "status": h.status,
+                "task_id": str(h.task_id) if h.task_id else None,
+                "sim": round(h.similarity, 4),
+            }
+            for h in candidates
+        ],
         "iterations": [],
     }
     final_status = "not_task"
@@ -81,8 +84,8 @@ async def run_new_input_agent(
 
     messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
     log.info(
-        "llm call · branch=new_input raw=%s candidates=%d not_task_precedents=%d closed_precedents=%d",
-        raw.id, len(open_tasks), len(not_task_hits), len(closed_hits),
+        "llm call · branch=new_input raw=%s task_candidates=%d not_task_signals=%d",
+        raw.id, len(task_candidates), len(not_task_signals),
     )
 
     done = False
@@ -192,7 +195,7 @@ async def run_new_input_agent(
             await schedule_task(session, task)
             done = True
             break
-        if tu.name in ("no_change", "update_task", "close_task"):
+        if tu.name in ("no_change", "update_task"):
             # Duplicate-handling: act on the named candidate task. The current
             # input stays status="duplicate" linked to that task regardless of
             # the action — the action mutates the task's anchor row, not this one.
@@ -275,7 +278,9 @@ async def _save_notes(session, raw_input_id, raw_notes) -> list[str]:
 
 
 def _build_new_input_message(
-    raw, open_tasks, not_task_hits: list[SimilarInput], closed_hits: list[SimilarInput]
+    raw,
+    task_candidates: list[tuple[SimilarInput, Any]],
+    not_task_signals: list[SimilarInput],
 ) -> str:
     meta = raw.source_metadata or {}
     lines = [
@@ -284,33 +289,30 @@ def _build_new_input_message(
     ]
     append_meta_lines(lines, meta, include_account=True)
 
-    if open_tasks:
+    if task_candidates or not_task_signals:
         lines.append("")
         lines.append(
-            "Candidate existing tasks — if the input duplicates one of these, "
-            "act on it with `no_change` / `update_task` / `close_task` and pass "
-            "its id as `existing_task_id` instead of calling `create_task`:"
+            "Most similar past items (ranked by similarity). If the input refers "
+            "to an OPEN or CLOSED task below, act on it with `update_task` (pass "
+            "its id as `existing_task_id`; set `status=closed` to finish it or "
+            "`status=open` to reopen a CLOSED one) or `no_change`, instead of "
+            "`create_task`. NOT_TASK items are precedents — a strong signal this "
+            "input may also not be a task."
         )
-        for t in open_tasks:
+        for hit, t in task_candidates:
             lines.append("")
+            lines.append(
+                f"[{hit.status.upper()}] sim={hit.similarity:.2f} · "
+                f"existing_task_id={t.id}"
+            )
             lines.extend(task_field_lines(t))
-
-    precedent_lines: list[str] = []
-    for p in not_task_hits[:3]:
-        reason = (p.agent_trace or {}).get("reason") or ""
-        precedent_lines.append(
-            f"- sim={p.similarity:.2f} | NOT_TASK | from {p.sender or '?'} | "
-            f"{p.subject or '(no subject)'} | {reason[:120]}"
-        )
-    for p in closed_hits[:3]:
-        precedent_lines.append(
-            f"- sim={p.similarity:.2f} | CLOSED_TASK_PRECEDENT (task {p.task_id}) | "
-            f"from {p.sender or '?'} | {p.subject or '(no subject)'}"
-        )
-    if precedent_lines:
-        lines.append("")
-        lines.append("Past similar inputs (precedents — strong signal):")
-        lines.extend(precedent_lines)
+        for p in not_task_signals:
+            reason = (p.agent_trace or {}).get("reason") or ""
+            lines.append("")
+            lines.append(
+                f"[NOT_TASK] sim={p.similarity:.2f} · from {p.sender or '?'} · "
+                f"{p.subject or '(no subject)'} · {reason[:120]}"
+            )
 
     lines.append("")
     lines.append("Body:")
