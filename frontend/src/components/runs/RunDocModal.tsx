@@ -32,13 +32,16 @@ function branchUrl(task: KotxTask): string | null {
 
 export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const primaryLabel = doc === "task" ? "TASK.md" : "REVIEW.md";
+  // Resolve-conflict runs have no brief — drop the TASK.md tab and open on the
+  // prompt instead.
+  const showPrimary = task.kind !== "resolve_conflict";
   // kotx only accepts the PUT in the matching state; mirror that here so we
   // don't offer an Edit button that would 409.
   const canEditPrimary =
     (doc === "task" && task.state === "draft") ||
     (doc === "review" && task.state === "awaiting_approval");
 
-  const [view, setView] = useState<View>("primary");
+  const [view, setView] = useState<View>(showPrimary ? "primary" : "prompt");
   const [content, setContent] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
@@ -89,7 +92,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     }, `${primaryLabel} saved`);
 
   const views: { key: View; label: string }[] = [
-    { key: "primary", label: primaryLabel },
+    ...(showPrimary ? [{ key: "primary" as const, label: primaryLabel }] : []),
     { key: "prompt", label: "Prompt" },
     { key: "log", label: "Log" },
   ];
