@@ -9,9 +9,11 @@ import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
 import { api } from "@/lib/api";
+import { useThemePreference } from "@/lib/theme";
 
 export function App() {
   const { tasks, inputs, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
+  const { theme, setTheme } = useThemePreference();
   const [tab, setTab] = useState("tasks");
   const runs = useRuns(tab === "runs");
   // Runs awaiting my action (ready to start, or a review ready to post).
@@ -102,7 +104,7 @@ export function App() {
 
   return (
     <div className="min-h-dvh pb-[120px]">
-      <Topbar />
+      <Topbar theme={theme} onThemeChange={setTheme} />
       <main className="mx-auto max-w-2xl px-4 py-4">
         <Tabs value={tab} onValueChange={onTabChange}>
           <TabsList className="mb-4 grid w-full grid-cols-3">

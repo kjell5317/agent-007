@@ -16,23 +16,23 @@ interface Props {
 // subjectType (a PR subject means a PR exists → "in review"; otherwise the
 // branch is pushed but no PR is open yet → "waiting on PR").
 const STATE_CLASS: Record<Exclude<KotxState, "awaiting_external">, string> = {
-  drafting: "bg-slate-500 text-white", // preparing task
-  draft: "bg-amber-500 text-slate-900", // waiting on my approval
-  queued: "bg-slate-400 text-slate-900",
-  running: "bg-blue-500 text-white",
-  awaiting_approval: "bg-amber-500 text-slate-900", // waiting on my approval
-  done: "bg-emerald-500 text-white",
-  failed: "bg-red-500 text-white",
-  cancelled: "bg-zinc-500 text-white",
-  timed_out: "bg-red-600 text-white",
-  discarded: "bg-zinc-400 text-slate-900",
+  drafting: "bg-slate-500 text-white dark:bg-slate-600 dark:text-slate-100", // preparing task
+  draft: "bg-amber-500 text-slate-900 dark:bg-amber-500/25 dark:text-amber-200", // waiting on my approval
+  queued: "bg-slate-400 text-slate-900 dark:bg-slate-500/35 dark:text-slate-100",
+  running: "bg-blue-500 text-white dark:bg-blue-500/25 dark:text-blue-200",
+  awaiting_approval: "bg-amber-500 text-slate-900 dark:bg-amber-500/25 dark:text-amber-200", // waiting on my approval
+  done: "bg-emerald-500 text-white dark:bg-emerald-500/25 dark:text-emerald-200",
+  failed: "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-200",
+  cancelled: "bg-zinc-500 text-white dark:bg-zinc-500/30 dark:text-zinc-200",
+  timed_out: "bg-red-600 text-white dark:bg-red-600/30 dark:text-red-100",
+  discarded: "bg-zinc-400 text-slate-900 dark:bg-zinc-500/25 dark:text-zinc-200",
 };
 
 function statusClass(task: KotxTask): string {
   if (task.state === "awaiting_external") {
     return task.subjectType === "pull_request"
-      ? "bg-violet-500 text-white" // in review — PR exists
-      : "bg-violet-400 text-slate-900"; // waiting on PR — pushed, no PR yet
+      ? "bg-violet-500 text-white dark:bg-violet-500/25 dark:text-violet-200" // in review — PR exists
+      : "bg-violet-400 text-slate-900 dark:bg-violet-500/20 dark:text-violet-200"; // waiting on PR — pushed, no PR yet
   }
   return STATE_CLASS[task.state];
 }

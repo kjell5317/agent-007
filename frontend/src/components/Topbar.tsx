@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut } from "lucide-react";
+import { CircleUser, ExternalLink, LogOut, Moon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
+import type { ThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 // Each entry becomes a "Connect <label>" link inside the account dropdown.
@@ -36,7 +37,13 @@ function PointsIcon({ className }: { className?: string }) {
   );
 }
 
-export function Topbar() {
+export function Topbar({
+  theme,
+  onThemeChange,
+}: {
+  theme: ThemePreference;
+  onThemeChange: (next: ThemePreference) => void;
+}) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
@@ -158,7 +165,9 @@ export function Topbar() {
           <AccountMenu
             email={email}
             autoPoll={autoPoll}
+            theme={theme}
             onToggleAutoPoll={toggleAutoPoll}
+            onThemeChange={onThemeChange}
             onLogout={logout}
           />
         )}
@@ -251,12 +260,16 @@ function PointsModal({
 function AccountMenu({
   email,
   autoPoll,
+  theme,
   onToggleAutoPoll,
+  onThemeChange,
   onLogout,
 }: {
   email: string;
   autoPoll: boolean | null;
+  theme: ThemePreference;
   onToggleAutoPoll: (next: boolean) => void;
+  onThemeChange: (next: ThemePreference) => void;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -316,11 +329,11 @@ function AccountMenu({
               </a>
             ))}
           </div>
-          {autoPoll !== null && (
-            <div className="border-t py-1">
-              <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Preferences
-              </div>
+          <div className="border-t py-1">
+            <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Preferences
+            </div>
+            {autoPoll !== null && (
               <label className="flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground">
                 <span>Auto sync · 5 min</span>
                 <Switch
@@ -328,8 +341,20 @@ function AccountMenu({
                   onChange={(e) => onToggleAutoPoll(e.target.checked)}
                 />
               </label>
-            </div>
-          )}
+            )}
+            <label className="flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground">
+              <span className="flex items-center gap-2">
+                <Moon className="h-4 w-4 text-muted-foreground" />
+                Dark mode
+              </span>
+              <Switch
+                checked={theme === "dark"}
+                onChange={(e) =>
+                  onThemeChange(e.target.checked ? "dark" : "light")
+                }
+              />
+            </label>
+          </div>
           <div className="border-t py-1">
             <button
               type="button"

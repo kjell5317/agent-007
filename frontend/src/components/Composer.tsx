@@ -66,7 +66,7 @@ export function Composer({ onCreated }: Props) {
   return (
     <form
       onSubmit={submit}
-      className="fixed inset-x-0 bottom-0 z-40 border-t bg-card pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_14px_rgba(15,23,42,0.06)]"
+      className="fixed inset-x-0 bottom-0 z-40 border-t bg-card pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_14px_rgba(15,23,42,0.06)] dark:shadow-[0_-4px_18px_rgba(0,0,0,0.35)]"
     >
       <div className="mx-auto flex max-w-2xl items-center gap-2 px-3 py-2.5">
         <Input
