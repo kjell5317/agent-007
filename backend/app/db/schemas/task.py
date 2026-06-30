@@ -64,6 +64,7 @@ class TaskCreationAccepted(BaseModel):
 class TaskRead(TaskBase):
     id: uuid.UUID
     scheduled_date: datetime | None = None
+    source_url: str | None = None
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
     created_at: datetime
@@ -73,7 +74,13 @@ class TaskRead(TaskBase):
         from_attributes = True
 
     @classmethod
-    def build(cls, task, status_: str, is_manual: bool) -> "TaskRead":
+    def build(
+        cls,
+        task,
+        status_: str,
+        is_manual: bool,
+        source_url: str | None = None,
+    ) -> "TaskRead":
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
         `tasks.latest_status_for` / `tasks.is_manual_for`)."""
@@ -85,6 +92,7 @@ class TaskRead(TaskBase):
                 "link": task.link,
                 "due_date": task.due_date,
                 "scheduled_date": task.scheduled_date,
+                "source_url": source_url,
                 "estimation": task.estimation,
                 "location": task.location,
                 "label": task.label,
