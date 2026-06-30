@@ -1,11 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import {
-  CircleDot,
-  ExternalLink,
-  GitBranch,
-  GitPullRequest,
-  Pencil,
-} from "lucide-react";
+import { CircleDot, ExternalLink, GitBranch, GitPullRequest, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut, Moon } from "lucide-react";
+import { CircleUser, ExternalLink, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,7 +51,9 @@ export function Topbar({
   const [pointsOpen, setPointsOpen] = useState(false);
   // A short-lived "+N / −N" burst keyed by a counter so each change replays
   // the float + pop animation even when the same delta repeats.
-  const [flash, setFlash] = useState<{ key: number; delta: number } | null>(null);
+  const [flash, setFlash] = useState<{ key: number; delta: number } | null>(
+    null,
+  );
   const prevPoints = useRef<number | null>(null);
   const flashSeq = useRef(0);
 
@@ -343,10 +345,7 @@ function AccountMenu({
               </label>
             )}
             <label className="flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground">
-              <span className="flex items-center gap-2">
-                <Moon className="h-4 w-4 text-muted-foreground" />
-                Dark mode
-              </span>
+              <span className="flex items-center gap-2">Dark mode</span>
               <Switch
                 checked={theme === "dark"}
                 onChange={(e) =>

@@ -30,6 +30,7 @@ from app.services.plan.schedule import (
     plan_task_slot,
     reschedule_event,
     schedule_task,
+    scheduled_interval_for,
 )
 from app.services.plan.update import update_task_to_calendar
 
@@ -39,5 +40,6 @@ __all__ = [
     "plan_task_slot",
     "reschedule_event",
     "schedule_task",
+    "scheduled_interval_for",
     "update_task_to_calendar",
 ]

@@ -200,7 +200,11 @@ async def reschedule_event(
     """
     task = _task_for_event(session, event_id)
     if task is not None:
-        await schedule_task(session, task, account_key=account_key)
+        result = await schedule_task(session, task, account_key=account_key)
+        if result is not None:
+            from app.events import publish_task
+
+            publish_task(session, task.id)
         return
     await _repair_commute_event(session, event_id, account_key=account_key)
 
@@ -600,6 +604,15 @@ def _task_for_event(session: Session, event_id: str) -> Task | None:
     return session.execute(stmt).scalar_one_or_none()
 
 
+def scheduled_interval_for(task: Task) -> Interval | None:
+    if task.scheduled_date is None:
+        return None
+    settings = get_settings()
+    start = to_user_tz(task.scheduled_date)
+    end = start + timedelta(minutes=_duration_minutes(task, settings))
+    return Interval(start, end, task.calendar_event_id)
+
+
 def _duration_minutes(task: Task, settings) -> int:
     raw = task.estimation or settings.google_calendar_default_event_minutes
     return max(5, int(raw or 30))
@@ -614,5 +627,3 @@ def _busy_calendar_ids(settings) -> list[str]:
             seen.add(clean)
             out.append(clean)
     return out
-
-

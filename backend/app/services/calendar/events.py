@@ -31,6 +31,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.clients import tasks as tasks_store
 from app.labels import color_for
 from app.services.location import resolve_location_alias
 from app.services.calendar.client import (
@@ -223,7 +224,12 @@ async def add_task_event(
         color_id=color_for(task.label),
         private_properties=task_private_properties(task),
     )
-    task.calendar_event_id = event.id
+    tasks_store.set_schedule(
+        session,
+        task,
+        event_id=event.id,
+        scheduled_date=event.start,
+    )
     session.commit()
 
 
@@ -285,13 +291,21 @@ async def update_task_event(
         return
 
     try:
-        await patch_event(
+        event = await patch_event(
             session,
             calendar_id=calendar_id,
             event_id=task.calendar_event_id,
             private_properties=task_private_properties(task),
             **patch_kwargs,
         )
+        if start is not None:
+            tasks_store.set_schedule(
+                session,
+                task,
+                event_id=event.id,
+                scheduled_date=event.start,
+            )
+            session.commit()
     except httpx.HTTPStatusError as exc:
         # 404 / 410 = the event we thought we owned is gone (deleted in
         # Google Calendar UI, or never created successfully). Drop the
@@ -301,7 +315,12 @@ async def update_task_event(
                 "calendar update · task=%s event=%s missing (status=%s); recreating",
                 task.id, task.calendar_event_id, exc.response.status_code,
             )
-            task.calendar_event_id = None
+            tasks_store.set_schedule(
+                session,
+                task,
+                event_id=None,
+                scheduled_date=None,
+            )
             session.commit()
             await add_task_event(session, task, start=start, end=end)
             return
@@ -313,6 +332,14 @@ async def delete_task_event(session: Session, task) -> None:
     calendar is configured. Clears `task.calendar_event_id` on success so a
     later re-open creates a fresh event. Best-effort."""
     if not task.calendar_event_id:
+        if getattr(task, "scheduled_date", None) is not None:
+            tasks_store.set_schedule(
+                session,
+                task,
+                event_id=None,
+                scheduled_date=None,
+            )
+            session.commit()
         return
     settings = get_settings()
     calendar_id = (settings.google_calendar_id or "").strip()
@@ -326,7 +353,12 @@ async def delete_task_event(session: Session, task) -> None:
         log.warning("calendar delete failed · task=%s err=%s", task.id, exc)
         return
 
-    task.calendar_event_id = None
+    tasks_store.set_schedule(
+        session,
+        task,
+        event_id=None,
+        scheduled_date=None,
+    )
     session.commit()
 
 

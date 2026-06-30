@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { isOverdue, isToday } from "@/lib/dates";
+import { compareTasksBySchedule, taskGroupDate } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 
 interface Props {
@@ -9,20 +10,14 @@ interface Props {
   seenAfter: string | null;
 }
 
-function sortTasks(a: Task, b: Task) {
-  const ad = a.due_date ? new Date(a.due_date).getTime() : Infinity;
-  const bd = b.due_date ? new Date(b.due_date).getTime() : Infinity;
-  if (ad !== bd) return ad - bd;
-  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-}
-
 export function TasksPanel({ tasks, onChanged, seenAfter }: Props) {
   const [today, later] = useMemo(() => {
-    const sorted = [...tasks].sort(sortTasks);
+    const sorted = [...tasks].sort(compareTasksBySchedule);
     const t: Task[] = [];
     const l: Task[] = [];
     for (const task of sorted) {
-      if (task.due_date && (isToday(task.due_date) || isOverdue(task.due_date))) {
+      const groupDate = taskGroupDate(task);
+      if (groupDate && (isToday(groupDate) || isOverdue(groupDate))) {
         t.push(task);
       } else {
         l.push(task);

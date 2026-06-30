@@ -15,21 +15,25 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app import state
 from app.config import get_settings
 from app.db import SessionLocal
+from app.db.clients import tasks as tasks_store
+from app.events import publish_task
 from app.services.calendar.discover import discover_updated_events
 from app.services.input.poll import poll_sources
-from app.services.plan import refresh_commutes_for_weather
+from app.services.plan import refresh_commutes_for_weather, schedule_task, scheduled_interval_for
 
 log = logging.getLogger(__name__)
 
 AUTO_POLL_INTERVAL_S = 300
 DISCOVER_INTERVAL_S = 300
+OVERDUE_TASK_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
+OVERDUE_TASK_GRACE = timedelta(minutes=15)
 
 
 async def _auto_poll() -> None:
@@ -88,6 +92,44 @@ async def _calendar_discover() -> None:
             log.exception("calendar-discover iteration failed")
 
 
+async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
+    cutoff = datetime.now(timezone.utc) - OVERDUE_TASK_GRACE
+    attempted = 0
+    rescheduled = 0
+    with SessionLocal() as session:
+        overdue = tasks_store.overdue_scheduled_open(session, cutoff=cutoff)
+        for task in overdue:
+            block = scheduled_interval_for(task)
+            attempted += 1
+            result = await schedule_task(session, task, block=block)
+            if result is None:
+                continue
+            rescheduled += 1
+            publish_task(session, task.id)
+    return {"attempted": attempted, "rescheduled": rescheduled}
+
+
+async def _overdue_scheduled_tasks() -> None:
+    log.info("overdue-scheduled-tasks loop started · interval=%ds", OVERDUE_TASK_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(OVERDUE_TASK_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                log.debug("overdue-scheduled-tasks skipped (disabled)")
+                continue
+            summary = await reschedule_overdue_scheduled_tasks_once()
+            log.info(
+                "overdue-scheduled-tasks done · attempted=%d rescheduled=%d",
+                summary["attempted"],
+                summary["rescheduled"],
+            )
+        except asyncio.CancelledError:
+            log.info("overdue-scheduled-tasks loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("overdue-scheduled-tasks iteration failed")
+
+
 async def _weather_commute_refresh() -> None:
     """Refresh existing commute events when hourly weather changes mode choice."""
     log.info("weather-commute-refresh loop started · interval=%ds", WEATHER_INTERVAL_S)
@@ -115,6 +157,7 @@ async def _weather_commute_refresh() -> None:
 _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("auto-poll", _auto_poll),
     ("calendar-discover", _calendar_discover),
+    ("overdue-scheduled-tasks", _overdue_scheduled_tasks),
     ("weather-commute-refresh", _weather_commute_refresh),
 ]
 

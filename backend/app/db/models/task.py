@@ -20,6 +20,7 @@ class Task(Base):
 
     link: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
 

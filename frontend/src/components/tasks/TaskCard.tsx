@@ -31,8 +31,9 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
   const [detailOpen, setDetailOpen] = useState(false);
   const labels = useLabels();
 
-  const overdue = isOverdue(task.due_date);
-  const urgent = isUrgent(task.due_date, task.estimation);
+  const displayDate = task.scheduled_date ?? task.due_date;
+  const displayOverdue = isOverdue(displayDate);
+  const displayUrgent = isUrgent(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   // Manual tasks are excluded from the Tasks-tab unread count on the
   // server (count_since skips manual-only tasks). Suppress the per-card
@@ -109,9 +110,11 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              {task.due_date && (
-                <Badge variant={overdue ? "overdue" : urgent ? "urgent" : "open"}>
-                  {fmtDue(task.due_date)}
+              {displayDate && (
+                <Badge
+                  variant={displayOverdue ? "overdue" : displayUrgent ? "urgent" : "open"}
+                >
+                  {fmtDue(displayDate)}
                 </Badge>
               )}
 
