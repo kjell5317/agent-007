@@ -13,18 +13,18 @@ import logging
 import uuid
 from typing import Any
 
-from anthropic import AsyncAnthropic
-from anthropic.types import MessageParam
 from sqlalchemy.orm import Session
 
 from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT
 from app.agent.helpers.llm import (
+    LLMMessage,
     MAX_TOOL_ITERATIONS,
     TERMINAL_TOOLS,
+    assistant_message,
     block_summary,
-    cached_system,
-    cached_tools,
-    create_message,
+    chat,
+    tool_result_message,
+    user_message,
 )
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import run_create_event, run_find_calendar_events
@@ -48,7 +48,6 @@ async def run_new_input_agent(
     query_embedding: list[float] | None,
 ) -> dict:
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     # Split the ranked candidates: OPEN/CLOSED tasks are actionable (load their
     # fields, dedup by task_id, keep similarity order), NOT_TASK items are
@@ -82,7 +81,7 @@ async def run_new_input_agent(
     final_status = "not_task"
     final_task_id: uuid.UUID | None = None
 
-    messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
+    messages: list[LLMMessage] = [user_message(user_msg)]
     log.info(
         "llm call · branch=new_input raw=%s task_candidates=%d not_task_signals=%d",
         raw.id, len(task_candidates), len(not_task_signals),
@@ -90,26 +89,29 @@ async def run_new_input_agent(
 
     done = False
     for _ in range(MAX_TOOL_ITERATIONS):
-        resp = await create_message(
-            client, settings,
-            system=cached_system(NEW_INPUT_SYSTEM_PROMPT),
-            tools=cached_tools(NEW_INPUT_TOOLS),
-            messages=messages,
+        resp = await chat(
+            messages,
+            settings,
+            system_prompt=NEW_INPUT_SYSTEM_PROMPT,
+            tools=NEW_INPUT_TOOLS,
         )
         log.debug(
             "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",
             raw.id, resp.stop_reason,
-            getattr(resp.usage, "input_tokens", "?"),
-            getattr(resp.usage, "output_tokens", "?"),
+            resp.usage.get("input_tokens", "?"),
+            resp.usage.get("output_tokens", "?"),
         )
         iter_log: dict[str, Any] = {
-            "blocks": [block_summary(b) for b in resp.content],
+            "blocks": block_summary(resp),
+            "llm": {
+                "provider": resp.provider,
+                "model": resp.model,
+                "usage": resp.usage,
+            },
         }
         trace["iterations"].append(iter_log)
 
-        all_tool_uses = [
-            b for b in resp.content if getattr(b, "type", None) == "tool_use"
-        ]
+        all_tool_uses = list(resp.tool_calls)
         terminal_uses = [b for b in all_tool_uses if b.name in TERMINAL_TOOLS]
         non_terminal_uses = [b for b in all_tool_uses if b.name not in TERMINAL_TOOLS]
 
@@ -148,14 +150,10 @@ async def run_new_input_agent(
                 iter_log.setdefault("tool_results", []).append(
                     {"name": tu.name, "preview": out[:200]}
                 )
-                results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu.id,
-                    "content": out,
-                })
+                results.append(tool_result_message(tu, out))
             if not terminal_uses:
-                messages.append({"role": "assistant", "content": resp.content})
-                messages.append({"role": "user", "content": results})
+                messages.append(assistant_message(resp))
+                messages.extend(results)
                 continue
 
         if not terminal_uses:

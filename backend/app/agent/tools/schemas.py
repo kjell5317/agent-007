@@ -17,14 +17,13 @@ reopen a closed one. `no_change` is genuinely inert — it touches nothing.
 All tools are terminal — the runner stops after the first tool call.
 
 The tool sets are built on demand so the `label` field can carry the current
-label catalog as a strict enum — Claude can't hallucinate a label that isn't
+label catalog as a strict enum — the model can't choose a label that isn't
 configured.
 """
 
 from app.labels import load_labels
 
-# Anthropic tool-use schema format.
-# https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview
+# Provider-neutral JSON schema format; provider adapters translate at the boundary.
 
 _CONFIDENCE_SCHEMA = {
     "type": "number",
@@ -148,7 +147,7 @@ NEW_INPUT_TOOLS = [
             "once and you still need a terminal tool (`create_task`, "
             "`mark_not_task`, or a duplicate action) to finish."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "query": {
@@ -171,7 +170,7 @@ NEW_INPUT_TOOLS = [
             "duplicate. Non-terminal — you still need a terminal tool "
             "(`create_task`, `mark_not_task`, or a duplicate action) to finish."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "time_min": {
@@ -189,7 +188,7 @@ NEW_INPUT_TOOLS = [
     {
         "name": "create_task",
         "description": "Persist a new task extracted from the current raw input.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": _CREATE_TASK_PROPS,
             "required": _CREATE_TASK_REQUIRED,
@@ -207,7 +206,7 @@ NEW_INPUT_TOOLS = [
             "with `mark_not_task`; if it needs registration or preparation, also "
             "call `create_task` for that work."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "summary": {"type": "string", "description": "Event title."},
@@ -239,7 +238,7 @@ NEW_INPUT_TOOLS = [
             "source. Record the duplicate and leave the task untouched. This is "
             "the common duplicate case."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "existing_task_id": _EXISTING_TASK_ID_SCHEMA,
@@ -257,7 +256,7 @@ NEW_INPUT_TOOLS = [
             "lifecycle: `closed` when it's done or cancelled, `open` to reopen a "
             "CLOSED candidate the input revives. Include only what changes."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {**_UPDATE_TASK_PROPS, "existing_task_id": _EXISTING_TASK_ID_SCHEMA},
             "required": ["existing_task_id"],
@@ -273,7 +272,7 @@ NEW_INPUT_TOOLS = [
             "`search_notes`. Only save genuinely useful information; skip "
             "ephemeral content."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "reason": {"type": "string"},
@@ -303,7 +302,7 @@ THREAD_FOLLOWUP_TOOLS = [
             "completion or cancellation, `open` to reopen a task that was closed. "
             "Include only what changes."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": _UPDATE_TASK_PROPS,
         },
@@ -311,7 +310,7 @@ THREAD_FOLLOWUP_TOOLS = [
     {
         "name": "no_change",
         "description": "The follow-up adds no actionable change to the existing task.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "reason": {"type": "string"},

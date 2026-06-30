@@ -1,8 +1,8 @@
 # Task Agent
 
 A personal task-extraction agent. It watches your message sources (Gmail,
-Slack), uses Claude to decide whether each message is actually a task **for
-you**, and — when it is — extracts a structured task, files it without
+Slack), uses a Haystack-backed LLM to decide whether each message is actually
+a task **for you**, and — when it is — extracts a structured task, files it without
 creating duplicates, and mirrors it to your calendar.
 
 It's built for a single user (me), but the architecture is deliberately
@@ -18,7 +18,7 @@ self-registering file, with no changes to the agent, storage, or API.
 - **Multi-source ingestion** — pulls messages from Gmail and Slack over OAuth,
   normalizing every source into one internal envelope before anything
   source-specific can leak downstream.
-- **Task vs. noise, decided by Claude** — the agent reads an input plus
+- **Task vs. noise, decided by an LLM** — the agent reads an input plus
   similar past inputs and decides `task` / `not a task` / `duplicate`. For real
   tasks it extracts a title, label, due date, time estimate, how much of it is
   AI-doable (0–1), and a confidence score.
@@ -40,7 +40,7 @@ self-registering file, with no changes to the agent, storage, or API.
 
 ```text
 [Sources]  →  [Ingestion]  →  [Agent]      →  [Storage]    →  [API + SPA]
- Gmail         normalize       Claude           Postgres        FastAPI
+ Gmail         normalize       Haystack LLM     Postgres        FastAPI
  Slack         to RawInput     + tools          + pgvector      React/Vite
                                (in-proc queue)
 ```
@@ -58,8 +58,8 @@ self-registering file, with no changes to the agent, storage, or API.
 
 ## Tech stack
 
-Python 3.12 · FastAPI · SQLAlchemy 2 · Postgres + pgvector · Anthropic Claude
-(via the Claude Agent SDK) · Gemini embeddings · Authlib + httpx for OAuth ·
+Python 3.12 · FastAPI · SQLAlchemy 2 · Postgres + pgvector · Haystack-backed
+LLM orchestration (Anthropic initially) · Gemini embeddings · Authlib + httpx for OAuth ·
 React + Vite + Tailwind · Docker Compose + Caddy · Terraform (Hetzner +
 Cloudflare) for deployment.
 
@@ -101,8 +101,9 @@ essentials:
 
 | Variable | Purpose |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | Claude API access for the agent |
-| `GEMINI_API_KEY` | Embeddings for de-duplication |
+| `LLM_PROVIDER` / `LLM_MODEL` | Haystack LLM backend selection; `anthropic` is currently supported |
+| `ANTHROPIC_API_KEY` | Anthropic API access when `LLM_PROVIDER=anthropic` |
+| `GEMINI_API_KEY` | Gemini embeddings for de-duplication and note retrieval |
 | `TOKEN_ENCRYPTION_KEY` | Fernet key — OAuth tokens are stored encrypted at rest |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Gmail access + Google SSO login |
 | `SLACK_APPS` | Per-workspace Slack OAuth apps (JSON) |
@@ -120,7 +121,7 @@ See [`config/README.md`](config/README.md).
 ```text
 backend/app/
   api/            FastAPI routers (thin: validate → storage/agent → return)
-  agent/          Claude runners, prompts, tool schemas
+  agent/          Haystack LLM runners, prompts, tool schemas
   auth/           OAuth contract + per-provider + token encryption
   services/
     input/        ingestion: source contract + Gmail/Slack subpackages

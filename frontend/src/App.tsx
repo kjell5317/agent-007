@@ -44,14 +44,6 @@ export function App() {
         setSeenInboxAt(inboxRes.last_seen_at);
         setSeenTasksAt(tasksRes.last_seen_at);
         snapshotsTaken.current = true;
-        // The user lands on the Tasks tab by default — count that as a
-        // visit so any pre-existing tasks badge clears immediately.
-        // Without this, the user has to navigate to Tasks a second time
-        // to dismiss the count after starting elsewhere.
-        if (tasksRes.count > 0) {
-          setUnreadTasks(0);
-          api.markTasksSeen().catch(() => {});
-        }
       }
     } catch {
       setUnreadInbox(0);
@@ -59,9 +51,50 @@ export function App() {
     }
   }, []);
 
+  const markInboxViewed = useCallback(async () => {
+    setUnreadInbox(0);
+    try {
+      const res = await api.markInputsSeen();
+      setUnreadInbox(res.count);
+      setSeenInboxAt(res.last_seen_at);
+    } catch {
+      loadUnread();
+    }
+  }, [loadUnread]);
+
+  const markTasksViewed = useCallback(async () => {
+    setUnreadTasks(0);
+    try {
+      const res = await api.markTasksSeen();
+      setUnreadTasks(res.count);
+      setSeenTasksAt(res.last_seen_at);
+    } catch {
+      loadUnread();
+    }
+  }, [loadUnread]);
+
   useEffect(() => {
     loadUnread();
   }, [loadUnread]);
+
+  useEffect(() => {
+    loadUnread();
+  }, [tasks, inputs, loadUnread]);
+
+  useEffect(() => {
+    if (tab === "tasks" && unreadTasks > 0) markTasksViewed();
+    if (tab === "inbox" && unreadInbox > 0) markInboxViewed();
+  }, [markInboxViewed, markTasksViewed, tab, unreadInbox, unreadTasks]);
+
+  useEffect(() => {
+    if (tab !== "tasks" || document.visibilityState !== "visible") return;
+    markTasksViewed();
+  }, [markTasksViewed, tab, tasks]);
+
+  useEffect(() => {
+    if (tab !== "inbox" || document.visibilityState !== "visible") return;
+    markInboxViewed();
+  }, [markInboxViewed, tab, inputs]);
 
   // Refresh unread badges when the app comes back to the foreground. The
   // task/input lists themselves are already refreshed by useAppData on
@@ -82,24 +115,8 @@ export function App() {
   const onTabChange = useCallback(
     (value: string) => {
       setTab(value);
-      if (value === "inbox" && unreadInbox > 0) {
-        setUnreadInbox(0);
-        api.markInputsSeen().catch(() => loadUnread());
-      }
-      if (value === "tasks") {
-        if (unreadTasks > 0) {
-          setUnreadTasks(0);
-          api.markTasksSeen().catch(() => loadUnread());
-        }
-        // Switching to Tasks implies leaving Inbox (only two tabs). Anything
-        // that landed while the user was on Inbox should count as seen on
-        // the way out — symmetric to the "Tasks badge clears on first load
-        // because the user is already on that tab" rule.
-        setUnreadInbox(0);
-        api.markInputsSeen().catch(() => {});
-      }
     },
-    [unreadInbox, unreadTasks, loadUnread],
+    [],
   );
 
   return (

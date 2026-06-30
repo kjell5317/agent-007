@@ -6,7 +6,7 @@ trivially unit-testable from fixture dicts.
 
 Embedding-time text construction lives in `app.services.input.embedding`
 (`candidate_query_text`) — kept separate because it feeds the embedding
-model rather than Claude.
+model rather than the LLM prompt.
 """
 
 from __future__ import annotations
