@@ -25,6 +25,11 @@ function load(task: KotxTask, doc: Props["doc"], view: View): Promise<string | n
   return doc === "task" ? kotx.getBrief(task.id) : kotx.getReview(task.id);
 }
 
+function branchUrl(task: KotxTask): string | null {
+  if (!task.branch || !/^[^/\s]+\/[^/\s]+$/.test(task.repo)) return null;
+  return `https://github.com/${task.repo}/tree/${encodeURIComponent(task.branch)}`;
+}
+
 export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const primaryLabel = doc === "task" ? "TASK.md" : "REVIEW.md";
   // kotx only accepts the PUT in the matching state; mirror that here so we
@@ -88,6 +93,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     { key: "prompt", label: "Prompt" },
     { key: "log", label: "Log" },
   ];
+  const taskBranchUrl = branchUrl(task);
 
   return (
     <Modal
@@ -97,11 +103,23 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       className="max-w-2xl"
     >
       {task.branch && (
-        <div className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="mb-3 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           <GitBranch className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate font-mono" title={task.branch}>
-            {task.branch}
-          </span>
+          {taskBranchUrl ? (
+            <a
+              href={taskBranchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 truncate font-mono hover:text-foreground hover:underline"
+              title={task.branch}
+            >
+              {task.branch}
+            </a>
+          ) : (
+            <span className="min-w-0 truncate font-mono" title={task.branch}>
+              {task.branch}
+            </span>
+          )}
         </div>
       )}
 
