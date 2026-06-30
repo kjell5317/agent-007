@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  ChevronLeft,
   Circle,
   CircleCheckBig,
   MapPin,
@@ -10,10 +9,6 @@ import {
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { DatePicker } from "@/components/ui/date-picker";
-import { EstimationPicker } from "@/components/ui/estimation-picker";
-import { LabelPicker } from "@/components/ui/label-picker";
-import { Modal } from "@/components/ui/modal";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
@@ -28,19 +23,12 @@ interface Props {
   seenAfter: string | null;
 }
 
-type EditField = "due_date" | "estimation" | "label" | null;
-
 const CROSS_OFF_MS = 350;
 
 export function TaskCard({ task, onChanged, seenAfter }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [editField, setEditField] = useState<EditField>(null);
-  const [draft, setDraft] = useState("");
-  // Lifted out of DatePicker so the surrounding Modal can render a Back
-  // arrow into its top-left action slot on the time step.
-  const [dateStep, setDateStep] = useState<"date" | "time">("date");
   const labels = useLabels();
 
   const overdue = isOverdue(task.due_date);
@@ -74,36 +62,6 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
       withBusy(() => api.closeTask(task.id), "Marked done");
     }, CROSS_OFF_MS);
   };
-
-  const openEdit = (field: Exclude<EditField, null>) => {
-    if (field === "due_date") setDraft(task.due_date ?? "");
-    else if (field === "estimation")
-      setDraft(task.estimation == null ? "" : String(task.estimation));
-    else setDraft(task.label ?? "");
-    setDateStep("date");
-    setEditField(field);
-  };
-
-  const closeEdit = () => setEditField(null);
-
-  const saveEdit = async () => {
-    if (!editField) return;
-    let patch: Partial<Task>;
-    if (editField === "due_date") {
-      patch = { due_date: draft || null };
-    } else if (editField === "estimation") {
-      patch = { estimation: draft === "" ? null : Number(draft) };
-    } else {
-      patch = { label: draft || null };
-    }
-    await withBusy(() => api.updateTask(task.id, patch), "Saved");
-    closeEdit();
-  };
-
-  const TitleEl = task.link ? "a" : "span";
-  const titleProps = task.link
-    ? { href: task.link, target: "_blank", rel: "noopener noreferrer" }
-    : {};
 
   return (
     <Card
@@ -141,76 +99,39 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
                   className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
                 />
               )}
-              <TitleEl
-                {...titleProps}
+              <span
                 className={cn(
                   "min-w-0 flex-1 truncate font-medium leading-snug transition-all duration-300",
-                  task.link && "hover:underline",
                   crossing && "line-through opacity-60",
                 )}
               >
                 {task.title}
-              </TitleEl>
+              </span>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              {task.due_date ? (
-                <button
-                  type="button"
-                  onClick={() => openEdit("due_date")}
-                  disabled={busy || crossing}
-                  className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <Badge
-                    variant={overdue ? "overdue" : urgent ? "urgent" : "open"}
-                  >
-                    {fmtDue(task.due_date)}
-                  </Badge>
-                </button>
-              ) : (
-                <AddChip
-                  label="+ Due"
-                  onClick={() => openEdit("due_date")}
-                  disabled={busy || crossing}
-                />
+              {task.due_date && (
+                <Badge variant={overdue ? "overdue" : urgent ? "urgent" : "open"}>
+                  {fmtDue(task.due_date)}
+                </Badge>
               )}
 
-              {task.label ? (
-                <button
-                  type="button"
-                  onClick={() => openEdit("label")}
-                  disabled={busy || crossing}
+              {task.label && (
+                <span
                   title={labelMeta?.description ?? task.label}
                   className={cn(
-                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
                     labelChipClass(labelMeta?.color),
                   )}
                 >
                   {task.label}
-                </button>
-              ) : (
-                <AddChip
-                  label="+ Label"
-                  onClick={() => openEdit("label")}
-                  disabled={busy || crossing}
-                />
+                </span>
               )}
 
-              {task.estimation != null ? (
-                <button
-                  type="button"
-                  onClick={() => openEdit("estimation")}
-                  disabled={busy || crossing}
-                  className="inline-flex items-center gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
+              {task.estimation != null && (
+                <span className="inline-flex items-center gap-1">
                   <Timer className="h-3 w-3" />
                   {task.estimation} min
-                </button>
-              ) : (
-                <AddChip
-                  label="+ Estimation"
-                  onClick={() => openEdit("estimation")}
-                  disabled={busy || crossing}
-                />
+                </span>
               )}
               {task.location && (
                 <span
@@ -240,61 +161,12 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
         </div>
       </CardContent>
 
-      <Modal
-        open={editField !== null}
-        onClose={closeEdit}
-        title={
-          editField === "due_date"
-            ? "Edit due date"
-            : editField === "estimation"
-              ? "Edit estimation"
-              : editField === "label"
-                ? "Edit label"
-                : ""
-        }
-        leftAction={
-          editField === "due_date" && dateStep === "time" ? (
-            <button
-              type="button"
-              aria-label="Back"
-              onClick={() => setDateStep("date")}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-          ) : null
-        }
-      >
-        {editField === "due_date" && (
-          // DatePicker owns its own Next / Save footer; the modal's
-          // leftAction slot supplies the Back arrow on the time step.
-          <DatePicker
-            value={draft || null}
-            onChange={(iso) => setDraft(iso ?? "")}
-            onSave={saveEdit}
-            step={dateStep}
-            onStepChange={setDateStep}
-          />
-        )}
-        {editField === "estimation" && (
-          <EstimationPicker
-            value={draft === "" ? null : Number(draft)}
-            onChange={(n) => setDraft(n == null ? "" : String(n))}
-            onSave={saveEdit}
-          />
-        )}
-        {editField === "label" && (
-          <LabelPicker
-            value={draft}
-            onChange={(v) => setDraft(v)}
-            onSave={saveEdit}
-            labels={labels}
-          />
-        )}
-      </Modal>
-
       {detailOpen && (
-        <TaskDetailModal task={task} onClose={() => setDetailOpen(false)} />
+        <TaskDetailModal
+          task={task}
+          onClose={() => setDetailOpen(false)}
+          onChanged={onChanged}
+        />
       )}
     </Card>
   );
@@ -321,25 +193,3 @@ function IconButton({
     </button>
   );
 }
-
-function AddChip({
-  label,
-  onClick,
-  disabled,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="rounded-md px-1 text-[11px] text-muted-foreground/70 hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {label}
-    </button>
-  );
-}
-

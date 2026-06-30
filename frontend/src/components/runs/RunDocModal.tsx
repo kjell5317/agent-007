@@ -1,10 +1,18 @@
-import { useEffect, useState } from "react";
-import { GitBranch, Pencil } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  CircleDot,
+  ExternalLink,
+  GitBranch,
+  GitPullRequest,
+  Pencil,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
+import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { formatJsonLikeText } from "@/lib/format";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { cn } from "@/lib/utils";
 
@@ -97,36 +105,62 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     { key: "log", label: "Log" },
   ];
   const taskBranchUrl = branchUrl(task);
+  const subjectLabel = task.subjectType === "pull_request" ? "PR" : "Issue";
+  const SubjectIcon =
+    task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
+  const displayedLog = view === "log" ? formatJsonLikeText(content) : "";
 
   return (
     <Modal
       open
       onClose={onClose}
       title={`${task.repo} #${task.subjectNumber}`}
-      className="max-w-2xl"
+      titleClassName="text-lg"
+      className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
     >
-      {task.branch && (
-        <div className="mb-3 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <GitBranch className="h-3.5 w-3.5 shrink-0" />
-          {taskBranchUrl ? (
-            <a
-              href={taskBranchUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="min-w-0 truncate font-mono hover:text-foreground hover:underline"
-              title={task.branch}
-            >
-              {task.branch}
-            </a>
-          ) : (
-            <span className="min-w-0 truncate font-mono" title={task.branch}>
-              {task.branch}
+      <div className="mb-3 grid shrink-0 gap-2 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground sm:grid-cols-2">
+        <LinkMeta
+          icon={<SubjectIcon className="h-3.5 w-3.5" />}
+          label={subjectLabel}
+        >
+          <a
+            href={task.githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex min-w-0 items-center gap-1 font-medium text-foreground hover:underline"
+            title={`${subjectLabel} #${task.subjectNumber}`}
+          >
+            <span className="min-w-0 truncate">
+              #{task.subjectNumber} {task.repo}
             </span>
+            <ExternalLink className="h-3 w-3 shrink-0" />
+          </a>
+        </LinkMeta>
+        <LinkMeta icon={<GitBranch className="h-3.5 w-3.5" />} label="Branch">
+          {task.branch ? (
+            taskBranchUrl ? (
+              <a
+                href={taskBranchUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex min-w-0 items-center gap-1 font-mono text-foreground hover:underline"
+                title={task.branch}
+              >
+                <span className="min-w-0 truncate">{task.branch}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </a>
+            ) : (
+              <span className="min-w-0 truncate font-mono" title={task.branch}>
+                {task.branch}
+              </span>
+            )
+          ) : (
+            <span>None</span>
           )}
-        </div>
-      )}
+        </LinkMeta>
+      </div>
 
-      <div className="mb-3 inline-flex rounded-lg bg-muted p-0.5 text-xs">
+      <div className="mb-3 inline-flex shrink-0 rounded-lg bg-muted p-0.5 text-xs">
         {views.map((v) => (
           <button
             key={v.key}
@@ -145,31 +179,32 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
         ))}
       </div>
 
-      {loading ? (
-        <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
-      ) : content === null && !editing ? (
-        <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
-          Not generated yet.
-        </div>
-      ) : editing ? (
-        <Textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          className="h-[55vh] resize-none font-mono text-xs leading-relaxed"
-          autoFocus
-        />
-      ) : view === "log" ? (
-        // Raw Codex transcript is JSONL, not markdown — show it verbatim.
-        <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
-          {content}
-        </pre>
-      ) : (
-        <div className="max-h-[55vh] overflow-auto rounded-lg border p-3">
-          <Markdown content={content ?? ""} />
-        </div>
-      )}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {loading ? (
+          <ModalSkeleton />
+        ) : content === null && !editing ? (
+          <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+            Not generated yet.
+          </div>
+        ) : editing ? (
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="h-full resize-none font-mono text-xs leading-relaxed"
+            autoFocus
+          />
+        ) : view === "log" ? (
+          <pre className="h-full overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
+            {displayedLog}
+          </pre>
+        ) : (
+          <div className="h-full overflow-auto rounded-lg border p-3">
+            <Markdown content={content ?? ""} />
+          </div>
+        )}
+      </div>
 
-      <div className="mt-3 flex items-center justify-end gap-2">
+      <div className="mt-3 flex shrink-0 items-center justify-end gap-2">
         {view === "primary" && canEditPrimary && !editing && content !== null && (
           <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={busy}>
             <Pencil className="h-3.5 w-3.5" />
@@ -214,5 +249,23 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
         )}
       </div>
     </Modal>
+  );
+}
+
+function LinkMeta({
+  icon,
+  label,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="shrink-0 text-muted-foreground">{icon}</span>
+      <span className="shrink-0 font-medium">{label}</span>
+      <span className="min-w-0">{children}</span>
+    </div>
   );
 }

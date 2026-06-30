@@ -8,6 +8,7 @@ interface Props {
   title: string;
   children: ReactNode;
   className?: string;
+  titleClassName?: string;
   // Optional content for the top-left of the header (e.g. a back arrow).
   // Sized for a 32-px square button to balance the close X on the right.
   leftAction?: ReactNode;
@@ -19,6 +20,7 @@ export function Modal({
   title,
   children,
   className,
+  titleClassName,
   leftAction,
 }: Props) {
   useEffect(() => {
@@ -43,13 +45,21 @@ export function Modal({
       <div
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          "w-full max-w-sm rounded-xl border bg-card p-4 text-card-foreground shadow-lg",
+          "flex w-full max-w-sm flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-lg",
           className,
         )}
       >
-        <div className="mb-3 grid grid-cols-[2rem_1fr_2rem] items-center">
+        <div className="mb-3 grid shrink-0 grid-cols-[2rem_1fr_2rem] items-center">
           <div className="justify-self-start">{leftAction}</div>
-          <div className="text-center text-sm font-semibold">{title}</div>
+          <div
+            className={cn(
+              "min-w-0 truncate text-center text-sm font-semibold",
+              titleClassName,
+            )}
+            title={title}
+          >
+            {title}
+          </div>
           <button
             type="button"
             aria-label="Close"

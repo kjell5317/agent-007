@@ -72,6 +72,7 @@ export function RunCard({ task, onChanged }: Props) {
       tabIndex={0}
       onClick={() => setOpen(true)}
       onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           setOpen(true);
@@ -81,17 +82,13 @@ export function RunCard({ task, onChanged }: Props) {
     >
       <CardContent className="flex items-center gap-2 p-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <a
-            href={task.githubUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="min-w-0 truncate font-medium leading-snug hover:underline"
+          <div
+            className="min-w-0 truncate font-medium leading-snug"
             title={`${subjectLabel} #${task.subjectNumber} · ${task.repo}`}
           >
             {subjectLabel} #{task.subjectNumber}{" "}
             <span className="text-muted-foreground">{task.repo}</span>
-          </a>
+          </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <Badge className={statusClass(task)}>{task.status}</Badge>
             <span className="capitalize">{task.kind.replace("_", " ")}</span>
