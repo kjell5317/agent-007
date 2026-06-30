@@ -12,9 +12,7 @@ interface Props {
   onChanged: () => Promise<void> | void;
 }
 
-// One distinct color per run status. awaiting_external is split below by
-// subjectType (a PR subject means a PR exists → "in review"; otherwise the
-// branch is pushed but no PR is open yet → "waiting on PR").
+// Fallback colors for unknown upstream status labels.
 const STATE_CLASS: Record<Exclude<KotxState, "awaiting_external">, string> = {
   drafting: "bg-slate-500 text-white dark:bg-slate-600 dark:text-slate-100", // preparing task
   draft: "bg-amber-500 text-slate-900 dark:bg-amber-500/25 dark:text-amber-200", // waiting on my approval
@@ -28,13 +26,50 @@ const STATE_CLASS: Record<Exclude<KotxState, "awaiting_external">, string> = {
   discarded: "bg-zinc-400 text-slate-900 dark:bg-zinc-500/25 dark:text-zinc-200",
 };
 
-function statusClass(task: KotxTask): string {
+const IN_REVIEW_CLASS = "bg-violet-500 text-white dark:bg-violet-500/25 dark:text-violet-200";
+const WAITING_ON_PR_CLASS =
+  "bg-violet-400 text-slate-900 dark:bg-violet-500/20 dark:text-violet-200";
+
+// One distinct color per displayed run status. The key is the text shown in
+// the badge, not the workflow state that happened to produce it.
+const STATUS_CLASS: Record<string, string> = {
+  "preparing task": STATE_CLASS.drafting,
+  drafting: STATE_CLASS.drafting,
+  draft: STATE_CLASS.draft,
+  "waiting on my approval": STATE_CLASS.awaiting_approval,
+  "awaiting approval": STATE_CLASS.awaiting_approval,
+  queued: STATE_CLASS.queued,
+  running: STATE_CLASS.running,
+  "in review": IN_REVIEW_CLASS,
+  "waiting on pr": WAITING_ON_PR_CLASS,
+  "awaiting external": IN_REVIEW_CLASS,
+  done: STATE_CLASS.done,
+  failed: STATE_CLASS.failed,
+  cancelled: STATE_CLASS.cancelled,
+  canceled: STATE_CLASS.cancelled,
+  "timed out": STATE_CLASS.timed_out,
+  discarded: STATE_CLASS.discarded,
+};
+
+function normalizeStatus(status: string): string {
+  return status
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function fallbackStatusClass(task: KotxTask): string {
   if (task.state === "awaiting_external") {
     return task.subjectType === "pull_request"
-      ? "bg-violet-500 text-white dark:bg-violet-500/25 dark:text-violet-200" // in review — PR exists
-      : "bg-violet-400 text-slate-900 dark:bg-violet-500/20 dark:text-violet-200"; // waiting on PR — pushed, no PR yet
+      ? IN_REVIEW_CLASS // PR exists
+      : WAITING_ON_PR_CLASS; // pushed, no PR yet
   }
   return STATE_CLASS[task.state];
+}
+
+function statusClass(task: KotxTask): string {
+  return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
 }
 
 export function RunCard({ task, onChanged }: Props) {
