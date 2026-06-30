@@ -5,6 +5,7 @@ export interface Task {
   title: string;
   description: string | null;
   link: string | null;
+  source_url: string | null;
   due_date: string | null;
   scheduled_date: string | null;
   estimation: number | null;

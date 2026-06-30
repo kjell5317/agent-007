@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app import state
 from app.db import get_session
+from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.task import (
     TaskCreationAccepted,
@@ -38,6 +39,7 @@ from app.services.task.dismiss import dismiss_task
 from app.services.task.open import open_task_from_input
 from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
+from app.services.source_url import source_url_for_raw_input
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -47,8 +49,14 @@ class UnreadCount(BaseModel):
     last_seen_at: datetime
 
 
-def _to_read(task, status_: str, is_manual: bool) -> TaskRead:
-    return TaskRead.build(task, status_, is_manual)
+def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
+    raw = raw_inputs_store.latest_for_task(session, task.id)
+    return TaskRead.build(
+        task,
+        status_,
+        is_manual,
+        source_url=source_url_for_raw_input(raw),
+    )
 
 
 @router.get("", response_model=list[TaskRead])
@@ -59,7 +67,7 @@ async def list_tasks(
 ) -> list[TaskRead]:
     rows = tasks_store.list_(session, status=status_filter, limit=limit)
     manual_map = tasks_store.is_manual_for(session, [t.id for t, _ in rows])
-    return [_to_read(t, s, manual_map.get(t.id, False)) for t, s in rows]
+    return [_to_read(t, s, manual_map.get(t.id, False), session) for t, s in rows]
 
 
 # Static paths must precede the dynamic /{task_id} GET — FastAPI matches in
@@ -89,7 +97,7 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual)
+    return _to_read(row, status_, is_manual, session)
 
 
 @router.post(
@@ -151,7 +159,7 @@ async def update_task(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual)
+    return _to_read(row, status_, is_manual, session)
 
 
 @router.post("/{task_id}/close", status_code=status.HTTP_204_NO_CONTENT)
