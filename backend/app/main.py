@@ -18,6 +18,7 @@ from app.api import auth as auth_router
 from app.api import (
     events,
     inputs,
+    kotx,
     labels,
     notifications,
     oauth,
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(events.router)
     app.include_router(inputs.router)
+    app.include_router(kotx.router)
     app.include_router(labels.router)
     app.include_router(tasks.router)
     app.include_router(notifications.router)

@@ -1,15 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { RunsPanel } from "@/components/runs/RunsPanel";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
+import { useRuns } from "@/hooks/useRuns";
 import { api } from "@/lib/api";
 
 export function App() {
   const { tasks, inputs, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
+  const [tab, setTab] = useState("tasks");
+  const runs = useRuns(tab === "runs");
+  // Runs awaiting my action (ready to start, or a review ready to post).
+  const runsActionable = useMemo(
+    () => runs.tasks.filter((t) => t.canStart || t.canApprove).length,
+    [runs.tasks],
+  );
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [unreadTasks, setUnreadTasks] = useState(0);
   // Page-load snapshots of the per-tab "last seen" watermarks. Used to draw
@@ -70,6 +79,7 @@ export function App() {
 
   const onTabChange = useCallback(
     (value: string) => {
+      setTab(value);
       if (value === "inbox" && unreadInbox > 0) {
         setUnreadInbox(0);
         api.markInputsSeen().catch(() => loadUnread());
@@ -94,8 +104,8 @@ export function App() {
     <div className="min-h-dvh pb-[120px]">
       <Topbar />
       <main className="mx-auto max-w-2xl px-4 py-4">
-        <Tabs defaultValue="tasks" onValueChange={onTabChange}>
-          <TabsList className="mb-4 grid w-full grid-cols-2">
+        <Tabs value={tab} onValueChange={onTabChange}>
+          <TabsList className="mb-4 grid w-full grid-cols-3">
             <TabsTrigger value="tasks">
               Tasks
               {tasks.length > 0 && (
@@ -117,6 +127,14 @@ export function App() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="runs">
+              Runs
+              {runsActionable > 0 && (
+                <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {runsActionable}
+                </span>
+              )}
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="tasks">
             <TasksPanel
@@ -133,6 +151,9 @@ export function App() {
               hasMore={hasMoreInputs}
               seenAfter={seenInboxAt}
             />
+          </TabsContent>
+          <TabsContent value="runs">
+            <RunsPanel {...runs} />
           </TabsContent>
         </Tabs>
       </main>

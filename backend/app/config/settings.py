@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     slack_oauth_redirect_uri: str = "http://localhost:8001/oauth/slack/callback"
     slack_bootstrap_days: int = 1
 
+    # kotx — external coding-agent API proxied under /kotx (see app.api.kotx).
+    # Empty base URL or token disables the proxy (it answers 503).
+    kotx_base_url: str = ""
+    kotx_api_token: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
