@@ -12,6 +12,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { subjectLabel } from "@/components/runs/runLabels";
 import { formatJsonLikeText } from "@/lib/format";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { cn } from "@/lib/utils";
@@ -210,7 +211,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     { key: "log", label: "Log" },
   ];
   const taskBranchUrl = branchUrl(task);
-  const subjectLabel = task.subjectType === "pull_request" ? "PR" : "Issue";
+  const taskSubjectLabel = subjectLabel(task);
   const SubjectIcon =
     task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
   const logCanLoadMore = logHasMore && logBefore !== null;
@@ -220,24 +221,25 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     <Modal
       open
       onClose={onClose}
-      title={`${task.repo} #${task.subjectNumber}`}
+      title={taskSubjectLabel}
       titleClassName="text-lg"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
     >
       <div className="mb-3 grid shrink-0 gap-2 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground sm:grid-cols-2">
         <LinkMeta
           icon={<SubjectIcon className="h-3.5 w-3.5" />}
-          label={subjectLabel}
+          label={task.repo}
+          labelTitle={task.repo}
         >
           <a
             href={task.githubUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-w-0 items-center gap-1 font-medium text-foreground hover:underline"
-            title={`${subjectLabel} #${task.subjectNumber}`}
+            className="inline-flex min-w-0 max-w-full items-center gap-1 font-medium text-foreground hover:underline"
+            title={taskSubjectLabel}
           >
             <span className="min-w-0 truncate">
-              #{task.subjectNumber} {task.repo}
+              {taskSubjectLabel}
             </span>
             <ExternalLink className="h-3 w-3 shrink-0" />
           </a>
@@ -249,14 +251,14 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
                 href={taskBranchUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex min-w-0 items-center gap-1 font-mono text-foreground hover:underline"
+                className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-foreground hover:underline"
                 title={task.branch}
               >
                 <span className="min-w-0 truncate">{task.branch}</span>
                 <ExternalLink className="h-3 w-3 shrink-0" />
               </a>
             ) : (
-              <span className="min-w-0 truncate font-mono" title={task.branch}>
+              <span className="block min-w-0 truncate font-mono" title={task.branch}>
                 {task.branch}
               </span>
             )
@@ -390,17 +392,21 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
 function LinkMeta({
   icon,
   label,
+  labelTitle,
   children,
 }: {
   icon: ReactNode;
   label: string;
+  labelTitle?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="grid min-w-0 grid-cols-[auto_minmax(0,7rem)_minmax(0,1fr)] items-center gap-2">
       <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <span className="shrink-0 font-medium">{label}</span>
-      <span className="min-w-0">{children}</span>
+      <span className="min-w-0 truncate font-medium" title={labelTitle}>
+        {label}
+      </span>
+      <span className="min-w-0 overflow-hidden">{children}</span>
     </div>
   );
 }
