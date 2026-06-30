@@ -18,7 +18,6 @@ REQUIRED fields:
         time and MUST use the user's local zone
         unless the input explicitly names a different zone.
         Round to 5-minute steps.
-    * ai_doable — one of `yes` / `no` / `unsure`. See the tool schema.
     * label — pick the single best-fitting value from the enum. If nothing
         plausibly fits, call `mark_not_task` instead.
 

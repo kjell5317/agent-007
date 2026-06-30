@@ -31,8 +31,14 @@ async def open_task_from_input(
     session: Session,
     raw_input_id: uuid.UUID,
     user_fields: dict[str, Any],
+    context_input_ids: list[uuid.UUID] | None = None,
 ) -> None:
     """Enqueue task creation for an already-processed raw_input.
+
+    `context_input_ids` are sibling inputs (same thread / follow-up group)
+    whose content should also feed the agent's extraction, so a task created
+    from a grouped thread captures the whole conversation. The anchor
+    (`raw_input_id`) is the row that links to the new task.
 
     Raises:
       * `LookupError` — no raw_input with that id.
@@ -73,4 +79,4 @@ async def open_task_from_input(
                     publish_task_removed(old_task_id)
         else:
             raise ValueError("Raw input is already linked to a task")
-    await enqueue(raw_input_id, user_fields)
+    await enqueue(raw_input_id, user_fields, context_input_ids)

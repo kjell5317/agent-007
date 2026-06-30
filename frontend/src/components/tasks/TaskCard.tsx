@@ -19,7 +19,7 @@ import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import type { AiDoable, Task } from "@/lib/types";
+import type { Task } from "@/lib/types";
 
 interface Props {
   task: Task;
@@ -227,7 +227,6 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
                       String(task.location).slice(1)}
                 </span>
               )}
-              {task.ai_doable && <AiDoableDot value={task.ai_doable} />}
             </div>
           </div>
         </div>
@@ -332,29 +331,3 @@ function AddChip({
   );
 }
 
-function AiDoableDot({ value }: { value: AiDoable }) {
-  const color =
-    value === "yes"
-      ? "bg-emerald-500"
-      : value === "no"
-        ? "bg-red-500"
-        : "bg-amber-400";
-  const title =
-    value === "yes"
-      ? "AI-doable: yes"
-      : value === "no"
-        ? "AI-doable: no"
-        : "AI-doable: unsure";
-  return (
-    <span
-      aria-label={title}
-      title={title}
-      // 10×10 with a soft outer ring — clearly visible against the muted
-      // meta row without dominating the row.
-      className={cn(
-        "inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-background",
-        color,
-      )}
-    />
-  );
-}

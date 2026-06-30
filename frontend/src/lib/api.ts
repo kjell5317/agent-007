@@ -61,10 +61,18 @@ export const api = {
     return request<RawInput[]>(`/inputs?${qs.toString()}`);
   },
   getInput: (id: string) => request<RawInput>(`/inputs/${id}`),
-  promoteInput: (id: string, title?: string) =>
+  promoteInput: (
+    id: string,
+    opts?: { title?: string; contextInputIds?: string[] },
+  ) =>
     request<TaskCreationAccepted>(`/tasks/open/${id}`, {
       method: "POST",
-      body: JSON.stringify(title ? { title } : {}),
+      body: JSON.stringify({
+        ...(opts?.title ? { title: opts.title } : {}),
+        ...(opts?.contextInputIds?.length
+          ? { context_input_ids: opts.contextInputIds }
+          : {}),
+      }),
     }),
   unreadInputCount: () =>
     request<UnreadInputs>("/inputs/unread_count"),

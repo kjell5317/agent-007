@@ -166,14 +166,8 @@ async def run_new_input_agent(
             payload = dict(tu_input)
             if "due_date" in payload:
                 payload["due_date"] = parse_iso(str(payload["due_date"]))
-            # The schema marks these required, but the LLM sometimes skips
-            # them. Default ai_doable to "unsure"; warn for the missing label.
-            if not payload.get("ai_doable"):
-                log.warning(
-                    "agent skipped ai_doable · raw=%s — defaulting to 'unsure'",
-                    raw.id,
-                )
-                payload["ai_doable"] = "unsure"
+            # The schema marks `label` required, but the LLM sometimes skips
+            # it — warn and leave NULL so the user can assign one later.
             if not payload.get("label"):
                 log.warning(
                     "agent skipped label · raw=%s — leaving NULL, user must assign",
@@ -189,7 +183,6 @@ async def run_new_input_agent(
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
                     label=str(payload.get("label")) if payload.get("label") else None,
-                    ai_doable=str(payload["ai_doable"]),
                 ),
             )
             trace["outcome"] = "task_created"

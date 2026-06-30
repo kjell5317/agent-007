@@ -56,8 +56,6 @@ def task_field_lines(task, *, indent: str = "  ") -> list[str]:
         lines.append(f"{indent}link: {task.link}")
     if task.label:
         lines.append(f"{indent}label: {task.label}")
-    if getattr(task, "ai_doable", None):
-        lines.append(f"{indent}ai_doable: {task.ai_doable}")
     return lines
 
 

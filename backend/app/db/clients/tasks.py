@@ -54,7 +54,6 @@ def create(session: Session, payload: TaskCreate) -> Task:
         estimation=payload.estimation,
         location=payload.location,
         label=payload.label,
-        ai_doable=payload.ai_doable,
     )
     session.add(row)
     session.flush()
@@ -67,7 +66,7 @@ def get(session: Session, task_id: uuid.UUID) -> Task | None:
 
 _UPDATABLE = {
     "title", "description", "link", "due_date", "estimation",
-    "location", "label", "ai_doable",
+    "location", "label",
 }
 
 

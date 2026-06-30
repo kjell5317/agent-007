@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
-import { InboxCard, type InboxItem } from "@/components/inbox/InboxCard";
+import { InboxCard } from "@/components/inbox/InboxCard";
+import { InboxGroup } from "@/components/inbox/InboxGroup";
 import { Button } from "@/components/ui/button";
+import { groupInputs } from "@/lib/inbox";
 import type { RawInput } from "@/lib/types";
 
 interface Props {
@@ -23,18 +25,9 @@ export function InboxPanel({
   // Inbox is a raw-input log/debug view. Tasks live on the Tasks tab — we
   // intentionally don't surface them here, so a promoted input keeps showing
   // its original envelope (subject/content/agent trace) rather than a
-  // duplicate task card.
-  const items = useMemo<InboxItem[]>(
-    () =>
-      inputs
-        .map<InboxItem>((r) => ({
-          id: r.id,
-          sort: r.received_at,
-          data: r,
-        }))
-        .sort((a, b) => new Date(b.sort).getTime() - new Date(a.sort).getTime()),
-    [inputs],
-  );
+  // duplicate task card. Inputs that share a thread / task are folded into a
+  // single group dropdown; everything else stays a standalone card.
+  const groups = useMemo(() => groupInputs(inputs), [inputs]);
 
   const handleLoadMore = async () => {
     setLoadingMore(true);
@@ -58,7 +51,7 @@ export function InboxPanel({
     </div>
   ) : null;
 
-  if (items.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="space-y-2">
         <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -71,14 +64,27 @@ export function InboxPanel({
 
   return (
     <div className="space-y-2">
-      {items.map((it) => (
-        <InboxCard
-          key={it.id}
-          item={it}
-          onChanged={onChanged}
-          seenAfter={seenAfter}
-        />
-      ))}
+      {groups.map((group) =>
+        group.members.length === 1 ? (
+          <InboxCard
+            key={group.key}
+            item={{
+              id: group.newest.id,
+              sort: group.sort,
+              data: group.newest,
+            }}
+            onChanged={onChanged}
+            seenAfter={seenAfter}
+          />
+        ) : (
+          <InboxGroup
+            key={group.key}
+            group={group}
+            onChanged={onChanged}
+            seenAfter={seenAfter}
+          />
+        ),
+      )}
       {loadMoreButton}
     </div>
   );

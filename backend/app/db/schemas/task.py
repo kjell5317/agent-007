@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TaskBase(BaseModel):
@@ -12,7 +12,6 @@ class TaskBase(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
-    ai_doable: str | None = None  # "yes" / "no" / "unsure"
 
 
 class TaskCreate(TaskBase):
@@ -27,7 +26,6 @@ class TaskUpdate(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
-    ai_doable: str | None = None
 
 
 class TaskPromote(BaseModel):
@@ -43,7 +41,15 @@ class TaskPromote(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
-    ai_doable: str | None = None
+
+
+class TaskOpenRequest(TaskPromote):
+    """Body for POST /tasks/open/{raw_input_id}. Adds `context_input_ids` —
+    sibling inputs from the same thread/follow-up group whose content should
+    also feed the agent's extraction, so a task created from a grouped thread
+    captures the whole conversation. The path's raw_input is the anchor."""
+
+    context_input_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class TaskCreationAccepted(BaseModel):
@@ -80,7 +86,6 @@ class TaskRead(TaskBase):
                 "estimation": task.estimation,
                 "location": task.location,
                 "label": task.label,
-                "ai_doable": task.ai_doable,
                 "status": status_,
                 "is_manual": is_manual,
                 "created_at": task.created_at,

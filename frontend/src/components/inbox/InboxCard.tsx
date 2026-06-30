@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { CirclePlus, RotateCcw, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
+import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
+import { useInboxActions } from "@/components/inbox/useInboxActions";
 import type { RawInput } from "@/lib/types";
 
 export interface InboxItem {
@@ -16,57 +16,20 @@ export interface InboxItem {
   data: RawInput;
 }
 
-type BadgeKind =
-  | "open"
-  | "not_task"
-  | "duplicate"
-  | "no_change"
-  | "closed";
-
 interface Props {
   item: InboxItem;
   onChanged: () => Promise<void> | void;
   seenAfter: string | null;
 }
 
-function labelFor(item: InboxItem): BadgeKind {
-  const outcome = item.data.agent_trace?.outcome;
-  if (outcome === "no_change") return "no_change";
-  return item.data.status as BadgeKind;
-}
-
 export function InboxCard({ item, onChanged, seenAfter }: Props) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  // Promote is async on the backend (queue + LLM extract) — track the in-flight
-  // poll so we can cancel it if the card unmounts mid-flight.
-  const activePolls = useRef<Set<PollHandle>>(new Set());
+  const { busy, runTaskAction, promote } = useInboxActions(onChanged);
 
-  useEffect(
-    () => () => {
-      activePolls.current.forEach((handle) => handle.cancel());
-      activePolls.current.clear();
-    },
-    [],
-  );
-
-  const label = labelFor(item);
   const data = item.data;
-
-  // Prefer the linked task's title when we have a live (open) or completed
-  // (closed) task attached — that's the human-meaningful name. Fall back to
-  // the raw envelope (email subject / content snippet) for everything else.
-  const linkedTitle =
-    data.task_title && (data.status === "open" || data.status === "closed")
-      ? data.task_title
-      : null;
-  const title =
-    linkedTitle ||
-    data.source_metadata?.subject ||
-    (data.content || "").slice(0, 80) ||
-    "(no subject)";
+  const label = inboxBadge(data);
+  const title = inputTitle(data);
   const when = fmtWhen(data.received_at);
-  const source = data.source;
   // Manual entries are excluded from the inbox unread badge (count_since
   // filters source="manual" — the user just created them, no need to
   // notify themselves). Suppress the per-card dot too so the two stay
@@ -76,56 +39,12 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
     data.source !== "manual" &&
     new Date(data.received_at).getTime() > new Date(seenAfter).getTime();
 
-  async function runTaskAction(
-    call: (id: string) => Promise<unknown>,
-    successMsg: string,
-  ) {
-    if (!data.task_id) return;
-    const taskId = data.task_id;
-    setBusy(true);
-    try {
-      await call(taskId);
-      toast.success(successMsg);
-      await onChanged();
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const dismiss = () => runTaskAction(api.markNotTask, "Task dismissed");
-  const reopen = () => runTaskAction(api.reopenTask, "Task re-opened");
-
-  async function promote() {
-    setBusy(true);
-    const toastId = toast.loading("Creating task…", { duration: Infinity });
-    let handle: PollHandle | null = null;
-    const finish = (run: () => void) => {
-      toast.dismiss(toastId);
-      run();
-      if (handle) activePolls.current.delete(handle);
-      setBusy(false);
-    };
-    try {
-      const { raw_input_id } = await api.promoteInput(item.id);
-      handle = pollTaskCreation(raw_input_id, {
-        onSuccess: () =>
-          finish(() => {
-            toast.success("Task added");
-            void onChanged();
-          }),
-        onFailure: (message) => finish(() => toast.error(message)),
-        onTimeout: () =>
-          finish(() => toast.error("Task is taking longer than expected")),
-      });
-      activePolls.current.add(handle);
-    } catch (err) {
-      toast.dismiss(toastId);
-      toast.error((err as Error).message);
-      setBusy(false);
-    }
-  }
+  const dismiss = () => {
+    if (data.task_id) runTaskAction(data.task_id, api.markNotTask, "Task dismissed");
+  };
+  const reopen = () => {
+    if (data.task_id) runTaskAction(data.task_id, api.reopenTask, "Task re-opened");
+  };
 
   // Promote when the input isn't the anchor of an active task: no link at
   // all, or the link is a marker the user can override into a fresh task
@@ -139,7 +58,7 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
     data.status === "not_task" ||
     traceOutcome === "no_change";
   const action = promotable
-    ? { label: "Make a task", Icon: CirclePlus, run: promote }
+    ? { label: "Make a task", Icon: CirclePlus, run: () => promote(item.id) }
     : data.status === "open"
       ? { label: "Dismiss task", Icon: Trash2, run: dismiss }
       : data.status === "closed"
@@ -157,18 +76,7 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
       >
         <div className="flex items-center gap-2">
           {action ? (
-            <button
-              type="button"
-              aria-label={action.label}
-              title={action.label}
-              disabled={busy}
-              onClick={action.run}
-              className={cn(
-                "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
-              )}
-            >
-              <action.Icon className="h-5 w-5" />
-            </button>
+            <ActionButton {...action} disabled={busy} />
           ) : (
             // Keep the leading column reserved so cards align whether or
             // not they have an action button.
@@ -190,7 +98,7 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <Badge variant={label}>{label}</Badge>
-              <span>{source}</span>
+              <span className="truncate">{senderName(data)}</span>
               <span>{when}</span>
             </div>
           </div>
@@ -209,7 +117,34 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
   );
 }
 
-function InputBody({ data }: { data: RawInput }) {
+export function ActionButton({
+  label,
+  Icon,
+  run,
+  disabled,
+}: {
+  label: string;
+  Icon: typeof CirclePlus;
+  run: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={run}
+      className={cn(
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
+      )}
+    >
+      <Icon className="h-5 w-5" />
+    </button>
+  );
+}
+
+export function InputBody({ data }: { data: RawInput }) {
   return (
     <>
       <div className="text-xs text-muted-foreground">

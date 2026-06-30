@@ -36,7 +36,9 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 log = logging.getLogger(__name__)
 
-_queue: asyncio.Queue[tuple[uuid.UUID, dict[str, Any]]] | None = None
+_QueueItem = tuple[uuid.UUID, dict[str, Any], list[uuid.UUID]]
+
+_queue: asyncio.Queue[_QueueItem] | None = None
 _worker: asyncio.Task | None = None
 
 
@@ -63,17 +65,21 @@ async def stop() -> None:
     log.info("task-creation queue stopped")
 
 
-async def enqueue(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None:
+async def enqueue(
+    raw_input_id: uuid.UUID,
+    user_fields: dict[str, Any],
+    context_input_ids: list[uuid.UUID] | None = None,
+) -> None:
     if _queue is None:
         raise RuntimeError("task-creation queue is not running")
-    await _queue.put((raw_input_id, user_fields))
+    await _queue.put((raw_input_id, user_fields, context_input_ids or []))
 
 
-async def _run(queue: asyncio.Queue[tuple[uuid.UUID, dict[str, Any]]]) -> None:
+async def _run(queue: asyncio.Queue[_QueueItem]) -> None:
     while True:
-        raw_input_id, user_fields = await queue.get()
+        raw_input_id, user_fields, context_input_ids = await queue.get()
         try:
-            await _process(raw_input_id, user_fields)
+            await _process(raw_input_id, user_fields, context_input_ids)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — never let one bad item kill the worker
@@ -83,7 +89,11 @@ async def _run(queue: asyncio.Queue[tuple[uuid.UUID, dict[str, Any]]]) -> None:
             queue.task_done()
 
 
-async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None:
+async def _process(
+    raw_input_id: uuid.UUID,
+    user_fields: dict[str, Any],
+    context_input_ids: list[uuid.UUID],
+) -> None:
     with SessionLocal() as session:
         raw = raw_inputs_store.get(session, raw_input_id)
         if raw is None:
@@ -102,7 +112,10 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
         needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
         agent_fields: dict = {}
         if needs_agent:
-            agent_fields = await extract_task_fields(session, raw)
+            context_inputs = _load_context_inputs(session, raw_input_id, context_input_ids)
+            agent_fields = await extract_task_fields(
+                session, raw, context_inputs=context_inputs
+            )
 
         merged = {**agent_fields, **user_fields}
         task = tasks_store.create(
@@ -115,7 +128,6 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
                 location=merged.get("location"),
                 link=merged.get("link"),
                 label=merged.get("label"),
-                ai_doable=merged.get("ai_doable"),
             ),
         )
 
@@ -140,6 +152,25 @@ async def _process(raw_input_id: uuid.UUID, user_fields: dict[str, Any]) -> None
         await schedule_task(session, task)
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
+
+
+def _load_context_inputs(
+    session, anchor_id: uuid.UUID, context_input_ids: list[uuid.UUID]
+) -> list:
+    """Load the sibling inputs whose content should feed extraction.
+
+    Skips the anchor itself and any id that no longer resolves to a row.
+    Order doesn't matter — the extractor sorts the thread by `received_at`."""
+    out = []
+    seen: set[uuid.UUID] = {anchor_id}
+    for cid in context_input_ids:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        row = raw_inputs_store.get(session, cid)
+        if row is not None:
+            out.append(row)
+    return out
 
 
 def _mark_failed(raw_input_id: uuid.UUID) -> None:

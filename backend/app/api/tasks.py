@@ -25,7 +25,13 @@ from sqlalchemy.orm import Session
 from app import state
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
-from app.db.schemas.task import TaskCreationAccepted, TaskPromote, TaskRead, TaskUpdate
+from app.db.schemas.task import (
+    TaskCreationAccepted,
+    TaskOpenRequest,
+    TaskPromote,
+    TaskRead,
+    TaskUpdate,
+)
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import dismiss_task
@@ -107,19 +113,26 @@ async def create_task(
 )
 async def create_task_from_input(
     raw_input_id: uuid.UUID,
-    payload: TaskPromote | None = None,
+    payload: TaskOpenRequest | None = None,
     session: Session = Depends(get_session),
 ) -> TaskCreationAccepted:
     """Enqueue a manual override that turns an already-processed raw_input
     into a task. Returns immediately; the client polls
     `GET /inputs/{raw_input_id}` until the row gains a `task_id`."""
+    context_input_ids = payload.context_input_ids if payload is not None else []
     user_fields = (
-        {k: v for k, v in payload.model_dump().items() if v is not None}
+        {
+            k: v
+            for k, v in payload.model_dump(exclude={"context_input_ids"}).items()
+            if v is not None
+        }
         if payload is not None
         else {}
     )
     try:
-        await open_task_from_input(session, raw_input_id, user_fields)
+        await open_task_from_input(
+            session, raw_input_id, user_fields, context_input_ids
+        )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except ValueError as exc:

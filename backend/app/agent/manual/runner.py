@@ -29,8 +29,12 @@ from app.config import get_settings
 log = logging.getLogger(__name__)
 
 
-async def extract_task_fields(session: Session, raw) -> dict[str, Any]:
+async def extract_task_fields(session: Session, raw, *, context_inputs=()) -> dict[str, Any]:
     """Ask the LLM to extract task fields from a raw input.
+
+    `context_inputs` are sibling raw_inputs from the same thread/follow-up
+    group. When present, the agent sees the whole conversation (oldest first)
+    and is told to produce ONE task capturing it.
 
     Multi-step loop so the model can call `search_notes` (and any configured
     MCP tools — those run server-side) before finalizing with `create_task`.
@@ -39,7 +43,7 @@ async def extract_task_fields(session: Session, raw) -> dict[str, Any]:
     settings = get_settings()
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-    user_msg = _build_extract_message(raw)
+    user_msg = _build_extract_message(raw, context_inputs)
     create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
     search_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "search_notes")
     extract_tools = [search_tool, create_tool]
@@ -112,27 +116,38 @@ async def extract_task_fields(session: Session, raw) -> dict[str, Any]:
 
 
 def _backstop_required(payload: dict, *, raw_id) -> None:
-    """The tool schema marks `ai_doable` and `label` as required, but the LLM
-    sometimes still ships a create_task call without them. Fill in a sane
-    default for ai_doable; warn (and leave NULL) for label so the user can
+    """The tool schema marks `label` as required, but the LLM sometimes still
+    ships a create_task call without it. Warn (and leave NULL) so the user can
     pick one manually."""
-    if not payload.get("ai_doable"):
-        log.warning(
-            "agent skipped ai_doable · raw=%s — defaulting to 'unsure'", raw_id,
-        )
-        payload["ai_doable"] = "unsure"
     if not payload.get("label"):
         log.warning(
             "agent skipped label · raw=%s — leaving NULL, user must assign", raw_id,
         )
 
 
-def _build_extract_message(raw) -> str:
-    meta = raw.source_metadata or {}
+def _build_extract_message(raw, context_inputs=()) -> str:
+    now_line = f"Current time: {now_iso(get_settings().user_timezone)}"
+    if not context_inputs:
+        return "\n".join([now_line, *_render_input_lines(raw)])
+
+    ordered = sorted([raw, *context_inputs], key=lambda r: r.received_at)
     lines = [
-        f"Current time: {now_iso(get_settings().user_timezone)}",
-        f"Source: {raw.source}",
+        now_line,
+        "",
+        f"This input is part of a conversation thread of {len(ordered)} "
+        "messages, shown oldest first. Create ONE task that captures the "
+        "whole thread.",
     ]
+    for i, item in enumerate(ordered, start=1):
+        lines.append("")
+        lines.append(f"===== Message {i} of {len(ordered)} =====")
+        lines.extend(_render_input_lines(item))
+    return "\n".join(lines)
+
+
+def _render_input_lines(raw) -> list[str]:
+    meta = raw.source_metadata or {}
+    lines = [f"Source: {raw.source}"]
     for key in ("from", "to", "subject", "date", "thread_id", "account"):
         val = meta.get(key)
         if val:
@@ -140,4 +155,4 @@ def _build_extract_message(raw) -> str:
     lines.append("")
     lines.append("Body:")
     lines.append((raw.content or "").strip() or "(empty)")
-    return "\n".join(lines)
+    return lines

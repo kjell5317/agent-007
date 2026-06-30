@@ -61,19 +61,6 @@ def _label_schema(*, required: bool) -> dict:
     }
 
 
-_AI_DOABLE_DESCRIPTION = (
-    "Whether a capable AI assistant with normal computer use (browser, email, "
-    "file editing, code, web search) could meaningfully do this task on its "
-    "own — not just help with it. "
-    "`yes` = clearly an AI-doable task (drafting, coding, searching, summarizing, "
-    "filling forms). "
-    "`no` = clearly requires the user in the physical world or with their unique "
-    "credentials/judgement (going somewhere, attending a meeting, signing in person, "
-    "personal decisions). "
-    "`unsure` = mixed or unclear — for example, a task whose scope you can't "
-    "tell from the input."
-)
-
 _CREATE_TASK_PROPS: dict = {
     "title": {"type": "string"},
     "description": {"type": "string"},
@@ -88,11 +75,6 @@ _CREATE_TASK_PROPS: dict = {
             "otherwise a reasonable best-guess based on urgency."
         ),
     },
-    "ai_doable": {
-        "type": "string",
-        "enum": ["yes", "no", "unsure"],
-        "description": _AI_DOABLE_DESCRIPTION,
-    },
     "location": {"type": "string"},
     "link": {
         "type": "string",
@@ -103,18 +85,13 @@ _CREATE_TASK_PROPS: dict = {
         ),
     },
 }
-_CREATE_TASK_REQUIRED = ["title", "estimation", "due_date", "ai_doable"]
+_CREATE_TASK_REQUIRED = ["title", "estimation", "due_date"]
 
 _UPDATE_TASK_PROPS: dict = {
     "title": {"type": "string"},
     "description": {"type": "string"},
     "estimation": {"type": "integer"},
     "due_date": {"type": "string", "description": "ISO 8601 timestamp"},
-    "ai_doable": {
-        "type": "string",
-        "enum": ["yes", "no", "unsure"],
-        "description": "Change the AI-doable assessment. " + _AI_DOABLE_DESCRIPTION,
-    },
     "location": {"type": "string"},
     "link": {
         "type": "string",
