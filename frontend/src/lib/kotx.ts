@@ -169,6 +169,13 @@ function readBooleanField(body: Record<string, unknown>, names: string[]): boole
   return null;
 }
 
+// A JSON object is only a paginated log envelope if it actually carries the
+// log under a known key. Otherwise it's log content that happens to be JSON
+// (e.g. a transcript object or a single JSONL line) and must be shown verbatim.
+function isLogPageEnvelope(body: Record<string, unknown>): boolean {
+  return ["text", "content", "log", "lines"].some((field) => field in body);
+}
+
 function logPageFromJson(body: Record<string, unknown>, requestedLines: number | null): KotxLogPage {
   const text =
     readStringField(body, ["text", "content", "log"]) ??
@@ -231,7 +238,12 @@ async function logRequest(path: string, params: KotxLogParams = {}): Promise<Kot
   const requestedLines = params.limit ?? params.tail ?? null;
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      isLogPageEnvelope(parsed as Record<string, unknown>)
+    ) {
       return logPageFromJson(parsed as Record<string, unknown>, requestedLines);
     }
   } catch {
