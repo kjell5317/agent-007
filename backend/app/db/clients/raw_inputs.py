@@ -53,6 +53,74 @@ def list_(
     return list(session.execute(stmt).scalars())
 
 
+# Group key mirrors the frontend's `inputGroupKey`: a thread (stable across
+# task creation) wins, then a shared task, else the row stands alone. Keeping
+# the two in sync is what guarantees the rows we return for N groups are
+# exactly N whole groups on the client.
+_GROUPED_INPUT_IDS_SQL = text(
+    """
+    WITH keyed AS (
+        SELECT
+            id,
+            received_at,
+            CASE
+                WHEN COALESCE(source_metadata->>'thread_id', '') <> ''
+                    THEN source || ':thread:' || (source_metadata->>'thread_id')
+                WHEN task_id IS NOT NULL
+                    THEN 'task:' || task_id::text
+                ELSE 'input:' || id::text
+            END AS group_key
+        FROM raw_inputs
+        WHERE (CAST(:status AS text) IS NULL OR status = :status)
+          AND (CAST(:source AS text) IS NULL OR source = :source)
+    ),
+    top_groups AS (
+        SELECT group_key, MAX(received_at) AS group_sort
+        FROM keyed
+        GROUP BY group_key
+        ORDER BY group_sort DESC
+        LIMIT :limit
+    )
+    SELECT k.id
+    FROM keyed k
+    JOIN top_groups g ON k.group_key = g.group_key
+    ORDER BY g.group_sort DESC, k.received_at DESC
+    """
+)
+
+
+def list_grouped(
+    session: Session,
+    *,
+    status: str | None = None,
+    source: str | None = None,
+    limit: int = 100,
+) -> list[RawInput]:
+    """Return raw inputs for the `limit` most-recent groups (thread / task /
+    standalone), with *every* member of each group included.
+
+    `limit` counts groups, not rows — so the inbox can render whole threads
+    without one being split across a pagination boundary. Rows come ordered
+    newest-group-first, newest-member-first within a group.
+    """
+    ordered_ids = [
+        row.id
+        for row in session.execute(
+            _GROUPED_INPUT_IDS_SQL,
+            {"status": status, "source": source, "limit": limit},
+        )
+    ]
+    if not ordered_ids:
+        return []
+    objs = (
+        session.execute(select(RawInput).where(RawInput.id.in_(ordered_ids)))
+        .scalars()
+        .all()
+    )
+    by_id = {o.id: o for o in objs}
+    return [by_id[i] for i in ordered_ids if i in by_id]
+
+
 def count_since(session: Session, ts: datetime) -> int:
     """Count raw inputs received after `ts` for the unread badge.
 

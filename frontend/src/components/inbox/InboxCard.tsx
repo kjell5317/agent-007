@@ -121,8 +121,8 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
 // Separator between meta labels — keeps the gaps legible.
 export function MetaDot() {
   return (
-    <span aria-hidden className="text-muted-foreground/40">
-      ·
+    <span aria-hidden className="text-muted-foreground">
+      •
     </span>
   );
 }

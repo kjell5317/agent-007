@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
+import { groupInputs } from "@/lib/inbox";
 import type { RawInput, Task } from "@/lib/types";
 
+// Pagination counts inbox *groups* (threads / follow-ups), not raw rows — the
+// backend returns every member of each included group (see `list_grouped`).
 const INPUTS_PAGE_SIZE = 20;
 
 export interface AppData {
@@ -45,7 +48,7 @@ export function useAppData(): AppData {
     ]);
     setTasks([...open]);
     setInputs(allInputs);
-    setHasMoreInputs(allInputs.length >= limit);
+    setHasMoreInputs(groupInputs(allInputs).length >= limit);
     setLoading(false);
   }, []);
 
@@ -54,7 +57,7 @@ export function useAppData(): AppData {
     const more = await api.listInputs({ limit: next });
     inputsLimitRef.current = next;
     setInputs(more);
-    setHasMoreInputs(more.length >= next);
+    setHasMoreInputs(groupInputs(more).length >= next);
   }, []);
 
   useEffect(() => {

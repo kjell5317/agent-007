@@ -34,10 +34,20 @@ class UnreadCount(BaseModel):
 async def list_inputs(
     status_filter: str | None = Query(None, alias="status"),
     source: str | None = Query(None),
-    limit: int = Query(100, le=500),
+    limit: int = Query(
+        100,
+        le=500,
+        description=(
+            "Number of inbox *groups* (threads / follow-ups) to return. Every "
+            "member of an included group is returned, so threads are never "
+            "split — the row count may exceed `limit`."
+        ),
+    ),
     session: Session = Depends(get_session),
 ) -> list[RawInputRead]:
-    rows = raw_inputs.list_(session, status=status_filter, source=source, limit=limit)
+    rows = raw_inputs.list_grouped(
+        session, status=status_filter, source=source, limit=limit
+    )
     return [RawInputRead.from_row(r) for r in rows]
 
 
