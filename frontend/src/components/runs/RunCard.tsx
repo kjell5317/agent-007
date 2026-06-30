@@ -3,7 +3,6 @@ import { ChevronRight, Square, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { RunDocModal } from "@/components/runs/RunDocModal";
 import { runTitle } from "@/components/runs/runLabels";
 import { kotx, TERMINAL_STATES, type KotxState, type KotxTask } from "@/lib/kotx";
 import { cn } from "@/lib/utils";
@@ -11,6 +10,7 @@ import { cn } from "@/lib/utils";
 interface Props {
   task: KotxTask;
   onChanged: () => Promise<void> | void;
+  onOpen: (id: number) => void;
 }
 
 // Fallback colors for unknown upstream status labels.
@@ -73,10 +73,7 @@ function statusClass(task: KotxTask): string {
   return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
 }
 
-export function RunCard({ task, onChanged }: Props) {
-  // review-kind runs surface REVIEW.md; everything else surfaces TASK.md.
-  const doc: "task" | "review" = task.kind === "review" ? "review" : "task";
-  const [open, setOpen] = useState(false);
+export function RunCard({ task, onChanged, onOpen }: Props) {
   const [busy, setBusy] = useState(false);
 
   const title = runTitle(task);
@@ -102,16 +99,15 @@ export function RunCard({ task, onChanged }: Props) {
   const discard = runAction(() => kotx.discard(task.id), "Discarded");
 
   return (
-    <>
     <Card
       role="button"
       tabIndex={0}
-      onClick={() => setOpen(true)}
+      onClick={() => onOpen(task.id)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          setOpen(true);
+          onOpen(task.id);
         }
       }}
       className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -153,10 +149,6 @@ export function RunCard({ task, onChanged }: Props) {
         </span>
       </CardContent>
     </Card>
-    {open && (
-      <RunDocModal task={task} doc={doc} onClose={() => setOpen(false)} onChanged={onChanged} />
-    )}
-    </>
   );
 }
 

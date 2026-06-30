@@ -1,5 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
+import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
+import { api } from "@/lib/api";
 import { isOverdue, isToday } from "@/lib/dates";
 import { compareTasksBySchedule, taskGroupDate } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
@@ -8,9 +10,20 @@ interface Props {
   tasks: Task[];
   onChanged: () => Promise<void> | void;
   seenAfter: string | null;
+  selectedTaskId: string | null;
+  onTaskOpen: (id: string) => void;
+  onSelectedTaskClose: () => void;
 }
 
-export function TasksPanel({ tasks, onChanged, seenAfter }: Props) {
+export function TasksPanel({
+  tasks,
+  onChanged,
+  seenAfter,
+  selectedTaskId,
+  onTaskOpen,
+  onSelectedTaskClose,
+}: Props) {
+  const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const [today, later] = useMemo(() => {
     const sorted = [...tasks].sort(compareTasksBySchedule);
     const t: Task[] = [];
@@ -25,42 +38,86 @@ export function TasksPanel({ tasks, onChanged, seenAfter }: Props) {
     }
     return [t, l];
   }, [tasks]);
+  const selectedListTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, tasks],
+  );
+  const selectedTask = selectedTaskId ? selectedListTask ?? fetchedTask : null;
+
+  useEffect(() => {
+    if (!selectedTaskId || selectedListTask) {
+      setFetchedTask(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getTask(selectedTaskId)
+      .then((task) => {
+        if (!cancelled) setFetchedTask(task);
+      })
+      .catch(() => {
+        if (!cancelled) onSelectedTaskClose();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onSelectedTaskClose, selectedListTask, selectedTaskId]);
 
   if (today.length === 0 && later.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-        No tasks yet. Add one below or sync a source.
-      </div>
+      <>
+        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+          No tasks yet. Add one below or sync a source.
+        </div>
+        {selectedTask && (
+          <TaskDetailModal
+            task={selectedTask}
+            onClose={onSelectedTaskClose}
+            onChanged={onChanged}
+          />
+        )}
+      </>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {today.length > 0 && (
-        <Section title="Today">
-          {today.map((t) => (
-            <TaskCard
-              key={t.id}
-              task={t}
-              onChanged={onChanged}
-              seenAfter={seenAfter}
-            />
-          ))}
-        </Section>
+    <>
+      <div className="space-y-6">
+        {today.length > 0 && (
+          <Section title="Today">
+            {today.map((t) => (
+              <TaskCard
+                key={t.id}
+                task={t}
+                onChanged={onChanged}
+                seenAfter={seenAfter}
+                onOpen={onTaskOpen}
+              />
+            ))}
+          </Section>
+        )}
+        {later.length > 0 && (
+          <Section title="Later">
+            {later.map((t) => (
+              <TaskCard
+                key={t.id}
+                task={t}
+                onChanged={onChanged}
+                seenAfter={seenAfter}
+                onOpen={onTaskOpen}
+              />
+            ))}
+          </Section>
+        )}
+      </div>
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          onClose={onSelectedTaskClose}
+          onChanged={onChanged}
+        />
       )}
-      {later.length > 0 && (
-        <Section title="Later">
-          {later.map((t) => (
-            <TaskCard
-              key={t.id}
-              task={t}
-              onChanged={onChanged}
-              seenAfter={seenAfter}
-            />
-          ))}
-        </Section>
-      )}
-    </div>
+    </>
   );
 }
 

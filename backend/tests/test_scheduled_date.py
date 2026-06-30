@@ -20,6 +20,8 @@ from app.db.schemas.task import TaskRead  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar import discover  # noqa: E402
 from app.services.calendar import events as calendar_events  # noqa: E402
+from app.services import notify as notify_service  # noqa: E402
+from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.plan.schedule import Interval  # noqa: E402
 
 
@@ -187,6 +189,53 @@ async def test_add_task_event_persists_scheduled_date_after_calendar_create(monk
 
 
 @pytest.mark.asyncio
+async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Write report",
+        due_date=datetime.now(timezone.utc) + timedelta(days=2),
+        scheduled_date=None,
+        calendar_event_id=None,
+        estimation=30,
+    )
+    extended_start = datetime.now(timezone.utc) + timedelta(hours=6)
+    extended_slot = (extended_start, extended_start + timedelta(minutes=30))
+    searches: list[bool] = []
+    repairs: list[bool] = []
+
+    def fake_find_free_slot(*_args, extended_window: bool = False):
+        searches.append(extended_window)
+        return extended_slot if extended_window else None
+
+    async def fake_repair_by_displacing_task(*_args, extended_window: bool, **_kwargs):
+        repairs.append(extended_window)
+        raise ValueError("no normal slot")
+
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=0,
+            google_calendar_default_event_minutes=30,
+            google_calendar_id="",
+            google_busy_calendar_ids=[],
+        ),
+    )
+    monkeypatch.setattr(schedule_service, "_find_free_slot", fake_find_free_slot)
+    monkeypatch.setattr(
+        schedule_service,
+        "_repair_by_displacing_task",
+        fake_repair_by_displacing_task,
+    )
+
+    result = await schedule_service.plan_task_slot(SimpleNamespace(), task)
+
+    assert result == extended_slot
+    assert searches == [False, True]
+    assert repairs == [False]
+
+
+@pytest.mark.asyncio
 async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
     task_id = uuid.uuid4()
     scheduled = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
@@ -224,6 +273,94 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
     assert result["ok"] is True
     assert len(calls) == 1
     assert calls[0] == Interval(scheduled, scheduled + timedelta(minutes=45), "event-1")
+
+
+@pytest.mark.asyncio
+async def test_task_notifications_deep_link_and_expose_three_actions(monkeypatch):
+    task_id = uuid.uuid4()
+    task = SimpleNamespace(
+        id=task_id,
+        title="Write report",
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        estimation=45,
+    )
+    calls: list[dict] = []
+
+    async def fake_notify(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        notify_service,
+        "get_settings",
+        lambda: SimpleNamespace(task_default_url="https://example.test/app"),
+    )
+    monkeypatch.setattr(notify_service, "notify", fake_notify)
+
+    await notify_service.notify_task_scheduled(
+        task,
+        start=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 1, 10, 45, tzinfo=timezone.utc),
+        is_fresh=True,
+    )
+    await notify_service.notify_no_slot(task)
+
+    expected_actions = [
+        {"action": notify_service.ACTION_CLOSE_TASK, "title": "Done"},
+        {"action": notify_service.ACTION_DISMISS_TASK, "title": "Dismiss"},
+        {"action": notify_service.ACTION_RESCHEDULE_TASK, "title": "Reschedule"},
+    ]
+    assert [call["url"] for call in calls] == [
+        f"https://example.test/app#task/{task_id}",
+        f"https://example.test/app#task/{task_id}",
+    ]
+    assert [call["actions"] for call in calls] == [expected_actions, expected_actions]
+
+
+@pytest.mark.asyncio
+async def test_notification_done_and_dismiss_callbacks_use_task_services(monkeypatch):
+    task_id = uuid.uuid4()
+    task = SimpleNamespace(id=task_id, title="Write report")
+    closed: list[uuid.UUID] = []
+    dismissed: list[uuid.UUID] = []
+
+    async def fake_close_task(_session, task_id_arg):
+        closed.append(task_id_arg)
+
+    async def fake_dismiss_task(_session, task_id_arg):
+        dismissed.append(task_id_arg)
+
+    monkeypatch.setattr(notifications.tasks_store, "get", lambda _session, _task_id: task)
+    monkeypatch.setattr(notifications, "close_task_svc", fake_close_task)
+    monkeypatch.setattr(notifications, "dismiss_task", fake_dismiss_task)
+    monkeypatch.setattr(
+        notifications,
+        "get_settings",
+        lambda: SimpleNamespace(home_assistant_action_secret=""),
+    )
+
+    request = SimpleNamespace(headers={}, query_params={})
+
+    close_result = await notifications.handle_action(
+        notifications.ActionPayload(
+            action=notifications.ACTION_CLOSE_TASK,
+            tag=f"task-{task_id}",
+        ),
+        request,
+        session=SimpleNamespace(),
+    )
+    dismiss_result = await notifications.handle_action(
+        notifications.ActionPayload(
+            action=notifications.ACTION_DISMISS_TASK,
+            tag=f"task-{task_id}",
+        ),
+        request,
+        session=SimpleNamespace(),
+    )
+
+    assert close_result["ok"] is True
+    assert dismiss_result["ok"] is True
+    assert closed == [task_id]
+    assert dismissed == [task_id]
 
 
 @pytest.mark.asyncio
