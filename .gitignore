@@ -23,4 +23,3 @@ build/
 
 # Personal runtime config — copy from the *.example templates in config/
 config/labels.toml
-config/points.yaml

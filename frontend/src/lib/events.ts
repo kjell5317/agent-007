@@ -13,7 +13,8 @@ import type { RawInput, Task } from "./types";
 export type ServerEvent =
   | { type: "task"; data: Task }
   | { type: "task_removed"; id: string }
-  | { type: "input"; data: RawInput };
+  | { type: "input"; data: RawInput }
+  | { type: "points"; total: number };
 
 type Handler = (event: ServerEvent) => void;
 

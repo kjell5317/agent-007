@@ -22,7 +22,6 @@ from app.api import (
     notifications,
     oauth,
     points,
-    poll,
     settings as settings_router,
     tasks,
 )
@@ -79,7 +78,6 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router)
     app.include_router(oauth.router)
     app.include_router(points.router)
-    app.include_router(poll.sources_router)
     app.include_router(settings_router.router)
 
     @app.get("/health", tags=["meta"])

@@ -10,6 +10,7 @@ Frontend contract — every event is `{"type": ..., ...}`:
                                                when data.status != "open"
   * {"type": "task_removed", "id": <uuid>}   — task row deleted (dismiss / orphan)
   * {"type": "input", "data": <RawInputRead>} — upsert into the inbox
+  * {"type": "points", "total": <float>}     — new points total (topbar display)
 """
 
 from __future__ import annotations
@@ -19,7 +20,11 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
+from app.db.clients import (
+    points as points_store,
+    raw_inputs as raw_inputs_store,
+    tasks as tasks_store,
+)
 from app.db.schemas.raw_input import RawInputRead
 from app.db.schemas.task import TaskRead
 from app.events import bus
@@ -50,3 +55,7 @@ def publish_input(session: Session, raw_input_id: uuid.UUID) -> None:
     if row is None:
         return
     _emit({"type": "input", "data": RawInputRead.from_row(row).model_dump(mode="json")})
+
+
+def publish_points(session: Session) -> None:
+    _emit({"type": "points", "total": points_store.total(session)})

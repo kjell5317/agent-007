@@ -22,7 +22,7 @@ export default defineConfig({
       "/auth": "http://localhost:8001",
       "/tasks": "http://localhost:8001",
       "/inputs": "http://localhost:8001",
-      "/sources": "http://localhost:8001",
+      "/points": "http://localhost:8001",
       "/oauth": "http://localhost:8001",
       "/labels": "http://localhost:8001",
       "/notifications": "http://localhost:8001",

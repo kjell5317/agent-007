@@ -48,29 +48,3 @@ export interface RawInput {
   agent_trace: AgentTrace | null;
 }
 
-export interface SourcePollResult {
-  fetched: number;
-  agent_runs: number;
-  tasks_created: number;
-  skipped: number;
-  errors: unknown[];
-  per_source: Record<string, unknown>;
-}
-
-export interface PointAction {
-  name: string;
-  factor: number;
-  unit: string | null;
-}
-
-export interface PointsSection {
-  key: string;
-  title: string;
-  actions: PointAction[];
-}
-
-export interface PointsData {
-  total: number;
-  task_done_factor: number;
-  sections: PointsSection[];
-}

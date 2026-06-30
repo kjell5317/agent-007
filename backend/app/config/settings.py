@@ -65,8 +65,9 @@ class Settings(BaseSettings):
     # Labels
     labels_config_path: str = "config/labels.toml"
 
-    # Points actions + task-completion factor (see app.points)
-    points_config_path: str = "config/points.yaml"
+    # Points-per-estimated-minute awarded automatically when a task is
+    # completed (e.g. 0.2 → a 30-minute task earns 6 points). 0 disables it.
+    points_task_done_factor: float = 0.2
 
     # Write calendar
     google_calendar_id: str = "primary"

@@ -5,8 +5,9 @@ Disabled when AUTH_ALLOWED_EMAILS is empty (local dev / tests). When enabled:
   - Browser requests (`Accept: text/html`) → 302 to /auth/login
   - API clients (everything else)         → 401 JSON
 
-Exempts /auth/* (the login flow itself) and /health (so external healthchecks
-work without a session).
+Exempts /auth/* (the login flow itself), /health (so external healthchecks
+work without a session), and the Home Assistant webhooks under /notifications/*
+and /points/* (which authenticate via their own shared secret instead).
 
 Requires SessionMiddleware to be added AFTER this one — middleware order is
 last-added-first-executed, so a later add wraps an earlier one. Result:
@@ -26,7 +27,7 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_EXEMPT_PREFIXES = ("/auth/", "/notifications/")
+_EXEMPT_PREFIXES = ("/auth/", "/notifications/", "/points/")
 _EXEMPT_PATHS = {"/health"}
 
 

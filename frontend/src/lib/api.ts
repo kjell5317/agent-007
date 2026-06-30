@@ -1,4 +1,4 @@
-import type { Label, PointsData, RawInput, SourcePollResult, Task } from "./types";
+import type { Label, RawInput, Task } from "./types";
 
 class ApiError extends Error {
   status: number;
@@ -76,16 +76,13 @@ export const api = {
   markTasksSeen: () =>
     request<UnreadInputs>("/tasks/mark_seen", { method: "POST" }),
 
-  poll: () =>
-    request<SourcePollResult>("/sources/poll", { method: "POST" }),
-
   listLabels: () => request<Label[]>("/labels"),
 
-  getPoints: () => request<PointsData>("/points"),
-  submitPointAction: (body: { section: string; name: string; quantity?: number }) =>
-    request<{ total: number }>("/points/actions", {
+  getPoints: () => request<{ total: number }>("/points"),
+  adjustPoints: (amount: number) =>
+    request<{ total: number }>("/points/adjust", {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify({ amount }),
     }),
 
   getSettings: () => request<AppSettings>("/settings"),

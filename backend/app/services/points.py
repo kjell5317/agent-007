@@ -1,9 +1,9 @@
-"""Points awarding — action submissions and task-completion bonuses.
+"""Points awarding — manual adjustments and task-completion bonuses.
 
-Config (sections + `task_done_factor`) lives in `app.points`; the running
-total and per-event ledger live in the `points_entries` table. The factor is
-always read from the server-side config — callers only name an action and a
-quantity, so the client can't inflate its own score.
+The running total and per-event ledger live in the `points_entries` table.
+Task completion awards `points_task_done_factor × estimated minutes`; manual
+adjustments (from the topbar modal or Home Assistant) add a signed amount
+directly.
 """
 
 from __future__ import annotations
@@ -12,49 +12,35 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.clients import points as points_store
-from app.points import find_action, load_points_config
+from app.events import publish_points
 
 log = logging.getLogger(__name__)
 
 
-def submit_action(session: Session, *, section: str, name: str, quantity: float | None) -> float:
-    """Record an action submission and return the new total.
-
-    Raises `LookupError` when the action isn't configured, and `ValueError`
-    when a unit-bearing action is submitted without a positive quantity.
-    """
-    action = find_action(section, name)
-    if action is None:
-        raise LookupError(f"No configured action {name!r} in section {section!r}")
-
-    if action.unit is None:
-        qty = 1.0
-    elif quantity is None or quantity <= 0:
-        raise ValueError("This action requires a positive quantity.")
-    else:
-        qty = float(quantity)
-
+def adjust_points(session: Session, amount: float) -> float:
+    """Add a signed amount to the ledger and return the new total."""
     points_store.add_entry(
         session,
-        source="action",
-        section=section,
-        action_name=name,
-        factor=action.factor,
-        quantity=qty,
-        amount=action.factor * qty,
+        source="manual",
+        factor=float(amount),
+        quantity=1.0,
+        amount=float(amount),
     )
+    log.info("points · manual adjust amount=%s", amount)
+    publish_points(session)
     return points_store.total(session)
 
 
 def award_for_task(session: Session, task) -> None:
-    """Award `task_done_factor × estimated minutes` for a completed task.
+    """Award `points_task_done_factor × estimated minutes` for a completed task.
 
     No-op when the factor is 0 (disabled), the task has no estimation, or the
     task was already awarded (so a reopen→close cycle doesn't double-count). A
     negative factor is allowed and subtracts points on completion.
     """
-    factor = load_points_config().task_done_factor
+    factor = get_settings().points_task_done_factor
     minutes = task.estimation or 0
     if factor == 0 or minutes <= 0:
         return

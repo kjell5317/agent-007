@@ -30,11 +30,11 @@ self-registering file, with no changes to the agent, storage, or API.
   color-coded by label.
 - **Commute planning** — events with a location get weather-aware travel time
   blocked out, and rescheduling when an edit creates an overlap.
-- **Gamification** — a configurable points system for habits and completed
-  tasks.
+- **Gamification** — a running points score (shown in the topbar) earned by
+  completing tasks, adjustable by hand or from Home Assistant.
 - **Push notifications** — errors and updates are pushed via a Home Assistant
   notify service (nothing fails silently).
-- **Web UI** — a React/Vite single-page app for the inbox, tasks, and points.
+- **Web UI** — a React/Vite single-page app for the inbox and tasks.
 
 ## Architecture
 
@@ -71,7 +71,6 @@ cd agent-007
 
 cp .env.example .env                         # then fill in the secrets below
 cp config/labels.toml.example config/labels.toml
-cp config/points.yaml.example config/points.yaml
 
 docker compose up -d --build                 # Postgres + app + Caddy
 ```
@@ -112,9 +111,9 @@ essentials:
 | `AUTH_ALLOWED_EMAILS` / `SESSION_SECRET` | Google-SSO email allowlist for the UI |
 
 Runtime config that isn't secret lives in [`config/`](config/) — task
-`labels.toml` and the `points.yaml` scoring. These are personal and
-git-ignored; copy the `*.example` templates and edit. See
-[`config/README.md`](config/README.md).
+`labels.toml`. It's personal and git-ignored; copy the `*.example` template
+and edit. Points scoring is controlled by `POINTS_TASK_DONE_FACTOR` in `.env`.
+See [`config/README.md`](config/README.md).
 
 ## Project structure
 

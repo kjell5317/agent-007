@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut, RefreshCw } from "lucide-react";
+import { CircleUser, ExternalLink, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
+import { subscribeEvents } from "@/lib/events";
 import { cn } from "@/lib/utils";
-
-interface Props {
-  onSynced: () => Promise<void> | void;
-}
 
 // Each entry becomes a "Connect <label>" link inside the account dropdown.
 // The href points at the backend's generic OAuth authorize route, which
@@ -19,11 +18,16 @@ const OAUTH_PROVIDERS: { label: string; href: string }[] = [
   { label: "Social AI", href: "/oauth/slack/authorize?app=social" },
 ];
 
-export function Topbar({ onSynced }: Props) {
+function formatPoints(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+export function Topbar() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
+  const [points, setPoints] = useState<number | null>(null);
+  const [pointsOpen, setPointsOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -38,6 +42,18 @@ export function Topbar({ onSynced }: Props) {
       .getSettings()
       .then((s) => setAutoPoll(s.auto_poll_enabled))
       .catch(() => setAutoPoll(null));
+    api
+      .getPoints()
+      .then((r) => setPoints(r.total))
+      .catch(() => setPoints(null));
+  }, []);
+
+  // Live points: the backend pushes a `points` event whenever the total
+  // changes (task crossed off, manual adjust, Home Assistant).
+  useEffect(() => {
+    return subscribeEvents((event) => {
+      if (event.type === "points") setPoints(event.total);
+    });
   }, []);
 
   const toggleAutoPoll = useCallback(
@@ -54,25 +70,6 @@ export function Topbar({ onSynced }: Props) {
     },
     [autoPoll],
   );
-
-  const sync = async () => {
-    setSyncing(true);
-    const toastId = toast.loading("Syncing…");
-    try {
-      const result = await api.poll();
-      const parts = [
-        `${result.fetched} fetched`,
-        `${result.tasks_created} new task${result.tasks_created === 1 ? "" : "s"}`,
-      ];
-      if (result.errors.length) parts.push(`${result.errors.length} error(s)`);
-      toast.success(`Synced: ${parts.join(" · ")}`, { id: toastId });
-      await onSynced();
-    } catch (err) {
-      toast.error(`Sync failed: ${(err as Error).message}`, { id: toastId });
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const logout = async () => {
     await api.logout();
@@ -96,10 +93,17 @@ export function Topbar({ onSynced }: Props) {
           }
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
-        <Button size="sm" variant="outline" onClick={sync} disabled={syncing}>
-          <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
-          Sync
-        </Button>
+        {points != null && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setPointsOpen(true)}
+            className="tabular-nums"
+            title="Adjust points"
+          >
+            {formatPoints(points)} pts
+          </Button>
+        )}
         {email && (
           <AccountMenu
             email={email}
@@ -109,7 +113,88 @@ export function Topbar({ onSynced }: Props) {
           />
         )}
       </div>
+      <PointsModal
+        open={pointsOpen}
+        onClose={() => setPointsOpen(false)}
+        total={points}
+        onTotal={setPoints}
+      />
     </header>
+  );
+}
+
+function PointsModal({
+  open,
+  onClose,
+  total,
+  onTotal,
+}: {
+  open: boolean;
+  onClose: () => void;
+  total: number | null;
+  onTotal: (total: number) => void;
+}) {
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const apply = async (sign: 1 | -1) => {
+    const magnitude = Math.abs(Number(amount));
+    if (!Number.isFinite(magnitude) || magnitude === 0) {
+      toast.error("Enter a non-zero amount.");
+      return;
+    }
+    const delta = sign * magnitude;
+    setBusy(true);
+    try {
+      const res = await api.adjustPoints(delta);
+      onTotal(res.total);
+      const s = delta >= 0 ? "+" : "";
+      toast.success(`${s}${formatPoints(delta)} points`);
+      setAmount("");
+      onClose();
+    } catch (err) {
+      toast.error(`Failed: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Adjust points">
+      {total != null && (
+        <div className="mb-4 text-center">
+          <span className="text-4xl font-bold tabular-nums">
+            {formatPoints(total)}
+          </span>
+          <span className="ml-1 text-sm text-muted-foreground">points</span>
+        </div>
+      )}
+      <Input
+        type="number"
+        inputMode="decimal"
+        min="0"
+        step="any"
+        autoFocus
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        placeholder="Amount"
+        aria-label="Amount"
+        className="mb-3"
+      />
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          className="flex-1"
+          disabled={busy}
+          onClick={() => apply(-1)}
+        >
+          − Subtract
+        </Button>
+        <Button className="flex-1" disabled={busy} onClick={() => apply(1)}>
+          + Add
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
