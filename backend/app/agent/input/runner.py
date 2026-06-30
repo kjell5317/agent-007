@@ -220,6 +220,7 @@ async def run_new_input_agent(
             break
         if tu.name == "mark_not_task":
             trace["outcome"] = "not_task"
+            trace["reason"] = tu_input.get("reason")
             trace["confidence"] = tu_input.get("confidence")
             final_status = "not_task"
             raw_notes = tu_input.get("notes") or []
@@ -300,21 +301,80 @@ def _build_new_input_message(
             "input may also not be a task."
         )
         for hit, t in task_candidates:
-            lines.append("")
-            lines.append(
-                f"[{hit.status.upper()}] sim={hit.similarity:.2f} · "
-                f"existing_task_id={t.id}"
-            )
-            lines.extend(task_field_lines(t))
+            lines.extend(_task_candidate_lines(hit, t))
         for p in not_task_signals:
-            reason = (p.agent_trace or {}).get("reason") or ""
-            lines.append("")
-            lines.append(
-                f"[NOT_TASK] sim={p.similarity:.2f} · from {p.sender or '?'} · "
-                f"{p.subject or '(no subject)'} · {reason[:120]}"
-            )
+            lines.extend(_not_task_candidate_lines(p))
 
     lines.append("")
     lines.append("Body:")
     lines.append((raw.content or "").strip() or "(empty)")
     return "\n".join(lines)
+
+
+def _task_candidate_lines(hit: SimilarInput, task: Any) -> list[str]:
+    title = _truncate_inline(str(getattr(task, "title", "") or "(untitled task)"), 120)
+    lines = [
+        "",
+        (
+            f"[{hit.status.upper()}] sim={hit.similarity:.2f} · "
+            f"existing_task_id={task.id} · title: {title}"
+        ),
+    ]
+    for line in task_field_lines(task):
+        if line.strip().lower().startswith("title:"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _not_task_candidate_lines(hit: SimilarInput) -> list[str]:
+    title = _candidate_title(hit)
+    lines = [
+        "",
+        f"[NOT_TASK] sim={hit.similarity:.2f} · title: {title}",
+        f"  id: {hit.id}",
+    ]
+
+    meta = _candidate_metadata(hit)
+    if meta:
+        lines.append(f"  metadata: {meta}")
+
+    snippet = _truncate_inline(hit.content_snippet or "", 300)
+    if snippet:
+        lines.append(f"  snippet: {snippet}")
+
+    reason = _truncate_inline(str((hit.agent_trace or {}).get("reason") or ""), 180)
+    if reason:
+        lines.append(f"  reason: {reason}")
+
+    return lines
+
+
+def _candidate_title(hit: SimilarInput) -> str:
+    subject = _truncate_inline(hit.subject or "", 120)
+    if subject:
+        return subject
+
+    for raw_line in (hit.content_snippet or "").splitlines():
+        line = _truncate_inline(raw_line, 120)
+        if line:
+            return line
+
+    return "(no subject)"
+
+
+def _candidate_metadata(hit: SimilarInput) -> str:
+    parts = [f"source={hit.source}"]
+    sender = _truncate_inline(hit.sender or "", 100)
+    if sender:
+        parts.append(f"from={sender}")
+    if hit.received_at:
+        parts.append(f"received_at={hit.received_at.isoformat()}")
+    return " · ".join(parts)
+
+
+def _truncate_inline(value: str, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"

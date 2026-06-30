@@ -222,6 +222,7 @@ class SimilarInput:
     agent_trace: dict | None
     subject: str | None
     sender: str | None
+    content_snippet: str | None
     received_at: datetime
 
 
@@ -229,6 +230,7 @@ _SIMILAR_INPUTS_SQL = text(
     """
     SELECT
       id, source, status, task_id, received_at, agent_trace, source_metadata,
+      LEFT(content, 1000) AS content_snippet,
       1.0 - (embedding <=> CAST(:emb AS vector)) AS similarity
     FROM raw_inputs
     WHERE embedding IS NOT NULL
@@ -273,6 +275,7 @@ def search_similar(
                 agent_trace=r.agent_trace,
                 subject=meta.get("subject"),
                 sender=meta.get("from"),
+                content_snippet=r.content_snippet,
                 received_at=r.received_at,
             )
         )
