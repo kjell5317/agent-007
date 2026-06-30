@@ -19,12 +19,12 @@ without touching the agent, storage, or API layers.
 
 ```md
 [Sources] → [Ingestion] → [Queue] → [Agent] → [Storage] → [API]
-            FastAPI       RQ +     Claude    Postgres    FastAPI
+            FastAPI       RQ +     Haystack  Postgres    FastAPI
                           Redis    + tools  + pgvector   REST
 ```
 
 Stack: Python 3.11+, FastAPI, SQLAlchemy 2.x, Postgres + pgvector,
-RQ + Redis, Anthropic SDK / Claude Agent SDK, Authlib + httpx for OAuth.
+RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
 
 ### Layering rules
 
