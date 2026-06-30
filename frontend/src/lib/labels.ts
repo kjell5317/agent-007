@@ -2,17 +2,17 @@
 // pair so the in-app label chip matches the color the event will get on the
 // calendar. Falls back to a neutral chip when the id is unknown or empty.
 const COLOR_CLASSES: Record<string, string> = {
-  "1": "bg-violet-200 text-violet-900",     // Lavender
-  "2": "bg-green-200 text-green-900",       // Sage
-  "3": "bg-purple-300 text-purple-900",     // Grape
-  "4": "bg-pink-200 text-pink-900",         // Flamingo
-  "5": "bg-yellow-200 text-yellow-900",     // Banana
-  "6": "bg-orange-200 text-orange-900",     // Tangerine
-  "7": "bg-sky-200 text-sky-900",           // Peacock
-  "8": "bg-slate-300 text-slate-900",       // Graphite
-  "9": "bg-blue-300 text-blue-900",         // Blueberry
-  "10": "bg-emerald-300 text-emerald-900",  // Basil
-  "11": "bg-red-200 text-red-900",          // Tomato
+  "1": "bg-violet-200 text-violet-900 dark:bg-violet-500/25 dark:text-violet-200",     // Lavender
+  "2": "bg-green-200 text-green-900 dark:bg-green-500/25 dark:text-green-200",         // Sage
+  "3": "bg-purple-300 text-purple-900 dark:bg-purple-500/25 dark:text-purple-200",     // Grape
+  "4": "bg-pink-200 text-pink-900 dark:bg-pink-500/25 dark:text-pink-200",             // Flamingo
+  "5": "bg-yellow-200 text-yellow-900 dark:bg-yellow-400/25 dark:text-yellow-100",     // Banana
+  "6": "bg-orange-200 text-orange-900 dark:bg-orange-500/25 dark:text-orange-200",     // Tangerine
+  "7": "bg-sky-200 text-sky-900 dark:bg-sky-500/25 dark:text-sky-200",                 // Peacock
+  "8": "bg-slate-300 text-slate-900 dark:bg-slate-500/35 dark:text-slate-100",         // Graphite
+  "9": "bg-blue-300 text-blue-900 dark:bg-blue-500/25 dark:text-blue-200",             // Blueberry
+  "10": "bg-emerald-300 text-emerald-900 dark:bg-emerald-500/25 dark:text-emerald-200", // Basil
+  "11": "bg-red-200 text-red-900 dark:bg-red-500/25 dark:text-red-200",                // Tomato
 };
 
 export function labelChipClass(colorId: string | undefined): string {
