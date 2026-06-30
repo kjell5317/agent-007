@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronRight, Square, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { RunDocModal } from "@/components/runs/RunDocModal";
 import { kotx, TERMINAL_STATES, type KotxState, type KotxTask } from "@/lib/kotx";
@@ -12,19 +12,30 @@ interface Props {
   onChanged: () => Promise<void> | void;
 }
 
-const STATE_VARIANT: Record<KotxState, BadgeProps["variant"]> = {
-  drafting: "muted",
-  draft: "open",
-  queued: "muted",
-  running: "no_change",
-  awaiting_approval: "open",
-  awaiting_external: "duplicate",
-  done: "closed",
-  failed: "not_task",
-  cancelled: "closed",
-  timed_out: "not_task",
-  discarded: "closed",
+// One distinct color per run status. awaiting_external is split below by
+// subjectType (a PR subject means a PR exists → "in review"; otherwise the
+// branch is pushed but no PR is open yet → "waiting on PR").
+const STATE_CLASS: Record<Exclude<KotxState, "awaiting_external">, string> = {
+  drafting: "bg-slate-500 text-white", // preparing task
+  draft: "bg-amber-500 text-slate-900", // waiting on my approval
+  queued: "bg-slate-400 text-slate-900",
+  running: "bg-blue-500 text-white",
+  awaiting_approval: "bg-amber-500 text-slate-900", // waiting on my approval
+  done: "bg-emerald-500 text-white",
+  failed: "bg-red-500 text-white",
+  cancelled: "bg-zinc-500 text-white",
+  timed_out: "bg-red-600 text-white",
+  discarded: "bg-zinc-400 text-slate-900",
 };
+
+function statusClass(task: KotxTask): string {
+  if (task.state === "awaiting_external") {
+    return task.subjectType === "pull_request"
+      ? "bg-violet-500 text-white" // in review — PR exists
+      : "bg-violet-400 text-slate-900"; // waiting on PR — pushed, no PR yet
+  }
+  return STATE_CLASS[task.state];
+}
 
 export function RunCard({ task, onChanged }: Props) {
   // review-kind runs surface REVIEW.md; everything else surfaces TASK.md.
@@ -82,7 +93,7 @@ export function RunCard({ task, onChanged }: Props) {
             <span className="text-muted-foreground">{task.repo}</span>
           </a>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <Badge variant={STATE_VARIANT[task.state]}>{task.status}</Badge>
+            <Badge className={statusClass(task)}>{task.status}</Badge>
             <span className="capitalize">{task.kind.replace("_", " ")}</span>
           </div>
         </div>
