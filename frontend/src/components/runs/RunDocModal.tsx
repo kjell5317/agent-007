@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   CircleDot,
   ExternalLink,
@@ -26,11 +26,23 @@ interface Props {
 }
 
 type View = "primary" | "prompt" | "log";
+const LOG_PAGE_SIZE = 200;
+const LOG_TOP_THRESHOLD = 8;
 
-function load(task: KotxTask, doc: Props["doc"], view: View): Promise<string | null> {
+function load(
+  task: KotxTask,
+  doc: Props["doc"],
+  view: Exclude<View, "log">,
+): Promise<string | null> {
   if (view === "prompt") return kotx.getPrompt(task.id);
-  if (view === "log") return kotx.getLog(task.id);
   return doc === "task" ? kotx.getBrief(task.id) : kotx.getReview(task.id);
+}
+
+function prependLogText(older: string | null, newer: string | null): string | null {
+  if (!older) return newer;
+  if (!newer) return older;
+  const separator = older.endsWith("\n") || newer.startsWith("\n") ? "" : "\n";
+  return `${older}${separator}${newer}`;
 }
 
 function branchUrl(task: KotxTask): string | null {
@@ -55,8 +67,19 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [logText, setLogText] = useState<string | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logLoadingMore, setLogLoadingMore] = useState(false);
+  const [logHasMore, setLogHasMore] = useState(false);
+  const [logBefore, setLogBefore] = useState<string | null>(null);
+  const [logAtTop, setLogAtTop] = useState(false);
+  const logScrollRef = useRef<HTMLDivElement>(null);
+  const logScrollRestoreRef = useRef<
+    "bottom" | { scrollHeight: number; scrollTop: number } | null
+  >(null);
 
   useEffect(() => {
+    if (view === "log") return;
     let cancelled = false;
     setLoading(true);
     setEditing(false);
@@ -76,6 +99,88 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       cancelled = true;
     };
   }, [task.id, doc, view]);
+
+  useEffect(() => {
+    if (view !== "log") return;
+    let cancelled = false;
+
+    setEditing(false);
+    setLogLoading(true);
+    setLogLoadingMore(false);
+    setLogText(null);
+    setLogHasMore(false);
+    setLogBefore(null);
+    setLogAtTop(false);
+    logScrollRestoreRef.current = "bottom";
+
+    kotx
+      .getLog(task.id, { tail: LOG_PAGE_SIZE })
+      .then((page) => {
+        if (cancelled) return;
+        setLogText(page.text);
+        setLogHasMore(page.hasMoreBefore);
+        setLogBefore(page.before);
+      })
+      .catch((e) => {
+        if (!cancelled) toast.error((e as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLogLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, view]);
+
+  const displayedLog = view === "log" ? formatJsonLikeText(logText) : "";
+
+  useLayoutEffect(() => {
+    if (view !== "log" || logLoading) return;
+    const el = logScrollRef.current;
+    if (!el) return;
+
+    const restore = logScrollRestoreRef.current;
+    if (restore === "bottom") {
+      el.scrollTop = el.scrollHeight;
+    } else if (restore) {
+      el.scrollTop = el.scrollHeight - restore.scrollHeight + restore.scrollTop;
+    }
+    logScrollRestoreRef.current = null;
+    setLogAtTop(el.scrollTop <= LOG_TOP_THRESHOLD);
+  }, [displayedLog, logLoading, view]);
+
+  const handleLogScroll = () => {
+    const el = logScrollRef.current;
+    if (!el) return;
+    const nextAtTop = el.scrollTop <= LOG_TOP_THRESHOLD;
+    setLogAtTop((current) => (current === nextAtTop ? current : nextAtTop));
+  };
+
+  const loadOlderLog = async () => {
+    if (logLoadingMore || !logHasMore || logBefore === null) return;
+
+    const el = logScrollRef.current;
+    logScrollRestoreRef.current = el
+      ? { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop }
+      : null;
+    setLogLoadingMore(true);
+    try {
+      const page = await kotx.getLog(task.id, {
+        before: logBefore,
+        limit: LOG_PAGE_SIZE,
+      });
+      if (!page.text) logScrollRestoreRef.current = null;
+      setLogText((current) => prependLogText(page.text, current));
+      setLogHasMore(page.hasMoreBefore);
+      setLogBefore(page.before);
+    } catch (e) {
+      logScrollRestoreRef.current = null;
+      toast.error((e as Error).message);
+    } finally {
+      setLogLoadingMore(false);
+    }
+  };
 
   async function withBusy<T>(fn: () => Promise<T>, msg: string, done?: boolean) {
     setBusy(true);
@@ -108,7 +213,8 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const subjectLabel = task.subjectType === "pull_request" ? "PR" : "Issue";
   const SubjectIcon =
     task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
-  const displayedLog = view === "log" ? formatJsonLikeText(content) : "";
+  const logCanLoadMore = logHasMore && logBefore !== null;
+  const activeLoading = view === "log" ? logLoading : loading;
 
   return (
     <Modal
@@ -180,12 +286,8 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {loading ? (
+        {activeLoading ? (
           <ModalSkeleton />
-        ) : content === null && !editing ? (
-          <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-            Not generated yet.
-          </div>
         ) : editing ? (
           <Textarea
             value={draft}
@@ -194,9 +296,42 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             autoFocus
           />
         ) : view === "log" ? (
-          <pre className="h-full overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
-            {displayedLog}
-          </pre>
+          logText === null ? (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+              Not generated yet.
+            </div>
+          ) : (
+            <div
+              ref={logScrollRef}
+              onScroll={handleLogScroll}
+              className="h-full overflow-auto rounded-lg border bg-muted/40"
+            >
+              {logCanLoadMore && (
+                <div
+                  className={cn(
+                    "sticky top-0 z-10 flex justify-center border-b bg-background/95 p-2",
+                    !logAtTop && "invisible",
+                  )}
+                >
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadOlderLog}
+                    disabled={logLoadingMore}
+                  >
+                    {logLoadingMore ? "Loading…" : "Load more"}
+                  </Button>
+                </div>
+              )}
+              <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
+                {displayedLog}
+              </pre>
+            </div>
+          )
+        ) : content === null ? (
+          <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+            Not generated yet.
+          </div>
         ) : (
           <div className="h-full overflow-auto rounded-lg border p-3">
             <Markdown content={content ?? ""} />
