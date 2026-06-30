@@ -57,6 +57,18 @@ export interface KotxContainer {
   createdAt: number;
 }
 
+export interface KotxLogPage {
+  text: string | null;
+  hasMoreBefore: boolean;
+  before: string | null;
+}
+
+export interface KotxLogParams {
+  tail?: number;
+  limit?: number;
+  before?: string | number;
+}
+
 class KotxError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -103,6 +115,159 @@ async function markdownRequest(path: string): Promise<string | null> {
   return text;
 }
 
+function parseCursor(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function parseBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes"].includes(normalized)) return true;
+  if (["0", "false", "no"].includes(normalized)) return false;
+  return null;
+}
+
+function firstHeader(headers: Headers, names: string[]): string | null {
+  for (const name of names) {
+    const value = headers.get(name);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function lineCount(text: string): number {
+  if (text === "") return 0;
+  return text.replace(/\n$/, "").split(/\r?\n/).length;
+}
+
+function readStringField(body: Record<string, unknown>, names: string[]): string | null {
+  for (const name of names) {
+    const value = body[name];
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.map(String).join("\n");
+  }
+  return null;
+}
+
+function readCursorField(body: Record<string, unknown>, names: string[]): string | null {
+  for (const name of names) {
+    const value = parseCursor(body[name]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function readBooleanField(body: Record<string, unknown>, names: string[]): boolean | null {
+  for (const name of names) {
+    const value = parseBoolean(body[name]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function logPageFromJson(body: Record<string, unknown>, requestedLines: number | null): KotxLogPage {
+  const text =
+    readStringField(body, ["text", "content", "log"]) ??
+    (Array.isArray(body.lines) ? body.lines.map(String).join("\n") : "");
+  const before =
+    readCursorField(body, [
+      "before",
+      "nextBefore",
+      "next_before",
+      "startLine",
+      "start_line",
+      "firstLine",
+      "first_line",
+      "start",
+      "cursor",
+      "nextCursor",
+      "next_cursor",
+      "previousCursor",
+      "previous_cursor",
+    ]) ?? null;
+  const explicitHasMore = readBooleanField(body, [
+    "hasMoreBefore",
+    "has_more_before",
+    "hasMore",
+    "has_more",
+    "hasOlder",
+    "has_older",
+    "hasPrevious",
+    "has_previous",
+  ]);
+
+  return {
+    text,
+    hasMoreBefore: explicitHasMore ?? (requestedLines !== null && lineCount(text) >= requestedLines),
+    before,
+  };
+}
+
+async function logRequest(path: string, params: KotxLogParams = {}): Promise<KotxLogPage> {
+  const qs = new URLSearchParams();
+  if (params.tail !== undefined) qs.set("tail", String(params.tail));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.before !== undefined) qs.set("before", String(params.before));
+
+  const query = qs.toString();
+  const res = await fetch(`/kotx${path}${query ? `?${query}` : ""}`);
+  if (res.status === 404) return { text: null, hasMoreBefore: false, before: null };
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && "error" in parsed) msg = String(parsed.error);
+    } catch {
+      /* keep statusText */
+    }
+    throw new KotxError(res.status, msg);
+  }
+
+  const requestedLines = params.limit ?? params.tail ?? null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return logPageFromJson(parsed as Record<string, unknown>, requestedLines);
+    }
+  } catch {
+    /* raw log text */
+  }
+
+  const before =
+    parseCursor(
+      firstHeader(res.headers, [
+        "x-log-before",
+        "x-log-next-before",
+        "x-log-start-line",
+        "x-log-first-line",
+        "x-start-line",
+        "x-log-cursor",
+        "x-next-cursor",
+      ]),
+    ) ?? null;
+  const explicitHasMore = parseBoolean(
+    firstHeader(res.headers, [
+      "x-log-has-more-before",
+      "x-log-has-more",
+      "x-has-more-before",
+      "x-has-more",
+      "x-log-has-older",
+      "x-has-older",
+    ]),
+  );
+
+  return {
+    text,
+    hasMoreBefore: explicitHasMore ?? (requestedLines !== null && lineCount(text) >= requestedLines),
+    before,
+  };
+}
+
 function putMarkdown(path: string, content: string) {
   return jsonRequest<{ ok: true }>(path, {
     method: "PUT",
@@ -121,7 +286,8 @@ export const kotx = {
   getReview: (id: number) => markdownRequest(`/tasks/${id}/review`),
   putReview: (id: number, content: string) => putMarkdown(`/tasks/${id}/review`, content),
   getPrompt: (id: number) => markdownRequest(`/tasks/${id}/prompt`),
-  getLog: (id: number) => markdownRequest(`/tasks/${id}/log`),
+  getLog: (id: number, params: KotxLogParams = {}) =>
+    logRequest(`/tasks/${id}/log`, params),
 
   start: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/start`, { method: "POST" }),
