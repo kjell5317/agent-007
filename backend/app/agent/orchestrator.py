@@ -26,6 +26,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.agent.input.runner import run_new_input_agent
+from app.agent.retrieval import search_raw_inputs
 from app.agent.thread.runner import run_thread_followup
 from app.config import get_settings
 from app.db.clients import raw_inputs, tasks
@@ -88,21 +89,21 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     closed_hits: list[SimilarInput] = []
 
     if query_embedding is not None:
-        not_task_hits = raw_inputs.search_similar(
+        not_task_hits = search_raw_inputs(
             session,
             embedding=query_embedding,
             exclude_id=raw_input_id,
             statuses=["not_task"],
             k=SIMILAR_K,
         )
-        open_hits = raw_inputs.search_similar(
+        open_hits = search_raw_inputs(
             session,
             embedding=query_embedding,
             exclude_id=raw_input_id,
             statuses=["open"],
             k=SIMILAR_K,
         )
-        closed_hits = raw_inputs.search_similar(
+        closed_hits = search_raw_inputs(
             session,
             embedding=query_embedding,
             exclude_id=raw_input_id,

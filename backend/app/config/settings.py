@@ -4,6 +4,8 @@ from typing import Annotated
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -31,8 +33,11 @@ class Settings(BaseSettings):
     session_secret: str = "" # python -c "import secrets; print(secrets.token_urlsafe(32))"
 
     # LLM
+    llm_provider: str = "anthropic"
+    llm_model: str = ""
     anthropic_api_key: str = ""
-    claude_model: str = "claude-opus-4-7"
+    # Deprecated compatibility alias. Prefer LLM_MODEL.
+    claude_model: str = ""
 
     # Embeddings
     gemini_api_key: str = ""
@@ -114,6 +119,18 @@ class Settings(BaseSettings):
     # Empty base URL or token disables the proxy (it answers 503).
     kotx_base_url: str = ""
     kotx_api_token: str = ""
+
+    @property
+    def effective_llm_provider(self) -> str:
+        return self.llm_provider.strip().lower() or "anthropic"
+
+    @property
+    def effective_llm_model(self) -> str:
+        return (
+            self.llm_model.strip()
+            or self.claude_model.strip()
+            or DEFAULT_ANTHROPIC_MODEL
+        )
 
 
 @lru_cache

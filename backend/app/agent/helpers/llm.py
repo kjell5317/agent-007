@@ -1,18 +1,15 @@
-"""Anthropic client wrapper shared by every agent flow in this package.
-
-Centralizes the bits that would otherwise be duplicated across each flow:
-the Messages API call (with MCP beta when configured), prompt/tool caching,
-block-summary extraction for trace logs, and the shared tuning constants.
-"""
+"""Provider-neutral Haystack chat adapter shared by every agent flow."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
-from anthropic import AsyncAnthropic
-from anthropic.types import ToolParam
-from anthropic.types.beta import BetaRequestMCPServerURLDefinitionParam
+from haystack.dataclasses import ChatMessage, ToolCall as HaystackToolCall
+from haystack.tools import Tool
+from haystack.utils import Secret
+from haystack_integrations.components.generators.anthropic import AnthropicChatGenerator
 
 from app.config import Settings
 
@@ -27,36 +24,201 @@ TERMINAL_TOOLS = frozenset({
     "update_task", "no_change",
 })
 
-
-def cached_system(prompt: str) -> list[dict[str, Any]]:
-    return [{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}]
+MessageRole = Literal["user", "assistant", "tool"]
 
 
-def cached_tools(tools: list[dict]) -> list[ToolParam]:
-    out = [dict(t) for t in tools]
-    out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
-    return cast(list[ToolParam], out)
+@dataclass(frozen=True)
+class ToolCall:
+    id: str | None
+    name: str
+    input: dict[str, Any] = field(default_factory=dict)
 
 
-async def create_message(client: AsyncAnthropic, settings: Settings, **kwargs: Any):
-    """Issue a Messages API call, routing through the beta endpoint when MCP is on.
+@dataclass(frozen=True)
+class ToolResult:
+    tool_call: ToolCall
+    content: str
+    error: bool = False
 
-    When at least one MCP server is configured, the agent gains access to the
-    server's tools mid-decision (server-side execution by Anthropic); when
-    none are configured, behavior is identical to the prior direct call.
-    """
-    base = dict(
-        model=settings.claude_model,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
+
+@dataclass(frozen=True)
+class LLMMessage:
+    role: MessageRole
+    text: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
+    tool_result: ToolResult | None = None
+
+
+@dataclass(frozen=True)
+class LLMResponse:
+    message: LLMMessage
+    tool_calls: tuple[ToolCall, ...]
+    text: str
+    stop_reason: str | None
+    usage: dict[str, Any]
+    meta: dict[str, Any]
+    provider: str
+    model: str
+
+
+def user_message(text: str) -> LLMMessage:
+    return LLMMessage(role="user", text=text)
+
+
+def assistant_message(response: LLMResponse) -> LLMMessage:
+    return response.message
+
+
+def tool_result_message(tool_call: ToolCall, content: str) -> LLMMessage:
+    return LLMMessage(
+        role="tool",
+        tool_result=ToolResult(tool_call=tool_call, content=content),
     )
-    return await client.messages.create(**base, **kwargs)
 
 
-def block_summary(block) -> dict:
-    btype = getattr(block, "type", "unknown")
-    if btype == "text":
-        return {"type": "text", "text": getattr(block, "text", "") or ""}
-    if btype == "tool_use":
-        return {"type": "tool_use", "name": block.name, "input": block.input}
-    return {"type": btype}
+def block_summary(response: LLMResponse) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    if response.text:
+        blocks.append({"type": "text", "text": response.text})
+    blocks.extend(
+        {"type": "tool_use", "name": call.name, "input": call.input}
+        for call in response.tool_calls
+    )
+    return blocks
+
+
+async def chat(
+    messages: list[LLMMessage],
+    settings: Settings,
+    *,
+    system_prompt: str,
+    tools: list[dict[str, Any]],
+    force_tool: str | None = None,
+) -> LLMResponse:
+    """Call the configured Haystack chat backend and normalize its response."""
+    provider = settings.effective_llm_provider
+    model = settings.effective_llm_model
+    generator = _build_generator(settings)
+    generation_kwargs: dict[str, Any] = {
+        "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
+    }
+    if force_tool:
+        generation_kwargs["tool_choice"] = _tool_choice(provider, force_tool)
+
+    result = await generator.run_async(
+        messages=_to_haystack_messages(system_prompt, messages),
+        tools=[_to_haystack_tool(tool) for tool in tools],
+        generation_kwargs=generation_kwargs,
+    )
+    replies = result.get("replies") or []
+    if not replies:
+        raise RuntimeError("LLM provider returned no replies")
+    return _from_haystack_reply(replies[0], provider=provider, model=model)
+
+
+def _build_generator(settings: Settings):
+    provider = settings.effective_llm_provider
+    if provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required for LLM_PROVIDER=anthropic")
+        return AnthropicChatGenerator(
+            api_key=Secret.from_token(settings.anthropic_api_key),
+            model=settings.effective_llm_model,
+        )
+    raise ValueError(f"Unsupported LLM_PROVIDER: {settings.llm_provider!r}")
+
+
+def _tool_choice(provider: str, tool_name: str) -> dict[str, Any]:
+    if provider == "anthropic":
+        return {"type": "tool", "name": tool_name}
+    return {"type": "function", "function": {"name": tool_name}}
+
+
+def _to_haystack_messages(system_prompt: str, messages: list[LLMMessage]) -> list[ChatMessage]:
+    out = [ChatMessage.from_system(system_prompt)]
+    out.extend(_to_haystack_message(message) for message in messages)
+    return out
+
+
+def _to_haystack_message(message: LLMMessage) -> ChatMessage:
+    if message.role == "user":
+        return ChatMessage.from_user(message.text or "")
+    if message.role == "assistant":
+        return ChatMessage.from_assistant(
+            text=message.text,
+            tool_calls=[_to_haystack_tool_call(call) for call in message.tool_calls] or None,
+        )
+    if message.role == "tool":
+        if message.tool_result is None:
+            raise ValueError("tool message is missing tool_result")
+        return ChatMessage.from_tool(
+            message.tool_result.content,
+            origin=_to_haystack_tool_call(message.tool_result.tool_call),
+            error=message.tool_result.error,
+        )
+    raise ValueError(f"Unsupported message role: {message.role!r}")
+
+
+def _from_haystack_reply(reply: ChatMessage, *, provider: str, model: str) -> LLMResponse:
+    tool_calls = tuple(
+        ToolCall(
+            id=call.id,
+            name=call.tool_name,
+            input=dict(call.arguments or {}),
+        )
+        for call in (reply.tool_calls or [])
+    )
+    text = "\n".join(reply.texts or [])
+    meta = dict(reply.meta or {})
+    usage = _extract_usage(meta)
+    stop_reason = (
+        meta.get("finish_reason")
+        or meta.get("stop_reason")
+        or meta.get("done_reason")
+    )
+    message = LLMMessage(
+        role="assistant",
+        text=text or None,
+        tool_calls=tool_calls,
+    )
+    return LLMResponse(
+        message=message,
+        tool_calls=tool_calls,
+        text=text,
+        stop_reason=str(stop_reason) if stop_reason is not None else None,
+        usage=usage,
+        meta=meta,
+        provider=provider,
+        model=model,
+    )
+
+
+def _extract_usage(meta: dict[str, Any]) -> dict[str, Any]:
+    usage = meta.get("usage") or meta.get("token_usage") or {}
+    if hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    if not isinstance(usage, dict):
+        return {}
+    return dict(usage)
+
+
+def _to_haystack_tool_call(call: ToolCall) -> HaystackToolCall:
+    return HaystackToolCall(
+        tool_name=call.name,
+        arguments=dict(call.input or {}),
+        id=call.id,
+    )
+
+
+def _to_haystack_tool(tool: dict[str, Any]) -> Tool:
+    return Tool(
+        name=str(tool["name"]),
+        description=str(tool.get("description") or ""),
+        parameters=dict(tool.get("parameters") or {}),
+        function=_unused_tool_function,
+    )
+
+
+def _unused_tool_function(**kwargs: Any) -> dict[str, Any]:
+    return kwargs

@@ -10,16 +10,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from anthropic import AsyncAnthropic
-from anthropic.types import MessageParam
 from sqlalchemy.orm import Session
 
 from app.agent.prompts import EXTRACT_FIELDS_SYSTEM_PROMPT
 from app.agent.helpers.llm import (
+    LLMMessage,
     MAX_TOOL_ITERATIONS,
-    cached_system,
-    cached_tools,
-    create_message,
+    assistant_message,
+    chat,
+    tool_result_message,
+    user_message,
 )
 from app.agent.tools.notes_lookup import run_search_notes
 from app.agent.helpers.text import now_iso, parse_iso
@@ -41,14 +41,13 @@ async def extract_task_fields(session: Session, raw, *, context_inputs=()) -> di
     The last iteration forces `create_task` via tool_choice so we always end
     with a populated payload."""
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     user_msg = _build_extract_message(raw, context_inputs)
     create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
     search_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "search_notes")
     extract_tools = [search_tool, create_tool]
 
-    messages: list[MessageParam] = [{"role": "user", "content": user_msg}]
+    messages: list[LLMMessage] = [user_message(user_msg)]
     log.info("llm call · branch=extract_fields raw=%s", raw.id)
 
     payload: dict[str, Any] = {}
@@ -57,28 +56,21 @@ async def extract_task_fields(session: Session, raw, *, context_inputs=()) -> di
         # On the final iteration, force create_task so we never finish without
         # a finalized payload — earlier iterations let the model pick freely
         # so it can chain search_notes lookups first.
-        tool_choice: dict[str, Any] = (
-            {"type": "tool", "name": "create_task"}
-            if is_last
-            else {"type": "auto"}
-        )
-        resp = await create_message(
-            client, settings,
-            system=cached_system(EXTRACT_FIELDS_SYSTEM_PROMPT),
-            tools=cached_tools(extract_tools),
-            tool_choice=tool_choice,
-            messages=messages,
+        resp = await chat(
+            messages,
+            settings,
+            system_prompt=EXTRACT_FIELDS_SYSTEM_PROMPT,
+            tools=extract_tools,
+            force_tool="create_task" if is_last else None,
         )
         log.debug(
             "llm response · raw=%s attempt=%d stop_reason=%s input_tokens=%s output_tokens=%s",
             raw.id, attempt, resp.stop_reason,
-            getattr(resp.usage, "input_tokens", "?"),
-            getattr(resp.usage, "output_tokens", "?"),
+            resp.usage.get("input_tokens", "?"),
+            resp.usage.get("output_tokens", "?"),
         )
 
-        tool_uses = [
-            b for b in resp.content if getattr(b, "type", None) == "tool_use"
-        ]
+        tool_uses = list(resp.tool_calls)
         if not tool_uses:
             raise RuntimeError(
                 "agent did not call any tool during field extraction"
@@ -101,13 +93,9 @@ async def extract_task_fields(session: Session, raw, *, context_inputs=()) -> di
             out = await run_search_notes(
                 session, str((tu.input or {}).get("query") or ""),
             )
-            results.append({
-                "type": "tool_result",
-                "tool_use_id": tu.id,
-                "content": out,
-            })
-        messages.append({"role": "assistant", "content": resp.content})
-        messages.append({"role": "user", "content": results})
+            results.append(tool_result_message(tu, out))
+        messages.append(assistant_message(resp))
+        messages.extend(results)
 
     if "due_date" in payload:
         payload["due_date"] = parse_iso(str(payload["due_date"]))
