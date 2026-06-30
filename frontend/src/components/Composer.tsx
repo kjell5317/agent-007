@@ -78,7 +78,7 @@ export function Composer({ onCreated }: Props) {
           autoComplete="off"
           className="h-10 rounded-full bg-secondary px-4 text-[15px]"
         />
-        <Button type="submit" disabled={submitting || !value.trim()} className="rounded-full px-5">
+        <Button type="submit" disabled={submitting || !value.trim()} className="px-5">
           Add
         </Button>
       </div>

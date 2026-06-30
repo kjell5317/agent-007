@@ -13,7 +13,16 @@ export type KotxState =
   | "done"
   | "failed"
   | "cancelled"
-  | "timed_out";
+  | "timed_out"
+  | "discarded";
+
+export const TERMINAL_STATES: ReadonlySet<KotxState> = new Set([
+  "done",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "discarded",
+]);
 
 export interface KotxTask {
   id: number;
@@ -75,7 +84,8 @@ async function jsonRequest<T>(path: string, opts: RequestInit = {}): Promise<T> 
   return body as T;
 }
 
-// Returns null on 404 — the brief / review isn't generated yet.
+// Returns null on 404 — the document isn't generated yet (brief/review not
+// drafted, or prompt/log absent until a run has started).
 async function markdownRequest(path: string): Promise<string | null> {
   const res = await fetch(`/kotx${path}`);
   if (res.status === 404) return null;
@@ -93,19 +103,25 @@ async function markdownRequest(path: string): Promise<string | null> {
   return text;
 }
 
+function putMarkdown(path: string, content: string) {
+  return jsonRequest<{ ok: true }>(path, {
+    method: "PUT",
+    headers: { "content-type": "text/markdown" },
+    body: content,
+  });
+}
+
 export const kotx = {
   listTasks: (scope: "active" | "all" = "active") =>
     jsonRequest<KotxTask[]>(`/tasks?scope=${scope}`),
   getTask: (id: number) => jsonRequest<KotxTask>(`/tasks/${id}`),
 
   getBrief: (id: number) => markdownRequest(`/tasks/${id}/task`),
-  putBrief: (id: number, content: string) =>
-    jsonRequest<{ ok: true }>(`/tasks/${id}/task`, {
-      method: "PUT",
-      headers: { "content-type": "text/markdown" },
-      body: content,
-    }),
+  putBrief: (id: number, content: string) => putMarkdown(`/tasks/${id}/task`, content),
   getReview: (id: number) => markdownRequest(`/tasks/${id}/review`),
+  putReview: (id: number, content: string) => putMarkdown(`/tasks/${id}/review`, content),
+  getPrompt: (id: number) => markdownRequest(`/tasks/${id}/prompt`),
+  getLog: (id: number) => markdownRequest(`/tasks/${id}/log`),
 
   start: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/start`, { method: "POST" }),
@@ -113,6 +129,8 @@ export const kotx = {
     jsonRequest<{ ok: true }>(`/tasks/${id}/approve`, { method: "POST" }),
   stop: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/stop`, { method: "POST" }),
+  discard: (id: number) =>
+    jsonRequest<{ ok: true }>(`/tasks/${id}/discard`, { method: "POST" }),
 
   listContainers: () => jsonRequest<KotxContainer[]>(`/containers`),
 };
