@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import Column, DateTime, MetaData, String, Table, create_engine
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
@@ -115,6 +116,52 @@ def test_task_list_orders_by_display_date(monkeypatch):
         "Undated newer",
         "Undated older",
     ]
+
+
+def test_open_filter_survives_limit_with_many_closed(monkeypatch):
+    # Regression: with display_date-ASC ordering, completed tasks (old due
+    # dates) sort first. If `limit` is applied before the status filter, they
+    # fill the window and evict every open task. The filter must run in SQL.
+    session = _sqlite_session()
+    # The ORM RawInput carries a pgvector column that won't create on SQLite,
+    # so mirror just the columns the status join reads — with matching UUID
+    # types so the join keys align with Task.id.
+    raw_inputs = Table(
+        "raw_inputs",
+        MetaData(),
+        Column("id", UUID(as_uuid=True), primary_key=True),
+        Column("task_id", UUID(as_uuid=True)),
+        Column("status", String(32)),
+        Column("received_at", DateTime(timezone=True)),
+        Column("source", String(64)),
+    )
+    raw_inputs.create(session.get_bind())
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    def add(title: str, *, status: str, due=None, scheduled=None, created):
+        task = Task(title=title, due_date=due, scheduled_date=scheduled, created_at=created)
+        session.add(task)
+        session.flush()
+        session.execute(
+            raw_inputs.insert(),
+            {"id": uuid.uuid4(), "task_id": task.id, "status": status, "received_at": created, "source": "gmail"},
+        )
+
+    for i in range(5):
+        add(f"closed-{i}", status="closed", due=base + timedelta(days=i), created=base + timedelta(days=i))
+    add("open-scheduled", status="open", scheduled=base + timedelta(days=40), created=base + timedelta(days=40))
+    add("open-undated", status="open", created=base + timedelta(days=41))
+    session.commit()
+
+    # latest_status_for uses Postgres ANY(:ids); stub it as the ordering test does.
+    # The status filtering under test happens in the SQL join, not here.
+    monkeypatch.setattr(
+        tasks_store, "latest_status_for", lambda _session, ids: {tid: "open" for tid in ids}
+    )
+
+    rows = tasks_store.list_(session, status="open", limit=2)
+
+    assert {task.title for task, _status in rows} == {"open-scheduled", "open-undated"}
 
 
 def test_discover_syncs_moved_managed_task_event():
