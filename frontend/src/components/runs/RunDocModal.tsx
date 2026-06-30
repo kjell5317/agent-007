@@ -1,11 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import {
-  CircleDot,
-  ExternalLink,
-  GitBranch,
-  GitPullRequest,
-  Pencil,
-} from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CircleDot, GitBranch, GitPullRequest, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
@@ -210,7 +204,6 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     { key: "log", label: "Log" },
   ];
   const taskBranchUrl = branchUrl(task);
-  const subjectLabel = task.subjectType === "pull_request" ? "PR" : "Issue";
   const SubjectIcon =
     task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
   const logCanLoadMore = logHasMore && logBefore !== null;
@@ -224,36 +217,29 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       titleClassName="text-lg"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
     >
-      <div className="mb-3 grid shrink-0 gap-2 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground sm:grid-cols-2">
-        <LinkMeta
-          icon={<SubjectIcon className="h-3.5 w-3.5" />}
-          label={subjectLabel}
+      <div className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+        <a
+          href={task.githubUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex min-w-0 items-center gap-2 font-medium text-foreground hover:underline"
+          title={task.repo}
         >
-          <a
-            href={task.githubUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-w-0 items-center gap-1 font-medium text-foreground hover:underline"
-            title={`${subjectLabel} #${task.subjectNumber}`}
-          >
-            <span className="min-w-0 truncate">
-              #{task.subjectNumber} {task.repo}
-            </span>
-            <ExternalLink className="h-3 w-3 shrink-0" />
-          </a>
-        </LinkMeta>
-        <LinkMeta icon={<GitBranch className="h-3.5 w-3.5" />} label="Branch">
+          <SubjectIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">{task.repo}</span>
+        </a>
+        <div className="flex min-w-0 items-center gap-2">
+          <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           {task.branch ? (
             taskBranchUrl ? (
               <a
                 href={taskBranchUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex min-w-0 items-center gap-1 font-mono text-foreground hover:underline"
+                className="min-w-0 truncate font-mono text-foreground hover:underline"
                 title={task.branch}
               >
-                <span className="min-w-0 truncate">{task.branch}</span>
-                <ExternalLink className="h-3 w-3 shrink-0" />
+                {task.branch}
               </a>
             ) : (
               <span className="min-w-0 truncate font-mono" title={task.branch}>
@@ -263,7 +249,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
           ) : (
             <span>None</span>
           )}
-        </LinkMeta>
+        </div>
       </div>
 
       <div className="mb-3 inline-flex shrink-0 rounded-lg bg-muted p-0.5 text-xs">
@@ -384,23 +370,5 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
         )}
       </div>
     </Modal>
-  );
-}
-
-function LinkMeta({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <span className="shrink-0 font-medium">{label}</span>
-      <span className="min-w-0">{children}</span>
-    </div>
   );
 }
