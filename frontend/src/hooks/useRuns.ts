@@ -40,6 +40,12 @@ export function useRuns(active: boolean): RunsData {
     }
   }, []);
 
+  // Fetch once on mount even when the tab is closed, so the Runs badge count
+  // is populated on page load rather than only after the tab is first opened.
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
   // Only poll while the tab is the visible one and the document has focus —
   // runs change state over seconds (queued → running → awaiting_approval),
   // so a short interval keeps the list and container view live.
