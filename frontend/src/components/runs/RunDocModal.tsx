@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Pencil } from "lucide-react";
+import { GitBranch, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -69,6 +69,14 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
 
   return (
     <Modal open onClose={onClose} title={title} className="max-w-2xl">
+      {task.branch && (
+        <div className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <GitBranch className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate font-mono" title={task.branch}>
+            {task.branch}
+          </span>
+        </div>
+      )}
       {loading ? (
         <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
       ) : content === null && !editing ? (

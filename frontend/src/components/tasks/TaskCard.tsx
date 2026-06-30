@@ -14,6 +14,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { LabelPicker } from "@/components/ui/label-picker";
 import { Modal } from "@/components/ui/modal";
+import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
@@ -34,6 +35,7 @@ const CROSS_OFF_MS = 350;
 export function TaskCard({ task, onChanged, seenAfter }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [editField, setEditField] = useState<EditField>(null);
   const [draft, setDraft] = useState("");
   // Lifted out of DatePicker so the surrounding Modal can render a Back
@@ -110,7 +112,13 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
         crossing && "pointer-events-none opacity-40",
       )}
     >
-      <CardContent>
+      <CardContent
+        className="cursor-pointer"
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button,a,summary")) return;
+          setDetailOpen(true);
+        }}
+      >
         <div className="flex items-center gap-2">
           <IconButton
             label="Mark done"
@@ -143,17 +151,6 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
               >
                 {task.title}
               </TitleEl>
-
-              <IconButton
-                label="Mark not a task"
-                disabled={busy || crossing}
-                onClick={() =>
-                  withBusy(() => api.markNotTask(task.id), "Marked not a task")
-                }
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <Trash2 className="h-4 w-4" />
-              </IconButton>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {task.due_date ? (
@@ -229,6 +226,17 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
               )}
             </div>
           </div>
+
+          <IconButton
+            label="Mark not a task"
+            disabled={busy || crossing}
+            onClick={() =>
+              withBusy(() => api.markNotTask(task.id), "Marked not a task")
+            }
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+          </IconButton>
         </div>
       </CardContent>
 
@@ -284,6 +292,10 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
           />
         )}
       </Modal>
+
+      {detailOpen && (
+        <TaskDetailModal task={task} onClose={() => setDetailOpen(false)} />
+      )}
     </Card>
   );
 }

@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { ExternalLink, FileText, GitBranch, Square } from "lucide-react";
+import { ChevronRight, ExternalLink, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RunDocModal } from "@/components/runs/RunDocModal";
 import { kotx, type KotxState, type KotxTask } from "@/lib/kotx";
+import { cn } from "@/lib/utils";
 
 interface Props {
   task: KotxTask;
@@ -31,87 +31,93 @@ export function RunCard({ task, onChanged }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const stop = async () => {
+  const subjectLabel = task.subjectType === "pull_request" ? "PR" : "Issue";
+  const actionable = task.canStart || task.canApprove;
+  const hint = task.canStart ? "Start" : task.canApprove ? "Approve" : "Open";
+
+  const stop = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     setBusy(true);
     try {
       await kotx.stop(task.id);
       toast.success("Stopping run");
       await onChanged();
-    } catch (e) {
-      toast.error((e as Error).message);
+    } catch (err) {
+      toast.error((err as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
-  const cta = task.canStart
-    ? "Review & start"
-    : task.canApprove
-      ? "Review & approve"
-      : doc === "review"
-        ? "Review"
-        : "Brief";
-
   return (
-    <Card>
-      <CardContent className="p-3">
-        <div className="flex items-start gap-2">
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <a
-                href={task.githubUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="min-w-0 truncate font-medium leading-snug hover:underline"
-                title={`${task.repo} #${task.subjectNumber}`}
-              >
-                {task.repo} <span className="text-muted-foreground">#{task.subjectNumber}</span>
-              </a>
-              <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <Badge variant={STATE_VARIANT[task.state]}>{task.status}</Badge>
-              <span className="capitalize">{task.kind.replace("_", " ")}</span>
-              {task.branch && (
-                <span className="inline-flex items-center gap-1" title={task.branch}>
-                  <GitBranch className="h-3 w-3" />
-                  <span className="max-w-[12rem] truncate">{task.branch}</span>
-                </span>
-              )}
-              {task.outcome && <span title="Last outcome">· {task.outcome}</span>}
-            </div>
+    <>
+    <Card
+      role="button"
+      tabIndex={0}
+      onClick={() => setOpen(true)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen(true);
+        }
+      }}
+      className={cn(
+        "cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        actionable && "ring-1 ring-primary/40",
+      )}
+    >
+      <CardContent className="flex items-center gap-2 p-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="min-w-0 truncate font-medium leading-snug" title={task.repo}>
+              {task.repo}{" "}
+              <span className="text-muted-foreground">
+                {subjectLabel} #{task.subjectNumber}
+              </span>
+            </span>
+            <a
+              href={task.githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              title="Open on GitHub"
+            >
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <Badge variant={STATE_VARIANT[task.state]}>{task.status}</Badge>
+            <span className="capitalize">{task.kind.replace("_", " ")}</span>
+            {task.outcome && <span title="Last outcome">· {task.outcome}</span>}
           </div>
         </div>
 
-        <div className="mt-2.5 flex items-center gap-2">
-          <Button
-            variant={task.canStart || task.canApprove ? "default" : "outline"}
-            size="sm"
-            onClick={() => setOpen(true)}
+        {task.canStop && (
+          <button
+            type="button"
+            onClick={stop}
             disabled={busy}
+            title="Stop run"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
           >
-            <FileText className="h-3.5 w-3.5" />
-            {cta}
-          </Button>
-          {task.canStop && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={stop}
-              disabled={busy}
-              className="ml-auto text-muted-foreground hover:text-destructive"
-              title="Stop run"
-            >
-              <Square className="h-3.5 w-3.5" />
-              Stop
-            </Button>
+            <Square className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center gap-0.5 text-xs font-medium",
+            actionable ? "text-primary" : "text-muted-foreground",
           )}
-        </div>
+        >
+          {actionable && hint}
+          <ChevronRight className="h-4 w-4" />
+        </span>
       </CardContent>
-
-      {open && (
-        <RunDocModal task={task} doc={doc} onClose={() => setOpen(false)} onChanged={onChanged} />
-      )}
     </Card>
+    {open && (
+      <RunDocModal task={task} doc={doc} onClose={() => setOpen(false)} onChanged={onChanged} />
+    )}
+    </>
   );
 }

@@ -94,7 +94,6 @@ export function InboxGroup({ group, onChanged, seenAfter }: Props) {
               <div className="min-w-0 flex-1 truncate font-medium leading-snug">
                 {group.title}
               </div>
-              <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Badge variant={badge}>{badge}</Badge>
@@ -105,6 +104,8 @@ export function InboxGroup({ group, onChanged, seenAfter }: Props) {
               <span className="font-medium">{members.length} messages</span>
             </div>
           </div>
+
+          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
         </div>
 
         <Collapsible open={open}>
