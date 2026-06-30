@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
 import { groupInputs } from "@/lib/inbox";
+import { compareTasksBySchedule } from "@/lib/tasks";
 import type { RawInput, Task } from "@/lib/types";
 
 // Pagination counts inbox *groups* (threads / follow-ups), not raw rows — the
@@ -17,14 +18,14 @@ export interface AppData {
   hasMoreInputs: boolean;
 }
 
-// Server lists are ordered newest-first (tasks by created_at, inputs by
-// received_at). Live upserts re-sort to match so a pushed row lands where a
-// refetch would have put it. ISO-8601 strings sort lexicographically by time.
+// Server task lists are ordered by scheduled_date first, with due/created
+// fallbacks for unscheduled rows. Live upserts re-sort to match so a pushed row
+// lands where a refetch would have put it.
 function upsertTask(list: Task[], task: Task): Task[] {
   const rest = list.filter((t) => t.id !== task.id);
   // The hook only holds *open* tasks; a non-open push means it left the list.
   if (task.status !== "open") return rest;
-  return [...rest, task].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return [...rest, task].sort(compareTasksBySchedule);
 }
 
 function upsertInput(list: RawInput[], input: RawInput): RawInput[] {

@@ -6,6 +6,7 @@ export interface Task {
   description: string | null;
   link: string | null;
   due_date: string | null;
+  scheduled_date: string | null;
   estimation: number | null;
   location: string | null;
   label: string | null;
@@ -44,4 +45,3 @@ export interface RawInput {
   task_title: string | null;
   agent_trace: AgentTrace | null;
 }
-

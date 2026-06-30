@@ -25,8 +25,9 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
-from app.services.notify import ACTION_EXTEND_WINDOW
-from app.services.plan.schedule import schedule_task
+from app.events import publish_task
+from app.services.notify import ACTION_EXTEND_WINDOW, ACTION_RESCHEDULE_TASK
+from app.services.plan.schedule import schedule_task, scheduled_interval_for
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +83,16 @@ async def handle_action(
 
     if payload.action == ACTION_EXTEND_WINDOW:
         log.info("notify action · extend_window task=%s", task.id)
-        await schedule_task(session, task, extend_window=True)
+        result = await schedule_task(session, task, extend_window=True)
+        if result is not None:
+            publish_task(session, task.id)
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    if payload.action == ACTION_RESCHEDULE_TASK:
+        log.info("notify action · reschedule task=%s", task.id)
+        result = await schedule_task(session, task, block=scheduled_interval_for(task))
+        if result is not None:
+            publish_task(session, task.id)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     raise HTTPException(

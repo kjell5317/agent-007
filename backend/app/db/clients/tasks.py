@@ -64,6 +64,19 @@ def get(session: Session, task_id: uuid.UUID) -> Task | None:
     return session.get(Task, task_id)
 
 
+def set_schedule(
+    session: Session,
+    task: Task,
+    *,
+    event_id: str | None,
+    scheduled_date: datetime | None,
+) -> Task:
+    task.calendar_event_id = event_id
+    task.scheduled_date = scheduled_date
+    session.flush()
+    return task
+
+
 _UPDATABLE = {
     "title", "description", "link", "due_date", "estimation",
     "location", "label",
@@ -126,10 +139,39 @@ def list_(
 
     If `status` is given, filter by the latest-raw_input status.
     """
-    stmt = select(Task).order_by(Task.created_at.desc()).limit(limit)
+    stmt = (
+        select(Task)
+        .order_by(
+            Task.scheduled_date.is_(None),
+            Task.scheduled_date.asc(),
+            Task.due_date.is_(None),
+            Task.due_date.asc(),
+            Task.created_at.desc(),
+        )
+        .limit(limit)
+    )
     rows = list(session.execute(stmt).scalars())
     statuses = latest_status_for(session, [r.id for r in rows])
     out = [(r, statuses.get(r.id, "open")) for r in rows]
     if status is not None:
         out = [t for t in out if t[1] == status]
     return out
+
+
+def overdue_scheduled_open(
+    session: Session,
+    *,
+    cutoff: datetime,
+    limit: int = 100,
+) -> list[Task]:
+    stmt = (
+        select(Task)
+        .where(Task.scheduled_date.is_not(None))
+        .where(Task.scheduled_date <= cutoff)
+        .where(Task.due_date.is_not(None))
+        .order_by(Task.scheduled_date.asc())
+        .limit(limit)
+    )
+    rows = list(session.execute(stmt).scalars())
+    statuses = latest_status_for(session, [r.id for r in rows])
+    return [r for r in rows if statuses.get(r.id, "open") == "open"]

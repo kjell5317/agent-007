@@ -33,6 +33,7 @@ _TIMEOUT = 5.0
 # Action identifiers we send to HA. The companion app echoes these back in
 # the `mobile_app_notification_action` event; our webhook reads them.
 ACTION_EXTEND_WINDOW = "EXTEND_WINDOW"
+ACTION_RESCHEDULE_TASK = "RESCHEDULE_TASK"
 
 
 async def notify(
@@ -126,12 +127,14 @@ async def notify_task_scheduled(
     parts = [_fmt_range(start, end)]
     if task.estimation:
         parts.append(f"{task.estimation}min")
+    actions = [{"action": ACTION_RESCHEDULE_TASK, "title": "Reschedule"}]
+    actions.extend(_link_actions(task))
     await notify(
         title=f"{kind}: {_short_title(task)}",
         message=" · ".join(parts),
         url=get_settings().task_default_url,
         tag=task_tag(task.id),
-        actions=_link_actions(task) or None,
+        actions=actions or None,
         sticky=True,
     )
 

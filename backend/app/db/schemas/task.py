@@ -63,6 +63,7 @@ class TaskCreationAccepted(BaseModel):
 
 class TaskRead(TaskBase):
     id: uuid.UUID
+    scheduled_date: datetime | None = None
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
     created_at: datetime
@@ -83,6 +84,7 @@ class TaskRead(TaskBase):
                 "description": task.description,
                 "link": task.link,
                 "due_date": task.due_date,
+                "scheduled_date": task.scheduled_date,
                 "estimation": task.estimation,
                 "location": task.location,
                 "label": task.label,

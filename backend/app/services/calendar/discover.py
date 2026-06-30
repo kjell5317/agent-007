@@ -15,6 +15,7 @@ minus one day" so we don't try to ingest the whole calendar history.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 
@@ -22,8 +23,15 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.clients import oauth_tokens
+from app.db.models.task import Task
+from app.events import publish_task
 from app.services.calendar.client import CalendarEvent, authorized_client, normalize
-from app.services.calendar.events import WINDOW_DAYS, is_commute_event, is_managed_event
+from app.services.calendar.events import (
+    WINDOW_DAYS,
+    is_commute_event,
+    is_managed_event,
+    is_task_event,
+)
 from app.services.plan.schedule import reschedule_event
 
 log = logging.getLogger(__name__)
@@ -51,7 +59,7 @@ async def discover_updated_events(
     """
     settings = get_settings()
     write_id = (settings.google_calendar_id or "").strip()
-    ids = _read_calendar_ids(calendar_ids, write_id)
+    ids = _calendar_ids(calendar_ids)
     if not ids or not write_id:
         return _empty_summary()
 
@@ -73,7 +81,13 @@ async def discover_updated_events(
 
     client = await authorized_client(session, account_key)
 
-    summary: dict = {"checked": 0, "updated": 0, "overlapping": 0, "cursor": now.isoformat()}
+    summary: dict = {
+        "checked": 0,
+        "updated": 0,
+        "overlapping": 0,
+        "scheduled_updates": 0,
+        "cursor": now.isoformat(),
+    }
 
     for cid in ids:
         log.info(
@@ -95,14 +109,29 @@ async def discover_updated_events(
         updated_events = _active_events(updated_items, cid)
         summary["updated"] += len(updated_events)
 
-        # Something changed in a read calendar. Pull the write calendar and
-        # only move events we own there; read events and manual write events
-        # are hard blockers.
+        if cid == write_id:
+            synced_task_ids: list[uuid.UUID] = []
+            for ev in updated_events:
+                if not is_task_event(ev):
+                    continue
+                synced_task_id = _sync_task_schedule_from_event(session, ev)
+                if synced_task_id is not None:
+                    synced_task_ids.append(synced_task_id)
+                    summary["scheduled_updates"] += 1
+            session.commit()
+            for task_id in synced_task_ids:
+                publish_task(session, task_id)
+
+        # Something changed in a read/busy calendar, or a manual event on the
+        # write calendar. Pull the write calendar and only move events we own
+        # there; read events and manual write events are hard blockers.
         items = await client.list_events(write_id, time_min=window_start, time_max=window_end)
         write_events = _active_events(items, write_id)
         summary["checked"] += len(write_events)
 
         for ev in updated_events:
+            if cid == write_id and is_managed_event(ev):
+                continue
             overlapping = _first_managed_overlap(ev, write_events)
             if overlapping is not None:
                 summary["overlapping"] += 1
@@ -136,6 +165,27 @@ async def discover_updated_events(
     return summary
 
 
+def _sync_task_schedule_from_event(session: Session, event: CalendarEvent) -> uuid.UUID | None:
+    task_id = event.private_properties.get("task_id")
+    row: Task | None = None
+    if task_id:
+        try:
+            row = session.get(Task, uuid.UUID(task_id))
+        except ValueError:
+            row = None
+    if row is None:
+        row = session.query(Task).filter(Task.calendar_event_id == event.id).one_or_none()
+    if row is None:
+        return None
+    changed = row.calendar_event_id != event.id or row.scheduled_date != event.start
+    if not changed:
+        return None
+    row.calendar_event_id = event.id
+    row.scheduled_date = event.start
+    session.flush()
+    return row.id
+
+
 def _first_managed_overlap(
     event: CalendarEvent,
     others: Iterable[CalendarEvent],
@@ -166,12 +216,12 @@ def _active_events(items: Iterable[dict], calendar_id: str) -> list[CalendarEven
     return out
 
 
-def _read_calendar_ids(calendar_ids: Iterable[str], write_id: str) -> list[str]:
+def _calendar_ids(calendar_ids: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for cid in calendar_ids:
         clean = (cid or "").strip()
-        if not clean or clean == write_id or clean in seen:
+        if not clean or clean in seen:
             continue
         seen.add(clean)
         out.append(clean)
@@ -179,4 +229,10 @@ def _read_calendar_ids(calendar_ids: Iterable[str], write_id: str) -> list[str]:
 
 
 def _empty_summary() -> dict:
-    return {"checked": 0, "updated": 0, "overlapping": 0, "cursor": None}
+    return {
+        "checked": 0,
+        "updated": 0,
+        "overlapping": 0,
+        "scheduled_updates": 0,
+        "cursor": None,
+    }
