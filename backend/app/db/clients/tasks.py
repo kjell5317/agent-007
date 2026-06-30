@@ -139,13 +139,12 @@ def list_(
 
     If `status` is given, filter by the latest-raw_input status.
     """
+    display_date = func.coalesce(Task.scheduled_date, Task.due_date)
     stmt = (
         select(Task)
         .order_by(
-            Task.scheduled_date.is_(None),
-            Task.scheduled_date.asc(),
-            Task.due_date.is_(None),
-            Task.due_date.asc(),
+            display_date.is_(None),
+            display_date.asc(),
             Task.created_at.desc(),
         )
         .limit(limit)

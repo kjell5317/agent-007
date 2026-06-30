@@ -14,8 +14,11 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
-from app.auth.base import get_provider
-from app.db.clients import oauth_tokens
+from app.auth.google_tokens import (
+    GoogleReauthorizationRequired,
+    GoogleTokenMissing,
+    get_fresh_google_token,
+)
 from app.services.location import resolve_location_alias
 
 _BASE = "https://www.googleapis.com/calendar/v3"
@@ -130,29 +133,16 @@ async def authorized_client(
     session: Session, account_key: str | None
 ) -> GoogleCalendarClient:
     """Resolve a Google token, refreshing it on demand, and wrap it for use."""
-    token = oauth_tokens.get_decrypted(session, provider="google", account_key=account_key)
-    if token is None:
+    try:
+        token = await get_fresh_google_token(session, account_key=account_key)
+    except GoogleTokenMissing:
         raise RuntimeError(
             "No Google account connected — sign in via /auth/login first."
         )
-    if token.is_expired:
-        if not token.refresh_token:
-            raise RuntimeError(
-                "Google access token expired and no refresh_token available; re-authorize."
-            )
-        bundle = await get_provider("google")().refresh(token.refresh_token)
-        oauth_tokens.upsert(
-            session,
-            provider="google",
-            account_key=token.account_key,
-            bundle=bundle,
-            extra_merge=token.extra,
+    except GoogleReauthorizationRequired:
+        raise RuntimeError(
+            "Google access token expired and no refresh_token available; re-authorize."
         )
-        session.commit()
-        token = oauth_tokens.get_decrypted(
-            session, provider="google", account_key=token.account_key
-        )
-        assert token is not None
     return GoogleCalendarClient(token.access_token)
 
 

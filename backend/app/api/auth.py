@@ -27,6 +27,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.auth import get_provider
+from app.auth.google_tokens import GoogleTokenError, get_fresh_google_token
 from app.config import get_settings
 from app.db import get_session
 from app.db.clients import oauth_tokens
@@ -114,9 +115,26 @@ async def callback(
 
 
 @router.get("/whoami")
-async def whoami(request: Request) -> dict:
+async def whoami(request: Request, session: Session = Depends(get_session)) -> dict:
     """Used by the UI to render identity / logout state."""
     email = request.session.get("email") if hasattr(request, "session") else None
+    if not email:
+        return {"email": None}
+
+    settings = get_settings()
+    account_key = email.lower()
+    if settings.auth_allowed_emails and account_key not in settings.auth_allowed_emails:
+        request.session.clear()
+        return {"email": None}
+
+    if settings.auth_allowed_emails:
+        try:
+            await get_fresh_google_token(session, account_key=account_key)
+        except GoogleTokenError as exc:
+            log.info("session reauthorization required · email=%s reason=%s", account_key, exc)
+            request.session.clear()
+            return {"email": None}
+
     return {"email": email}
 
 

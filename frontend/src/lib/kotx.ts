@@ -27,6 +27,7 @@ export const TERMINAL_STATES: ReadonlySet<KotxState> = new Set([
 export interface KotxTask {
   id: number;
   repo: string;
+  title?: string | null;
   subjectType: "issue" | "pull_request";
   subjectNumber: number;
   kind: "implement" | "resolve_conflict" | "review";

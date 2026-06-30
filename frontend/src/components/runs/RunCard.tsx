@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { RunDocModal } from "@/components/runs/RunDocModal";
+import { runTitle } from "@/components/runs/runLabels";
 import { kotx, TERMINAL_STATES, type KotxState, type KotxTask } from "@/lib/kotx";
 import { cn } from "@/lib/utils";
 
@@ -78,7 +79,7 @@ export function RunCard({ task, onChanged }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const subjectLabel = task.subjectType === "pull_request" ? "PR" : "Issue";
+  const title = runTitle(task);
   const actionable = task.canStart || task.canApprove;
   const hint = task.canStart ? "Start" : task.canApprove ? "Comment" : "Open";
   const terminal = TERMINAL_STATES.has(task.state);
@@ -119,14 +120,15 @@ export function RunCard({ task, onChanged }: Props) {
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div
             className="min-w-0 truncate font-medium leading-snug"
-            title={`${subjectLabel} #${task.subjectNumber} · ${task.repo}`}
+            title={title}
           >
-            {subjectLabel} #{task.subjectNumber}{" "}
-            <span className="text-muted-foreground">{task.repo}</span>
+            {title}
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <Badge className={statusClass(task)}>{task.status}</Badge>
-            <span className="capitalize">{task.kind.replace("_", " ")}</span>
+            <span className="min-w-0 flex-1 truncate" title={task.repo}>
+              {task.repo}
+            </span>
           </div>
         </div>
 

@@ -18,9 +18,9 @@ export interface AppData {
   hasMoreInputs: boolean;
 }
 
-// Server task lists are ordered by scheduled_date first, with due/created
-// fallbacks for unscheduled rows. Live upserts re-sort to match so a pushed row
-// lands where a refetch would have put it.
+// Server task lists are ordered by the displayed task date
+// (scheduled_date ?? due_date), then created_at. Live upserts re-sort to match
+// so a pushed row lands where a refetch would have put it.
 function upsertTask(list: Task[], task: Task): Task[] {
   const rest = list.filter((t) => t.id !== task.id);
   // The hook only holds *open* tasks; a non-open push means it left the list.

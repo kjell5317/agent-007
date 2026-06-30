@@ -14,6 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app import cron  # noqa: E402
 from app.api import notifications  # noqa: E402
+from app.db.clients import tasks as tasks_store  # noqa: E402
 from app.db.models.task import Task  # noqa: E402
 from app.db.schemas.task import TaskRead  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
@@ -68,6 +69,50 @@ def test_task_read_serializes_scheduled_date():
 
     assert read.scheduled_date == scheduled
     assert read.model_dump(mode="json")["scheduled_date"] == "2026-07-01T12:30:00Z"
+
+
+def test_task_list_orders_by_display_date(monkeypatch):
+    session = _sqlite_session()
+    created = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
+    due_only = Task(
+        title="Due-only earlier",
+        due_date=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        scheduled_date=None,
+        calendar_event_id="historical-event",
+        created_at=created,
+    )
+    scheduled = Task(
+        title="Scheduled later",
+        due_date=datetime(2026, 7, 3, 17, 0, tzinfo=timezone.utc),
+        scheduled_date=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        calendar_event_id="event-1",
+        created_at=created + timedelta(minutes=1),
+    )
+    undated_newer = Task(
+        title="Undated newer",
+        created_at=created + timedelta(minutes=2),
+    )
+    undated_older = Task(
+        title="Undated older",
+        created_at=created,
+    )
+    session.add_all([scheduled, undated_older, due_only, undated_newer])
+    session.commit()
+
+    monkeypatch.setattr(
+        tasks_store,
+        "latest_status_for",
+        lambda _session, ids: {task_id: "open" for task_id in ids},
+    )
+
+    rows = tasks_store.list_(session)
+
+    assert [task.title for task, _status in rows] == [
+        "Due-only earlier",
+        "Scheduled later",
+        "Undated newer",
+        "Undated older",
+    ]
 
 
 def test_discover_syncs_moved_managed_task_event():

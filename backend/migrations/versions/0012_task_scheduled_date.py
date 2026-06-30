@@ -20,6 +20,10 @@ def upgrade() -> None:
         "tasks",
         sa.Column("scheduled_date", sa.DateTime(timezone=True), nullable=True),
     )
+    # Historical calendar start times were not stored locally before this
+    # column existed, so this migration intentionally leaves existing managed
+    # calendar tasks NULL. The app falls back to due_date for display/order
+    # until future calendar discovery syncs the event start.
 
 
 def downgrade() -> None:
