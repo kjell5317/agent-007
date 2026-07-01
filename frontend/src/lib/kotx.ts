@@ -215,6 +215,36 @@ function logPageFromJson(body: Record<string, unknown>, requestedLines: number |
   };
 }
 
+// kotx streams the log as JSONL and appends a final line carrying the page
+// envelope, e.g. {"page": {"nextBefore": ..., "hasMoreBefore": ...}}. Lift it
+// off so it drives pagination instead of rendering as log content.
+function splitTrailingPage(text: string): {
+  body: string;
+  page: Record<string, unknown> | null;
+} {
+  const lines = text.split(/\r?\n/);
+  let i = lines.length - 1;
+  while (i >= 0 && lines[i].trim() === "") i--;
+  if (i < 0) return { body: text, page: null };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(lines[i].trim());
+  } catch {
+    return { body: text, page: null };
+  }
+
+  const page =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).page
+      : null;
+  if (!page || typeof page !== "object" || Array.isArray(page)) {
+    return { body: text, page: null };
+  }
+
+  return { body: lines.slice(0, i).join("\n"), page: page as Record<string, unknown> };
+}
+
 async function logRequest(path: string, params: KotxLogParams = {}): Promise<KotxLogPage> {
   const qs = new URLSearchParams();
   if (params.tail !== undefined) qs.set("tail", String(params.tail));
@@ -251,7 +281,10 @@ async function logRequest(path: string, params: KotxLogParams = {}): Promise<Kot
     /* raw log text */
   }
 
+  const { body, page } = splitTrailingPage(text);
+
   const before =
+    (page && readCursorField(page, ["nextBefore", "next_before", "before"])) ??
     parseCursor(
       firstHeader(res.headers, [
         "x-log-before",
@@ -262,21 +295,24 @@ async function logRequest(path: string, params: KotxLogParams = {}): Promise<Kot
         "x-log-cursor",
         "x-next-cursor",
       ]),
-    ) ?? null;
-  const explicitHasMore = parseBoolean(
-    firstHeader(res.headers, [
-      "x-log-has-more-before",
-      "x-log-has-more",
-      "x-has-more-before",
-      "x-has-more",
-      "x-log-has-older",
-      "x-has-older",
-    ]),
-  );
+    ) ??
+    null;
+  const explicitHasMore =
+    (page && readBooleanField(page, ["hasMoreBefore", "has_more_before"])) ??
+    parseBoolean(
+      firstHeader(res.headers, [
+        "x-log-has-more-before",
+        "x-log-has-more",
+        "x-has-more-before",
+        "x-has-more",
+        "x-log-has-older",
+        "x-has-older",
+      ]),
+    );
 
   return {
-    text,
-    hasMoreBefore: explicitHasMore ?? (requestedLines !== null && lineCount(text) >= requestedLines),
+    text: body,
+    hasMoreBefore: explicitHasMore ?? (requestedLines !== null && lineCount(body) >= requestedLines),
     before,
   };
 }

@@ -395,7 +395,7 @@ function LinkMeta({
   children: ReactNode;
 }) {
   return (
-    <div className="grid min-w-0 grid-cols-[auto_minmax(0,7rem)_minmax(0,1fr)] items-center gap-2">
+    <div className="grid min-w-0 grid-cols-[auto_fit-content(7rem)_minmax(0,1fr)] items-center gap-2">
       <span className="shrink-0 text-muted-foreground">{icon}</span>
       <span className="min-w-0 truncate font-medium" title={labelTitle}>
         {label}
