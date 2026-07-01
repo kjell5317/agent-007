@@ -7,6 +7,7 @@ import {
   MapPin,
   Pencil,
   Timer,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -18,12 +19,14 @@ import { LabelPicker } from "@/components/ui/label-picker";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { InputBody, MetaDot } from "@/components/inbox/InboxCard";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
+import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import type { Task } from "@/lib/types";
+import type { Label, Task, TaskRawInput } from "@/lib/types";
 
 interface Props {
   task: Task;
@@ -31,19 +34,10 @@ interface Props {
   onChanged: () => Promise<void> | void;
 }
 
-type Mode =
-  | "summary"
-  | "title"
-  | "description"
-  | "link"
-  | "location"
-  | "due_date"
-  | "estimation"
-  | "label";
+type TextField = "title" | "description" | "link" | "location";
+type PickerField = "due_date" | "estimation" | "label";
 
-type TextMode = Extract<Mode, "title" | "description" | "link" | "location">;
-
-const TEXT_LABEL: Record<TextMode, string> = {
+const TEXT_LABEL: Record<TextField, string> = {
   title: "Title",
   description: "Description",
   link: "Provided link",
@@ -53,7 +47,8 @@ const TEXT_LABEL: Record<TextMode, string> = {
 export function TaskDetailModal({ task, onClose, onChanged }: Props) {
   const labels = useLabels();
   const [current, setCurrent] = useState(task);
-  const [mode, setMode] = useState<Mode>("summary");
+  const [editingText, setEditingText] = useState<TextField | null>(null);
+  const [activePicker, setActivePicker] = useState<PickerField | null>(null);
   const [dateStep, setDateStep] = useState<"date" | "time">("date");
   const [pickerDue, setPickerDue] = useState(task.due_date);
   const [pickerEstimation, setPickerEstimation] = useState(task.estimation);
@@ -64,7 +59,8 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
 
   useEffect(() => {
     setCurrent(task);
-    setMode("summary");
+    setEditingText(null);
+    setActivePicker(null);
     setDateStep("date");
     setPickerDue(task.due_date);
     setPickerEstimation(task.estimation);
@@ -96,136 +92,95 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     }
   }
 
-  const openTextEditor = (nextMode: TextMode) => {
-    const value = current[nextMode];
+  const openTextEditor = (field: TextField) => {
+    setActivePicker(null);
+    setEditingText(field);
+    const value = current[field];
     setTextDraft(value == null ? "" : String(value));
-    setMode(nextMode);
   };
 
-  const saveTextEditor = async (textMode: TextMode) => {
+  const closeTextEditor = () => {
+    setEditingText(null);
+    setTextDraft("");
+  };
+
+  const saveTextEditor = async (field: TextField) => {
     const trimmed = textDraft.trim();
-    if (textMode === "title" && !trimmed) {
+    if (field === "title" && !trimmed) {
       toast.error("Title is required");
       return;
     }
-    const saved = await savePatch({
-      [textMode]: textMode === "title" ? trimmed : normalizeOptional(textDraft),
-    });
-    if (saved) setMode("summary");
+
+    let patch: Partial<Task>;
+    if (field === "title") patch = { title: trimmed };
+    else if (field === "description") patch = { description: normalizeOptional(textDraft) };
+    else if (field === "link") patch = { link: normalizeOptional(textDraft) };
+    else patch = { location: normalizeOptional(textDraft) };
+
+    const saved = await savePatch(patch);
+    if (saved) closeTextEditor();
   };
 
-  const openPicker = (next: Extract<Mode, "due_date" | "estimation" | "label">) => {
-    setMode(next);
+  const openPicker = (field: PickerField) => {
+    setEditingText(null);
+    setActivePicker((prev) => (prev === field ? null : field));
     setDateStep("date");
     setPickerDue(current.due_date);
     setPickerEstimation(current.estimation);
     setPickerLabel(current.label ?? "");
   };
 
-  const closeSubView = () => {
-    setMode("summary");
-    setDateStep("date");
-  };
-
   return (
     <Modal
       open
       onClose={onClose}
-      title={mode === "summary" ? "Task details" : editTitle(mode)}
+      title="Task details"
       titleClassName="text-lg"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
-      leftAction={
-        mode !== "summary" ? (
-          <button
-            type="button"
-            aria-label="Back"
-            onClick={() =>
-              mode === "due_date" && dateStep === "time"
-                ? setDateStep("date")
-                : closeSubView()
-            }
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-        ) : null
-      }
     >
       {loading ? (
         <div className="min-h-0 flex-1 overflow-hidden">
           <ModalSkeleton />
         </div>
-      ) : mode === "summary" ? (
+      ) : (
         <TaskSummary
           task={current}
           labels={labels}
           busy={busy}
+          editingText={editingText}
+          textDraft={textDraft}
+          activePicker={activePicker}
+          dateStep={dateStep}
+          pickerDue={pickerDue}
+          pickerEstimation={pickerEstimation}
+          pickerLabel={pickerLabel}
           onEditText={openTextEditor}
+          onCancelText={closeTextEditor}
+          onChangeText={setTextDraft}
+          onSaveText={saveTextEditor}
           onEditPicker={openPicker}
+          onClosePicker={() => setActivePicker(null)}
+          onDateStepChange={setDateStep}
+          onPickerDueChange={setPickerDue}
+          onPickerEstimationChange={setPickerEstimation}
+          onPickerLabelChange={setPickerLabel}
+          onSaveDue={async () => {
+            const saved = await savePatch({ due_date: pickerDue });
+            if (saved) setActivePicker(null);
+          }}
+          onClearDue={async () => {
+            const saved = await savePatch({ due_date: null });
+            if (saved) setActivePicker(null);
+          }}
+          onSaveEstimation={async () => {
+            const saved = await savePatch({ estimation: pickerEstimation });
+            if (saved) setActivePicker(null);
+          }}
+          onSaveLabel={async () => {
+            const saved = await savePatch({ label: pickerLabel || null });
+            if (saved) setActivePicker(null);
+          }}
         />
-      ) : isTextMode(mode) ? (
-        <TextEditor
-          mode={mode}
-          value={textDraft}
-          busy={busy}
-          onChange={setTextDraft}
-          onCancel={closeSubView}
-          onSave={() => saveTextEditor(mode)}
-        />
-      ) : mode === "due_date" ? (
-        <PickerBody
-          footer={
-            pickerDue ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full"
-                onClick={async () => {
-                  const saved = await savePatch({ due_date: null });
-                  if (saved) closeSubView();
-                }}
-                disabled={busy}
-              >
-                Clear due date
-              </Button>
-            ) : null
-          }
-        >
-          <DatePicker
-            value={pickerDue}
-            onChange={setPickerDue}
-            onSave={async () => {
-              const saved = await savePatch({ due_date: pickerDue });
-              if (saved) closeSubView();
-            }}
-            step={dateStep}
-            onStepChange={setDateStep}
-          />
-        </PickerBody>
-      ) : mode === "estimation" ? (
-        <PickerBody>
-          <EstimationPicker
-            value={pickerEstimation}
-            onChange={setPickerEstimation}
-            onSave={async () => {
-              const saved = await savePatch({ estimation: pickerEstimation });
-              if (saved) closeSubView();
-            }}
-          />
-        </PickerBody>
-      ) : (
-        <PickerBody>
-          <LabelPicker
-            value={pickerLabel}
-            onChange={setPickerLabel}
-            onSave={async () => {
-              const saved = await savePatch({ label: pickerLabel || null });
-              if (saved) closeSubView();
-            }}
-            labels={labels}
-          />
-        </PickerBody>
       )}
     </Modal>
   );
@@ -235,14 +190,52 @@ function TaskSummary({
   task,
   labels,
   busy,
+  editingText,
+  textDraft,
+  activePicker,
+  dateStep,
+  pickerDue,
+  pickerEstimation,
+  pickerLabel,
   onEditText,
+  onCancelText,
+  onChangeText,
+  onSaveText,
   onEditPicker,
+  onClosePicker,
+  onDateStepChange,
+  onPickerDueChange,
+  onPickerEstimationChange,
+  onPickerLabelChange,
+  onSaveDue,
+  onClearDue,
+  onSaveEstimation,
+  onSaveLabel,
 }: {
   task: Task;
-  labels: ReturnType<typeof useLabels>;
+  labels: Label[];
   busy: boolean;
-  onEditText: (mode: TextMode) => void;
-  onEditPicker: (mode: Extract<Mode, "due_date" | "estimation" | "label">) => void;
+  editingText: TextField | null;
+  textDraft: string;
+  activePicker: PickerField | null;
+  dateStep: "date" | "time";
+  pickerDue: string | null;
+  pickerEstimation: number | null;
+  pickerLabel: string;
+  onEditText: (field: TextField) => void;
+  onCancelText: () => void;
+  onChangeText: (value: string) => void;
+  onSaveText: (field: TextField) => void;
+  onEditPicker: (field: PickerField) => void;
+  onClosePicker: () => void;
+  onDateStepChange: (step: "date" | "time") => void;
+  onPickerDueChange: (value: string | null) => void;
+  onPickerEstimationChange: (value: number | null) => void;
+  onPickerLabelChange: (value: string) => void;
+  onSaveDue: () => void;
+  onClearDue: () => void;
+  onSaveEstimation: () => void;
+  onSaveLabel: () => void;
 }) {
   const labelMeta = labels.find((l) => l.name === task.label);
   const dueOverdue = isOverdue(task.due_date);
@@ -251,22 +244,35 @@ function TaskSummary({
   return (
     <div className="min-h-0 flex-1 overflow-auto pr-1">
       <div className="space-y-5">
-        <div className="space-y-2">
-          <div className="flex min-w-0 flex-wrap items-start gap-2">
+        <div className="space-y-3">
+          {editingText === "title" ? (
+            <InlineTextEditor
+              label={TEXT_LABEL.title}
+              value={textDraft}
+              busy={busy}
+              onChange={onChangeText}
+              onCancel={onCancelText}
+              onSave={() => onSaveText("title")}
+              inputClassName="text-xl font-semibold"
+            />
+          ) : (
             <button
               type="button"
               onClick={() => onEditText("title")}
               disabled={busy}
-              className="group min-w-0 flex-1 rounded-md text-left text-2xl font-semibold leading-tight transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50"
+              className="group block w-full rounded-md text-left text-2xl font-semibold leading-tight transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50"
             >
               <span className="break-words">{task.title}</span>
               <Pencil className="ml-2 inline h-4 w-4 align-baseline text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
             </button>
+          )}
+
+          <div className="relative inline-block">
             <button
               type="button"
               onClick={() => onEditPicker("label")}
               disabled={busy}
-              className="shrink-0 rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
+              className="rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
               title={labelMeta?.description ?? task.label ?? "Set label"}
             >
               {task.label ? (
@@ -282,6 +288,16 @@ function TaskSummary({
                 <Badge variant="muted">No label</Badge>
               )}
             </button>
+            {activePicker === "label" && (
+              <InlinePickerPanel title="Label" onClose={onClosePicker}>
+                <LabelPicker
+                  value={pickerLabel}
+                  onChange={onPickerLabelChange}
+                  onSave={onSaveLabel}
+                  labels={labels}
+                />
+              </InlinePickerPanel>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -291,109 +307,264 @@ function TaskSummary({
                 Scheduled {fmtDue(task.scheduled_date)}
               </Badge>
             )}
-            <button
-              type="button"
-              onClick={() => onEditPicker("estimation")}
-              disabled={busy}
-              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+
+            <PickerAnchor
+              open={activePicker === "estimation"}
+              panel={
+                <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
+                  <EstimationPicker
+                    value={pickerEstimation}
+                    onChange={onPickerEstimationChange}
+                    onSave={onSaveEstimation}
+                  />
+                </InlinePickerPanel>
+              }
             >
-              <Timer className="h-3 w-3" />
-              {task.estimation != null ? `${task.estimation} min` : "No estimate"}
-            </button>
-            <button
-              type="button"
-              onClick={() => onEditPicker("due_date")}
-              disabled={busy}
-              className="disabled:pointer-events-none disabled:opacity-50"
+              <button
+                type="button"
+                onClick={() => onEditPicker("estimation")}
+                disabled={busy}
+                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              >
+                <Timer className="h-3 w-3" />
+                {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+              </button>
+            </PickerAnchor>
+
+            <PickerAnchor
+              open={activePicker === "due_date"}
+              panel={
+                <InlinePickerPanel
+                  title="Due date"
+                  onClose={onClosePicker}
+                  onBack={dateStep === "time" ? () => onDateStepChange("date") : undefined}
+                  footer={
+                    pickerDue ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full"
+                        onClick={onClearDue}
+                        disabled={busy}
+                      >
+                        Clear due date
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <DatePicker
+                    value={pickerDue}
+                    onChange={onPickerDueChange}
+                    onSave={onSaveDue}
+                    step={dateStep}
+                    onStepChange={onDateStepChange}
+                  />
+                </InlinePickerPanel>
+              }
             >
-              {task.due_date ? (
-                <Badge variant={dueOverdue ? "overdue" : dueUrgent ? "urgent" : "open"}>
-                  Due {fmtDue(task.due_date)}
-                </Badge>
-              ) : (
-                <Badge variant="muted">No due date</Badge>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={() => onEditPicker("due_date")}
+                disabled={busy}
+                className="disabled:pointer-events-none disabled:opacity-50"
+              >
+                {task.due_date ? (
+                  <Badge variant={dueOverdue ? "overdue" : dueUrgent ? "urgent" : "open"}>
+                    Due {fmtDue(task.due_date)}
+                  </Badge>
+                ) : (
+                  <Badge variant="muted">No due date</Badge>
+                )}
+              </button>
+            </PickerAnchor>
           </div>
         </div>
 
         <div className="space-y-1.5">
-          <SummaryRow
+          <EditableTextBlock
+            field="location"
             icon={<MapPin className="h-4 w-4" />}
-            label="Location"
-            value={task.location || "Add location"}
-            muted={!task.location}
-            disabled={busy}
-            onClick={() => onEditText("location")}
+            value={task.location}
+            fallback="Add location"
+            editing={editingText === "location"}
+            draft={textDraft}
+            busy={busy}
+            onEdit={() => onEditText("location")}
+            onChange={onChangeText}
+            onCancel={onCancelText}
+            onSave={() => onSaveText("location")}
           />
           <LinksSection
             task={task}
+            editing={editingText === "link"}
+            draft={textDraft}
             busy={busy}
-            onEditProvided={() => onEditText("link")}
+            onEdit={() => onEditText("link")}
+            onChange={onChangeText}
+            onCancel={onCancelText}
+            onSave={() => onSaveText("link")}
           />
         </div>
 
-        <button
-          type="button"
-          onClick={() => onEditText("description")}
-          disabled={busy}
-          className="group block w-full rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
-        >
-          <div className="mb-1 flex items-center justify-between gap-2 text-xs font-medium uppercase text-muted-foreground">
-            <span>Description</span>
-            <Pencil className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-          </div>
-          {task.description ? (
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-              {task.description}
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">Add description</p>
-          )}
-        </button>
+        <EditableTextBlock
+          field="description"
+          value={task.description}
+          fallback="Add description"
+          editing={editingText === "description"}
+          draft={textDraft}
+          busy={busy}
+          multiline
+          onEdit={() => onEditText("description")}
+          onChange={onChangeText}
+          onCancel={onCancelText}
+          onSave={() => onSaveText("description")}
+        />
 
-        <div className="grid gap-2 border-t pt-3 text-xs text-muted-foreground sm:grid-cols-2">
-          <Meta label="Status">
-            <Badge variant={task.status}>{task.status}</Badge>
-          </Meta>
-          <Meta label="Source">{task.is_manual ? "Manual" : "Extracted"}</Meta>
-          <Meta label="Created">{fmtWhen(task.created_at)}</Meta>
-          <Meta label="Updated">{fmtWhen(task.updated_at)}</Meta>
-        </div>
+        <LinkedInputsSection inputs={task.raw_inputs ?? []} />
       </div>
     </div>
   );
 }
 
+function EditableTextBlock({
+  field,
+  icon,
+  value,
+  fallback,
+  editing,
+  draft,
+  busy,
+  multiline,
+  onEdit,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  field: TextField;
+  icon?: ReactNode;
+  value: string | null;
+  fallback: string;
+  editing: boolean;
+  draft: string;
+  busy: boolean;
+  multiline?: boolean;
+  onEdit: () => void;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  if (editing) {
+    return (
+      <div className="rounded-lg bg-accent/40 p-2">
+        <InlineTextEditor
+          label={TEXT_LABEL[field]}
+          value={draft}
+          busy={busy}
+          multiline={multiline}
+          placeholder={fallback}
+          onChange={onChange}
+          onCancel={onCancel}
+          onSave={onSave}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onEdit}
+      disabled={busy}
+      className="group flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+    >
+      {icon && <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>}
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-medium uppercase text-muted-foreground">
+          {TEXT_LABEL[field]}
+        </span>
+        {value ? (
+          <span
+            className={cn(
+              "block break-words text-sm",
+              multiline && "whitespace-pre-wrap leading-relaxed",
+            )}
+          >
+            {value}
+          </span>
+        ) : (
+          <span className="block text-sm text-muted-foreground">{fallback}</span>
+        )}
+      </span>
+      <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+    </button>
+  );
+}
+
 function LinksSection({
   task,
+  editing,
+  draft,
   busy,
-  onEditProvided,
+  onEdit,
+  onChange,
+  onCancel,
+  onSave,
 }: {
   task: Task;
+  editing: boolean;
+  draft: string;
   busy: boolean;
-  onEditProvided: () => void;
+  onEdit: () => void;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
 }) {
   const hasSource = Boolean(task.source_url && task.source_url !== task.link);
 
-  return (
-    <div className="rounded-lg p-2">
-      <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase text-muted-foreground">
-        <Link2 className="h-3.5 w-3.5" />
-        <span>Links</span>
+  if (editing) {
+    return (
+      <div className="rounded-lg bg-accent/40 p-2">
+        <InlineTextEditor
+          label={TEXT_LABEL.link}
+          value={draft}
+          busy={busy}
+          placeholder="https://..."
+          onChange={onChange}
+          onCancel={onCancel}
+          onSave={onSave}
+        />
       </div>
-      <div className="space-y-1">
-        <button
-          type="button"
-          onClick={onEditProvided}
-          disabled={busy}
-          className="group flex w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
-        >
-          <span className={cn("min-w-0 truncate", !task.link && "text-muted-foreground")}>
+    );
+  }
+
+  return (
+    <div className="space-y-1 rounded-lg p-2">
+      <button
+        type="button"
+        onClick={onEdit}
+        disabled={busy}
+        className="group flex w-full min-w-0 items-start gap-3 rounded-md text-left transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50"
+      >
+        <span className="mt-0.5 shrink-0 text-muted-foreground">
+          <Link2 className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-medium uppercase text-muted-foreground">
+            {TEXT_LABEL.link}
+          </span>
+          <span
+            className={cn(
+              "block break-words text-sm",
+              !task.link && "text-muted-foreground",
+            )}
+          >
             {task.link || "Add provided link"}
           </span>
-          <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-        </button>
+        </span>
+        <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+      <div className="flex flex-wrap gap-1 pl-7">
         {task.link && <OpenLink href={task.link}>Open provided link</OpenLink>}
         {hasSource && task.source_url && (
           <OpenLink href={task.source_url}>Open original source</OpenLink>
@@ -403,39 +574,163 @@ function LinksSection({
   );
 }
 
-function SummaryRow({
-  icon,
+function InlineTextEditor({
   label,
   value,
-  muted,
-  disabled,
-  onClick,
+  busy,
+  multiline,
+  placeholder,
+  inputClassName,
+  onChange,
+  onCancel,
+  onSave,
 }: {
-  icon: ReactNode;
   label: string;
   value: string;
-  muted?: boolean;
-  disabled: boolean;
-  onClick: () => void;
+  busy: boolean;
+  multiline?: boolean;
+  placeholder?: string;
+  inputClassName?: string;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="group flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
-    >
-      <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-xs font-medium uppercase text-muted-foreground">
+    <div className="space-y-2">
+      <label className="space-y-1.5">
+        <span className="text-xs font-medium uppercase text-muted-foreground">
           {label}
         </span>
-        <span className={cn("block break-words text-sm", muted && "text-muted-foreground")}>
-          {value}
-        </span>
-      </span>
-      <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-    </button>
+        {multiline ? (
+          <Textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={busy}
+            placeholder={placeholder}
+            className="min-h-32 resize-y"
+            autoFocus
+          />
+        ) : (
+          <Input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={busy}
+            placeholder={placeholder}
+            className={inputClassName}
+            autoFocus
+          />
+        )}
+      </label>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button type="button" size="sm" onClick={onSave} disabled={busy}>
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function PickerAnchor({
+  open,
+  panel,
+  children,
+}: {
+  open: boolean;
+  panel: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative inline-flex">
+      {children}
+      {open && panel}
+    </div>
+  );
+}
+
+function InlinePickerPanel({
+  title,
+  children,
+  footer,
+  onBack,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  onBack?: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="absolute left-0 top-full z-20 mt-2 w-[min(calc(100vw-4rem),22rem)] rounded-lg border bg-card p-3 text-card-foreground shadow-lg"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
+        <div>
+          {onBack && (
+            <button
+              type="button"
+              aria-label="Back"
+              onClick={onBack}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <div className="truncate text-center text-sm font-semibold">{title}</div>
+        <button
+          type="button"
+          aria-label="Close picker"
+          onClick={onClose}
+          className="inline-flex h-7 w-7 items-center justify-center justify-self-end rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="space-y-3">
+        {children}
+        {footer}
+      </div>
+    </div>
+  );
+}
+
+function LinkedInputsSection({ inputs }: { inputs: TaskRawInput[] }) {
+  if (inputs.length === 0) return null;
+
+  return (
+    <section className="space-y-2 border-t pt-3">
+      <div className="text-xs font-medium uppercase text-muted-foreground">
+        Linked inputs
+      </div>
+      <div className="space-y-2">
+        {inputs.map((input) => (
+          <div key={input.id} className="rounded-lg border p-3">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{inputTitle(input)}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  <Badge variant={inboxBadge(input)}>{inboxBadge(input)}</Badge>
+                  <span className="truncate font-medium">{senderName(input)}</span>
+                  <MetaDot />
+                  <span className="font-medium">{fmtWhen(input.received_at)}</span>
+                </div>
+              </div>
+              {input.source_url && (
+                <OpenLink href={input.source_url}>Open source</OpenLink>
+              )}
+            </div>
+            <div className="mt-3 space-y-3 border-t pt-3 text-sm">
+              <InputBody data={input} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -451,93 +746,6 @@ function OpenLink({ href, children }: { href: string; children: ReactNode }) {
       <span className="min-w-0 truncate">{children}</span>
     </a>
   );
-}
-
-function TextEditor({
-  mode,
-  value,
-  busy,
-  onChange,
-  onCancel,
-  onSave,
-}: {
-  mode: TextMode;
-  value: string;
-  busy: boolean;
-  onChange: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
-}) {
-  const isLong = mode === "description";
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <label className="min-h-0 flex-1 space-y-1.5">
-        <span className="text-xs font-medium text-muted-foreground">
-          {TEXT_LABEL[mode]}
-        </span>
-        {isLong ? (
-          <Textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={busy}
-            className="h-[calc(100%-1.5rem)] min-h-[24rem] resize-none"
-            autoFocus
-          />
-        ) : (
-          <Input
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={busy}
-            placeholder={mode === "link" ? "https://..." : undefined}
-            autoFocus
-          />
-        )}
-      </label>
-      <div className="flex shrink-0 justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
-          Cancel
-        </Button>
-        <Button type="button" size="sm" onClick={onSave} disabled={busy}>
-          Save
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function PickerBody({
-  children,
-  footer,
-}: {
-  children: ReactNode;
-  footer?: ReactNode;
-}) {
-  return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      <div className="mx-auto w-full max-w-sm space-y-3">{children}{footer}</div>
-    </div>
-  );
-}
-
-function Meta({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <div className="font-medium">{label}</div>
-      <div className="mt-1 min-w-0 break-words text-foreground">{children}</div>
-    </div>
-  );
-}
-
-function editTitle(mode: Mode) {
-  if (mode === "due_date") return "Edit due date";
-  if (mode === "estimation") return "Edit estimation";
-  if (mode === "label") return "Edit label";
-  if (isTextMode(mode)) return `Edit ${TEXT_LABEL[mode].toLowerCase()}`;
-  return "Task details";
-}
-
-function isTextMode(mode: Mode): mode is TextMode {
-  return mode === "title" || mode === "description" || mode === "link" || mode === "location";
 }
 
 function normalizeOptional(value: string) {

@@ -61,10 +61,43 @@ class TaskCreationAccepted(BaseModel):
     status: str = "processing"
 
 
+class TaskRawInputRead(BaseModel):
+    id: uuid.UUID
+    source: str
+    external_id: str | None
+    content: str
+    source_metadata: dict
+    received_at: datetime
+    processed_at: datetime | None
+    status: str
+    task_id: uuid.UUID | None
+    task_title: str | None
+    agent_trace: dict | None
+    source_url: str | None
+
+    @classmethod
+    def build(cls, raw_input, source_url: str | None = None) -> "TaskRawInputRead":
+        return cls(
+            id=raw_input.id,
+            source=raw_input.source,
+            external_id=raw_input.external_id,
+            content=raw_input.content,
+            source_metadata=raw_input.source_metadata,
+            received_at=raw_input.received_at,
+            processed_at=raw_input.processed_at,
+            status=raw_input.status,
+            task_id=raw_input.task_id,
+            task_title=raw_input.task.title if raw_input.task is not None else None,
+            agent_trace=raw_input.agent_trace,
+            source_url=source_url,
+        )
+
+
 class TaskRead(TaskBase):
     id: uuid.UUID
     scheduled_date: datetime | None = None
     source_url: str | None = None
+    raw_inputs: list[TaskRawInputRead] = Field(default_factory=list)
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
     created_at: datetime
@@ -80,6 +113,7 @@ class TaskRead(TaskBase):
         status_: str,
         is_manual: bool,
         source_url: str | None = None,
+        raw_inputs: list[TaskRawInputRead] | None = None,
     ) -> "TaskRead":
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
@@ -93,6 +127,7 @@ class TaskRead(TaskBase):
                 "due_date": task.due_date,
                 "scheduled_date": task.scheduled_date,
                 "source_url": source_url,
+                "raw_inputs": raw_inputs or [],
                 "estimation": task.estimation,
                 "location": task.location,
                 "label": task.label,

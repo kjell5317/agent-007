@@ -182,6 +182,20 @@ def latest_for_task(session: Session, task_id: uuid.UUID) -> RawInput | None:
     return session.execute(stmt).scalar_one_or_none()
 
 
+def list_for_task(session: Session, task_id: uuid.UUID) -> list[RawInput]:
+    """Return every raw input linked to a task, newest first.
+
+    This mirrors the inbox grouping rule where a shared task_id wins, so
+    duplicates and agent follow-ups are visible with the task they reference.
+    """
+    stmt = (
+        select(RawInput)
+        .where(RawInput.task_id == task_id)
+        .order_by(RawInput.received_at.desc())
+    )
+    return list(session.execute(stmt).scalars())
+
+
 def find_by_thread(
     session: Session,
     source: str,
