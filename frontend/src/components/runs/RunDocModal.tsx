@@ -441,22 +441,6 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
         )}
         {!editing && (view === "primary" || view === "pr") && (
           <>
-            {task.canApprove && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  withBusy(
-                    () => kotx.approve(task.id),
-                    task.proposes === "pr" ? "PR opened" : "Approved",
-                    true,
-                  )
-                }
-                disabled={busy}
-              >
-                {task.proposes === "pr" ? "Open PR" : "Approve"}
-              </Button>
-            )}
             {task.canComment && (
               <Button
                 size="sm"
@@ -473,6 +457,24 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
                 disabled={busy}
               >
                 Start
+              </Button>
+            )}
+            {/* Approve stays last so it sits farthest from the Edit button and
+                isn't clicked by mistake when reaching for Edit. */}
+            {task.canApprove && (
+              <Button
+                variant={task.proposes === "pr" ? "default" : "outline"}
+                size="sm"
+                onClick={() =>
+                  withBusy(
+                    () => kotx.approve(task.id),
+                    task.proposes === "pr" ? "PR opened" : "Approved",
+                    true,
+                  )
+                }
+                disabled={busy}
+              >
+                {task.proposes === "pr" ? "Open PR" : "Approve"}
               </Button>
             )}
           </>
