@@ -11,6 +11,7 @@ interface Props {
   task: KotxTask;
   onChanged: () => Promise<void> | void;
   onOpen: (id: number) => void;
+  displayMode?: "default" | "readonly";
 }
 
 // Fallback colors for unknown upstream status labels.
@@ -73,6 +74,10 @@ function statusClass(task: KotxTask): string {
   return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
 }
 
+export function RunStatusBadge({ task }: { task: KotxTask }) {
+  return <Badge className={statusClass(task)}>{task.status}</Badge>;
+}
+
 // The label of the modal's primary action — the card leads with the same word,
 // but tapping it opens the modal rather than acting directly.
 function actionHint(task: KotxTask): string | null {
@@ -82,11 +87,12 @@ function actionHint(task: KotxTask): string | null {
   return null;
 }
 
-export function RunCard({ task, onChanged, onOpen }: Props) {
+export function RunCard({ task, onChanged, onOpen, displayMode = "default" }: Props) {
   const [busy, setBusy] = useState(false);
 
   const title = runTitle(task);
-  const hint = actionHint(task);
+  const showActions = displayMode === "default";
+  const hint = showActions ? actionHint(task) : null;
 
   const runAction = (fn: () => Promise<unknown>, msg: string) => async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -119,14 +125,16 @@ export function RunCard({ task, onChanged, onOpen }: Props) {
       className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <CardContent className="flex items-center gap-2 p-3">
-        {task.canDiscard ? (
-          <IconAction onClick={discard} disabled={busy} title="Discard task">
-            <Trash2 className="h-5 w-5" />
-          </IconAction>
-        ) : (
-          // Keep the leading column reserved so cards align whether or not
-          // they carry a discard button.
-          <div className="h-8 w-8 shrink-0" />
+        {showActions && (
+          task.canDiscard ? (
+            <IconAction onClick={discard} disabled={busy} title="Discard task">
+              <Trash2 className="h-5 w-5" />
+            </IconAction>
+          ) : (
+            // Keep the leading column reserved so cards align whether or not
+            // they carry a discard button.
+            <div className="h-8 w-8 shrink-0" />
+          )
         )}
 
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -134,7 +142,7 @@ export function RunCard({ task, onChanged, onOpen }: Props) {
             {title}
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <Badge className={statusClass(task)}>{task.status}</Badge>
+            <RunStatusBadge task={task} />
             <span className="min-w-0 flex-1 truncate" title={task.repo}>
               {task.repo}
             </span>

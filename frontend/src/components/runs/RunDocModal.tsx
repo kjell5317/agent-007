@@ -225,7 +225,9 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     }, "PR saved");
 
   const views: { key: View; label: string }[] = [
-    ...(showPrimary ? [{ key: "primary" as const, label: primaryLabel }] : []),
+    // A PR proposal supersedes TASK.md — the brief isn't relevant once the run
+    // has produced a PR to open, so drop it entirely.
+    ...(showPrimary && !showPr ? [{ key: "primary" as const, label: primaryLabel }] : []),
     ...(showPr ? [{ key: "pr" as const, label: "PR" }] : []),
     { key: "prompt", label: "Prompt" },
     { key: "log", label: "Log" },
@@ -316,21 +318,21 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               value={prTitleDraft}
               onChange={(e) => setPrTitleDraft(e.target.value)}
               placeholder="PR title"
-              className="shrink-0 font-medium"
+              className="shrink-0 rounded-lg font-medium focus-visible:border-ring focus-visible:ring-0"
               autoFocus
             />
             <Textarea
               value={prBodyDraft}
               onChange={(e) => setPrBodyDraft(e.target.value)}
               placeholder="PR body"
-              className="min-h-0 flex-1 resize-none font-mono text-xs leading-relaxed"
+              className="min-h-0 flex-1 resize-none rounded-lg font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-0"
             />
           </div>
         ) : editing ? (
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="h-full resize-none font-mono text-xs leading-relaxed"
+            className="h-full resize-none rounded-lg font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-0"
             autoFocus
           />
         ) : view === "pr" ? (
