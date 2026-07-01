@@ -19,7 +19,6 @@ export function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const runs = useRuns(tab === "runs");
-  const setRunsScope = runs.setScope;
   // Runs awaiting my action (ready to start, or a review ready to post).
   const runsActionable = useMemo(
     () => runs.tasks.filter((t) => t.canStart || t.canApprove).length,
@@ -97,8 +96,7 @@ export function App() {
     setSelectedRunId(link.id);
     setSelectedTaskId(null);
     setTab("runs");
-    setRunsScope("all");
-  }, [setRunsScope]);
+  }, []);
 
   useEffect(() => {
     applyLocation();
@@ -165,9 +163,8 @@ export function App() {
       setSelectedRunId(id);
       setSelectedTaskId(null);
       setTab("runs");
-      setRunsScope("all");
     },
-    [setRunsScope],
+    [],
   );
 
   const closeSelectedModal = useCallback(() => {
