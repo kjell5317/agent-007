@@ -11,8 +11,10 @@ model rather than the LLM prompt.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+AGENT_DATETIME_STEP_MINUTES = 5
 
 
 def now_iso(tz_name: str | None = None) -> str:
@@ -23,7 +25,7 @@ def now_iso(tz_name: str | None = None) -> str:
     gets stored as 14:00Z, which renders as 16:00 CEST on the frontend.
     """
     tz = ZoneInfo(tz_name) if tz_name else timezone.utc
-    return datetime.now(tz).replace(microsecond=0).isoformat()
+    return ceil_datetime_to_minute_step(datetime.now(tz)).isoformat()
 
 
 def parse_iso(value: str | datetime | None) -> datetime | None:
@@ -31,6 +33,36 @@ def parse_iso(value: str | datetime | None) -> datetime | None:
         return value
     # Accept trailing Z for UTC, which fromisoformat doesn't.
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def ceil_datetime_to_minute_step(
+    value: datetime,
+    *,
+    minutes: int = AGENT_DATETIME_STEP_MINUTES,
+) -> datetime:
+    """Return `value` rounded up to the next minute-step boundary."""
+    if minutes <= 0:
+        raise ValueError("minutes must be positive")
+
+    elapsed = timedelta(
+        minutes=value.minute % minutes,
+        seconds=value.second,
+        microseconds=value.microsecond,
+    )
+    if elapsed == timedelta(0):
+        return value.replace(second=0, microsecond=0)
+    return (value + (timedelta(minutes=minutes) - elapsed)).replace(
+        second=0,
+        microsecond=0,
+    )
+
+
+def normalize_agent_due_date(value: str | datetime | None) -> datetime | None:
+    """Parse and round agent-emitted due dates to deterministic 5-minute steps."""
+    parsed = parse_iso(value)
+    if parsed is None:
+        return None
+    return ceil_datetime_to_minute_step(parsed)
 
 
 def task_field_lines(task, *, indent: str = "  ") -> list[str]:

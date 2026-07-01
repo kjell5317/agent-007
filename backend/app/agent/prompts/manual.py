@@ -17,7 +17,8 @@ REQUIRED fields:
         begins with a "Current time:" line; due_date must be at or after that
         time and MUST use the user's local zone
         unless the input explicitly names a different zone.
-        Round to 5-minute steps.
+        Prefer 15-minute choices (:00, :15, :30, :45). If the input says
+        EOD or end of day, use 23:45.
     * label — pick the single best-fitting value from the enum. If nothing
         plausibly fits, call `mark_not_task` instead.
 

@@ -75,7 +75,8 @@ _CREATE_TASK_PROPS: dict = {
         "type": "string",
         "description": (
             "ISO 8601 timestamp. Always set: use the explicit deadline if present, "
-            "otherwise a reasonable best-guess based on urgency."
+            "otherwise a reasonable best-guess based on urgency. Prefer 15-minute "
+            "choices (:00, :15, :30, :45); EOD/end of day means 23:45."
         ),
     },
     "location": {"type": "string"},
@@ -94,7 +95,13 @@ _UPDATE_TASK_PROPS: dict = {
     "title": {"type": "string"},
     "description": {"type": "string"},
     "estimation": {"type": "integer"},
-    "due_date": {"type": "string", "description": "ISO 8601 timestamp"},
+    "due_date": {
+        "type": "string",
+        "description": (
+            "ISO 8601 timestamp. Prefer 15-minute choices (:00, :15, :30, :45); "
+            "EOD/end of day means 23:45."
+        ),
+    },
     "status": {
         "type": "string",
         "enum": ["open", "closed"],
