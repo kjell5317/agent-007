@@ -6,6 +6,7 @@ export interface Task {
   description: string | null;
   link: string | null;
   source_url: string | null;
+  raw_inputs: TaskRawInput[];
   due_date: string | null;
   scheduled_date: string | null;
   estimation: number | null;
@@ -15,6 +16,10 @@ export interface Task {
   is_manual: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaskRawInput extends RawInput {
+  source_url: string | null;
 }
 
 export interface Label {

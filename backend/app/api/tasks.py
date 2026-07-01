@@ -30,6 +30,7 @@ from app.db.schemas.task import (
     TaskCreationAccepted,
     TaskOpenRequest,
     TaskPromote,
+    TaskRawInputRead,
     TaskRead,
     TaskUpdate,
 )
@@ -51,11 +52,19 @@ class UnreadCount(BaseModel):
 
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
     raw = raw_inputs_store.latest_for_task(session, task.id)
+    linked_inputs = raw_inputs_store.list_for_task(session, task.id)
     return TaskRead.build(
         task,
         status_,
         is_manual,
         source_url=source_url_for_raw_input(raw),
+        raw_inputs=[
+            TaskRawInputRead.build(
+                linked,
+                source_url=source_url_for_raw_input(linked),
+            )
+            for linked in linked_inputs
+        ],
     )
 
 
