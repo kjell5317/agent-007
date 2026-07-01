@@ -78,7 +78,7 @@ function statusClass(task: KotxTask): string {
 function actionHint(task: KotxTask): string | null {
   if (task.canStart) return "Start";
   if (task.canComment) return "Comment";
-  if (task.canApprove) return "Approve";
+  if (task.canApprove) return task.proposes === "pr" ? "Open PR" : "Approve";
   return null;
 }
 

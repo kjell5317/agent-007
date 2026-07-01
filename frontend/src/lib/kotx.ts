@@ -54,6 +54,13 @@ export interface KotxTask {
   canDiscard: boolean;
 }
 
+// The proposed pull request for an implement task, before it's opened. Editable
+// while the task is awaiting approval; kotx uses these as the PR title and body.
+export interface KotxPr {
+  title: string;
+  body: string;
+}
+
 export interface KotxContainer {
   id: string;
   name: string;
@@ -94,6 +101,28 @@ class KotxError extends Error {
 
 async function jsonRequest<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`/kotx${path}`, opts);
+  const text = await res.text();
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  if (!res.ok) {
+    const msg =
+      body && typeof body === "object" && "error" in body
+        ? String((body as { error: unknown }).error)
+        : res.statusText;
+    throw new KotxError(res.status, msg);
+  }
+  return body as T;
+}
+
+// Like jsonRequest but returns null on 404 (the resource isn't available yet)
+// rather than throwing.
+async function jsonRequestOrNull<T>(path: string, opts: RequestInit = {}): Promise<T | null> {
+  const res = await fetch(`/kotx${path}`, opts);
+  if (res.status === 404) return null;
   const text = await res.text();
   let body: unknown = null;
   try {
@@ -195,6 +224,14 @@ export const kotx = {
   getReview: (id: number) => markdownRequest(`/tasks/${id}/review`),
   putReview: (id: number, content: string) => putMarkdown(`/tasks/${id}/review`, content),
   getPrompt: (id: number) => markdownRequest(`/tasks/${id}/prompt`),
+  // The proposed PR title + body for an implement task. null until proposed.
+  getPr: (id: number) => jsonRequestOrNull<KotxPr>(`/tasks/${id}/pr`),
+  putPr: (id: number, pr: KotxPr) =>
+    jsonRequest<{ ok: true }>(`/tasks/${id}/pr`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(pr),
+    }),
   getLog: (id: number, params: KotxLogParams = {}) =>
     logRequest(`/tasks/${id}/log`, params),
 
