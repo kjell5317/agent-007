@@ -1,9 +1,33 @@
 import type { RawInput } from "@/lib/types";
 
-export type BadgeKind = "open" | "not_task" | "duplicate" | "no_change" | "closed";
+export type BadgeKind =
+  | "open"
+  | "not_task"
+  | "duplicate"
+  | "closed"
+  | "reopened"
+  | "updated"
+  | "no_change";
 
+// The agent outcomes on a follow-up that mean it deliberately acted on / judged
+// an existing task (as opposed to the embedding auto-decider, which is a
+// similarity guess). Each gets its own badge and suppresses "Make a task".
+const AGENT_TASK_OUTCOMES = new Set(["reopened", "updated", "closed", "no_change"]);
+
+// True when the agent (not the embedding auto-decider) acted on an existing
+// task from this follow-up. `auto_decided` marks the embedding path, which we
+// treat as a plain duplicate the user may still override.
+export function isAgentTaskFollowup(data: RawInput): boolean {
+  const trace = data.agent_trace;
+  if (data.status !== "duplicate" || trace?.auto_decided) return false;
+  return AGENT_TASK_OUTCOMES.has(trace?.outcome ?? "");
+}
+
+// A follow-up input keeps status="duplicate". When the *agent* acted on its
+// task, surface that outcome as the badge; the embedding auto-decider's links
+// (and anything else) read as a plain "duplicate".
 export function inboxBadge(data: RawInput): BadgeKind {
-  if (data.agent_trace?.outcome === "no_change") return "no_change";
+  if (isAgentTaskFollowup(data)) return data.agent_trace!.outcome as BadgeKind;
   return data.status as BadgeKind;
 }
 
@@ -39,16 +63,16 @@ export function inputTitle(data: RawInput): string {
   );
 }
 
-// Inputs that resolve to the same task — or the same source thread — belong
-// together. thread_id is preferred because it's stable across promotion
-// (task_id only appears once a task exists); manual follow-ups with no thread
-// fall back to task_id. Everything else is its own singleton.
+// Inputs that resolve to the same task belong together — so every follow-up
+// and duplicate (including cross-thread, embedding-matched ones) folds in with
+// its anchor. A shared task wins; then a source thread groups pre-task inputs;
+// else the row stands alone. Mirrors `_GROUPED_INPUT_IDS_SQL` on the backend.
 export function inputGroupKey(r: RawInput): string {
+  if (r.task_id) return `task:${r.task_id}`;
   const threadId = r.source_metadata?.thread_id;
   if (typeof threadId === "string" && threadId) {
     return `${r.source}:thread:${threadId}`;
   }
-  if (r.task_id) return `task:${r.task_id}`;
   return `input:${r.id}`;
 }
 

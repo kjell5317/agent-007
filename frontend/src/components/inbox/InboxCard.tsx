@@ -6,7 +6,7 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import { toYaml } from "@/lib/format";
-import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
+import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import type { RawInput } from "@/lib/types";
@@ -47,17 +47,17 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
     if (data.task_id) runTaskAction(data.task_id, api.reopenTask, "Task re-opened");
   };
 
-  // Promote when the input isn't the anchor of an active task: no link at
-  // all, or the link is a marker the user can override into a fresh task
-  // (`duplicate`, a `no_change` follow-up, or a `not_task` row whose
-  // task_id is still set from a pre-fix dismiss). Otherwise: open task →
-  // dismiss, closed task → reopen, anything else → no action.
-  const traceOutcome = data.agent_trace?.outcome;
+  // Promote when the input isn't the anchor of an active task: no link at all,
+  // or the link is a marker the user can override into a fresh task — an
+  // embedding auto-decided `duplicate` or a `not_task` row. When the *agent*
+  // acted on an existing task (reopened / updated / closed / no_change), the
+  // task is real and "Make a task" would duplicate it, so it's suppressed.
+  // Otherwise: open task → dismiss, closed → reopen.
   const promotable =
-    !data.task_id ||
-    data.status === "duplicate" ||
-    data.status === "not_task" ||
-    traceOutcome === "no_change";
+    !isAgentTaskFollowup(data) &&
+    (!data.task_id ||
+      data.status === "duplicate" ||
+      data.status === "not_task");
   const action = promotable
     ? { label: "Make a task", Icon: CirclePlus, run: () => promote(item.id) }
     : data.status === "open"

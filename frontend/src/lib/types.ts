@@ -26,6 +26,10 @@ export interface Label {
 export interface AgentTrace {
   outcome?: string;
   reason?: string;
+  // Set by the embedding auto-decider (no LLM) when it links an input as a
+  // duplicate on similarity alone — distinguishes it from the agent's own
+  // no_change / updated / reopened / closed decisions.
+  auto_decided?: boolean;
   [k: string]: unknown;
 }
 

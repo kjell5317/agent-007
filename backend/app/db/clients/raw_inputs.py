@@ -53,10 +53,11 @@ def list_(
     return list(session.execute(stmt).scalars())
 
 
-# Group key mirrors the frontend's `inputGroupKey`: a thread (stable across
-# task creation) wins, then a shared task, else the row stands alone. Keeping
-# the two in sync is what guarantees the rows we return for N groups are
-# exactly N whole groups on the client.
+# Group key mirrors the frontend's `inputGroupKey`: a shared task wins, so every
+# follow-up / duplicate of a task (incl. cross-thread, embedding-matched ones)
+# folds in with its anchor; then a thread for pre-task inputs; else the row
+# stands alone. Keeping the two in sync is what guarantees the rows we return
+# for N groups are exactly N whole groups on the client.
 _GROUPED_INPUT_IDS_SQL = text(
     """
     WITH keyed AS (
@@ -64,10 +65,10 @@ _GROUPED_INPUT_IDS_SQL = text(
             id,
             received_at,
             CASE
-                WHEN COALESCE(source_metadata->>'thread_id', '') <> ''
-                    THEN source || ':thread:' || (source_metadata->>'thread_id')
                 WHEN task_id IS NOT NULL
                     THEN 'task:' || task_id::text
+                WHEN COALESCE(source_metadata->>'thread_id', '') <> ''
+                    THEN source || ':thread:' || (source_metadata->>'thread_id')
                 ELSE 'input:' || id::text
             END AS group_key
         FROM raw_inputs
