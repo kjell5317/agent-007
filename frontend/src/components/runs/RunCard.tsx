@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, Square, Trash2 } from "lucide-react";
+import { ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -73,20 +73,27 @@ function statusClass(task: KotxTask): string {
   return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
 }
 
+// The action the card leads with — matches the primary button in the modal.
+function actionHint(task: KotxTask): string | null {
+  if (task.canStart) return "Start";
+  if (task.canComment) return "Comment";
+  if (task.canApprove) return "Approve";
+  return null;
+}
+
 export function RunCard({ task, onChanged, onOpen }: Props) {
   const [busy, setBusy] = useState(false);
 
   const title = runTitle(task);
-  const actionable = task.canStart || task.canApprove;
-  const hint = task.canStart ? "Start" : task.canApprove ? "Comment" : "Open";
+  const hint = actionHint(task);
   const terminal = TERMINAL_STATES.has(task.state);
 
-  const runAction = (fn: () => Promise<unknown>, msg: string) => async (e: React.MouseEvent) => {
+  const discard = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setBusy(true);
     try {
-      await fn();
-      toast.success(msg);
+      await kotx.discard(task.id);
+      toast.success("Discarded");
       await onChanged();
     } catch (err) {
       toast.error((err as Error).message);
@@ -94,9 +101,6 @@ export function RunCard({ task, onChanged, onOpen }: Props) {
       setBusy(false);
     }
   };
-
-  const stop = runAction(() => kotx.stop(task.id), "Stopping run");
-  const discard = runAction(() => kotx.discard(task.id), "Discarded");
 
   return (
     <Card
@@ -128,12 +132,7 @@ export function RunCard({ task, onChanged, onOpen }: Props) {
           </div>
         </div>
 
-        {task.canStop && (
-          <IconAction onClick={stop} disabled={busy} title="Stop run">
-            <Square className="h-3.5 w-3.5" />
-          </IconAction>
-        )}
-        {!terminal && (
+        {task.canDiscard && (
           <IconAction onClick={discard} disabled={busy} title="Discard task">
             <Trash2 className="h-3.5 w-3.5" />
           </IconAction>
@@ -141,10 +140,10 @@ export function RunCard({ task, onChanged, onOpen }: Props) {
         <span
           className={cn(
             "inline-flex shrink-0 items-center gap-0.5 text-xs font-medium",
-            actionable ? "text-primary" : "text-muted-foreground",
+            hint && !terminal ? "text-primary" : "text-muted-foreground",
           )}
         >
-          {actionable && hint}
+          {hint && !terminal && hint}
           <ChevronRight className="h-4 w-4" />
         </span>
       </CardContent>

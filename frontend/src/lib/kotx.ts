@@ -34,7 +34,9 @@ export interface KotxTask {
   role: "assignee" | "reviewer";
   state: KotxState;
   status: string;
+  stateReason: string | null;
   branch: string | null;
+  prNumber: number | null;
   triggeredBy: string | null;
   outcome: string | null;
   attempt: number;
@@ -45,7 +47,11 @@ export interface KotxTask {
   githubUrl: string;
   canStart: boolean;
   canApprove: boolean;
-  canStop: boolean;
+  canComment: boolean;
+  // What POST …/approve does when canApprove: "review" submits an approving PR
+  // review (REVIEW.md as body), "pr" opens the proposed PR.
+  proposes: "review" | "pr" | null;
+  canDiscard: boolean;
 }
 
 export interface KotxContainer {
@@ -58,16 +64,24 @@ export interface KotxContainer {
   createdAt: number;
 }
 
+export interface KotxLogEntry {
+  offset: number;
+  record?: unknown;
+  raw?: string;
+  parseError?: string;
+}
+
 export interface KotxLogPage {
   text: string | null;
   hasMoreBefore: boolean;
-  before: string | null;
+  // Byte cursor to pass as `before` when paging older; null when there's no
+  // older page.
+  before: number | null;
 }
 
 export interface KotxLogParams {
-  tail?: number;
   limit?: number;
-  before?: string | number;
+  before?: number;
 }
 
 class KotxError extends Error {
@@ -116,108 +130,26 @@ async function markdownRequest(path: string): Promise<string | null> {
   return text;
 }
 
-function parseCursor(value: unknown): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
+// kotx returns the log as a JSON page: `{ runId, entries, page }`, where each
+// entry is `{ offset, record }` (parsed JSONL) or `{ offset, raw, parseError }`
+// (a line that wasn't valid JSON). Flatten entries back to one line each — a
+// stringified record or the raw text — and let the caller pretty-print them.
+function entryToLine(entry: KotxLogEntry): string {
+  if (typeof entry.raw === "string") return entry.raw;
+  if ("record" in entry) return JSON.stringify(entry.record);
+  return "";
 }
 
-function parseBoolean(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes"].includes(normalized)) return true;
-  if (["0", "false", "no"].includes(normalized)) return false;
-  return null;
-}
-
-function firstHeader(headers: Headers, names: string[]): string | null {
-  for (const name of names) {
-    const value = headers.get(name);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function lineCount(text: string): number {
-  if (text === "") return 0;
-  return text.replace(/\n$/, "").split(/\r?\n/).length;
-}
-
-function readStringField(body: Record<string, unknown>, names: string[]): string | null {
-  for (const name of names) {
-    const value = body[name];
-    if (typeof value === "string") return value;
-    if (Array.isArray(value)) return value.map(String).join("\n");
-  }
-  return null;
-}
-
-function readCursorField(body: Record<string, unknown>, names: string[]): string | null {
-  for (const name of names) {
-    const value = parseCursor(body[name]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function readBooleanField(body: Record<string, unknown>, names: string[]): boolean | null {
-  for (const name of names) {
-    const value = parseBoolean(body[name]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-// A JSON object is only a paginated log envelope if it actually carries the
-// log under a known key. Otherwise it's log content that happens to be JSON
-// (e.g. a transcript object or a single JSONL line) and must be shown verbatim.
-function isLogPageEnvelope(body: Record<string, unknown>): boolean {
-  return ["text", "content", "log", "lines"].some((field) => field in body);
-}
-
-function logPageFromJson(body: Record<string, unknown>, requestedLines: number | null): KotxLogPage {
-  const text =
-    readStringField(body, ["text", "content", "log"]) ??
-    (Array.isArray(body.lines) ? body.lines.map(String).join("\n") : "");
-  const before =
-    readCursorField(body, [
-      "before",
-      "nextBefore",
-      "next_before",
-      "startLine",
-      "start_line",
-      "firstLine",
-      "first_line",
-      "start",
-      "cursor",
-      "nextCursor",
-      "next_cursor",
-      "previousCursor",
-      "previous_cursor",
-    ]) ?? null;
-  const explicitHasMore = readBooleanField(body, [
-    "hasMoreBefore",
-    "has_more_before",
-    "hasMore",
-    "has_more",
-    "hasOlder",
-    "has_older",
-    "hasPrevious",
-    "has_previous",
-  ]);
-
-  return {
-    text,
-    hasMoreBefore: explicitHasMore ?? (requestedLines !== null && lineCount(text) >= requestedLines),
-    before,
+interface LogPageResponse {
+  entries?: KotxLogEntry[];
+  page?: {
+    hasMoreBefore?: boolean;
+    nextBefore?: number | null;
   };
 }
 
 async function logRequest(path: string, params: KotxLogParams = {}): Promise<KotxLogPage> {
   const qs = new URLSearchParams();
-  if (params.tail !== undefined) qs.set("tail", String(params.tail));
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.before !== undefined) qs.set("before", String(params.before));
 
@@ -236,48 +168,12 @@ async function logRequest(path: string, params: KotxLogParams = {}): Promise<Kot
     throw new KotxError(res.status, msg);
   }
 
-  const requestedLines = params.limit ?? params.tail ?? null;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      isLogPageEnvelope(parsed as Record<string, unknown>)
-    ) {
-      return logPageFromJson(parsed as Record<string, unknown>, requestedLines);
-    }
-  } catch {
-    /* raw log text */
-  }
-
-  const before =
-    parseCursor(
-      firstHeader(res.headers, [
-        "x-log-before",
-        "x-log-next-before",
-        "x-log-start-line",
-        "x-log-first-line",
-        "x-start-line",
-        "x-log-cursor",
-        "x-next-cursor",
-      ]),
-    ) ?? null;
-  const explicitHasMore = parseBoolean(
-    firstHeader(res.headers, [
-      "x-log-has-more-before",
-      "x-log-has-more",
-      "x-has-more-before",
-      "x-has-more",
-      "x-log-has-older",
-      "x-has-older",
-    ]),
-  );
-
+  const body = JSON.parse(text) as LogPageResponse;
+  const entries = body.entries ?? [];
   return {
-    text,
-    hasMoreBefore: explicitHasMore ?? (requestedLines !== null && lineCount(text) >= requestedLines),
-    before,
+    text: entries.map(entryToLine).join("\n"),
+    hasMoreBefore: body.page?.hasMoreBefore ?? false,
+    before: body.page?.nextBefore ?? null,
   };
 }
 
@@ -304,10 +200,13 @@ export const kotx = {
 
   start: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/start`, { method: "POST" }),
+  // approve: for review tasks submits an approving PR review (REVIEW.md as
+  // body); for implement tasks opens the proposed PR.
   approve: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/approve`, { method: "POST" }),
-  stop: (id: number) =>
-    jsonRequest<{ ok: true }>(`/tasks/${id}/stop`, { method: "POST" }),
+  // comment (review tasks only): post REVIEW.md as a plain PR comment.
+  comment: (id: number) =>
+    jsonRequest<{ ok: true }>(`/tasks/${id}/comment`, { method: "POST" }),
   discard: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/discard`, { method: "POST" }),
 

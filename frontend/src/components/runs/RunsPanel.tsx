@@ -15,6 +15,19 @@ interface RunGroup {
   tasks: KotxTask[];
 }
 
+function isActionable(task: KotxTask): boolean {
+  return task.canStart || task.canApprove || task.canComment;
+}
+
+// Float tasks that need action to the top, keeping the original order within
+// each bucket (stable). Sorting before grouping lifts whole repo+branch groups
+// that contain something actionable, and orders runs within a group too.
+function sortActionableFirst(tasks: KotxTask[]): KotxTask[] {
+  return [...tasks].sort(
+    (a, b) => Number(isActionable(b)) - Number(isActionable(a)),
+  );
+}
+
 // Group runs that share a repo + branch, preserving the incoming order by the
 // position of each group's first run. Runs without a branch can't share one, so
 // each stands alone.
@@ -156,7 +169,7 @@ export function RunsPanel({
           </div>
         ) : (
           <div className="space-y-2">
-            {groupRuns(tasks).map((group) =>
+            {groupRuns(sortActionableFirst(tasks)).map((group) =>
               group.tasks.length === 1 ? (
                 <RunCard
                   key={group.tasks[0].id}
@@ -210,10 +223,12 @@ function RunGroup({
         ) : (
           <ChevronRight className="h-3.5 w-3.5 shrink-0" />
         )}
-        <span className="min-w-0 truncate font-medium text-foreground">{group.repo}</span>
-        <GitBranch className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate font-mono">{group.branch}</span>
-        <span className="shrink-0 tabular-nums">{group.tasks.length} runs</span>
+        <span className="min-w-0 shrink truncate font-medium text-foreground">{group.repo}</span>
+        <span className="flex min-w-0 shrink items-center gap-1">
+          <GitBranch className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 shrink truncate font-mono">{group.branch}</span>
+        </span>
+        <span className="ml-auto shrink-0 pl-2 tabular-nums">{group.tasks.length} runs</span>
       </button>
       <Collapsible open={open}>
         <div className="space-y-2 p-2 pt-0">
