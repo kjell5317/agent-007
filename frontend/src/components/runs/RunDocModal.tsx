@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { CircleDot, ExternalLink, GitBranch, GitPullRequest, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { subjectLabel } from "@/components/runs/runLabels";
 import { formatJsonLikeText } from "@/lib/format";
-import { kotx, type KotxTask } from "@/lib/kotx";
+import { kotx, type KotxPr, type KotxTask } from "@/lib/kotx";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -20,14 +21,14 @@ interface Props {
   onChanged: () => Promise<void> | void;
 }
 
-type View = "primary" | "prompt" | "log";
+type View = "primary" | "pr" | "prompt" | "log";
 const LOG_PAGE_SIZE = 200;
 const LOG_TOP_THRESHOLD = 8;
 
 function load(
   task: KotxTask,
   doc: Props["doc"],
-  view: Exclude<View, "log">,
+  view: Exclude<View, "log" | "pr">,
 ): Promise<string | null> {
   if (view === "prompt") return kotx.getPrompt(task.id);
   return doc === "task" ? kotx.getBrief(task.id) : kotx.getReview(task.id);
@@ -50,15 +51,23 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   // Resolve-conflict runs have no brief — drop the TASK.md tab and open on the
   // prompt instead.
   const showPrimary = task.kind !== "resolve_conflict";
+  // The proposed PR (title + body) is editable only while the task is awaiting
+  // approval — the same window in which `proposes` is "pr".
+  const showPr = task.proposes === "pr";
   // kotx only accepts the PUT in the matching state; mirror that here so we
   // don't offer an Edit button that would 409.
   const canEditPrimary =
     (doc === "task" && task.state === "draft") ||
     (doc === "review" && task.state === "awaiting_approval");
 
-  const [view, setView] = useState<View>(showPrimary ? "primary" : "prompt");
+  const [view, setView] = useState<View>(
+    showPr ? "pr" : showPrimary ? "primary" : "prompt",
+  );
   const [content, setContent] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [pr, setPr] = useState<KotxPr | null>(null);
+  const [prTitleDraft, setPrTitleDraft] = useState("");
+  const [prBodyDraft, setPrBodyDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -78,12 +87,20 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     let cancelled = false;
     setLoading(true);
     setEditing(false);
-    load(task, doc, view)
-      .then((text) => {
-        if (cancelled) return;
-        setContent(text);
-        setDraft(text ?? "");
-      })
+    const request =
+      view === "pr"
+        ? kotx.getPr(task.id).then((data) => {
+            if (cancelled) return;
+            setPr(data);
+            setPrTitleDraft(data?.title ?? "");
+            setPrBodyDraft(data?.body ?? "");
+          })
+        : load(task, doc, view).then((text) => {
+            if (cancelled) return;
+            setContent(text);
+            setDraft(text ?? "");
+          });
+    request
       .catch((e) => {
         if (!cancelled) toast.error((e as Error).message);
       })
@@ -199,8 +216,17 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       setEditing(false);
     }, `${primaryLabel} saved`);
 
+  const savePr = () =>
+    withBusy(async () => {
+      const next = { title: prTitleDraft, body: prBodyDraft };
+      await kotx.putPr(task.id, next);
+      setPr(next);
+      setEditing(false);
+    }, "PR saved");
+
   const views: { key: View; label: string }[] = [
     ...(showPrimary ? [{ key: "primary" as const, label: primaryLabel }] : []),
+    ...(showPr ? [{ key: "pr" as const, label: "PR" }] : []),
     { key: "prompt", label: "Prompt" },
     { key: "log", label: "Log" },
   ];
@@ -284,6 +310,22 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeLoading ? (
           <ModalSkeleton />
+        ) : editing && view === "pr" ? (
+          <div className="flex h-full flex-col gap-2">
+            <Input
+              value={prTitleDraft}
+              onChange={(e) => setPrTitleDraft(e.target.value)}
+              placeholder="PR title"
+              className="shrink-0 font-medium"
+              autoFocus
+            />
+            <Textarea
+              value={prBodyDraft}
+              onChange={(e) => setPrBodyDraft(e.target.value)}
+              placeholder="PR body"
+              className="min-h-0 flex-1 resize-none font-mono text-xs leading-relaxed"
+            />
+          </div>
         ) : editing ? (
           <Textarea
             value={draft}
@@ -291,6 +333,27 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             className="h-full resize-none font-mono text-xs leading-relaxed"
             autoFocus
           />
+        ) : view === "pr" ? (
+          pr === null ? (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+              Not generated yet.
+            </div>
+          ) : (
+            <div className="h-full overflow-auto rounded-lg border p-3">
+              <div className="mb-3 border-b pb-3">
+                <div className="mb-1 text-xs font-medium text-muted-foreground">
+                  PR_TITLE.md
+                </div>
+                <div className="text-base font-semibold leading-snug">
+                  {pr.title}
+                </div>
+              </div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">
+                PR_BODY.md
+              </div>
+              <Markdown content={pr.body} />
+            </div>
+          )
         ) : view === "log" ? (
           logText === null ? (
             <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
@@ -336,7 +399,16 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       </div>
 
       <div className="mt-3 flex shrink-0 items-center justify-end gap-2">
-        {view === "primary" && canEditPrimary && !editing && content !== null && (
+        {!editing &&
+          content !== null &&
+          view === "primary" &&
+          canEditPrimary && (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={busy}>
+              <Pencil className="h-3.5 w-3.5" />
+              Edit
+            </Button>
+          )}
+        {!editing && pr !== null && view === "pr" && showPr && (
           <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={busy}>
             <Pencil className="h-3.5 w-3.5" />
             Edit
@@ -348,19 +420,24 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               variant="ghost"
               size="sm"
               onClick={() => {
-                setDraft(content ?? "");
+                if (view === "pr") {
+                  setPrTitleDraft(pr?.title ?? "");
+                  setPrBodyDraft(pr?.body ?? "");
+                } else {
+                  setDraft(content ?? "");
+                }
                 setEditing(false);
               }}
               disabled={busy}
             >
               Cancel
             </Button>
-            <Button size="sm" onClick={save} disabled={busy}>
+            <Button size="sm" onClick={view === "pr" ? savePr : save} disabled={busy}>
               Save
             </Button>
           </>
         )}
-        {!editing && view === "primary" && (
+        {!editing && (view === "primary" || view === "pr") && (
           <>
             {task.canApprove && (
               <Button
@@ -375,7 +452,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
                 }
                 disabled={busy}
               >
-                Approve
+                {task.proposes === "pr" ? "Open PR" : "Approve"}
               </Button>
             )}
             {task.canComment && (
