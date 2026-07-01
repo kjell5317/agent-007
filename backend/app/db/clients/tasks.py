@@ -194,14 +194,30 @@ def overdue_scheduled_open(
     cutoff: datetime,
     limit: int = 100,
 ) -> list[Task]:
+    # The status filter MUST run in SQL, before `limit`. Otherwise closed tasks
+    # — of which the scheduled_date backfill created a large pile all tied at
+    # one instant — fill the limit window and evict the open tasks we actually
+    # need to reschedule (same trap as `list_`).
+    latest = (
+        select(
+            RawInput.task_id.label("task_id"),
+            RawInput.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=RawInput.task_id,
+                order_by=RawInput.received_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(RawInput.status != "duplicate")
+        .subquery()
+    )
     stmt = (
         select(Task)
-        .where(Task.scheduled_date.is_not(None))
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
         .where(Task.scheduled_date <= cutoff)
-        .where(Task.due_date.is_not(None))
+        .where(func.coalesce(latest.c.status, "open") == "open")
         .order_by(Task.scheduled_date.asc())
         .limit(limit)
     )
-    rows = list(session.execute(stmt).scalars())
-    statuses = latest_status_for(session, [r.id for r in rows])
-    return [r for r in rows if statuses.get(r.id, "open") == "open"]
+    return list(session.execute(stmt).scalars())

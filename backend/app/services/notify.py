@@ -67,9 +67,7 @@ async def notify(
         return
 
     endpoint = (
-        s.home_assistant_url.rstrip("/")
-        + "/api/services/notify/"
-        + s.home_assistant_notify_service
+        s.home_assistant_url.rstrip("/") + "/api/services/notify/" + s.home_assistant_notify_service
     )
     data: dict[str, Any] = {}
     if url:
@@ -141,10 +139,10 @@ async def notify_task_created(task, *, start: datetime, end: datetime) -> None:
     """A new task was extracted and given a calendar slot."""
     parts = [f"Scheduled {_fmt_range(start, end)}"]
     if task.due_date:
-        parts.append(f"due {_fmt_when(to_user_tz(task.due_date))}")
+        parts.append(f"Due {_fmt_when(to_user_tz(task.due_date))}")
     await notify(
-        title=f"Task created: {_short_title(task)}",
-        message=" · ".join(parts),
+        title=f"{_short_title(task)}",
+        message="\n".join(parts),
         url=task_url(task.id),
         tag=task_tag(task.id),
         actions=_task_actions(),

@@ -171,6 +171,51 @@ def test_open_filter_survives_limit_with_many_closed(monkeypatch):
     assert {task.title for task, _status in rows} == {"open-scheduled", "open-undated"}
 
 
+def test_overdue_open_survives_limit_with_many_closed():
+    # Regression: the scheduled_date backfill tied a large pile of *closed*
+    # tasks at one instant. If the status filter runs after `limit`, those
+    # closed rows fill the window and evict the open tasks that must reschedule.
+    session = _sqlite_session()
+    raw_inputs = Table(
+        "raw_inputs",
+        MetaData(),
+        Column("id", UUID(as_uuid=True), primary_key=True),
+        Column("task_id", UUID(as_uuid=True)),
+        Column("status", String(32)),
+        Column("received_at", DateTime(timezone=True)),
+        Column("source", String(64)),
+    )
+    raw_inputs.create(session.get_bind())
+    overdue = datetime(2026, 6, 30, 19, 42, tzinfo=timezone.utc)  # all tied here
+    cutoff = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+    def add(title: str, *, status: str):
+        task = Task(
+            title=title,
+            due_date=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            scheduled_date=overdue,
+            created_at=overdue,
+        )
+        session.add(task)
+        session.flush()
+        session.execute(
+            raw_inputs.insert(),
+            {"id": uuid.uuid4(), "task_id": task.id, "status": status,
+             "received_at": overdue, "source": "gmail"},
+        )
+
+    for i in range(10):
+        add(f"closed-{i}", status="closed")
+    add("open-overdue", status="open")
+    session.commit()
+
+    # A small limit that a naive query would exhaust on closed rows first.
+    rows = tasks_store.overdue_scheduled_open(session, cutoff=cutoff, limit=3)
+
+    titles = [t.title for t in rows]
+    assert titles == ["open-overdue"]
+
+
 def test_discover_syncs_moved_managed_task_event():
     session = _sqlite_session()
     task = Task(
