@@ -82,15 +82,14 @@ async def schedule_task(
     *,
     block: Interval | None = None,
     account_key: str | None = None,
-    extend_window: bool = False,
     notify: bool = True,
     _depth: int = 0,
 ) -> tuple[datetime, datetime] | None:
     """Plan `task` and create/update its calendar mirror.
 
-    `extend_window=True` widens each day's search range to 08:00–24:00
-    (default 10:00–20:00). Set by the HA "extend" action button on a
-    previous no-slot notification.
+    The planner searches the normal 10:00–20:00 window first. If that
+    cannot place the task, it automatically tries the extended 08:00–24:00
+    fallback before reporting no slot.
 
     `notify=False` suppresses the per-task scheduled/no-slot notification —
     batch callers (commute reschedule of many tasks) handle their own
@@ -108,7 +107,6 @@ async def schedule_task(
             task,
             block=block,
             account_key=account_key,
-            extend_window=extend_window,
             notify=notify,
             _depth=_depth,
         )
@@ -120,7 +118,6 @@ async def _schedule_task_locked(
     *,
     block: Interval | None,
     account_key: str | None,
-    extend_window: bool,
     notify: bool,
     _depth: int,
 ) -> tuple[datetime, datetime] | None:
@@ -132,18 +129,17 @@ async def _schedule_task_locked(
             task,
             block=block,
             account_key=account_key,
-            extend_window=extend_window,
             _depth=_depth,
         )
     except ValueError:
         log.warning(
-            "plan.schedule · no slot for task=%s due=%s extended=%s",
-            task.id, task.due_date.isoformat() if task.due_date else None, extend_window,
+            "plan.schedule · no slot for task=%s due=%s",
+            task.id, task.due_date.isoformat() if task.due_date else None,
         )
         if notify:
             from app.services.notify import notify_no_slot
 
-            await notify_no_slot(task, extended=extend_window)
+            await notify_no_slot(task)
         return None
 
     from app.services.calendar import add_task_event, update_task_event
@@ -216,15 +212,15 @@ async def plan_task_slot(
     extra_busy: list[Interval] | None = None,
     block: Interval | None = None,
     account_key: str | None = None,
-    extend_window: bool = False,
     _depth: int = 0,
 ) -> tuple[datetime, datetime]:
     """Return a planned `(start, end)` for `task`.
 
     The free search scans days forward from `max(now, due - 7d)`. Within
     each day it starts at the target time and moves backward toward the
-    start time. `extend_window=True` widens the per-day range from
-    10:00–20:00 to 08:00–24:00.
+    start time. If the normal 10:00–20:00 window cannot place the task, the
+    planner automatically tries the extended 08:00–24:00 fallback before
+    raising.
     """
     if task.due_date is None:
         raise ValueError("task has no due_date")
@@ -252,7 +248,31 @@ async def plan_task_slot(
     duration = timedelta(minutes=_duration_minutes(task, settings))
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
     slot = _find_free_slot(
-        busy, duration, window_start, window_end, buffer, extend_window=extend_window
+        busy, duration, window_start, window_end, buffer, extended_window=False
+    )
+    if slot is not None:
+        return slot
+
+    try:
+        return await _repair_by_displacing_task(
+            session,
+            task,
+            busy,
+            duration=duration,
+            window_start=window_start,
+            window_end=window_end,
+            account_key=account_key,
+            depth=_depth,
+            extended_window=False,
+        )
+    except ValueError:
+        log.info(
+            "plan.schedule · normal window exhausted task=%s due=%s; trying extended window",
+            task.id, task.due_date.isoformat() if task.due_date else None,
+        )
+
+    slot = _find_free_slot(
+        busy, duration, window_start, window_end, buffer, extended_window=True
     )
     if slot is not None:
         return slot
@@ -266,6 +286,7 @@ async def plan_task_slot(
         window_end=window_end,
         account_key=account_key,
         depth=_depth,
+        extended_window=True,
     )
 
 
@@ -276,7 +297,7 @@ def _find_free_slot(
     window_end: datetime,
     buffer: timedelta,
     *,
-    extend_window: bool = False,
+    extended_window: bool = False,
 ) -> tuple[datetime, datetime] | None:
     ordered = sorted(busy, key=lambda ev: ev.start)
     day = window_start.date()
@@ -284,7 +305,7 @@ def _find_free_slot(
     tz = user_tz()
 
     while day <= last_day:
-        if extend_window:
+        if extended_window:
             # Phase 1: late evening forward sweep, 20:00 → 24:00.
             lower, upper = _day_bounds(day, DAY_TARGET, END_OF_DAY, tz, window_start, window_end)
             slot = _sweep_forward(ordered, duration, buffer, lower, upper)
@@ -369,6 +390,7 @@ async def _repair_by_displacing_task(
     window_end: datetime,
     account_key: str | None,
     depth: int,
+    extended_window: bool,
 ) -> tuple[datetime, datetime]:
     if depth >= MAX_REPAIR_DEPTH:
         raise ValueError("repair recursion limit reached")
@@ -402,7 +424,13 @@ async def _repair_by_displacing_task(
         new_busy.append(
             BusyEvent(victim_event.id, victim_slot[0], victim_slot[1], "task")
         )
-        slot = _slot_in_range(new_busy, duration, buffer, freed_range)
+        slot = _slot_in_range(
+            new_busy,
+            duration,
+            buffer,
+            freed_range,
+            extended_window=extended_window,
+        )
         if slot is not None:
             return slot
 
@@ -414,19 +442,35 @@ def _slot_in_range(
     duration: timedelta,
     buffer: timedelta,
     freed_range: Interval,
+    *,
+    extended_window: bool,
 ) -> tuple[datetime, datetime] | None:
     """Latest-fitting slot inside `freed_range`, clamped to the per-day
-    working window. Same backward sweep as the normal-mode free search."""
+    working window."""
     tz = user_tz()
     day = freed_range.start.date()
     last_day = freed_range.end.date()
     while day <= last_day:
-        lower, upper = _day_bounds(
-            day, DAY_START, DAY_TARGET, tz, freed_range.start, freed_range.end,
-        )
-        slot = _sweep_backward(busy, duration, buffer, lower, upper)
-        if slot is not None:
-            return slot
+        if extended_window:
+            lower, upper = _day_bounds(
+                day, DAY_TARGET, END_OF_DAY, tz, freed_range.start, freed_range.end,
+            )
+            slot = _sweep_forward(busy, duration, buffer, lower, upper)
+            if slot is not None:
+                return slot
+            lower, upper = _day_bounds(
+                day, EARLY_MORNING, DAY_START, tz, freed_range.start, freed_range.end,
+            )
+            slot = _sweep_backward(busy, duration, buffer, lower, upper)
+            if slot is not None:
+                return slot
+        else:
+            lower, upper = _day_bounds(
+                day, DAY_START, DAY_TARGET, tz, freed_range.start, freed_range.end,
+            )
+            slot = _sweep_backward(busy, duration, buffer, lower, upper)
+            if slot is not None:
+                return slot
         day += timedelta(days=1)
     return None
 

@@ -26,8 +26,14 @@ from app.config import get_settings
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
 from app.events import publish_task
-from app.services.notify import ACTION_EXTEND_WINDOW, ACTION_RESCHEDULE_TASK
+from app.services.notify import (
+    ACTION_CLOSE_TASK,
+    ACTION_DISMISS_TASK,
+    ACTION_RESCHEDULE_TASK,
+)
 from app.services.plan.schedule import schedule_task, scheduled_interval_for
+from app.services.task.close import close_task as close_task_svc
+from app.services.task.dismiss import dismiss_task
 
 log = logging.getLogger(__name__)
 
@@ -81,11 +87,14 @@ async def handle_action(
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
 
-    if payload.action == ACTION_EXTEND_WINDOW:
-        log.info("notify action · extend_window task=%s", task.id)
-        result = await schedule_task(session, task, extend_window=True)
-        if result is not None:
-            publish_task(session, task.id)
+    if payload.action == ACTION_CLOSE_TASK:
+        log.info("notify action · close task=%s", task.id)
+        await close_task_svc(session, task.id)
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    if payload.action == ACTION_DISMISS_TASK:
+        log.info("notify action · dismiss task=%s", task.id)
+        await dismiss_task(session, task.id)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     if payload.action == ACTION_RESCHEDULE_TASK:

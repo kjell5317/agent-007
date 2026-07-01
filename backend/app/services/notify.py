@@ -2,8 +2,8 @@
 
 Every task notification carries `tag="task-<id>"` so the HA companion app
 replaces stale notifications with fresh ones (one live notification per
-task). Tapping any task notification opens its `link` — or
-`settings.task_default_url` when the task has none.
+task). Tapping a task notification opens the task detail modal in the
+frontend.
 
 Fire-and-forget: a failure here MUST NOT propagate to the caller —
 otherwise a flaky HA install would turn into a flood of pipeline errors
@@ -19,6 +19,7 @@ import logging
 import traceback
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 import httpx
@@ -32,7 +33,8 @@ _TIMEOUT = 5.0
 
 # Action identifiers we send to HA. The companion app echoes these back in
 # the `mobile_app_notification_action` event; our webhook reads them.
-ACTION_EXTEND_WINDOW = "EXTEND_WINDOW"
+ACTION_CLOSE_TASK = "CLOSE_TASK"
+ACTION_DISMISS_TASK = "DISMISS_TASK"
 ACTION_RESCHEDULE_TASK = "RESCHEDULE_TASK"
 
 
@@ -94,25 +96,20 @@ def task_tag(task_id: UUID | str) -> str:
     return f"task-{task_id}"
 
 
-# Cap on URI action buttons we attach to a task notification. Android allows
-# three actions total per notification; the EXTEND button can occupy one of
-# them on no-slot notifications, so two URI slots leaves us room without
-# clipping.
-MAX_LINK_ACTIONS = 2
+def task_url(task_id: UUID | str) -> str:
+    """Frontend deep link for opening a task detail modal."""
+    base = get_settings().task_default_url
+    parts = urlsplit(base)
+    path = parts.path or "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, f"task/{task_id}"))
 
 
-def _link_actions(task) -> list[dict[str, str]]:
-    """URI buttons for opening task-related links in the phone browser.
-
-    Currently we only surface `task.link`. The list is capped so callers
-    can blindly extend it with other actions (EXTEND_WINDOW etc.) without
-    blowing past Android's per-notification action limit.
-    """
-    actions: list[dict[str, str]] = []
-    link = (task.link or "").strip()
-    if link:
-        actions.append({"action": "URI", "title": "Open link", "uri": link})
-    return actions[:MAX_LINK_ACTIONS]
+def _task_actions() -> list[dict[str, str]]:
+    return [
+        {"action": ACTION_CLOSE_TASK, "title": "Done"},
+        {"action": ACTION_DISMISS_TASK, "title": "Dismiss"},
+        {"action": ACTION_RESCHEDULE_TASK, "title": "Reschedule"},
+    ]
 
 
 async def notify_task_scheduled(
@@ -127,36 +124,27 @@ async def notify_task_scheduled(
     parts = [_fmt_range(start, end)]
     if task.estimation:
         parts.append(f"{task.estimation}min")
-    actions = [{"action": ACTION_RESCHEDULE_TASK, "title": "Reschedule"}]
-    actions.extend(_link_actions(task))
     await notify(
         title=f"{kind}: {_short_title(task)}",
         message=" · ".join(parts),
-        url=get_settings().task_default_url,
+        url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=actions or None,
+        actions=_task_actions(),
         sticky=True,
     )
 
 
-async def notify_no_slot(task, *, extended: bool = False) -> None:
-    """No slot before the deadline. Includes an Extend-window action button
-    on the first attempt; on a re-attempt with the extended window already
-    applied, drops the button (nothing more to widen automatically)."""
+async def notify_no_slot(task) -> None:
+    """No slot before the deadline after normal and extended windows fail."""
     if task.due_date is None:
         return
     due = to_user_tz(task.due_date)
-    title = "Could not schedule" + (" (extended)" if extended else "")
-    actions: list[dict[str, str]] = []
-    if not extended:
-        actions.append({"action": ACTION_EXTEND_WINDOW, "title": "Try 20–24 & 8–10"})
-    actions.extend(_link_actions(task))
     await notify(
-        title=title,
+        title="Could not schedule",
         message=f"{_short_title(task)} · due {_fmt_when(due)}",
-        url=get_settings().task_default_url,
+        url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=actions or None,
+        actions=_task_actions(),
         sticky=True,
     )
 
@@ -199,9 +187,9 @@ async def notify_agent_task_updated(task, *, changes: dict) -> None:
     await notify(
         title=f"Agent updated: {_short_title(task)}",
         message=f"Changed: {fields}",
-        url=get_settings().task_default_url,
+        url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=_link_actions(task) or None,
+        actions=_task_actions(),
         sticky=True,
     )
 
@@ -210,9 +198,9 @@ async def notify_agent_task_closed(task) -> None:
     await notify(
         title=f"Agent closed: {_short_title(task)}",
         message="Marked complete by follow-up",
-        url=get_settings().task_default_url,
+        url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=_link_actions(task) or None,
+        actions=_task_actions(),
         sticky=True,
     )
 

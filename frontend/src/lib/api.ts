@@ -36,6 +36,7 @@ export const api = {
 
   listTasks: (status?: string) =>
     request<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
+  getTask: (id: string) => request<Task>(`/tasks/${id}`),
   createTask: (text: string) =>
     request<TaskCreationAccepted>("/tasks", {
       method: "POST",
@@ -114,4 +115,3 @@ export interface UnreadInputs {
   count: number;
   last_seen_at: string;
 }
-
