@@ -1,9 +1,11 @@
 import { Box, ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { RunCard } from "@/components/runs/RunCard";
+import { RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
+import { runTitle } from "@/components/runs/runLabels";
 import { cn } from "@/lib/utils";
 import type { RunsData } from "@/hooks/useRuns";
 import { kotx, type KotxContainer, type KotxTask } from "@/lib/kotx";
@@ -51,6 +53,10 @@ interface Props extends RunsData {
   selectedRunId: number | null;
   onRunOpen: (id: number) => void;
   onSelectedRunClose: () => void;
+}
+
+function runCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "run" : "runs"}`;
 }
 
 function primaryDoc(task: KotxTask): "task" | "review" {
@@ -168,25 +174,12 @@ export function RunsPanel({
             No {scope === "active" ? "active " : ""}runs.
           </div>
         ) : (
-          <div className="space-y-2">
-            {groupRuns(sortActionableFirst(tasks)).map((group) =>
-              group.tasks.length === 1 ? (
-                <RunCard
-                  key={group.tasks[0].id}
-                  task={group.tasks[0]}
-                  onChanged={refresh}
-                  onOpen={onRunOpen}
-                />
-              ) : (
-                <RunGroup
-                  key={group.key}
-                  group={group}
-                  refresh={refresh}
-                  onRunOpen={onRunOpen}
-                />
-              ),
-            )}
-          </div>
+          <RunList
+            groups={groupRuns(sortActionableFirst(tasks))}
+            scope={scope}
+            refresh={refresh}
+            onRunOpen={onRunOpen}
+          />
         )}
       </div>
       {selectedRun && (
@@ -198,6 +191,142 @@ export function RunsPanel({
         />
       )}
     </>
+  );
+}
+
+function RunList({
+  groups,
+  scope,
+  refresh,
+  onRunOpen,
+}: {
+  groups: RunGroup[];
+  scope: "active" | "all";
+  refresh: () => Promise<void> | void;
+  onRunOpen: (id: number) => void;
+}) {
+  if (scope === "all") {
+    return (
+      <div className="space-y-2">
+        {groups.map((group) => (
+          <AllRunGroup
+            key={group.key}
+            group={group}
+            refresh={refresh}
+            onRunOpen={onRunOpen}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {groups.map((group) =>
+        group.tasks.length === 1 ? (
+          <RunCard
+            key={group.tasks[0].id}
+            task={group.tasks[0]}
+            onChanged={refresh}
+            onOpen={onRunOpen}
+          />
+        ) : (
+          <RunGroup
+            key={group.key}
+            group={group}
+            refresh={refresh}
+            onRunOpen={onRunOpen}
+          />
+        ),
+      )}
+    </div>
+  );
+}
+
+function AllRunGroup({
+  group,
+  refresh,
+  onRunOpen,
+}: {
+  group: RunGroup;
+  refresh: () => Promise<void> | void;
+  onRunOpen: (id: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasMultipleRuns = group.tasks.length > 1;
+  const title = group.branch ?? runTitle(group.tasks[0]);
+  const Chevron = hasMultipleRuns && open ? ChevronDown : ChevronRight;
+
+  return (
+    <Card>
+      <CardContent
+        className="cursor-pointer"
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button,a,summary")) return;
+          if (hasMultipleRuns) {
+            setOpen((v) => !v);
+          } else {
+            onRunOpen(group.tasks[0].id);
+          }
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 shrink-0" />
+
+          <div className="min-w-0 flex-1">
+            <div className="min-w-0 truncate font-medium leading-snug" title={title}>
+              {title}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <span className="truncate font-medium" title={group.repo}>
+                {group.repo}
+              </span>
+              <MetaDot />
+              <GroupStatusBadge group={group} />
+              <MetaDot />
+              <span className="font-medium">{runCountLabel(group.tasks.length)}</span>
+            </div>
+          </div>
+
+          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </div>
+
+        {hasMultipleRuns && (
+          <Collapsible open={open}>
+            <div
+              className="mt-3 space-y-2 border-t pt-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {group.tasks.map((task) => (
+                <RunCard
+                  key={task.id}
+                  task={task}
+                  onChanged={refresh}
+                  onOpen={onRunOpen}
+                  displayMode="readonly"
+                />
+              ))}
+            </div>
+          </Collapsible>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function GroupStatusBadge({ group }: { group: RunGroup }) {
+  const statuses = new Set(group.tasks.map((task) => task.status));
+  if (statuses.size === 1) {
+    return <RunStatusBadge task={group.tasks[0]} />;
+  }
+  return <Badge variant="muted">{statuses.size} statuses</Badge>;
+}
+
+function MetaDot() {
+  return (
+    <span aria-hidden className="text-muted-foreground">
+      •
+    </span>
   );
 }
 
@@ -228,7 +357,9 @@ function RunGroup({
           <GitBranch className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 shrink truncate font-mono">{group.branch}</span>
         </span>
-        <span className="ml-auto shrink-0 pl-2 tabular-nums">{group.tasks.length} runs</span>
+        <span className="ml-auto shrink-0 pl-2 tabular-nums">
+          {runCountLabel(group.tasks.length)}
+        </span>
       </button>
       <Collapsible open={open}>
         <div className="space-y-2 p-2 pt-0">
