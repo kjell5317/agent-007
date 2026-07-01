@@ -66,7 +66,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const [logLoading, setLogLoading] = useState(false);
   const [logLoadingMore, setLogLoadingMore] = useState(false);
   const [logHasMore, setLogHasMore] = useState(false);
-  const [logBefore, setLogBefore] = useState<string | null>(null);
+  const [logBefore, setLogBefore] = useState<number | null>(null);
   const [logAtTop, setLogAtTop] = useState(false);
   const logScrollRef = useRef<HTMLDivElement>(null);
   const logScrollRestoreRef = useRef<
@@ -109,7 +109,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     logScrollRestoreRef.current = "bottom";
 
     kotx
-      .getLog(task.id, { tail: LOG_PAGE_SIZE })
+      .getLog(task.id, { limit: LOG_PAGE_SIZE })
       .then((page) => {
         if (cancelled) return;
         setLogText(page.text);
@@ -360,23 +360,43 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             </Button>
           </>
         )}
-        {!editing && view === "primary" && doc === "task" && task.canStart && (
-          <Button
-            size="sm"
-            onClick={() => withBusy(() => kotx.start(task.id), "Started", true)}
-            disabled={busy}
-          >
-            Start
-          </Button>
-        )}
-        {!editing && view === "primary" && doc === "review" && task.canApprove && (
-          <Button
-            size="sm"
-            onClick={() => withBusy(() => kotx.approve(task.id), "Comment posted", true)}
-            disabled={busy}
-          >
-            Comment
-          </Button>
+        {!editing && view === "primary" && (
+          <>
+            {task.canApprove && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  withBusy(
+                    () => kotx.approve(task.id),
+                    task.proposes === "pr" ? "PR opened" : "Approved",
+                    true,
+                  )
+                }
+                disabled={busy}
+              >
+                Approve
+              </Button>
+            )}
+            {task.canComment && (
+              <Button
+                size="sm"
+                onClick={() => withBusy(() => kotx.comment(task.id), "Comment posted", true)}
+                disabled={busy || !content?.trim()}
+              >
+                Comment
+              </Button>
+            )}
+            {task.canStart && (
+              <Button
+                size="sm"
+                onClick={() => withBusy(() => kotx.start(task.id), "Started", true)}
+                disabled={busy}
+              >
+                Start
+              </Button>
+            )}
+          </>
         )}
       </div>
     </Modal>
