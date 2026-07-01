@@ -1,4 +1,4 @@
-import { Box, ChevronDown, ChevronRight, GitBranch } from "lucide-react";
+import { Box, ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -53,10 +53,6 @@ interface Props extends RunsData {
   selectedRunId: number | null;
   onRunOpen: (id: number) => void;
   onSelectedRunClose: () => void;
-}
-
-function runCountLabel(count: number): string {
-  return `${count} ${count === 1 ? "run" : "runs"}`;
 }
 
 function primaryDoc(task: KotxTask): "task" | "review" {
@@ -205,16 +201,13 @@ function RunList({
   refresh: () => Promise<void> | void;
   onRunOpen: (id: number) => void;
 }) {
+  // A lone active run stays a full, actionable card; every grouped case (and
+  // the read-only "all" scope) uses the compact inbox-style group card.
   if (scope === "all") {
     return (
       <div className="space-y-2">
         {groups.map((group) => (
-          <AllRunGroup
-            key={group.key}
-            group={group}
-            refresh={refresh}
-            onRunOpen={onRunOpen}
-          />
+          <RunGroupCard key={group.key} group={group} onRunOpen={onRunOpen} />
         ))}
       </div>
     );
@@ -231,31 +224,29 @@ function RunList({
             onOpen={onRunOpen}
           />
         ) : (
-          <RunGroup
-            key={group.key}
-            group={group}
-            refresh={refresh}
-            onRunOpen={onRunOpen}
-          />
+          <RunGroupCard key={group.key} group={group} onRunOpen={onRunOpen} />
         ),
       )}
     </div>
   );
 }
 
-function AllRunGroup({
+// Mirrors the inbox group card: a status badge + repo header line with the runs
+// collapsed underneath as compact title/status rows. A single-run group drops
+// the count and the expander and just opens the run on click.
+function RunGroupCard({
   group,
-  refresh,
   onRunOpen,
 }: {
   group: RunGroup;
-  refresh: () => Promise<void> | void;
   onRunOpen: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const hasMultipleRuns = group.tasks.length > 1;
-  const title = group.branch ?? runTitle(group.tasks[0]);
-  const Chevron = hasMultipleRuns && open ? ChevronDown : ChevronRight;
+  const title = hasMultipleRuns
+    ? group.branch ?? runTitle(group.tasks[0])
+    : runTitle(group.tasks[0]);
+  const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
     <Card>
@@ -271,40 +262,37 @@ function AllRunGroup({
         }}
       >
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 shrink-0" />
-
           <div className="min-w-0 flex-1">
             <div className="min-w-0 truncate font-medium leading-snug" title={title}>
               {title}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <GroupStatusBadge group={group} />
               <span className="truncate font-medium" title={group.repo}>
                 {group.repo}
               </span>
-              <MetaDot />
-              <GroupStatusBadge group={group} />
-              <MetaDot />
-              <span className="font-medium">{runCountLabel(group.tasks.length)}</span>
+              {hasMultipleRuns && (
+                <>
+                  <MetaDot />
+                  <span className="font-medium">{group.tasks.length} runs</span>
+                </>
+              )}
             </div>
           </div>
 
-          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          {hasMultipleRuns && (
+            <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
         </div>
 
         {hasMultipleRuns && (
           <Collapsible open={open}>
             <div
-              className="mt-3 space-y-2 border-t pt-2"
+              className="mt-3 space-y-1 border-t pt-2"
               onClick={(e) => e.stopPropagation()}
             >
               {group.tasks.map((task) => (
-                <RunCard
-                  key={task.id}
-                  task={task}
-                  onChanged={refresh}
-                  onOpen={onRunOpen}
-                  displayMode="readonly"
-                />
+                <RunGroupMember key={task.id} task={task} onOpen={onRunOpen} />
               ))}
             </div>
           </Collapsible>
@@ -314,12 +302,34 @@ function AllRunGroup({
   );
 }
 
+function RunGroupMember({
+  task,
+  onOpen,
+}: {
+  task: KotxTask;
+  onOpen: (id: number) => void;
+}) {
+  const title = runTitle(task);
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(task.id)}
+      className="flex w-full items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-left"
+    >
+      <span className="min-w-0 flex-1 truncate text-sm" title={title}>
+        {title}
+      </span>
+      <RunStatusBadge task={task} />
+    </button>
+  );
+}
+
 function GroupStatusBadge({ group }: { group: RunGroup }) {
   const statuses = new Set(group.tasks.map((task) => task.status));
   if (statuses.size === 1) {
     return <RunStatusBadge task={group.tasks[0]} />;
   }
-  return <Badge variant="muted">{statuses.size} statuses</Badge>;
+  return <Badge variant="muted">mixed</Badge>;
 }
 
 function MetaDot() {
@@ -327,48 +337,6 @@ function MetaDot() {
     <span aria-hidden className="text-muted-foreground">
       •
     </span>
-  );
-}
-
-function RunGroup({
-  group,
-  refresh,
-  onRunOpen,
-}: {
-  group: RunGroup;
-  refresh: () => Promise<void> | void;
-  onRunOpen: (id: number) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="rounded-xl border bg-muted/20">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <span className="min-w-0 shrink truncate font-medium text-foreground">{group.repo}</span>
-        <span className="flex min-w-0 shrink items-center gap-1">
-          <GitBranch className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 shrink truncate font-mono">{group.branch}</span>
-        </span>
-        <span className="ml-auto shrink-0 pl-2 tabular-nums">
-          {runCountLabel(group.tasks.length)}
-        </span>
-      </button>
-      <Collapsible open={open}>
-        <div className="space-y-2 p-2 pt-0">
-          {group.tasks.map((t) => (
-            <RunCard key={t.id} task={t} onChanged={refresh} onOpen={onRunOpen} />
-          ))}
-        </div>
-      </Collapsible>
-    </div>
   );
 }
 function ContainerRow({ container }: { container: KotxContainer }) {
