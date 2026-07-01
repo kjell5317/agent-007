@@ -77,29 +77,29 @@ def test_task_read_serializes_scheduled_date():
 def test_task_list_orders_by_display_date(monkeypatch):
     session = _sqlite_session()
     created = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
-    due_only = Task(
-        title="Due-only earlier",
-        due_date=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
-        scheduled_date=None,
-        calendar_event_id="historical-event",
+    # Every task carries a scheduled_date now; display order follows it, and it
+    # wins over due_date in the coalesce (this row's due is latest of all).
+    early = Task(
+        title="Scheduled earliest",
+        due_date=datetime(2026, 7, 5, 9, 0, tzinfo=timezone.utc),
+        scheduled_date=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        calendar_event_id="event-early",
         created_at=created,
     )
-    scheduled = Task(
-        title="Scheduled later",
+    middle = Task(
+        title="Scheduled middle",
         due_date=datetime(2026, 7, 3, 17, 0, tzinfo=timezone.utc),
         scheduled_date=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
-        calendar_event_id="event-1",
+        calendar_event_id="event-mid",
         created_at=created + timedelta(minutes=1),
     )
-    undated_newer = Task(
-        title="Undated newer",
+    late = Task(
+        title="Scheduled latest",
+        scheduled_date=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc),
+        calendar_event_id="event-late",
         created_at=created + timedelta(minutes=2),
     )
-    undated_older = Task(
-        title="Undated older",
-        created_at=created,
-    )
-    session.add_all([scheduled, undated_older, due_only, undated_newer])
+    session.add_all([late, early, middle])
     session.commit()
 
     monkeypatch.setattr(
@@ -111,10 +111,9 @@ def test_task_list_orders_by_display_date(monkeypatch):
     rows = tasks_store.list_(session)
 
     assert [task.title for task, _status in rows] == [
-        "Due-only earlier",
-        "Scheduled later",
-        "Undated newer",
-        "Undated older",
+        "Scheduled earliest",
+        "Scheduled middle",
+        "Scheduled latest",
     ]
 
 
@@ -139,7 +138,15 @@ def test_open_filter_survives_limit_with_many_closed(monkeypatch):
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
     def add(title: str, *, status: str, due=None, scheduled=None, created):
-        task = Task(title=title, due_date=due, scheduled_date=scheduled, created_at=created)
+        # due_date and scheduled_date are both NOT NULL; fall back to created so
+        # display order is deterministic (closed tasks land oldest, filling the
+        # limit window).
+        task = Task(
+            title=title,
+            due_date=due or created,
+            scheduled_date=scheduled or created,
+            created_at=created,
+        )
         session.add(task)
         session.flush()
         session.execute(

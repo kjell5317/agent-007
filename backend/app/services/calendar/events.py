@@ -315,12 +315,7 @@ async def update_task_event(
                 "calendar update · task=%s event=%s missing (status=%s); recreating",
                 task.id, task.calendar_event_id, exc.response.status_code,
             )
-            tasks_store.set_schedule(
-                session,
-                task,
-                event_id=None,
-                scheduled_date=None,
-            )
+            tasks_store.clear_calendar_event(session, task)
             session.commit()
             await add_task_event(session, task, start=start, end=end)
             return
@@ -332,14 +327,6 @@ async def delete_task_event(session: Session, task) -> None:
     calendar is configured. Clears `task.calendar_event_id` on success so a
     later re-open creates a fresh event. Best-effort."""
     if not task.calendar_event_id:
-        if getattr(task, "scheduled_date", None) is not None:
-            tasks_store.set_schedule(
-                session,
-                task,
-                event_id=None,
-                scheduled_date=None,
-            )
-            session.commit()
         return
     settings = get_settings()
     calendar_id = (settings.google_calendar_id or "").strip()
@@ -353,12 +340,7 @@ async def delete_task_event(session: Session, task) -> None:
         log.warning("calendar delete failed · task=%s err=%s", task.id, exc)
         return
 
-    tasks_store.set_schedule(
-        session,
-        task,
-        event_id=None,
-        scheduled_date=None,
-    )
+    tasks_store.clear_calendar_event(session, task)
     session.commit()
 
 

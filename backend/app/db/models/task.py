@@ -19,8 +19,18 @@ class Task(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     link: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    scheduled_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Also required: a task without a deadline can't be placed in the planner's
+    # `[now, due]` window. `create()` fills a horizon default when the agent
+    # can't extract one; server_default is the NOT NULL safety net.
+    due_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    # Every task carries a slot. New rows default to now() so the invariant
+    # holds before the planner assigns a real slot; a task that never lands one
+    # keeps a past slot that the overdue-reschedule cron keeps re-planning.
+    scheduled_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
 

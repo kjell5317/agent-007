@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
@@ -9,6 +9,11 @@ from sqlalchemy.orm import Session
 from app.db.models.raw_input import RawInput
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
+
+# When the agent can't extract a deadline, give the task one far enough out
+# that the planner still has a window to place it (matches the planner's
+# LEAD_DAYS look-ahead).
+DEFAULT_DUE_HORIZON = timedelta(days=7)
 
 
 def count_since(session: Session, ts: datetime) -> int:
@@ -46,11 +51,12 @@ def is_manual_for(
 
 
 def create(session: Session, payload: TaskCreate) -> Task:
+    due_date = payload.due_date or datetime.now(timezone.utc) + DEFAULT_DUE_HORIZON
     row = Task(
         title=payload.title,
         description=payload.description,
         link=payload.link,
-        due_date=payload.due_date,
+        due_date=due_date,
         estimation=payload.estimation,
         location=payload.location,
         label=payload.label,
@@ -73,6 +79,17 @@ def set_schedule(
 ) -> Task:
     task.calendar_event_id = event_id
     task.scheduled_date = scheduled_date
+    session.flush()
+    return task
+
+
+def clear_calendar_event(session: Session, task: Task) -> Task:
+    """Drop the calendar mirror pointer, keeping the task's slot.
+
+    `scheduled_date` is NOT NULL — a deleted mirror doesn't un-schedule the
+    task, it just detaches the (now-gone) event so a later re-plan creates a
+    fresh one."""
+    task.calendar_event_id = None
     session.flush()
     return task
 

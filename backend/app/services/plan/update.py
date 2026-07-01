@@ -25,12 +25,6 @@ async def update_task_to_calendar(
     changed = set(changed_fields or ())
     if not changed & PLAN_TRIGGER_FIELDS:
         return
-    if task.due_date is None:
-        log.debug("plan.update · task=%s has no due_date", task.id)
-        from app.services.calendar import delete_task_event
-
-        await delete_task_event(session, task)
-        return
 
     current = await _current_event(session, task)
     if current is None:
