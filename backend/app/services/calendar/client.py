@@ -23,6 +23,15 @@ from app.services.location import resolve_location_alias
 
 _BASE = "https://www.googleapis.com/calendar/v3"
 
+# Safety valve: a full sync with `singleEvents=true` expands recurring events,
+# so cap pages to avoid an unbounded crawl. Hitting the cap forces a fresh full
+# sync next run rather than persisting a partial-state syncToken.
+_MAX_SYNC_PAGES = 40
+
+
+class CalendarSyncTokenExpired(Exception):
+    """Google returned 410 for an incremental `syncToken` — caller must full-sync."""
+
 
 @dataclass
 class CalendarEvent:
@@ -59,14 +68,8 @@ class GoogleCalendarClient:
         *,
         time_min: datetime | None = None,
         time_max: datetime | None = None,
-        updated_min: datetime | None = None,
     ) -> list[dict]:
-        """List events in `[time_min, time_max)`.
-
-        Pass `updated_min` to filter down to events whose server-side
-        `updated` timestamp is at or after that datetime — the cheap way
-        to find externally-edited events since a previous poll.
-        """
+        """List events in `[time_min, time_max)`."""
         params: dict[str, Any] = {
             # Expand recurring events so callers see the actual instances in
             # the window rather than the master rule.
@@ -78,11 +81,6 @@ class GoogleCalendarClient:
             params["timeMin"] = rfc3339(time_min)
         if time_max is not None:
             params["timeMax"] = rfc3339(time_max)
-        if updated_min is not None:
-            params["updatedMin"] = rfc3339(updated_min)
-            # Cancellations carry the updated timestamp too; surface them so
-            # callers can react to deletions, not just edits.
-            params["showDeleted"] = "true"
         out: list[dict] = []
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             while True:
@@ -96,6 +94,61 @@ class GoogleCalendarClient:
                 if not token:
                     return out
                 params["pageToken"] = token
+
+    async def sync_events(
+        self,
+        calendar_id: str,
+        *,
+        sync_token: str | None = None,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+    ) -> tuple[list[dict], str | None]:
+        """Incremental sync via Google's `syncToken`.
+
+        Pass `sync_token` to fetch only what changed since it was issued —
+        including cancellations. Omit it (optionally with `time_min`/`time_max`)
+        for a full baseline sync. Returns `(items, next_sync_token)`; persist
+        the token for the next call. Raises `CalendarSyncTokenExpired` on 410
+        so the caller can drop the stale token and re-baseline.
+
+        `orderBy` is intentionally absent — Google rejects it alongside a
+        `syncToken`. Callers that need ordering must sort the result.
+        """
+        params: dict[str, Any] = {
+            "singleEvents": "true",
+            "maxResults": 250,
+            # Surface cancellations so callers can react to deletions.
+            "showDeleted": "true",
+        }
+        if sync_token is not None:
+            params["syncToken"] = sync_token
+        else:
+            if time_min is not None:
+                params["timeMin"] = rfc3339(time_min)
+            if time_max is not None:
+                params["timeMax"] = rfc3339(time_max)
+
+        out: list[dict] = []
+        pages = 0
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            while True:
+                resp = await client.get(
+                    f"{_BASE}/calendars/{calendar_id}/events", params=params,
+                )
+                if resp.status_code == 410:
+                    raise CalendarSyncTokenExpired(calendar_id)
+                resp.raise_for_status()
+                payload = resp.json()
+                out.extend(payload.get("items", []))
+                pages += 1
+                page_token = payload.get("nextPageToken")
+                if not page_token:
+                    return out, payload.get("nextSyncToken")
+                if pages >= _MAX_SYNC_PAGES:
+                    # Bail without a token; next run full-syncs from scratch.
+                    return out, None
+                params["pageToken"] = page_token
+                params.pop("syncToken", None)
 
     async def insert_event(self, calendar_id: str, body: dict) -> dict:
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:

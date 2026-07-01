@@ -323,7 +323,7 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_notifications_deep_link_and_expose_three_actions(monkeypatch):
+async def test_task_notifications_deep_link_and_actions(monkeypatch):
     task_id = uuid.uuid4()
     task = SimpleNamespace(
         id=task_id,
@@ -343,24 +343,31 @@ async def test_task_notifications_deep_link_and_expose_three_actions(monkeypatch
     )
     monkeypatch.setattr(notify_service, "notify", fake_notify)
 
-    await notify_service.notify_task_scheduled(
+    await notify_service.notify_task_created(
         task,
         start=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
         end=datetime(2026, 7, 1, 10, 45, tzinfo=timezone.utc),
-        is_fresh=True,
     )
     await notify_service.notify_no_slot(task)
 
-    expected_actions = [
+    created, warning = calls
+    # Both deep-link to the task's modal anchor.
+    assert created["url"] == f"https://example.test/app#task/{task_id}"
+    assert warning["url"] == f"https://example.test/app#task/{task_id}"
+
+    # "Task created" keeps all three buttons.
+    assert created["actions"] == [
         {"action": notify_service.ACTION_CLOSE_TASK, "title": "Done"},
         {"action": notify_service.ACTION_DISMISS_TASK, "title": "Dismiss"},
         {"action": notify_service.ACTION_RESCHEDULE_TASK, "title": "Reschedule"},
     ]
-    assert [call["url"] for call in calls] == [
-        f"https://example.test/app#task/{task_id}",
-        f"https://example.test/app#task/{task_id}",
+    # The escalated warning drops Reschedule and is undismissable.
+    assert warning["actions"] == [
+        {"action": notify_service.ACTION_CLOSE_TASK, "title": "Done"},
+        {"action": notify_service.ACTION_DISMISS_TASK, "title": "Dismiss"},
     ]
-    assert [call["actions"] for call in calls] == [expected_actions, expected_actions]
+    assert warning["persistent"] is True
+    assert warning["importance"] == "high"
 
 
 @pytest.mark.asyncio
@@ -441,3 +448,123 @@ async def test_overdue_scheduled_cron_reschedules_with_previous_slot_blocked(mon
 
     assert summary == {"attempted": 1, "rescheduled": 1}
     assert calls == [Interval(scheduled, scheduled + timedelta(minutes=30), "event-1")]
+
+
+def test_discover_syncs_edited_fields_from_event():
+    session = _sqlite_session()
+    start = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    task = Task(
+        title="Write report",
+        description="Original body",
+        link="https://example.com/pr/1",
+        location="Office A",
+        estimation=30,
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=start,
+        calendar_event_id="event-1",
+    )
+    session.add(task)
+    session.commit()
+
+    event = CalendarEvent(
+        id="event-1",
+        calendar_id="primary",
+        summary="Write the Q3 report",
+        # Body edited, but the trailing link left intact.
+        description="Rewritten body\n\nhttps://example.com/pr/1",
+        start=start,
+        end=start + timedelta(minutes=60),
+        all_day=False,
+        location="Room 42",
+        html_link=None,
+        private_properties={
+            "managed_by": "plan_service",
+            "kind": "task",
+            "task_id": str(task.id),
+        },
+        raw={"summary": "Write the Q3 report"},
+    )
+
+    synced = discover._sync_task_schedule_from_event(session, event)
+    session.commit()
+    session.refresh(task)
+
+    assert synced == task.id
+    assert task.title == "Write the Q3 report"
+    assert task.location == "Room 42"
+    assert task.estimation == 60
+    # Unedited trailing link stripped back out of the description.
+    assert task.description == "Rewritten body"
+
+
+def test_discover_ignores_event_matching_pushed_state():
+    session = _sqlite_session()
+    start = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    task = Task(
+        title="Write report",
+        description="Body",
+        link=None,
+        location="Office A",
+        estimation=45,
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=start,
+        calendar_event_id="event-1",
+    )
+    session.add(task)
+    # flush, not commit: a commit would expire the row and sqlite reloads
+    # scheduled_date as naive, faking a change that postgres wouldn't see.
+    session.flush()
+
+    # Mirrors exactly what we last pushed — no field should register as changed.
+    event = CalendarEvent(
+        id="event-1",
+        calendar_id="primary",
+        summary="Write report",
+        description="Body",
+        start=start,
+        end=start + timedelta(minutes=45),
+        all_day=False,
+        location="Office A",
+        html_link=None,
+        private_properties={
+            "managed_by": "plan_service",
+            "kind": "task",
+            "task_id": str(task.id),
+        },
+        raw={"summary": "Write report"},
+    )
+
+    assert discover._sync_task_schedule_from_event(session, event) is None
+
+
+@pytest.mark.asyncio
+async def test_discover_reschedules_deleted_task_event_blocking_old_slot(monkeypatch):
+    session = _sqlite_session()
+    scheduled = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    task = Task(
+        title="Write report",
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=scheduled,
+        estimation=30,
+        calendar_event_id="event-1",
+    )
+    session.add(task)
+    session.commit()
+
+    blocks: list[Interval | None] = []
+
+    async def fake_schedule_task(_session, _task, **kwargs):
+        blocks.append(kwargs.get("block"))
+        return (scheduled + timedelta(hours=2), scheduled + timedelta(hours=2, minutes=30))
+
+    monkeypatch.setattr(discover, "schedule_task", fake_schedule_task)
+
+    result = await discover._reschedule_deleted_task_event(session, "event-1", account_key=None)
+    session.commit()
+    session.refresh(task)
+
+    assert result == task.id
+    # Old slot handed to the planner as a blocker so it isn't re-picked.
+    assert blocks == [Interval(scheduled, scheduled + timedelta(minutes=30), "event-1")]
+    # Dead event id cleared before replanning.
+    assert task.calendar_event_id is None

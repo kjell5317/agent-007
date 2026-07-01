@@ -1,15 +1,20 @@
 """Discover externally-modified calendar events.
 
-Polls Google Calendar with `updatedMin` set to the last check time and
-asks: "what changed?". Any event that returns AND now overlaps with
-another event in the look-ahead window gets handed off to
-`services.plan.reschedule.reschedule_event` — the plan layer owns
-deciding what to do about the conflict.
+Incremental sync via Google's `syncToken`: each poll asks "what changed since
+last time?" and Google answers with edited AND cancelled events. Three things
+happen to the results on the write calendar:
 
-The cursor is stored per-account on the oauth_tokens row (extra JSON),
-mirroring the way `gmail/poll.py` persists its `history_id` watermark.
-On the first run for an account the cursor is bootstrapped to "now
-minus one day" so we don't try to ingest the whole calendar history.
+  1. Task events that were edited (moved, renamed, re-timed, relocated,
+     re-described) sync their new state back into the task row.
+  2. Task events that were deleted get their task re-planned onto a fresh
+     slot, blocking the one they were removed from.
+  3. Any updated event that now overlaps a managed event hands off to
+     `services.plan.reschedule.reschedule_event` to resolve the conflict.
+
+The `syncToken` is stored per calendar on the oauth_tokens row (extra JSON).
+A full baseline sync is re-run at most once a day so the look-ahead window
+slides forward and recurring-event expansion stays bounded; between baselines
+the stored token drives cheap incremental pulls.
 """
 
 from __future__ import annotations
@@ -25,22 +30,36 @@ from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.db.models.task import Task
 from app.events import publish_task
-from app.services.calendar.client import CalendarEvent, authorized_client, normalize
+from app.services.calendar.client import (
+    CalendarEvent,
+    CalendarSyncTokenExpired,
+    authorized_client,
+    normalize,
+)
 from app.services.calendar.events import (
     WINDOW_DAYS,
+    _task_description,
     is_commute_event,
     is_managed_event,
     is_task_event,
 )
-from app.services.plan.schedule import reschedule_event
+from app.services.location import resolve_location_alias
+from app.services.plan.schedule import (
+    _duration_minutes,
+    reschedule_event,
+    schedule_task,
+    scheduled_interval_for,
+)
 
 log = logging.getLogger(__name__)
 
-# How far back to look on the very first run (no cursor yet).
-INITIAL_LOOKBACK_DAYS = 1
+# Cursor keys inside oauth_tokens.extra.
+_SYNC_TOKENS_KEY = "calendar_sync_tokens"
+_BASELINES_KEY = "calendar_sync_baselines"
 
-# Cursor key inside oauth_tokens.extra.
-_CURSOR_KEY = "calendar_updated_min"
+# Re-run a full baseline sync (sliding the look-ahead window) at most this
+# often; incremental syncToken pulls handle everything in between.
+REBASELINE_INTERVAL = timedelta(days=1)
 
 
 async def discover_updated_events(
@@ -49,13 +68,14 @@ async def discover_updated_events(
     calendar_ids: Iterable[str],
     account_key: str | None = None,
 ) -> dict:
-    """Fetch events changed since the last poll; reschedule any that now overlap.
+    """Fetch events changed since the last poll and reconcile them.
 
     Returns a summary dict:
-      * `checked`      — total events seen in the look-ahead window
-      * `updated`      — events changed since the last cursor
-      * `overlapping`  — updated events that triggered a reschedule call
-      * `cursor`       — ISO timestamp of the new cursor we persisted
+      * `checked`            — managed write events seen in the look-ahead window
+      * `updated`            — active events changed since the last sync
+      * `overlapping`        — updated events that triggered a reschedule call
+      * `scheduled_updates`  — task events whose edits synced back to the row
+      * `deleted`            — deleted task events re-planned onto a new slot
     """
     settings = get_settings()
     write_id = (settings.google_calendar_id or "").strip()
@@ -63,21 +83,19 @@ async def discover_updated_events(
     if not ids or not write_id:
         return _empty_summary()
 
-    token = oauth_tokens.get_decrypted(session, provider="google", account_key=account_key)
-    if token is None:
+    token_row = oauth_tokens.get_decrypted(session, provider="google", account_key=account_key)
+    if token_row is None:
         return _empty_summary()
 
     now = datetime.now(timezone.utc)
-    cursor_iso = (token.extra or {}).get(_CURSOR_KEY)
-    if cursor_iso:
-        updated_min = datetime.fromisoformat(cursor_iso)
-    else:
-        updated_min = now - timedelta(days=INITIAL_LOOKBACK_DAYS)
-
     # Look one day back to catch in-progress events whose start drifted earlier,
     # and WINDOW_DAYS forward so an updated event has neighbours to compare to.
     window_start = now - timedelta(days=1)
     window_end = now + timedelta(days=WINDOW_DAYS)
+
+    extra = token_row.extra or {}
+    sync_tokens = dict(extra.get(_SYNC_TOKENS_KEY) or {})
+    baselines = dict(extra.get(_BASELINES_KEY) or {})
 
     client = await authorized_client(session, account_key)
 
@@ -86,32 +104,34 @@ async def discover_updated_events(
         "updated": 0,
         "overlapping": 0,
         "scheduled_updates": 0,
-        "cursor": now.isoformat(),
+        "deleted": 0,
     }
 
     for cid in ids:
-        log.info(
-            "discover · id=%s updated_min=%s ",
-            cid, updated_min.isoformat(),
-        )
-
-        # Cheap call first: ask only for events touched since the cursor.
-        # In the common case (nothing changed) we skip the wider listing and
-        # save a round trip per calendar.
-        updated_items = await client.list_events(
+        raw_items, new_token, new_baseline = await _sync_calendar(
+            client,
             cid,
-            time_min=window_start,
-            time_max=window_end,
-            updated_min=updated_min,
+            token=sync_tokens.get(cid),
+            baseline_iso=baselines.get(cid),
+            now=now,
+            window_start=window_start,
+            window_end=window_end,
         )
-        if not updated_items:
-            continue
-        updated_events = _active_events(updated_items, cid)
-        summary["updated"] += len(updated_events)
+        if new_token is not None:
+            sync_tokens[cid] = new_token
+        baselines[cid] = new_baseline.isoformat()
+
+        active = _active_events(raw_items, cid)
+        cancelled_ids = [
+            it["id"]
+            for it in raw_items
+            if it.get("status") == "cancelled" and it.get("id")
+        ]
+        summary["updated"] += len(active)
 
         if cid == write_id:
             synced_task_ids: list[uuid.UUID] = []
-            for ev in updated_events:
+            for ev in active:
                 if not is_task_event(ev):
                     continue
                 synced_task_id = _sync_task_schedule_from_event(session, ev)
@@ -122,6 +142,14 @@ async def discover_updated_events(
             for task_id in synced_task_ids:
                 publish_task(session, task_id)
 
+            for event_id in cancelled_ids:
+                rescheduled = await _reschedule_deleted_task_event(
+                    session, event_id, account_key=account_key,
+                )
+                if rescheduled is not None:
+                    summary["deleted"] += 1
+                    publish_task(session, rescheduled)
+
         # Something changed in a read/busy calendar, or a manual event on the
         # write calendar. Pull the write calendar and only move events we own
         # there; read events and manual write events are hard blockers.
@@ -129,7 +157,7 @@ async def discover_updated_events(
         write_events = _active_events(items, write_id)
         summary["checked"] += len(write_events)
 
-        for ev in updated_events:
+        for ev in active:
             if cid == write_id and is_managed_event(ev):
                 continue
             overlapping = _first_managed_overlap(ev, write_events)
@@ -151,39 +179,147 @@ async def discover_updated_events(
                     account_key=account_key,
                 )
 
-    # Advance the cursor only after a successful pass. If anything above raised
-    # we'll re-check the same window on the next run, which is the desired
-    # behaviour — overlap handling stays at-least-once.
+    # Persist cursors only after a successful pass. If anything above raised
+    # we'll re-check with the same tokens next run, which keeps overlap and
+    # deletion handling at-least-once.
     oauth_tokens.set_extra(
         session,
         provider="google",
-        account_key=token.account_key,
-        patch={_CURSOR_KEY: now.isoformat()},
+        account_key=token_row.account_key,
+        patch={_SYNC_TOKENS_KEY: sync_tokens, _BASELINES_KEY: baselines},
     )
     session.commit()
 
     return summary
 
 
-def _sync_task_schedule_from_event(session: Session, event: CalendarEvent) -> uuid.UUID | None:
-    task_id = event.private_properties.get("task_id")
-    row: Task | None = None
-    if task_id:
+async def _sync_calendar(
+    client,
+    cid: str,
+    *,
+    token: str | None,
+    baseline_iso: str | None,
+    now: datetime,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[list[dict], str | None, datetime]:
+    """Incremental sync when a fresh token exists, else a full baseline sync.
+
+    Returns `(raw_items, new_token, baseline)` where `baseline` is the time the
+    returned token's window was established (unchanged on an incremental pull).
+    """
+    if token and not _baseline_stale(baseline_iso, now):
         try:
-            row = session.get(Task, uuid.UUID(task_id))
-        except ValueError:
-            row = None
-    if row is None:
-        row = session.query(Task).filter(Task.calendar_event_id == event.id).one_or_none()
+            items, new_token = await client.sync_events(cid, sync_token=token)
+            return items, new_token, datetime.fromisoformat(baseline_iso)
+        except CalendarSyncTokenExpired:
+            log.info("discover · sync token expired for %s; re-baselining", cid)
+
+    log.info("discover · full baseline sync id=%s window=%s..%s", cid,
+             window_start.isoformat(), window_end.isoformat())
+    items, new_token = await client.sync_events(
+        cid, time_min=window_start, time_max=window_end,
+    )
+    return items, new_token, now
+
+
+def _baseline_stale(baseline_iso: str | None, now: datetime) -> bool:
+    if not baseline_iso:
+        return True
+    try:
+        base = datetime.fromisoformat(baseline_iso)
+    except ValueError:
+        return True
+    return (now - base) > REBASELINE_INTERVAL
+
+
+def _sync_task_schedule_from_event(session: Session, event: CalendarEvent) -> uuid.UUID | None:
+    """Sync an externally-edited task event back into its task row.
+
+    Pulls start (→ scheduled_date), duration (→ estimation), title, location
+    and description. Only writes the DB — never patches the calendar back, so
+    it can't ping-pong with the planner. Each field is compared against the
+    value we'd have pushed, so unedited fields (aliased locations, the
+    description+link merge) don't get clobbered on a round trip.
+    """
+    row = _task_for_event(session, event)
     if row is None:
         return None
-    changed = row.calendar_event_id != event.id or row.scheduled_date != event.start
+
+    changed = False
+    if row.calendar_event_id != event.id:
+        row.calendar_event_id = event.id
+        changed = True
+    if not event.all_day and row.scheduled_date != event.start:
+        row.scheduled_date = event.start
+        changed = True
+    for field, value in _synced_field_updates(event, row).items():
+        setattr(row, field, value)
+        changed = True
+
     if not changed:
         return None
-    row.calendar_event_id = event.id
-    row.scheduled_date = event.start
     session.flush()
     return row.id
+
+
+def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:
+    """Task-row fields that differ from what we last pushed to the event."""
+    updates: dict = {}
+
+    raw_summary = event.raw.get("summary")
+    if raw_summary is not None and raw_summary != task.title:
+        updates["title"] = raw_summary
+
+    if event.description != _task_description(task):
+        updates["description"] = _description_for_task(event, task)
+
+    if event.location != resolve_location_alias(task.location):
+        updates["location"] = event.location
+
+    if not event.all_day:
+        expected = _duration_minutes(task, get_settings())
+        actual = round((event.end - event.start).total_seconds() / 60)
+        if actual >= 1 and actual != expected:
+            updates["estimation"] = actual
+
+    return updates
+
+
+def _description_for_task(event: CalendarEvent, task: Task) -> str | None:
+    """Recover the task description from an edited event body.
+
+    The event body is `description + "\\n\\n" + link`; strip a trailing,
+    unedited link so it doesn't leak into `task.description` (and duplicate on
+    the next push). If the link was itself edited away, keep the whole body.
+    """
+    desc = event.description
+    if desc and task.link and desc.endswith(task.link):
+        desc = desc[: -len(task.link)].rstrip("\n") or None
+    return desc
+
+
+async def _reschedule_deleted_task_event(
+    session: Session,
+    event_id: str,
+    *,
+    account_key: str | None,
+) -> uuid.UUID | None:
+    """Re-plan the task behind a deleted calendar event, blocking its old slot."""
+    row = session.query(Task).filter(Task.calendar_event_id == event_id).one_or_none()
+    if row is None:
+        return None
+
+    block = scheduled_interval_for(row)
+    # Drop the dead event id so the planner creates a fresh mirror rather than
+    # patching (and 404ing on) the event the user just deleted.
+    row.calendar_event_id = None
+    session.flush()
+
+    log.info("discover · task event=%s deleted; rescheduling task=%s blocking old slot",
+             event_id, row.id)
+    result = await schedule_task(session, row, block=block, account_key=account_key)
+    return row.id if result is not None else None
 
 
 def _first_managed_overlap(
@@ -203,6 +339,18 @@ def _first_managed_overlap(
         if event.start < other.end and other.start < event.end:
             return other
     return None
+
+
+def _task_for_event(session: Session, event: CalendarEvent) -> Task | None:
+    task_id = event.private_properties.get("task_id")
+    if task_id:
+        try:
+            row = session.get(Task, uuid.UUID(task_id))
+        except ValueError:
+            row = None
+        if row is not None:
+            return row
+    return session.query(Task).filter(Task.calendar_event_id == event.id).one_or_none()
 
 
 def _active_events(items: Iterable[dict], calendar_id: str) -> list[CalendarEvent]:
@@ -234,5 +382,5 @@ def _empty_summary() -> dict:
         "updated": 0,
         "overlapping": 0,
         "scheduled_updates": 0,
-        "cursor": None,
+        "deleted": 0,
     }

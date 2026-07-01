@@ -15,10 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.agent.helpers.text import parse_iso
 from app.db.models.task import Task
-from app.services.notify import notify_agent_task_closed, notify_agent_task_updated
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.reopen import reopen_task as reopen_task_svc
-from app.services.task.update import PLAN_TRIGGER_FIELDS, update_task as update_task_svc
+from app.services.task.update import update_task as update_task_svc
 
 # Fields carried on the tool variants that aren't task columns and must be
 # stripped before patching (`status` drives the lifecycle, not a column).
@@ -54,23 +53,19 @@ async def apply_task_action(
             outcome = "reopened"
 
         if patch:
+            # Plan-relevant edits route through `schedule_task` inside the
+            # update service, which owns the "Task created" / warning-clear
+            # notification. Non-plan edits are intentionally silent.
             try:
-                updated = await update_task_svc(session, task.id, patch)
+                await update_task_svc(session, task.id, patch)
             except LookupError:
-                updated = None
-            # Plan-relevant edits route through `schedule_task`, which fires its
-            # own "Rescheduled" notification with the new slot. Firing the
-            # generic "Agent updated" too would replace it via the shared task
-            # tag and lose the slot, so only notify for non-plan edits.
-            if updated is not None and not (patch.keys() & PLAN_TRIGGER_FIELDS):
-                await notify_agent_task_updated(updated, changes=patch)
+                pass
 
         if status == "closed":
             try:
                 await close_task_svc(session, task.id)
             except LookupError:
                 pass
-            await notify_agent_task_closed(task)
             outcome = "closed"
 
         return {"outcome": outcome, "status_change": status}

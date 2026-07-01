@@ -71,11 +71,6 @@ async def reschedule_overlapping_tasks(
         if result is not None:
             moved_slots.append((task, result[0], result[1]))
 
-    if batch and moved_slots:
-        from app.services.notify import notify_batch_rescheduled
-
-        await notify_batch_rescheduled(moved_slots)
-
     return len(moved_slots)
 
 

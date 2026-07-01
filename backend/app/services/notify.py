@@ -46,6 +46,10 @@ async def notify(
     tag: str | None = None,
     actions: list[dict[str, str]] | None = None,
     sticky: bool = False,
+    importance: str | None = None,
+    channel: str | None = None,
+    color: str | None = None,
+    persistent: bool = False,
 ) -> None:
     """Send a single notification through HA's notify.<service>.
 
@@ -54,6 +58,9 @@ async def notify(
     `actions` becomes `data.actions` — buttons on the notification.
     `sticky=True` keeps the notification visible after the user taps the
     body or an action — without it the companion app dismisses on tap.
+    `importance` (`high`/`max`) + `channel` escalate to a heads-up alert;
+    `color` tints it. `persistent=True` makes it non-dismissable (Android,
+    requires a `tag`) — clear it programmatically via `clear_task_notification`.
     """
     s = get_settings()
     if not s.home_assistant_url or not s.home_assistant_token:
@@ -72,6 +79,17 @@ async def notify(
     if actions:
         data["actions"] = actions
     if sticky:
+        data["sticky"] = "true"
+    if importance:
+        data["importance"] = importance
+    if channel:
+        data["channel"] = channel
+    if color:
+        data["color"] = color
+    if persistent:
+        # Undismissable — must be paired with a tag so the app can key it, and
+        # sticky so an action tap doesn't clear it out from under us.
+        data["persistent"] = "true"
         data["sticky"] = "true"
     payload: dict[str, Any] = {"title": title, "message": message}
     if data:
@@ -112,20 +130,20 @@ def _task_actions() -> list[dict[str, str]]:
     ]
 
 
-async def notify_task_scheduled(
-    task,
-    *,
-    start: datetime,
-    end: datetime,
-    is_fresh: bool,
-) -> None:
-    """Task got a slot. `is_fresh=False` means it had a slot before and was moved."""
-    kind = "Scheduled" if is_fresh else "Rescheduled"
-    parts = [_fmt_range(start, end)]
-    if task.estimation:
-        parts.append(f"{task.estimation}min")
+def _warning_actions() -> list[dict[str, str]]:
+    return [
+        {"action": ACTION_CLOSE_TASK, "title": "Done"},
+        {"action": ACTION_DISMISS_TASK, "title": "Dismiss"},
+    ]
+
+
+async def notify_task_created(task, *, start: datetime, end: datetime) -> None:
+    """A new task was extracted and given a calendar slot."""
+    parts = [f"Scheduled {_fmt_range(start, end)}"]
+    if task.due_date:
+        parts.append(f"due {_fmt_when(to_user_tz(task.due_date))}")
     await notify(
-        title=f"{kind}: {_short_title(task)}",
+        title=f"Task created: {_short_title(task)}",
         message=" · ".join(parts),
         url=task_url(task.id),
         tag=task_tag(task.id),
@@ -135,40 +153,24 @@ async def notify_task_scheduled(
 
 
 async def notify_no_slot(task) -> None:
-    """No slot before the deadline after normal and extended windows fail."""
+    """No slot before the deadline after normal and extended windows fail.
+
+    Escalated and undismissable: the user must resolve it (Done/Dismiss) or it
+    clears itself once the task lands a slot (see `clear_task_notification`).
+    """
     if task.due_date is None:
         return
     due = to_user_tz(task.due_date)
     await notify(
-        title="Could not schedule",
-        message=f"{_short_title(task)} · due {_fmt_when(due)}",
+        title=f"⚠️ Could not schedule: {_short_title(task)}",
+        message=f"No slot before due {_fmt_when(due)}",
         url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=_task_actions(),
-        sticky=True,
-    )
-
-
-async def notify_batch_rescheduled(items: list[tuple[Any, datetime, datetime]]) -> None:
-    """Single summary for many tasks moved at once (e.g. commute replan).
-
-    Uses a fixed `batch-reschedule` tag so consecutive batches replace
-    each other rather than piling up. Per-task notifications are still
-    available via `notify_task_scheduled` for callers that prefer them.
-    """
-    if not items:
-        return
-    lines = []
-    for task, start, _end in items[:5]:
-        lines.append(f"• {_short_title(task)} → {_fmt_when(start)}")
-    if len(items) > 5:
-        lines.append(f"+ {len(items) - 5} more")
-    await notify(
-        title=f"Rescheduled {len(items)} tasks",
-        message="\n".join(lines),
-        url=get_settings().task_default_url,
-        tag="batch-reschedule",
-        sticky=True,
+        actions=_warning_actions(),
+        importance="high",
+        channel="Scheduling warnings",
+        color="#f59e0b",
+        persistent=True,
     )
 
 
@@ -179,29 +181,6 @@ async def clear_task_notification(task_id: UUID | str) -> None:
         title="",
         message="clear_notification",
         tag=task_tag(task_id),
-    )
-
-
-async def notify_agent_task_updated(task, *, changes: dict) -> None:
-    fields = ", ".join(sorted(changes.keys())) or "task"
-    await notify(
-        title=f"Agent updated: {_short_title(task)}",
-        message=f"Changed: {fields}",
-        url=task_url(task.id),
-        tag=task_tag(task.id),
-        actions=_task_actions(),
-        sticky=True,
-    )
-
-
-async def notify_agent_task_closed(task) -> None:
-    await notify(
-        title=f"Agent closed: {_short_title(task)}",
-        message="Marked complete by follow-up",
-        url=task_url(task.id),
-        tag=task_tag(task.id),
-        actions=_task_actions(),
-        sticky=True,
     )
 
 

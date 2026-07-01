@@ -80,10 +80,13 @@ async def _calendar_discover() -> None:
             with SessionLocal() as session:
                 summary = await discover_updated_events(session, calendar_ids=ids)
             log.info(
-                "calendar-discover done · checked=%d updated=%d overlapping=%d",
+                "calendar-discover done · checked=%d updated=%d overlapping=%d"
+                " synced=%d deleted=%d",
                 summary["checked"],
                 summary["updated"],
                 summary["overlapping"],
+                summary["scheduled_updates"],
+                summary["deleted"],
             )
         except asyncio.CancelledError:
             log.info("calendar-discover loop cancelled")

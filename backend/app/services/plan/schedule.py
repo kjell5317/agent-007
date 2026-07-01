@@ -177,9 +177,18 @@ async def _schedule_task_locked(
     )
 
     if notify:
-        from app.services.notify import notify_task_scheduled
+        if is_fresh:
+            # First slot for this task — announce it. Shares the task tag, so
+            # it also replaces any lingering "could not schedule" warning.
+            from app.services.notify import notify_task_created
 
-        await notify_task_scheduled(task, start=start, end=end, is_fresh=is_fresh)
+            await notify_task_created(task, start=start, end=end)
+        else:
+            # A silent reschedule of an already-mirrored task. Still clear a
+            # possible warning so a recovered task doesn't keep nagging.
+            from app.services.notify import clear_task_notification
+
+            await clear_task_notification(task.id)
     return start, end
 
 
