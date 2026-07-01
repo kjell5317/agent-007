@@ -9,13 +9,17 @@ import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
 import { api } from "@/lib/api";
+import { clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
 import { useThemePreference } from "@/lib/theme";
 
 export function App() {
   const { tasks, inputs, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
   const [tab, setTab] = useState("tasks");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const runs = useRuns(tab === "runs");
+  const setRunsScope = runs.setScope;
   // Runs awaiting my action (ready to start, or a review ready to post).
   const runsActionable = useMemo(
     () => runs.tasks.filter((t) => t.canStart || t.canApprove).length,
@@ -77,6 +81,35 @@ export function App() {
     loadUnread();
   }, [loadUnread]);
 
+  const applyLocation = useCallback(() => {
+    const link = parseDeepLink();
+    if (!link) {
+      setSelectedTaskId(null);
+      setSelectedRunId(null);
+      return;
+    }
+    if (link.kind === "task") {
+      setSelectedTaskId(link.id);
+      setSelectedRunId(null);
+      setTab("tasks");
+      return;
+    }
+    setSelectedRunId(link.id);
+    setSelectedTaskId(null);
+    setTab("runs");
+    setRunsScope("all");
+  }, [setRunsScope]);
+
+  useEffect(() => {
+    applyLocation();
+    window.addEventListener("hashchange", applyLocation);
+    window.addEventListener("popstate", applyLocation);
+    return () => {
+      window.removeEventListener("hashchange", applyLocation);
+      window.removeEventListener("popstate", applyLocation);
+    };
+  }, [applyLocation]);
+
   useEffect(() => {
     loadUnread();
   }, [tasks, inputs, loadUnread]);
@@ -119,6 +152,30 @@ export function App() {
     [],
   );
 
+  const openTask = useCallback((id: string) => {
+    pushDeepLink({ kind: "task", id });
+    setSelectedTaskId(id);
+    setSelectedRunId(null);
+    setTab("tasks");
+  }, []);
+
+  const openRun = useCallback(
+    (id: number) => {
+      pushDeepLink({ kind: "run", id });
+      setSelectedRunId(id);
+      setSelectedTaskId(null);
+      setTab("runs");
+      setRunsScope("all");
+    },
+    [setRunsScope],
+  );
+
+  const closeSelectedModal = useCallback(() => {
+    clearDeepLink();
+    setSelectedTaskId(null);
+    setSelectedRunId(null);
+  }, []);
+
   return (
     <div className="min-h-dvh pb-[120px]">
       <Topbar theme={theme} onThemeChange={setTheme} />
@@ -160,6 +217,9 @@ export function App() {
               tasks={tasks}
               onChanged={refresh}
               seenAfter={seenTasksAt}
+              selectedTaskId={selectedTaskId}
+              onTaskOpen={openTask}
+              onSelectedTaskClose={closeSelectedModal}
             />
           </TabsContent>
           <TabsContent value="inbox">
@@ -172,7 +232,12 @@ export function App() {
             />
           </TabsContent>
           <TabsContent value="runs">
-            <RunsPanel {...runs} />
+            <RunsPanel
+              {...runs}
+              selectedRunId={selectedRunId}
+              onRunOpen={openRun}
+              onSelectedRunClose={closeSelectedModal}
+            />
           </TabsContent>
         </Tabs>
       </main>

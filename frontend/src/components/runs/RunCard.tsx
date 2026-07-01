@@ -4,13 +4,13 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { RunDocModal } from "@/components/runs/RunDocModal";
 import { runTitle } from "@/components/runs/runLabels";
 import { kotx, type KotxState, type KotxTask } from "@/lib/kotx";
 
 interface Props {
   task: KotxTask;
   onChanged: () => Promise<void> | void;
+  onOpen: (id: number) => void;
 }
 
 // Fallback colors for unknown upstream status labels.
@@ -82,10 +82,7 @@ function actionHint(task: KotxTask): string | null {
   return null;
 }
 
-export function RunCard({ task, onChanged }: Props) {
-  // review-kind runs surface REVIEW.md; everything else surfaces TASK.md.
-  const doc: "task" | "review" = task.kind === "review" ? "review" : "task";
-  const [open, setOpen] = useState(false);
+export function RunCard({ task, onChanged, onOpen }: Props) {
   const [busy, setBusy] = useState(false);
 
   const title = runTitle(task);
@@ -108,62 +105,57 @@ export function RunCard({ task, onChanged }: Props) {
   const discard = runAction(() => kotx.discard(task.id), "Discarded");
 
   return (
-    <>
-      <Card
-        role="button"
-        tabIndex={0}
-        onClick={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setOpen(true);
-          }
-        }}
-        className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <CardContent className="flex items-center gap-2 p-3">
-          {task.canDiscard ? (
-            <IconAction onClick={discard} disabled={busy} title="Discard task">
-              <Trash2 className="h-5 w-5" />
-            </IconAction>
-          ) : (
-            // Keep the leading column reserved so cards align whether or not
-            // they carry a discard button.
-            <div className="h-8 w-8 shrink-0" />
-          )}
+    <Card
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(task.id)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(task.id);
+        }
+      }}
+      className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <CardContent className="flex items-center gap-2 p-3">
+        {task.canDiscard ? (
+          <IconAction onClick={discard} disabled={busy} title="Discard task">
+            <Trash2 className="h-5 w-5" />
+          </IconAction>
+        ) : (
+          // Keep the leading column reserved so cards align whether or not
+          // they carry a discard button.
+          <div className="h-8 w-8 shrink-0" />
+        )}
 
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="min-w-0 truncate font-medium leading-snug" title={title}>
-              {title}
-            </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <Badge className={statusClass(task)}>{task.status}</Badge>
-              <span className="min-w-0 flex-1 truncate" title={task.repo}>
-                {task.repo}
-              </span>
-            </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <div className="min-w-0 truncate font-medium leading-snug" title={title}>
+            {title}
           </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <Badge className={statusClass(task)}>{task.status}</Badge>
+            <span className="min-w-0 flex-1 truncate" title={task.repo}>
+              {task.repo}
+            </span>
+          </div>
+        </div>
 
-          {hint && (
-            <Button
-              size="sm"
-              className="shrink-0"
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(true);
-              }}
-              disabled={busy}
-            >
-              {hint}
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-      {open && (
-        <RunDocModal task={task} doc={doc} onClose={() => setOpen(false)} onChanged={onChanged} />
-      )}
-    </>
+        {hint && (
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen(task.id);
+            }}
+            disabled={busy}
+          >
+            {hint}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

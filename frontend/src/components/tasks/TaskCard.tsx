@@ -9,7 +9,6 @@ import {
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
@@ -21,14 +20,14 @@ interface Props {
   task: Task;
   onChanged: () => Promise<void> | void;
   seenAfter: string | null;
+  onOpen: (id: string) => void;
 }
 
 const CROSS_OFF_MS = 350;
 
-export function TaskCard({ task, onChanged, seenAfter }: Props) {
+export function TaskCard({ task, onChanged, seenAfter, onOpen }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
   const labels = useLabels();
 
   const displayDate = task.scheduled_date ?? task.due_date;
@@ -75,7 +74,7 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
         className="cursor-pointer"
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          setDetailOpen(true);
+          onOpen(task.id);
         }}
       >
         <div className="flex items-center gap-2">
@@ -164,13 +163,6 @@ export function TaskCard({ task, onChanged, seenAfter }: Props) {
         </div>
       </CardContent>
 
-      {detailOpen && (
-        <TaskDetailModal
-          task={task}
-          onClose={() => setDetailOpen(false)}
-          onChanged={onChanged}
-        />
-      )}
     </Card>
   );
 }
