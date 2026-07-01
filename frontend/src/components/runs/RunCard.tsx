@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { ChevronRight, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RunDocModal } from "@/components/runs/RunDocModal";
 import { runTitle } from "@/components/runs/runLabels";
-import { TERMINAL_STATES, kotx, type KotxState, type KotxTask } from "@/lib/kotx";
-import { cn } from "@/lib/utils";
+import { kotx, type KotxState, type KotxTask } from "@/lib/kotx";
 
 interface Props {
   task: KotxTask;
@@ -73,7 +73,8 @@ function statusClass(task: KotxTask): string {
   return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
 }
 
-// The action the card leads with — matches the primary button in the modal.
+// The label of the modal's primary action — the card leads with the same word,
+// but tapping it opens the modal rather than acting directly.
 function actionHint(task: KotxTask): string | null {
   if (task.canStart) return "Start";
   if (task.canComment) return "Comment";
@@ -89,14 +90,13 @@ export function RunCard({ task, onChanged }: Props) {
 
   const title = runTitle(task);
   const hint = actionHint(task);
-  const terminal = TERMINAL_STATES.has(task.state);
 
-  const discard = async (e: React.MouseEvent) => {
+  const runAction = (fn: () => Promise<unknown>, msg: string) => async (e: React.MouseEvent) => {
     e.stopPropagation();
     setBusy(true);
     try {
-      await kotx.discard(task.id);
-      toast.success("Discarded");
+      await fn();
+      toast.success(msg);
       await onChanged();
     } catch (err) {
       toast.error((err as Error).message);
@@ -104,6 +104,8 @@ export function RunCard({ task, onChanged }: Props) {
       setBusy(false);
     }
   };
+
+  const discard = runAction(() => kotx.discard(task.id), "Discarded");
 
   return (
     <>
@@ -143,15 +145,19 @@ export function RunCard({ task, onChanged }: Props) {
             </div>
           </div>
 
-          <span
-            className={cn(
-              "inline-flex shrink-0 items-center gap-0.5 text-xs font-medium",
-              hint && !terminal ? "text-primary" : "text-muted-foreground",
-            )}
-          >
-            {hint && !terminal && hint}
-            <ChevronRight className="h-4 w-4" />
-          </span>
+          {hint && (
+            <Button
+              size="sm"
+              className="shrink-0"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(true);
+              }}
+              disabled={busy}
+            >
+              {hint}
+            </Button>
+          )}
         </CardContent>
       </Card>
       {open && (
