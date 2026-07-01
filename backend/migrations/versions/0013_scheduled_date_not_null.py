@@ -1,6 +1,6 @@
 """tasks: scheduled_date NOT NULL with a backfill
 
-Revision ID: 0013_task_scheduled_date_not_null
+Revision ID: 0013_scheduled_date_not_null
 Revises: 0012_task_scheduled_date
 Create Date: 2026-07-01
 
@@ -8,13 +8,15 @@ Every task must carry a slot. Tasks that never got one (created before this
 column existed, or that failed to schedule) are backfilled with a slot one day
 in the past so the overdue-reschedule cron immediately re-plans them onto a
 real future slot. New rows default to now() to keep the invariant on insert.
+
+Note: `revision` must fit alembic_version.version_num (varchar(32)).
 """
 from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0013_task_scheduled_date_not_null"
+revision = "0013_scheduled_date_not_null"
 down_revision = "0012_task_scheduled_date"
 branch_labels = None
 depends_on = None
