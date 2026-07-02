@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { isMergeProposal } from "@/components/runs/runLabels";
 import { RunsPanel } from "@/components/runs/RunsPanel";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
@@ -21,7 +22,10 @@ export function App() {
   const runs = useRuns(tab === "runs");
   // Runs awaiting my action (ready to start, or a review ready to post).
   const runsActionable = useMemo(
-    () => runs.tasks.filter((t) => t.canStart || t.canApprove).length,
+    () =>
+      runs.tasks.filter(
+        (t) => t.canStart || t.canApprove || t.canComment || isMergeProposal(t),
+      ).length,
     [runs.tasks],
   );
   const [unreadInbox, setUnreadInbox] = useState(0);
