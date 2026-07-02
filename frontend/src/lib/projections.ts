@@ -25,6 +25,7 @@ export interface ToolRow {
   status: "success" | "failed" | "skipped" | "denied" | "timed_out" | "called";
   purpose: string;
   input?: string;
+  inputFields?: ProjectionField[];
   result?: string;
   reason?: string;
   confidence?: string;
@@ -270,7 +271,7 @@ function evidenceFromRecord(
     source: stringValue(record.source),
     similarity: similarityValue(record.similarity ?? record.sim),
     taskId: stringValue(record.task_id),
-    sender: stringValue(record.sender) ?? stringValue(record.from),
+    sender: senderDisplayName(stringValue(record.sender) ?? stringValue(record.from)),
     receivedAt: stringValue(record.received_at),
     selected: Boolean(record.selected),
   };
@@ -313,18 +314,24 @@ function toolRowsFromBlocks(
       stringValue(result?.reason) ??
       stringValue(input?.reason) ??
       stringValue(result?.result_reason);
+    const display = toolDisplay(name, input ?? asRecord(block.input));
     return [
       {
         id: stringValue(block.id) ?? `${prefix}-tool-${index + 1}`,
         name,
         status: normalizeToolStatus(result),
         purpose: stringValue(result?.purpose) ?? toolPurpose(name, input),
-        input: redactPreview(input ?? block.input),
-        result: stringValue(result?.result_summary) ?? stringValue(result?.preview),
-        reason: resultReason,
+        input: display.hideInput
+          ? undefined
+          : display.input ?? redactPreview(input ?? block.input),
+        inputFields: display.inputFields,
+        result: display.hideResult
+          ? undefined
+          : stringValue(result?.result_summary) ?? stringValue(result?.preview),
+        reason: display.hideReason ? undefined : resultReason,
         confidence: confidenceValue(result?.confidence ?? input?.confidence),
         changedState: booleanValue(result?.changed_state),
-        artifacts: artifactRefs(result),
+        artifacts: display.hideArtifacts ? [] : artifactRefs(result),
       },
     ];
   });
@@ -556,6 +563,65 @@ function toolPurpose(name: string, input: JsonRecord | null | undefined): string
   return titleize(name);
 }
 
+function toolDisplay(
+  name: string,
+  input: JsonRecord | null | undefined,
+): {
+  input?: string;
+  inputFields?: ProjectionField[];
+  hideInput?: boolean;
+  hideReason?: boolean;
+  hideResult?: boolean;
+  hideArtifacts?: boolean;
+} {
+  if (!input) return {};
+
+  if (name === "create_task") {
+    const fields = createTaskFields(input);
+    return {
+      inputFields: fields.length > 0 ? fields : undefined,
+      hideInput: true,
+      hideResult: true,
+      hideArtifacts: true,
+    };
+  }
+
+  if (name === "mark_not_task") {
+    const fields = markNotTaskFields(input);
+    return {
+      inputFields: fields.length > 0 ? fields : undefined,
+      hideInput: true,
+      hideReason: true,
+      hideResult: true,
+      hideArtifacts: true,
+    };
+  }
+
+  return {};
+}
+
+function createTaskFields(input: JsonRecord): ProjectionField[] {
+  const fields: ProjectionField[] = [];
+  addField(fields, "title", stringValue(input.title));
+  addField(fields, "description", stringValue(input.description));
+  addField(fields, "estimation", estimationValue(input.estimation));
+  addField(fields, "due_date", stringValue(input.due_date));
+  addField(fields, "location", stringValue(input.location));
+  addField(fields, "link", stringValue(input.link));
+  addField(fields, "label", stringValue(input.label));
+  return fields;
+}
+
+function markNotTaskFields(input: JsonRecord): ProjectionField[] {
+  const fields: ProjectionField[] = [];
+  const notes = arrayValue(input.notes).map(renderValue).filter(isPresent);
+  if (notes.length > 0) {
+    fields.push({ label: "notes", value: notes.join("\n") });
+  }
+  addField(fields, "text", stringValue(input.text) ?? stringValue(input.input));
+  return fields;
+}
+
 function artifactRefs(result: JsonRecord | undefined): string[] {
   if (!result) return [];
   const refs = arrayValue(result.artifact_refs).map(renderValue).filter(isPresent);
@@ -676,6 +742,19 @@ function renderValue(value: unknown): string | undefined {
     return rendered.length > 0 ? rendered.join(", ") : undefined;
   }
   return truncate(toYaml(value), 240);
+}
+
+function estimationValue(value: unknown): string | undefined {
+  if (typeof value === "number") return `${value} min`;
+  const text = stringValue(value);
+  return text ? `${text}${/min\b/i.test(text) ? "" : " min"}` : undefined;
+}
+
+function senderDisplayName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
+  const name = match ? match[1].trim() || match[2].trim() : value;
+  return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
 }
 
 function stringValue(value: unknown): string | undefined {
