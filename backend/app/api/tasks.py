@@ -42,7 +42,7 @@ from app.services.kotx import (
     create_issue_run,
     has_github_url,
 )
-from app.services.plan import schedule_task
+from app.services.plan import schedule_task, scheduled_interval_for
 from app.services.source_url import source_url_for_raw_input
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
@@ -186,7 +186,7 @@ async def reschedule_task(task_id: uuid.UUID, session: Session = Depends(get_ses
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
 
-    result = await schedule_task(session, row)
+    result = await schedule_task(session, row, block=scheduled_interval_for(row))
     if result is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task could not be scheduled")
 

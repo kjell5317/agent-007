@@ -40,10 +40,7 @@ def _check_access(request: Request) -> None:
     expected = settings.home_assistant_action_secret
     if not expected:
         return
-    provided = (
-        request.headers.get("x-notify-secret")
-        or request.query_params.get("secret")
-    )
+    provided = request.headers.get("x-notify-secret") or request.query_params.get("secret")
     if provided != expected:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid notify secret")
 

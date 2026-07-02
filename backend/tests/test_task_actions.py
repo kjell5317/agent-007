@@ -31,6 +31,7 @@ def _task(*, label: str | None = None, link: str | None = None):
         link=link,
         due_date=now,
         scheduled_date=now,
+        calendar_event_id="evt_existing",
         estimation=30,
         location=None,
         label=label,
@@ -61,8 +62,8 @@ async def test_reschedule_task_calls_scheduler_and_publishes(monkeypatch):
     calls = []
     published = []
 
-    async def fake_schedule_task(_session, row):
-        calls.append((_session, row))
+    async def fake_schedule_task(_session, row, *, block=None):
+        calls.append((_session, row, block))
         row.scheduled_date = datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc)
         return (row.scheduled_date, datetime(2026, 7, 1, 14, 30, tzinfo=timezone.utc))
 
@@ -73,7 +74,11 @@ async def test_reschedule_task_calls_scheduler_and_publishes(monkeypatch):
 
     read = await tasks_api.reschedule_task(task.id, session=session)
 
-    assert calls == [(session, task)]
+    assert len(calls) == 1
+    assert calls[0][:2] == (session, task)
+    # The reschedule button must block the task's current slot so the planner
+    # can't re-pick it — otherwise reschedule is a no-op on a task with free time.
+    assert calls[0][2] is not None
     assert published == [task.id]
     assert read.scheduled_date == datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc)
 
@@ -82,7 +87,7 @@ async def test_reschedule_task_calls_scheduler_and_publishes(monkeypatch):
 async def test_reschedule_task_returns_clear_error_when_unschedulable(monkeypatch):
     task = _task()
 
-    async def fake_schedule_task(_session, _task):
+    async def fake_schedule_task(_session, _task, *, block=None):
         return None
 
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
@@ -148,7 +153,7 @@ async def test_create_issue_run_maps_csee_to_repo_and_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_issue_run_maps_social_ai_to_kotx_alias(monkeypatch):
-    task = _task(label="Social AI", link="https://example.com/context")
+    task = _task(label="SocialAI", link="https://example.com/context")
     calls = []
 
     class FakeResponse:
@@ -253,7 +258,7 @@ async def test_create_github_issue_rejects_unsupported_label(monkeypatch):
         await tasks_api.create_github_issue(task.id, session=FakeSession())
 
     assert exc.value.status_code == 400
-    assert "only supported for CSEE and Social AI" in exc.value.detail
+    assert "only supported for CSEE and SocialAI" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -265,12 +270,12 @@ async def test_create_github_issue_rejects_missing_label(monkeypatch):
         await tasks_api.create_github_issue(task.id, session=FakeSession())
 
     assert exc.value.status_code == 400
-    assert "only supported for CSEE and Social AI" in exc.value.detail
+    assert "only supported for CSEE and SocialAI" in exc.value.detail
 
 
 @pytest.mark.asyncio
 async def test_create_github_issue_stores_url_commits_and_publishes(monkeypatch):
-    task = _task(label="Social AI", link="https://example.com/context")
+    task = _task(label="SocialAI", link="https://example.com/context")
     session = FakeSession()
     published = []
 

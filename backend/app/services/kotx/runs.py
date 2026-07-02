@@ -9,7 +9,7 @@ from app.config import get_settings
 
 KOTX_ISSUE_REPOS: dict[str, str] = {
     "CSEE": "CSEE",
-    "Social AI": "Social Ai",
+    "SocialAI": "Social Ai",
 }
 _TIMEOUT = 30.0
 
@@ -43,7 +43,7 @@ def has_github_url(value: str | None) -> bool:
 def repo_for_label(label: str | None) -> str:
     if label not in KOTX_ISSUE_REPOS:
         raise KotxUnsupportedTaskError(
-            "GitHub issue creation is only supported for CSEE and Social AI tasks"
+            "GitHub issue creation is only supported for CSEE and SocialAI tasks"
         )
     return KOTX_ISSUE_REPOS[label]
 

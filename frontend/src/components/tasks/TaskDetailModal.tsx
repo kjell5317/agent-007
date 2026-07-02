@@ -340,133 +340,137 @@ function TaskSummary({
   return (
     <div className="min-h-0 flex-1 overflow-auto pr-1">
       <div className="space-y-5">
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <PickerAnchor
-              open={activePicker === "label"}
-              panel={
-                <InlinePickerPanel title="Label" onClose={onClosePicker}>
-                  <LabelPicker
-                    value={pickerLabel}
-                    onChange={onPickerLabelChange}
-                    onSave={onSaveLabel}
-                    labels={labels}
-                  />
-                </InlinePickerPanel>
-              }
-            >
-              <button
-                type="button"
-                onClick={() => onEditPicker("label")}
-                disabled={busy}
-                className="rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
-                title={labelMeta?.description ?? task.label ?? "Set label"}
-              >
-                {task.label ? (
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
-                      labelChipClass(labelMeta?.color),
-                    )}
-                  >
-                    {task.label}
-                  </span>
-                ) : (
-                  <Badge variant="muted">No label</Badge>
-                )}
-              </button>
-            </PickerAnchor>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onReschedule}
+            disabled={busy}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Reschedule
+          </Button>
 
-            {task.scheduled_date && (
-              <Badge variant="muted" className="gap-1">
-                <CalendarClock className="h-3 w-3" />
-                Scheduled {fmtDue(task.scheduled_date)}
-              </Badge>
-            )}
-
-            <PickerAnchor
-              open={activePicker === "estimation"}
-              panel={
-                <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
-                  <EstimationPicker
-                    value={pickerEstimation}
-                    onChange={onPickerEstimationChange}
-                    onSave={onSaveEstimation}
-                  />
-                </InlinePickerPanel>
-              }
-            >
-              <button
-                type="button"
-                onClick={() => onEditPicker("estimation")}
-                disabled={busy}
-                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-              >
-                <Timer className="h-3 w-3" />
-                {task.estimation != null ? `${task.estimation} min` : "No estimate"}
-              </button>
-            </PickerAnchor>
-
-            <PickerAnchor
-              open={activePicker === "due_date"}
-              panel={
-                <InlinePickerPanel
-                  title="Due date"
-                  onClose={onClosePicker}
-                  onBack={dateStep === "time" ? () => onDateStepChange("date") : undefined}
-                  footer={
-                    pickerDue ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="w-full"
-                        onClick={onClearDue}
-                        disabled={busy}
-                      >
-                        Clear due date
-                      </Button>
-                    ) : null
-                  }
-                >
-                  <DatePicker
-                    value={pickerDue}
-                    onChange={onPickerDueChange}
-                    onSave={onSaveDue}
-                    step={dateStep}
-                    onStepChange={onDateStepChange}
-                  />
-                </InlinePickerPanel>
-              }
-            >
-              <button
-                type="button"
-                onClick={() => onEditPicker("due_date")}
-                disabled={busy}
-                className="disabled:pointer-events-none disabled:opacity-50"
-              >
-                {task.due_date ? (
-                  <Badge variant={dueOverdue ? "overdue" : dueUrgent ? "urgent" : "open"}>
-                    Due {fmtDue(task.due_date)}
-                  </Badge>
-                ) : (
-                  <Badge variant="muted">No due date</Badge>
-                )}
-              </button>
-            </PickerAnchor>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
+          <PickerAnchor
+            open={activePicker === "label"}
+            panel={
+              <InlinePickerPanel title="Label" onClose={onClosePicker}>
+                <LabelPicker
+                  value={pickerLabel}
+                  onChange={onPickerLabelChange}
+                  onSave={onSaveLabel}
+                  labels={labels}
+                />
+              </InlinePickerPanel>
+            }
+          >
+            <button
               type="button"
-              variant="outline"
-              size="sm"
-              onClick={onReschedule}
+              onClick={() => onEditPicker("label")}
               disabled={busy}
+              className="rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
+              title={labelMeta?.description ?? task.label ?? "Set label"}
             >
-              <RefreshCw className="h-3.5 w-3.5" />
-              Reschedule
-            </Button>
-          </div>
+              {task.label ? (
+                <span
+                  className={cn(
+                    "inline-flex h-8 items-center rounded-full px-3 text-xs font-medium",
+                    labelChipClass(labelMeta?.color),
+                  )}
+                >
+                  {task.label}
+                </span>
+              ) : (
+                <Badge variant="muted" className="h-8 px-3">
+                  No label
+                </Badge>
+              )}
+            </button>
+          </PickerAnchor>
+
+          {task.scheduled_date && (
+            <Badge variant="muted" className="h-8 gap-1 px-3">
+              <CalendarClock className="h-3 w-3" />
+              Scheduled {fmtDue(task.scheduled_date)}
+            </Badge>
+          )}
+
+          <PickerAnchor
+            open={activePicker === "estimation"}
+            panel={
+              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
+                <EstimationPicker
+                  value={pickerEstimation}
+                  onChange={onPickerEstimationChange}
+                  onSave={onSaveEstimation}
+                />
+              </InlinePickerPanel>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => onEditPicker("estimation")}
+              disabled={busy}
+              className="inline-flex h-8 items-center gap-1 rounded-full bg-muted px-3 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <Timer className="h-3 w-3" />
+              {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+            </button>
+          </PickerAnchor>
+
+          <PickerAnchor
+            open={activePicker === "due_date"}
+            panel={
+              <InlinePickerPanel
+                title="Due date"
+                onClose={onClosePicker}
+                onBack={dateStep === "time" ? () => onDateStepChange("date") : undefined}
+                footer={
+                  pickerDue ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      onClick={onClearDue}
+                      disabled={busy}
+                    >
+                      Clear due date
+                    </Button>
+                  ) : null
+                }
+              >
+                <DatePicker
+                  value={pickerDue}
+                  onChange={onPickerDueChange}
+                  onSave={onSaveDue}
+                  step={dateStep}
+                  onStepChange={onDateStepChange}
+                />
+              </InlinePickerPanel>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => onEditPicker("due_date")}
+              disabled={busy}
+              className="disabled:pointer-events-none disabled:opacity-50"
+            >
+              {task.due_date ? (
+                <Badge
+                  variant={dueOverdue ? "overdue" : dueUrgent ? "urgent" : "open"}
+                  className="h-8 px-3"
+                >
+                  Due {fmtDue(task.due_date)}
+                </Badge>
+              ) : (
+                <Badge variant="muted" className="h-8 px-3">
+                  No due date
+                </Badge>
+              )}
+            </button>
+          </PickerAnchor>
         </div>
 
         <div className="space-y-1.5">
@@ -853,7 +857,7 @@ function normalizeOptional(value: string) {
 }
 
 function canCreateGithubIssue(task: Task) {
-  return (task.label === "CSEE" || task.label === "Social AI") && !hasGithubUrl(task.link);
+  return (task.label === "CSEE" || task.label === "SocialAI") && !hasGithubUrl(task.link);
 }
 
 function hasGithubUrl(value: string | null) {
