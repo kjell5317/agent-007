@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { actionHint, runTitle } from "@/components/runs/runLabels";
+import { actionHint, runStatusLabel, runTitle } from "@/components/runs/runLabels";
 import { kotx, type KotxState, type KotxTask } from "@/lib/kotx";
 
 interface Props {
@@ -71,11 +71,11 @@ function fallbackStatusClass(task: KotxTask): string {
 }
 
 function statusClass(task: KotxTask): string {
-  return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
+  return STATUS_CLASS[normalizeStatus(runStatusLabel(task))] ?? fallbackStatusClass(task);
 }
 
 export function RunStatusBadge({ task }: { task: KotxTask }) {
-  return <Badge className={statusClass(task)}>{task.status}</Badge>;
+  return <Badge className={statusClass(task)}>{runStatusLabel(task)}</Badge>;
 }
 
 export function RunCard({ task, onChanged, onOpen, displayMode = "default" }: Props) {
