@@ -47,6 +47,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(fields),
     }),
+  rescheduleTask: (id: string) =>
+    request<Task>(`/tasks/${id}/reschedule`, { method: "POST" }),
+  createGithubIssue: (id: string) =>
+    request<Task>(`/tasks/${id}/github_issue`, { method: "POST" }),
   closeTask: (id: string) =>
     request<void>(`/tasks/${id}/close`, { method: "POST" }),
   markNotTask: (id: string) =>
