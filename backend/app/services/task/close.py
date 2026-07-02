@@ -29,8 +29,8 @@ async def close_task(session: Session, task_id: uuid.UUID) -> None:
     # still have the task's estimation in hand. Idempotent per task and
     # best-effort — never let points bookkeeping block closing a task.
     try:
-        award_for_task(session, task)
-        publish_points(session)
+        if award_for_task(session, task):
+            publish_points(session)
     except Exception:  # noqa: BLE001
         log.exception("points award failed · task=%s", task_id)
     latest = raw_inputs_store.latest_for_task(session, task_id)

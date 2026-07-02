@@ -38,19 +38,20 @@ def adjust_points(session: Session, amount: float) -> float:
     return points_store.total(session)
 
 
-def award_for_task(session: Session, task) -> None:
+def award_for_task(session: Session, task) -> bool:
     """Award `points_task_done_factor × estimated minutes` for a completed task.
 
-    No-op when the factor is 0 (disabled), the task has no estimation, or the
-    task was already awarded (so a reopen→close cycle doesn't double-count). A
-    negative factor is allowed and subtracts points on completion.
+    Returns whether a ledger entry was inserted. No-op when the factor is 0
+    (disabled), the task has no estimation, or the task was already awarded
+    (so a reopen→close cycle doesn't double-count). A negative factor is
+    allowed and subtracts points on completion.
     """
     factor = get_settings().points_task_done_factor
     minutes = task.estimation or 0
     if factor == 0 or minutes <= 0:
-        return
+        return False
     if points_store.has_task_entry(session, task.id):
-        return
+        return False
     points_store.add_entry(
         session,
         source="task",
@@ -61,6 +62,7 @@ def award_for_task(session: Session, task) -> None:
         amount=factor * minutes,
     )
     log.info("points · awarded task=%s minutes=%s factor=%s", task.id, minutes, factor)
+    return True
 
 
 def subtract_scheduled_overdue_penalty(session: Session, task, *, scheduled_date: datetime) -> bool:
