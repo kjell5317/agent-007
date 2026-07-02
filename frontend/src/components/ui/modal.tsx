@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 interface Props {
   open: boolean;
   onClose: () => void;
-  title: string;
+  title: ReactNode;
+  titleLabel?: string;
   children: ReactNode;
   className?: string;
   titleClassName?: string;
@@ -18,11 +19,14 @@ export function Modal({
   open,
   onClose,
   title,
+  titleLabel,
   children,
   className,
   titleClassName,
   leftAction,
 }: Props) {
+  const accessibleTitle = typeof title === "string" ? title : titleLabel;
+
   useEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
@@ -43,7 +47,7 @@ export function Modal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={title}
+      aria-label={accessibleTitle}
       onClick={onClose}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
     >
@@ -58,12 +62,16 @@ export function Modal({
           <div className="justify-self-start">{leftAction}</div>
           <div
             className={cn(
-              "min-w-0 truncate text-center text-sm font-semibold",
+              "min-w-0 text-center text-sm font-semibold",
               titleClassName,
             )}
-            title={title}
+            title={accessibleTitle}
           >
-            {title}
+            {typeof title === "string" ? (
+              <span className="block truncate">{title}</span>
+            ) : (
+              title
+            )}
           </div>
           <button
             type="button"
