@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { runTitle } from "@/components/runs/runLabels";
+import { actionHint, runTitle } from "@/components/runs/runLabels";
 import { kotx, type KotxState, type KotxTask } from "@/lib/kotx";
 
 interface Props {
@@ -76,15 +76,6 @@ function statusClass(task: KotxTask): string {
 
 export function RunStatusBadge({ task }: { task: KotxTask }) {
   return <Badge className={statusClass(task)}>{task.status}</Badge>;
-}
-
-// The label of the modal's primary action — the card leads with the same word,
-// but tapping it opens the modal rather than acting directly.
-function actionHint(task: KotxTask): string | null {
-  if (task.canStart) return "Start";
-  if (task.canComment) return "Comment";
-  if (task.canApprove) return task.proposes === "pr" ? "Open PR" : "Approve";
-  return null;
 }
 
 export function RunCard({ task, onChanged, onOpen, displayMode = "default" }: Props) {

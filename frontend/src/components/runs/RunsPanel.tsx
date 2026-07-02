@@ -2,12 +2,13 @@ import { Box, ChevronDown, ChevronRight, Circle, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { IconAction, RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
-import { runTitle } from "@/components/runs/runLabels";
+import { actionHint, runTitle } from "@/components/runs/runLabels";
 import { cn } from "@/lib/utils";
 import type { RunsData } from "@/hooks/useRuns";
 import { kotx, type KotxContainer, type KotxTask } from "@/lib/kotx";
@@ -366,6 +367,7 @@ function RunGroupMember({
 }) {
   const [busy, setBusy] = useState(false);
   const title = runTitle(task);
+  const hint = actionHint(task);
 
   const discard = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -382,7 +384,7 @@ function RunGroupMember({
   };
 
   return (
-    <div className="flex items-center gap-1 rounded-md border bg-muted/30 pr-2">
+    <div className="flex min-w-0 items-center gap-1 rounded-md border bg-muted/30 pr-2">
       {showDiscard &&
         (task.canDiscard ? (
           <IconAction onClick={discard} disabled={busy} title="Discard task">
@@ -402,8 +404,21 @@ function RunGroupMember({
         <span className="min-w-0 flex-1 truncate text-sm" title={title}>
           {title}
         </span>
-        <RunStatusBadge task={task} />
+        <span className="shrink-0">
+          <RunStatusBadge task={task} />
+        </span>
       </button>
+      {hint && (
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 shrink-0 px-2 text-xs"
+          onClick={() => onOpen(task.id)}
+          disabled={busy}
+        >
+          {hint}
+        </Button>
+      )}
     </div>
   );
 }
