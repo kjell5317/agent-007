@@ -22,6 +22,8 @@ const MONTHS = [
 
 const DEFAULT_HOUR = 9;
 const DEFAULT_MINUTE = 0;
+const EOD_HOUR = 23;
+const EOD_MINUTE = 45;
 
 // Shared container height so step 1 and step 2 always render at the same
 // modal size. Sized to fit the taller step (time display + 224-px clock dial
@@ -232,7 +234,7 @@ function TimeContent({
     onChange(`${pad(hour)}:${pad(m)}`);
   };
 
-  const isEOD = hour === 23 && minute === 59;
+  const isEOD = hour === EOD_HOUR && minute === EOD_MINUTE;
 
   return (
     <div className="flex w-full flex-col items-center gap-3">
@@ -267,7 +269,7 @@ function TimeContent({
 
         <button
           type="button"
-          onClick={() => onChange("23:59")}
+          onClick={() => onChange(`${pad(EOD_HOUR)}:${pad(EOD_MINUTE)}`)}
           className={cn(
             "rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors",
             isEOD

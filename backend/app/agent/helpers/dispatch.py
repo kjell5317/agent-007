@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agent.helpers.text import parse_iso
+from app.agent.helpers.text import normalize_agent_due_date
 from app.db.models.task import Task
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.reopen import reopen_task as reopen_task_svc
@@ -40,7 +40,7 @@ async def apply_task_action(
             if v is not None and k not in _NON_PATCH_FIELDS
         }
         if "due_date" in patch:
-            patch["due_date"] = parse_iso(str(patch["due_date"]))
+            patch["due_date"] = normalize_agent_due_date(patch["due_date"])
 
         outcome = "updated"
         # Reopen first so the calendar event exists before any field edits sync

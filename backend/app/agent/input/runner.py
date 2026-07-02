@@ -29,7 +29,12 @@ from app.agent.helpers.llm import (
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import run_create_event, run_find_calendar_events
 from app.agent.tools.notes_lookup import run_search_notes
-from app.agent.helpers.text import append_meta_lines, now_iso, parse_iso, task_field_lines
+from app.agent.helpers.text import (
+    append_meta_lines,
+    normalize_agent_due_date,
+    now_iso,
+    task_field_lines,
+)
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
 from app.services.input.embedding import embed
@@ -165,8 +170,7 @@ async def run_new_input_agent(
 
         if tu.name == "create_task":
             payload = dict(tu_input)
-            if "due_date" in payload:
-                payload["due_date"] = parse_iso(str(payload["due_date"]))
+            due_date = normalize_agent_due_date(payload.get("due_date"))
             # The schema marks `label` required, but the LLM sometimes skips
             # it — warn and leave NULL so the user can assign one later.
             if not payload.get("label"):
@@ -180,7 +184,7 @@ async def run_new_input_agent(
                     title=str(payload["title"]),
                     description=str(payload.get("description")) if payload.get("description") else None,
                     estimation=payload.get("estimation") if payload.get("estimation") else None,
-                    due_date=parse_iso(str(payload.get("due_date"))) if payload.get("due_date") else None,
+                    due_date=due_date,
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
                     label=str(payload.get("label")) if payload.get("label") else None,
