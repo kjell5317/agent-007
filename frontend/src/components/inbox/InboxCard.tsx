@@ -167,8 +167,8 @@ export function InputBody({ data }: { data: RawInput }) {
   return (
     <>
       {data.content && (
-        <InputBodySection title="Source content" defaultOpen>
-          <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
+        <InputBodySection title="Source content" collapsible={false}>
+          <pre className="max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
             {data.content}
           </pre>
         </InputBodySection>
@@ -180,25 +180,37 @@ export function InputBody({ data }: { data: RawInput }) {
 
 function InputBodySection({
   title,
+  collapsible = true,
   defaultOpen = false,
   children,
 }: {
   title: string;
+  collapsible?: boolean;
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const content = <div className="mt-1 space-y-1">{children}</div>;
+
+  if (!collapsible) {
+    return (
+      <section className="rounded-md border bg-background p-2">
+        <div className="text-xs font-medium text-muted-foreground">{title}</div>
+        {content}
+      </section>
+    );
+  }
 
   return (
     <details
       open={open}
       onToggle={(e) => setOpen(e.currentTarget.open)}
-      className="space-y-1"
+      className="rounded-md border bg-background p-2"
     >
       <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
         {title}
       </summary>
-      <div className="space-y-1">{children}</div>
+      {content}
     </details>
   );
 }
@@ -223,10 +235,9 @@ function TraceView({ trace }: { trace: ReturnType<typeof projectAgentTrace> }) {
   return (
     <div className="space-y-2">
       {trace.reason && (
-        <div className="rounded-md border bg-background p-2">
-          <div className="mb-1 text-xs font-medium text-muted-foreground">Reason</div>
+        <InputBodySection title="Reason">
           <Markdown content={trace.reason} className="text-xs" />
-        </div>
+        </InputBodySection>
       )}
       {trace.evidence.length > 0 && (
         <InputBodySection title="Precedents">
