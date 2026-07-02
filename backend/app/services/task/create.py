@@ -25,12 +25,17 @@ async def create_manual_task(session: Session, user_fields: dict[str, Any]) -> R
     """Anchor a manual raw_input and enqueue the task-creation worker.
 
     Returns the persisted RawInput so the router can hand its id back to
-    the client. Raises `ValueError` when the payload has neither title
-    nor description (nothing for the agent to chew on).
+    the client. Raises `ValueError` when the payload has no content, title,
+    or description (nothing for the agent to chew on).
     """
-    content = (user_fields.get("description") or user_fields.get("title") or "").strip()
+    content = (
+        user_fields.get("content")
+        or user_fields.get("description")
+        or user_fields.get("title")
+        or ""
+    ).strip()
     if not content:
-        raise ValueError("Provide a title or description")
+        raise ValueError("Provide task content, a title, or a description")
 
     raw = RawInput(
         source="manual",
@@ -43,5 +48,6 @@ async def create_manual_task(session: Session, user_fields: dict[str, Any]) -> R
     session.refresh(raw)
 
     publish_input(session, raw.id)
-    await enqueue(raw.id, user_fields)
+    task_fields = {k: v for k, v in user_fields.items() if k != "content"}
+    await enqueue(raw.id, task_fields)
     return raw

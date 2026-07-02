@@ -106,7 +106,10 @@ _UPDATE_TASK_PROPS: dict = {
         "type": "string",
         "description": (
             "ISO 8601 timestamp. Prefer 15-minute choices (:00, :15, :30, :45); "
-            "EOD/end of day means 23:45."
+            "EOD/end of day means 23:45. When setting status=open to reopen a "
+            "closed task whose current due_date or scheduled_date is in the "
+            "past, include a new future due_date unless the input explicitly "
+            "says the date should not change."
         ),
     },
     "status": {
@@ -116,7 +119,10 @@ _UPDATE_TASK_PROPS: dict = {
             "Lifecycle change for the task. `closed` = the task is done or no "
             "longer needed; `open` = reopen a task that was previously closed. "
             "Omit to leave the current state unchanged. Can be combined with "
-            "field edits in the same call."
+            "field edits in the same call. When reopening a closed task whose "
+            "current due_date or scheduled_date is in the past, include a new "
+            "future due_date unless the input explicitly says the date should "
+            "not change."
         ),
     },
     "location": {"type": "string"},
@@ -268,7 +274,10 @@ NEW_INPUT_TOOLS = [
             "The current input refers to one of the CANDIDATE TASKS and changes "
             "it. Patch the fields that change and/or set `status` to drive the "
             "lifecycle: `closed` when it's done or cancelled, `open` to reopen a "
-            "CLOSED candidate the input revives. Include only what changes."
+            "CLOSED candidate the input revives. If reopening a closed task whose "
+            "current due_date or scheduled_date is in the past, include a new "
+            "future due_date unless the input explicitly says the date should not "
+            "change. Include only what changes."
         ),
         "parameters": {
             "type": "object",
@@ -314,7 +323,9 @@ THREAD_FOLLOWUP_TOOLS = [
             "The follow-up changes the existing task. Patch the fields that "
             "change and/or set `status`: `closed` when the follow-up indicates "
             "completion or cancellation, `open` to reopen a task that was closed. "
-            "Include only what changes."
+            "If reopening a closed task whose current due_date or scheduled_date "
+            "is in the past, include a new future due_date unless the follow-up "
+            "explicitly says the date should not change. Include only what changes."
         ),
         "parameters": {
             "type": "object",

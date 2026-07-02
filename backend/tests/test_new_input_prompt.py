@@ -8,6 +8,7 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
 from app.agent.input import runner  # noqa: E402
+from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PROMPT  # noqa: E402
 from app.agent.tools.schemas import NEW_INPUT_TOOLS  # noqa: E402
 from app.db.clients.raw_inputs import SimilarInput  # noqa: E402
 
@@ -152,3 +153,23 @@ def test_create_task_schema_requires_displayable_title():
     assert "title" in create_task["parameters"]["required"]
     assert title["minLength"] == 3
     assert "No subject" in title["description"]
+
+
+def test_reopen_prompt_guidance_requires_future_due_date_for_past_task():
+    for prompt in (NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PROMPT):
+        assert (
+            "When reopening a closed task whose current `due_date` or `scheduled_date`"
+            in prompt
+        )
+        assert "include a new future `due_date`" in prompt
+
+
+def test_update_task_schema_mentions_reopen_with_past_due_date_rule():
+    update_task = next(tool for tool in NEW_INPUT_TOOLS if tool["name"] == "update_task")
+    props = update_task["parameters"]["properties"]
+
+    assert (
+        "current due_date or scheduled_date is in the past"
+        in props["status"]["description"]
+    )
+    assert "new future due_date" in props["due_date"]["description"]

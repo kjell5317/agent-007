@@ -1,14 +1,10 @@
 """Open a task from an existing raw_input.
 
-Used by `POST /tasks/open/{raw_input_id}` when the user wants to
-override the agent's earlier decision (`not_task` / `duplicate`) and
-turn that raw_input into a real task.
-
-The work itself — agent field extraction, task insert, calendar mirror —
-runs on the shared task-creation queue so it doesn't block the API
-thread and so we keep one place where the LLM is called. The router
-returns immediately with the raw_input id; clients poll
-`GET /inputs/{raw_input_id}` until the row gains a `task_id`.
+Used by `POST /tasks/open/{raw_input_id}` when the user wants to act on an
+earlier agent decision (`not_task` / `duplicate`). If the raw input or its
+context identifies an existing task, run the follow-up path so the input can
+update, close, reopen, or no-op that task. Otherwise enqueue fresh task
+creation through the shared manual task queue.
 """
 
 from __future__ import annotations
@@ -18,11 +14,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent.thread.runner import run_thread_followup
 from app.db.clients import (
     raw_inputs as raw_inputs_store,
     tasks as tasks_store,
 )
-from app.events import publish_task_removed
+from app.events import publish_input, publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.task.queue import enqueue
 
@@ -32,13 +29,20 @@ async def open_task_from_input(
     raw_input_id: uuid.UUID,
     user_fields: dict[str, Any],
     context_input_ids: list[uuid.UUID] | None = None,
+    target_task_id: uuid.UUID | None = None,
 ) -> None:
-    """Enqueue task creation for an already-processed raw_input.
+    """Open an already-processed raw_input as a task action.
 
     `context_input_ids` are sibling inputs (same thread / follow-up group)
     whose content should also feed the agent's extraction, so a task created
     from a grouped thread captures the whole conversation. The anchor
     (`raw_input_id`) is the row that links to the new task.
+
+    When the anchor, an explicit target, or a context input already identifies
+    a task, route the raw input through the thread-follow-up agent instead of
+    creating a fresh task. That lets the agent update fields, close the task,
+    reopen it, or leave it unchanged using the same action dispatcher as
+    automatic thread follow-ups.
 
     Raises:
       * `LookupError` — no raw_input with that id.
@@ -49,15 +53,21 @@ async def open_task_from_input(
     raw = raw_inputs_store.get(session, raw_input_id)
     if raw is None:
         raise LookupError("Raw input not found")
+
+    context_input_ids = context_input_ids or []
+    target = _find_followup_target(session, raw, context_input_ids, target_task_id)
+    if target is not None:
+        trace = await run_thread_followup(session, raw, target)
+        publish_input(session, raw.id)
+        affected_task_id = trace.get("task_id") or trace.get("existing_task_id") or target.id
+        publish_task(session, uuid.UUID(str(affected_task_id)))
+        return
+
     if raw.task_id is not None:
-        # `duplicate` (status='duplicate'), `no_change` follow-ups
-        # (status='open', trace.outcome='no_change'), and lingering
-        # `not_task` rows from a pre-fix dismiss (status='not_task' with
-        # task_id still set) all hold a backlink the user can override
-        # ("this is actually its own task"). Break the backlink and let
-        # the worker attach a fresh task. The prior agent decision is
-        # preserved under `agent_trace.manual_override` by the queue
-        # worker.
+        # If the backlink points at a task that no longer exists, keep the
+        # historical override behavior: detach this raw input and let the
+        # worker attach a fresh task. The prior agent decision is preserved
+        # under `agent_trace.manual_override` by the queue worker.
         outcome = (raw.agent_trace or {}).get("outcome")
         if raw.status in ("duplicate", "not_task") or outcome == "no_change":
             old_task_id = raw.task_id
@@ -80,3 +90,41 @@ async def open_task_from_input(
         else:
             raise ValueError("Raw input is already linked to a task")
     await enqueue(raw_input_id, user_fields, context_input_ids)
+
+
+def _find_followup_target(
+    session: Session,
+    raw,
+    context_input_ids: list[uuid.UUID],
+    target_task_id: uuid.UUID | None,
+):
+    if target_task_id is not None:
+        task = tasks_store.get(session, target_task_id)
+        if task is None:
+            raise LookupError("Target task not found")
+        return task
+
+    if raw.task_id is not None and _can_treat_linked_raw_as_followup(raw):
+        return tasks_store.get(session, raw.task_id)
+
+    linked_context = []
+    seen: set[uuid.UUID] = {raw.id}
+    for cid in context_input_ids:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        row = raw_inputs_store.get(session, cid)
+        if row is not None and row.task_id is not None:
+            linked_context.append(row)
+
+    linked_context.sort(key=lambda row: row.received_at, reverse=True)
+    for row in linked_context:
+        task = tasks_store.get(session, row.task_id)
+        if task is not None:
+            return task
+    return None
+
+
+def _can_treat_linked_raw_as_followup(raw) -> bool:
+    outcome = (raw.agent_trace or {}).get("outcome")
+    return raw.status in ("duplicate", "not_task") or outcome == "no_change"

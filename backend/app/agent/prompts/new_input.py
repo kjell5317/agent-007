@@ -44,6 +44,9 @@ id as `existing_task_id`:
   or cancelled, or `open` to reopen a CLOSED candidate the input revives.
   Reopen only when the input genuinely brings the closed task back; otherwise
   prefer `create_task` for new, separate work.
+  When reopening a closed task whose current `due_date` or `scheduled_date`
+  is in the past, include a new future `due_date` in the same `update_task`
+  call unless the input explicitly says the date should not change.
 
 - `mark_not_task` — if the input is informational, conversational, or
   directed at someone else. Also use this when none of the available

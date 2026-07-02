@@ -31,9 +31,11 @@ class TaskUpdate(BaseModel):
 class TaskPromote(BaseModel):
     """Body for POST /tasks/open/{raw_input_id} and POST /tasks. Every field
     optional — anything missing from title/estimation/due_date triggers an
-    agent extraction over the raw input. User-provided values always
-    override agent guesses."""
+    agent extraction over the raw input. `content` is source text for manual
+    composer submissions, not a task field override. User-provided structured
+    values always override agent guesses."""
 
+    content: str | None = None
     title: str | None = None
     description: str | None = None
     link: str | None = None
@@ -47,9 +49,12 @@ class TaskOpenRequest(TaskPromote):
     """Body for POST /tasks/open/{raw_input_id}. Adds `context_input_ids` —
     sibling inputs from the same thread/follow-up group whose content should
     also feed the agent's extraction, so a task created from a grouped thread
-    captures the whole conversation. The path's raw_input is the anchor."""
+    captures the whole conversation. `target_task_id` lets callers name an
+    existing task for follow-up handling; it is available for API clients but
+    not yet wired into the frontend. The path's raw_input is the anchor."""
 
     context_input_ids: list[uuid.UUID] = Field(default_factory=list)
+    target_task_id: uuid.UUID | None = None
 
 
 class TaskCreationAccepted(BaseModel):
