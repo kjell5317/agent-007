@@ -65,6 +65,13 @@ export interface KotxPr {
   body: string;
 }
 
+export interface KotxMergeContext {
+  prNumber: number | null;
+  approvedBy: string | null;
+  reviewUrl: string | null;
+  commentMarkdown: string | null;
+}
+
 export interface KotxContainer {
   id: string;
   name: string;
@@ -236,6 +243,8 @@ export const kotx = {
   getReview: (id: number) => markdownRequest(`/tasks/${id}/review`),
   putReview: (id: number, content: string) => putMarkdown(`/tasks/${id}/review`, content),
   getMerge: (id: number) => markdownRequest(`/tasks/${id}/merge`),
+  getMergeContext: (id: number) =>
+    jsonRequestOrNull<KotxMergeContext>(`/tasks/${id}/merge/context`),
   getPrompt: (id: number) => markdownRequest(`/tasks/${id}/prompt`),
   // The proposed PR title + body for an implement task. null until proposed.
   getPr: (id: number) => jsonRequestOrNull<KotxPr>(`/tasks/${id}/pr`),
