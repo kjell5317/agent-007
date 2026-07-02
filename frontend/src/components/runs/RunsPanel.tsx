@@ -1,9 +1,10 @@
-import { Box, ChevronDown, ChevronRight } from "lucide-react";
+import { Box, ChevronDown, ChevronRight, Circle, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { RunCard, RunStatusBadge } from "@/components/runs/RunCard";
+import { IconAction, RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
 import { runTitle } from "@/components/runs/runLabels";
 import { cn } from "@/lib/utils";
@@ -207,7 +208,13 @@ function RunList({
     return (
       <div className="space-y-2">
         {groups.map((group) => (
-          <RunGroupCard key={group.key} group={group} onRunOpen={onRunOpen} />
+          <RunGroupCard
+            key={group.key}
+            group={group}
+            scope={scope}
+            refresh={refresh}
+            onRunOpen={onRunOpen}
+          />
         ))}
       </div>
     );
@@ -224,7 +231,13 @@ function RunList({
             onOpen={onRunOpen}
           />
         ) : (
-          <RunGroupCard key={group.key} group={group} onRunOpen={onRunOpen} />
+          <RunGroupCard
+            key={group.key}
+            group={group}
+            scope={scope}
+            refresh={refresh}
+            onRunOpen={onRunOpen}
+          />
         ),
       )}
     </div>
@@ -236,9 +249,13 @@ function RunList({
 // the count and the expander and just opens the run on click.
 function RunGroupCard({
   group,
+  scope,
+  refresh,
   onRunOpen,
 }: {
   group: RunGroup;
+  scope: "active" | "all";
+  refresh: () => Promise<void> | void;
   onRunOpen: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -251,7 +268,7 @@ function RunGroupCard({
   return (
     <Card>
       <CardContent
-        className="cursor-pointer"
+        className={cn("cursor-pointer", scope === "active" ? "pl-3" : "pl-4")}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           if (hasMultipleRuns) {
@@ -262,6 +279,11 @@ function RunGroupCard({
         }}
       >
         <div className="flex items-center gap-2">
+          {scope === "active" && (
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground">
+              <Circle className="h-5 w-5" />
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <div className="min-w-0 truncate font-medium leading-snug" title={title}>
               {title}
@@ -292,7 +314,13 @@ function RunGroupCard({
               onClick={(e) => e.stopPropagation()}
             >
               {group.tasks.map((task) => (
-                <RunGroupMember key={task.id} task={task} onOpen={onRunOpen} />
+                <RunGroupMember
+                  key={task.id}
+                  task={task}
+                  onOpen={onRunOpen}
+                  onChanged={refresh}
+                  showDiscard={scope === "active"}
+                />
               ))}
             </div>
           </Collapsible>
@@ -305,22 +333,55 @@ function RunGroupCard({
 function RunGroupMember({
   task,
   onOpen,
+  onChanged,
+  showDiscard,
 }: {
   task: KotxTask;
   onOpen: (id: number) => void;
+  onChanged: () => Promise<void> | void;
+  showDiscard: boolean;
 }) {
+  const [busy, setBusy] = useState(false);
   const title = runTitle(task);
+
+  const discard = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true);
+    try {
+      await kotx.discard(task.id);
+      toast.success("Discarded");
+      await onChanged();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(task.id)}
-      className="flex w-full items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-left"
-    >
-      <span className="min-w-0 flex-1 truncate text-sm" title={title}>
-        {title}
-      </span>
-      <RunStatusBadge task={task} />
-    </button>
+    <div className="flex items-center gap-1 rounded-md border bg-muted/30 pr-2">
+      {showDiscard &&
+        (task.canDiscard ? (
+          <IconAction onClick={discard} disabled={busy} title="Discard task">
+            <Trash2 className="h-4 w-4" />
+          </IconAction>
+        ) : (
+          <div className="h-8 w-8 shrink-0" />
+        ))}
+      <button
+        type="button"
+        onClick={() => onOpen(task.id)}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left",
+          !showDiscard && "pl-2",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-sm" title={title}>
+          {title}
+        </span>
+        <RunStatusBadge task={task} />
+      </button>
+    </div>
   );
 }
 

@@ -167,7 +167,7 @@ export function RunCard({ task, onChanged, onOpen, displayMode = "default" }: Pr
   );
 }
 
-function IconAction({
+export function IconAction({
   children,
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
