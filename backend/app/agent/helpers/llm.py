@@ -89,7 +89,7 @@ def block_summary(response: LLMResponse) -> list[dict[str, Any]]:
     if response.text:
         blocks.append({"type": "text", "text": response.text})
     blocks.extend(
-        {"type": "tool_use", "name": call.name, "input": call.input}
+        {"type": "tool_use", "id": call.id, "name": call.name, "input": call.input}
         for call in response.tool_calls
     )
     return blocks

@@ -124,5 +124,10 @@ async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
     )
     assert llm.block_summary(response) == [
         {"type": "text", "text": "checking"},
-        {"type": "tool_use", "name": "search_notes", "input": {"query": "project alpha"}},
+        {
+            "type": "tool_use",
+            "id": "call-1",
+            "name": "search_notes",
+            "input": {"query": "project alpha"},
+        },
     ]

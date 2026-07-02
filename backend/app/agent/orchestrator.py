@@ -130,10 +130,14 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
             # `no_change`: record the duplicate link, touch nothing on the task.
             trace = {
                 "outcome": "no_change",
+                "branch": "auto_duplicate",
                 "auto_decided": True,
                 "precedent_id": str(top.id),
                 "precedent_similarity": round(top.similarity, 4),
                 "existing_task_id": str(top.task_id),
+                "selected_evidence_ref": f"precedent:{top.id}",
+                "selected_precedent": _evidence_ref(top, selected=True),
+                "evidence_refs": [_evidence_ref(top, selected=True)],
             }
             log.info(
                 "branch=auto_duplicate · raw=%s precedent=%s sim=%.3f task=%s",
@@ -151,9 +155,13 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
             reason = (top.agent_trace or {}).get("reason") or "matched earlier not_task input"
             trace = {
                 "outcome": "not_task",
+                "branch": "auto_not_task",
                 "auto_decided": True,
                 "precedent_id": str(top.id),
                 "precedent_similarity": round(top.similarity, 4),
+                "selected_evidence_ref": f"precedent:{top.id}",
+                "selected_precedent": _evidence_ref(top, selected=True),
+                "evidence_refs": [_evidence_ref(top, selected=True)],
                 "reason": reason,
             }
             log.info(
@@ -191,3 +199,39 @@ def _thread_lookup_filters(meta: dict) -> dict[str, str]:
         for key in ("account", "channel_id")
         if isinstance((value := meta.get(key)), str) and value
     }
+
+
+def _evidence_ref(hit: SimilarInput, *, selected: bool = False) -> dict:
+    """Compact, human-readable pointer back to a similar raw input."""
+    return {
+        "ref": f"precedent:{hit.id}",
+        "kind": "precedent",
+        "id": str(hit.id),
+        "status": hit.status,
+        "source": hit.source,
+        "task_id": str(hit.task_id) if hit.task_id else None,
+        "similarity": round(hit.similarity, 4),
+        "title": _candidate_title(hit),
+        "snippet": _truncate_inline(hit.content_snippet or "", 300),
+        "sender": hit.sender,
+        "received_at": hit.received_at.isoformat() if hit.received_at else None,
+        "selected": selected,
+    }
+
+
+def _candidate_title(hit: SimilarInput) -> str:
+    subject = _truncate_inline(hit.subject or "", 120)
+    if subject:
+        return subject
+    for raw_line in (hit.content_snippet or "").splitlines():
+        line = _truncate_inline(raw_line, 120)
+        if line:
+            return line
+    return "(no subject)"
+
+
+def _truncate_inline(value: str, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"

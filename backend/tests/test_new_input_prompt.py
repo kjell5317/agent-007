@@ -98,3 +98,41 @@ def test_not_task_title_falls_back_to_first_content_line():
     hit = _hit(subject=None, content_snippet="\n\nFirst meaningful line\nSecond line")
 
     assert runner._candidate_title(hit) == "First meaningful line"
+
+
+def test_candidate_trace_ref_includes_readable_evidence_fields():
+    hit = _hit()
+
+    ref = runner._candidate_trace_ref(hit)
+
+    assert ref == {
+        "ref": "candidate:00000000-0000-0000-0000-000000000001",
+        "kind": "candidate",
+        "id": "00000000-0000-0000-0000-000000000001",
+        "status": "not_task",
+        "source": "gmail",
+        "task_id": None,
+        "similarity": 0.8123,
+        "sim": 0.8123,
+        "title": "Weekly FYI",
+        "snippet": "Hello, Here is an FYI update with details for context.",
+        "sender": "sender@example.com",
+        "received_at": "2026-06-01T12:30:00+00:00",
+    }
+
+
+def test_tool_result_entry_records_status_purpose_and_artifacts():
+    entry = runner._tool_result_entry(
+        "create_task",
+        {"title": "Send Q2 report", "api_key": "secret"},
+        "created task 10000000-0000-0000-0000-000000000001",
+        changed_state=True,
+        artifact_refs=["task:10000000-0000-0000-0000-000000000001"],
+    )
+
+    assert entry["name"] == "create_task"
+    assert entry["status"] == "success"
+    assert entry["purpose"] == "create task Send Q2 report"
+    assert entry["changed_state"] is True
+    assert entry["artifact_refs"] == ["task:10000000-0000-0000-0000-000000000001"]
+    assert entry["result_summary"] == "created task 10000000-0000-0000-0000-000000000001"

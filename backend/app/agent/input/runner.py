@@ -73,14 +73,8 @@ async def run_new_input_agent(
         "outcome": None,
         "branch": "new_input",
         "embedded_query": query_embedding is not None,
-        "candidates": [
-            {
-                "status": h.status,
-                "task_id": str(h.task_id) if h.task_id else None,
-                "sim": round(h.similarity, 4),
-            }
-            for h in candidates
-        ],
+        "candidates": [_candidate_trace_ref(h) for h in candidates],
+        "evidence_refs": [_candidate_trace_ref(h) for h in candidates],
         "iterations": [],
     }
     final_status = "not_task"
@@ -153,7 +147,18 @@ async def run_new_input_agent(
                 else:
                     out = f"unknown tool: {tu.name}"
                 iter_log.setdefault("tool_results", []).append(
-                    {"name": tu.name, "preview": out[:200]}
+                    _tool_result_entry(
+                        tu.name,
+                        tin,
+                        out,
+                        status="failed" if tu.name not in {"search_notes", "find_calendar_events", "create_event"} else "success",
+                        changed_state=tu.name == "create_event" and bool(trace.get("events_created")),
+                        artifact_refs=[
+                            f"event:{event_id}"
+                            for event_id in trace.get("events_created", [])
+                            if tu.name == "create_event"
+                        ],
+                    )
                 )
                 results.append(tool_result_message(tu, out))
             if not terminal_uses:
@@ -192,6 +197,15 @@ async def run_new_input_agent(
             )
             trace["outcome"] = "task_created"
             trace["task_id"] = str(task.id)
+            iter_log.setdefault("tool_results", []).append(
+                _tool_result_entry(
+                    tu.name,
+                    tu_input,
+                    f"created task {task.id}",
+                    changed_state=True,
+                    artifact_refs=[f"task:{task.id}"],
+                )
+            )
             final_status = "open"
             final_task_id = task.id
             await schedule_task(session, task)
@@ -210,12 +224,33 @@ async def run_new_input_agent(
                     tu.name, raw.id, existing_raw,
                 )
                 trace["outcome"] = "duplicate_target_missing"
+                iter_log.setdefault("tool_results", []).append(
+                    _tool_result_entry(
+                        tu.name,
+                        tu_input,
+                        "existing task was missing or invalid",
+                        status="failed",
+                        changed_state=False,
+                    )
+                )
                 final_status = "duplicate"
                 done = True
                 break
             frag = await apply_task_action(session, existing_task, tu.name, tu_input)
             trace.update(frag)
             trace["existing_task_id"] = str(existing_id)
+            selected_ref = _selected_candidate_ref(candidates, existing_id)
+            if selected_ref:
+                trace["selected_evidence_ref"] = selected_ref
+            iter_log.setdefault("tool_results", []).append(
+                _tool_result_entry(
+                    tu.name,
+                    tu_input,
+                    str(frag.get("outcome") or "handled duplicate"),
+                    changed_state=frag.get("outcome") != "no_change",
+                    artifact_refs=[f"task:{existing_id}"],
+                )
+            )
             final_status = "duplicate"
             final_task_id = existing_id
             done = True
@@ -229,11 +264,28 @@ async def run_new_input_agent(
             saved = await _save_notes(session, raw.id, raw_notes)
             if saved:
                 trace["notes_saved"] = saved
+            iter_log.setdefault("tool_results", []).append(
+                _tool_result_entry(
+                    tu.name,
+                    tu_input,
+                    str(trace.get("reason") or "marked not task"),
+                    changed_state=True,
+                )
+            )
             done = True
             break
 
         # Unknown tool — surface and stop.
         trace["outcome"] = f"unknown_tool:{tu.name}"
+        iter_log.setdefault("tool_results", []).append(
+            _tool_result_entry(
+                tu.name,
+                tu_input,
+                "unknown terminal tool",
+                status="failed",
+                changed_state=False,
+            )
+        )
         done = True
         break
     if not done:
@@ -363,6 +415,68 @@ def _candidate_title(hit: SimilarInput) -> str:
             return line
 
     return "(no subject)"
+
+
+def _candidate_trace_ref(hit: SimilarInput) -> dict[str, Any]:
+    return {
+        "ref": f"candidate:{hit.id}",
+        "kind": "candidate",
+        "id": str(hit.id),
+        "status": hit.status,
+        "source": hit.source,
+        "task_id": str(hit.task_id) if hit.task_id else None,
+        "similarity": round(hit.similarity, 4),
+        "sim": round(hit.similarity, 4),
+        "title": _candidate_title(hit),
+        "snippet": _truncate_inline(hit.content_snippet or "", 300),
+        "sender": hit.sender,
+        "received_at": hit.received_at.isoformat() if hit.received_at else None,
+    }
+
+
+def _selected_candidate_ref(candidates: list[SimilarInput], task_id: uuid.UUID) -> str | None:
+    for hit in candidates:
+        if hit.task_id == task_id:
+            return f"candidate:{hit.id}"
+    return None
+
+
+def _tool_result_entry(
+    name: str,
+    tool_input: dict[str, Any],
+    summary: str,
+    *,
+    status: str = "success",
+    changed_state: bool = False,
+    artifact_refs: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": status,
+        "purpose": _tool_purpose(name, tool_input),
+        "preview": _truncate_inline(summary, 200),
+        "result_summary": _truncate_inline(summary, 500),
+        "changed_state": changed_state,
+        "artifact_refs": artifact_refs or [],
+    }
+
+
+def _tool_purpose(name: str, tool_input: dict[str, Any]) -> str:
+    if name == "search_notes":
+        return f"search notes for {_truncate_inline(str(tool_input.get('query') or ''), 80)}"
+    if name == "find_calendar_events":
+        return "find calendar conflicts"
+    if name == "create_event":
+        return f"create calendar event {_truncate_inline(str(tool_input.get('summary') or ''), 80)}"
+    if name == "create_task":
+        return f"create task {_truncate_inline(str(tool_input.get('title') or ''), 80)}"
+    if name == "update_task":
+        return "update existing task"
+    if name == "mark_not_task":
+        return "mark input as not a task"
+    if name == "no_change":
+        return "leave existing task unchanged"
+    return name
 
 
 def _candidate_metadata(hit: SimilarInput) -> str:

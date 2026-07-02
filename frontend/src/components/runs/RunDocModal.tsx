@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { subjectLabel } from "@/components/runs/runLabels";
 import { formatJsonLikeText } from "@/lib/format";
 import { kotx, type KotxPr, type KotxTask } from "@/lib/kotx";
+import { projectKotxLog, type KotxLogProjection, type LogRow } from "@/lib/projections";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -148,7 +149,12 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     };
   }, [task.id, view]);
 
-  const displayedLog = view === "log" ? formatJsonLikeText(logText) : "";
+  const projectedLog = view === "log" ? projectKotxLog(logText) : null;
+  const displayedLog =
+    projectedLog?.rawFallback || (logText ? formatJsonLikeText(logText) : "");
+  const logDisplayKey = projectedLog
+    ? `${projectedLog.rows.length}:${projectedLog.infrastructureCount}:${displayedLog.length}`
+    : "";
 
   useLayoutEffect(() => {
     if (view !== "log" || logLoading) return;
@@ -163,7 +169,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     }
     logScrollRestoreRef.current = null;
     setLogAtTop(el.scrollTop <= LOG_TOP_THRESHOLD);
-  }, [displayedLog, logLoading, view]);
+  }, [logDisplayKey, logLoading, view]);
 
   const handleLogScroll = () => {
     const el = logScrollRef.current;
@@ -390,9 +396,13 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
                   </Button>
                 </div>
               )}
-              <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
-                {displayedLog}
-              </pre>
+              {projectedLog && projectedLog.rawFallback === "" ? (
+                <KotxLogView projection={projectedLog} />
+              ) : (
+                <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
+                  {displayedLog}
+                </pre>
+              )}
             </div>
           )
         ) : content === null ? (
@@ -506,4 +516,60 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       </div>
     </Modal>
   );
+}
+
+function KotxLogView({ projection }: { projection: KotxLogProjection }) {
+  return (
+    <div className="space-y-2 p-3 text-xs">
+      {projection.rows.length === 0 ? (
+        <div className="rounded-md border border-dashed bg-background p-3 text-muted-foreground">
+          No decision, action, or tool log records in this page.
+        </div>
+      ) : (
+        projection.rows.map((row) => <LogItem key={row.id} row={row} />)
+      )}
+      <details className="rounded-md border bg-background px-2 py-1.5">
+        <summary className="cursor-pointer text-muted-foreground">
+          diagnostics
+          {projection.infrastructureCount > 0
+            ? ` (${projection.infrastructureCount} infrastructure records)`
+            : ""}
+        </summary>
+        <pre className="mt-2 max-h-96 overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-words font-mono">
+          {projection.diagnostics || "No collapsed diagnostics."}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function LogItem({ row }: { row: LogRow }) {
+  return (
+    <details className="rounded-md border bg-background px-2 py-1.5">
+      <summary className="cursor-pointer list-none">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={cn("h-2 w-2 shrink-0 rounded-full", logKindClass(row.kind))} />
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+            {row.kind}
+          </span>
+          <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
+          <span className="shrink-0 text-muted-foreground">{row.status}</span>
+        </span>
+      </summary>
+      <div className="mt-1 space-y-1">
+        {row.subtitle && <div className="break-words text-muted-foreground">{row.subtitle}</div>}
+        {row.body && <div className="break-words">{row.body}</div>}
+        <pre className="max-h-56 overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-words font-mono text-muted-foreground">
+          {row.raw}
+        </pre>
+      </div>
+    </details>
+  );
+}
+
+function logKindClass(kind: LogRow["kind"]) {
+  if (kind === "decision") return "bg-primary";
+  if (kind === "tool") return "bg-blue-500";
+  if (kind === "action") return "bg-emerald-500";
+  return "bg-slate-400";
 }
