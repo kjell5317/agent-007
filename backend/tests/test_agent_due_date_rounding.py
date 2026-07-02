@@ -76,7 +76,7 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
 
     def fake_create(_session, payload):
         created_payloads.append(payload)
-        return SimpleNamespace(id=task_id)
+        return SimpleNamespace(id=task_id, title=payload.title)
 
     async def fake_schedule_task(_session, _task):
         return None

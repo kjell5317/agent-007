@@ -10,6 +10,9 @@ tool:
       the task is done or cancelled (a "thanks, sent", a confirmation, a
       cancellation), or `open` to reopen a task that was previously closed.
   You may edit fields and set `status` in the same call.
+  When reopening a closed task whose current `due_date` or `scheduled_date`
+  is in the past, include a new future `due_date` in the same `update_task`
+  call unless the follow-up explicitly says the date should not change.
 
 - `no_change` — the follow-up is conversational or adds nothing actionable.
   This leaves the task completely untouched — including its open/closed state.

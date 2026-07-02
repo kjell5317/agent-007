@@ -146,18 +146,19 @@ async def create_task_from_input(
     into a task. Returns immediately; the client polls
     `GET /inputs/{raw_input_id}` until the row gains a `task_id`."""
     context_input_ids = payload.context_input_ids if payload is not None else []
+    target_task_id = payload.target_task_id if payload is not None else None
     user_fields = (
         {
             k: v
             for k, v in payload.model_dump(exclude={"context_input_ids"}).items()
-            if v is not None
+            if v is not None and k not in {"content", "target_task_id"}
         }
         if payload is not None
         else {}
     )
     try:
         await open_task_from_input(
-            session, raw_input_id, user_fields, context_input_ids
+            session, raw_input_id, user_fields, context_input_ids, target_task_id
         )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc

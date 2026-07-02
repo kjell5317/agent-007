@@ -40,7 +40,7 @@ export const api = {
   createTask: (text: string) =>
     request<TaskCreationAccepted>("/tasks", {
       method: "POST",
-      body: JSON.stringify({ title: text }),
+      body: JSON.stringify({ content: text }),
     }),
   updateTask: (id: string, fields: Partial<Task>) =>
     request<Task>(`/tasks/${id}`, {
@@ -68,7 +68,7 @@ export const api = {
   getInput: (id: string) => request<RawInput>(`/inputs/${id}`),
   promoteInput: (
     id: string,
-    opts?: { title?: string; contextInputIds?: string[] },
+    opts?: { title?: string; contextInputIds?: string[]; targetTaskId?: string },
   ) =>
     request<TaskCreationAccepted>(`/tasks/open/${id}`, {
       method: "POST",
@@ -77,6 +77,7 @@ export const api = {
         ...(opts?.contextInputIds?.length
           ? { context_input_ids: opts.contextInputIds }
           : {}),
+        ...(opts?.targetTaskId ? { target_task_id: opts.targetTaskId } : {}),
       }),
     }),
   unreadInputCount: () =>

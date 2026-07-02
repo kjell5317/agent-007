@@ -80,6 +80,8 @@ def task_field_lines(task, *, indent: str = "  ") -> list[str]:
         lines.append(f"{indent}description: {desc}")
     if task.due_date:
         lines.append(f"{indent}due_date: {task.due_date.isoformat()}")
+    if getattr(task, "scheduled_date", None):
+        lines.append(f"{indent}scheduled_date: {task.scheduled_date.isoformat()}")
     if task.estimation is not None:
         lines.append(f"{indent}estimation: {task.estimation} min")
     if task.location:
