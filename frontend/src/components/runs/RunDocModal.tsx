@@ -20,7 +20,7 @@ import {
   subjectLabel,
 } from "@/components/runs/runLabels";
 import { formatJsonLikeText } from "@/lib/format";
-import { kotx, type KotxPr, type KotxTask } from "@/lib/kotx";
+import { kotx, type KotxMergeContext, type KotxPr, type KotxTask } from "@/lib/kotx";
 import { projectKotxLog, type KotxLogProjection, type LogRow } from "@/lib/projections";
 import { cn } from "@/lib/utils";
 
@@ -105,6 +105,7 @@ export function RunDocModal({
         : "prompt";
   const [view, setView] = useState<View>(defaultView);
   const [content, setContent] = useState<string | null>(null);
+  const [mergeContext, setMergeContext] = useState<KotxMergeContext | null>(null);
   const [draft, setDraft] = useState("");
   const [pr, setPr] = useState<KotxPr | null>(null);
   const [prTitleDraft, setPrTitleDraft] = useState("");
@@ -136,6 +137,7 @@ export function RunDocModal({
       setPr(null);
     } else {
       setContent(null);
+      setMergeContext(null);
       setDraft("");
     }
     const request =
@@ -146,6 +148,15 @@ export function RunDocModal({
             setPrTitleDraft(data?.title ?? "");
             setPrBodyDraft(data?.body ?? "");
           })
+        : view === "merge" && mergeProposal
+          ? Promise.all([load(task, doc, view), kotx.getMergeContext(task.id)]).then(
+              ([text, context]) => {
+                if (cancelled) return;
+                setContent(text);
+                setMergeContext(context);
+                setDraft(text ?? "");
+              },
+            )
         : load(task, doc, view).then((text) => {
             if (cancelled) return;
             setContent(text);
@@ -161,7 +172,7 @@ export function RunDocModal({
     return () => {
       cancelled = true;
     };
-  }, [task.id, doc, view]);
+  }, [task.id, doc, view, mergeProposal]);
 
   useEffect(() => {
     if (view !== "log") return;
@@ -284,11 +295,14 @@ export function RunDocModal({
       setEditing(false);
     }, "PR saved");
 
+  const mergeContextComment = mergeContext?.commentMarkdown?.trim() ?? "";
+  const mergeApprovalContent = mergeContextComment.length > 0 ? mergeContextComment : content;
   const trackedPrNumber =
     task.trackedPrNumber ??
     task.prNumber ??
+    mergeContext?.prNumber ??
     (task.subjectType === "pull_request" ? task.subjectNumber : null);
-  const mergeComment = view === "merge" ? content?.trim() ?? "" : "";
+  const mergeComment = view === "merge" ? mergeApprovalContent?.trim() ?? "" : "";
   const canStartPrFollowUp =
     mergeProposal && mergeComment.length > 0 && trackedPrNumber !== null;
   const activeSameBranchTasks = sameBranchTasks.filter(
@@ -326,6 +340,7 @@ export function RunDocModal({
   const taskSubjectLabel = subjectLabel(task);
   const reviewAssignee =
     task.kind === "review" || doc === "review" ? task.assignees?.[0] : null;
+  const approvedBy = mergeProposal ? mergeContext?.approvedBy?.trim() ?? "" : "";
   const SubjectIcon =
     task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
   const logCanLoadMore = logHasMore && logBefore !== null;
@@ -446,13 +461,13 @@ export function RunDocModal({
             </div>
           )
         ) : view === "merge" ? (
-          content?.trim() ? (
+          mergeApprovalContent?.trim() ? (
             <div className="h-full overflow-auto rounded-lg border p-3">
               <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                 <GitMerge className="h-3.5 w-3.5" />
                 MERGE_APPROVAL.md
               </div>
-              <Markdown content={content} />
+              <Markdown content={mergeApprovalContent} />
             </div>
           ) : (
             <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
@@ -522,6 +537,12 @@ export function RunDocModal({
             <span className="block truncate" title={reviewAssignee}>
               Assignee:{" "}
               <span className="font-medium text-foreground">{reviewAssignee}</span>
+            </span>
+          )}
+          {approvedBy && (
+            <span className="block truncate" title={approvedBy}>
+              Approved by:{" "}
+              <span className="font-medium text-foreground">{approvedBy}</span>
             </span>
           )}
         </div>
