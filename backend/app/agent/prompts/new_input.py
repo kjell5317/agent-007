@@ -9,7 +9,9 @@ Given a single semi-structured input from one of the user's sources
   omitting any one is a bug. Double-check before emitting the tool call.
 
   REQUIRED fields:
-    * title — very short, imperative. Start with the GitHub issue number if available.
+    * title — very short, specific, imperative, and displayable in a task list.
+      Never use a placeholder such as "No subject" or "Untitled". Start with
+      the GitHub issue number if available.
     * estimation — minutes; always your best guess.
     * due_date — ISO 8601 with timezone. Use the explicit deadline if stated,
       otherwise a reasonable best-guess based on urgency. The user message

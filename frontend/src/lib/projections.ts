@@ -15,8 +15,8 @@ export interface EvidenceRow {
   taskId?: string;
   sender?: string;
   receivedAt?: string;
-  snippet?: string;
   selected?: boolean;
+  aggregate?: boolean;
 }
 
 export interface ToolRow {
@@ -26,35 +26,39 @@ export interface ToolRow {
   purpose: string;
   input?: string;
   result?: string;
+  reason?: string;
+  confidence?: string;
   changedState?: boolean;
   artifacts: string[];
 }
 
 export interface TraceProjection {
   summary: ProjectionField[];
+  reason?: string;
+  confidence?: string;
   evidence: EvidenceRow[];
   tools: ToolRow[];
-  diagnostics: string;
 }
 
 export interface MetadataProjection {
   fields: ProjectionField[];
-  diagnostics: string;
 }
 
 export interface LogRow {
   id: string;
   kind: "decision" | "tool" | "action" | "event";
+  indicator: string;
+  recordId?: string;
   status: string;
   title: string;
   subtitle?: string;
   body?: string;
-  raw: string;
+  bodyFormat?: "markdown" | "yaml" | "text";
+  tokens: ProjectionField[];
 }
 
 export interface KotxLogProjection {
   rows: LogRow[];
-  diagnostics: string;
   rawFallback: string;
   infrastructureCount: number;
 }
@@ -105,11 +109,15 @@ export function projectSourceMetadata(
   metadata: JsonRecord | null | undefined,
 ): MetadataProjection {
   const fields: ProjectionField[] = [{ label: "Source", value: source }];
-  if (externalId) fields.push({ label: "External id", value: externalId });
+  const hiddenKeys = hiddenMetadataKeys(source);
+  if (externalId && !hiddenKeys.has("external_id")) {
+    fields.push({ label: "External id", value: externalId });
+  }
 
   const seen = new Set<string>();
   const meta = metadata ?? {};
   for (const [key, label] of METADATA_KEYS) {
+    if (hiddenKeys.has(key)) continue;
     if (seen.has(label)) continue;
     const rendered = renderValue(meta[key]);
     if (!rendered) continue;
@@ -117,7 +125,7 @@ export function projectSourceMetadata(
     fields.push({ label, value: rendered });
   }
 
-  return { fields, diagnostics: toYaml(meta) };
+  return { fields };
 }
 
 export function projectAgentTrace(trace: unknown): TraceProjection {
@@ -137,11 +145,15 @@ export function projectAgentTrace(trace: unknown): TraceProjection {
   addField(
     summary,
     "Task",
-    stringValue(record.task_id) ?? stringValue(record.existing_task_id),
+    stringValue(record.task_title) ??
+      stringValue(record.title) ??
+      stringValue(record.task_id) ??
+      stringValue(record.existing_task_id),
   );
-  if (selected) addField(summary, "Selected evidence", `${selected.id} ${selected.title}`);
-  addField(summary, "Reason", stringValue(record.reason));
-  addField(summary, "Confidence", confidenceValue(record.confidence));
+  if (selected) addField(summary, "Selected evidence", selected.title);
+  const reason = stringValue(record.reason);
+  const confidence = confidenceValue(record.confidence);
+  addField(summary, "Confidence", confidence);
 
   if (summary.length === 0) {
     summary.push({ label: "Trace", value: "No decision summary was recorded." });
@@ -149,29 +161,28 @@ export function projectAgentTrace(trace: unknown): TraceProjection {
 
   return {
     summary,
+    reason,
+    confidence,
     evidence,
     tools,
-    diagnostics: toYaml(trace),
   };
 }
 
 export function projectKotxLog(text: string | null): KotxLogProjection {
   if (!text?.trim()) {
-    return { rows: [], diagnostics: "", rawFallback: "", infrastructureCount: 0 };
+    return { rows: [], rawFallback: "", infrastructureCount: 0 };
   }
 
   const records = parseJsonRecords(text);
   if (records.length === 0) {
     return {
       rows: [],
-      diagnostics: "",
       rawFallback: text,
       infrastructureCount: 0,
     };
   }
 
   const rows: LogRow[] = [];
-  const diagnostics: string[] = [];
   let infrastructureCount = 0;
 
   records.forEach((record, index) => {
@@ -180,13 +191,11 @@ export function projectKotxLog(text: string | null): KotxLogProjection {
       rows.push(row);
     } else {
       infrastructureCount += 1;
-      diagnostics.push(toYaml(record));
     }
   });
 
   return {
     rows,
-    diagnostics: diagnostics.join("\n---\n"),
     rawFallback: "",
     infrastructureCount,
   };
@@ -241,7 +250,7 @@ function collectEvidence(trace: JsonRecord): EvidenceRow[] {
     rows.push(row);
   });
 
-  return dedupeEvidence(rows);
+  return aggregateUntitledEvidence(dedupeEvidence(rows));
 }
 
 function evidenceFromRecord(
@@ -251,11 +260,7 @@ function evidenceFromRecord(
 ): EvidenceRow {
   const rawId = stringValue(record.row_id) ?? stringValue(record.ref) ?? stringValue(record.id);
   const id = rawId ?? fallbackId;
-  const title =
-    stringValue(record.title) ??
-    stringValue(record.subject) ??
-    truncate(stringValue(record.snippet) ?? "", 96) ??
-    "(untitled evidence)";
+  const title = stringValue(record.title) ?? stringValue(record.subject) ?? "";
 
   return {
     id,
@@ -267,7 +272,6 @@ function evidenceFromRecord(
     taskId: stringValue(record.task_id),
     sender: stringValue(record.sender) ?? stringValue(record.from),
     receivedAt: stringValue(record.received_at),
-    snippet: truncate(stringValue(record.snippet) ?? stringValue(record.content_snippet) ?? "", 240),
     selected: Boolean(record.selected),
   };
 }
@@ -305,6 +309,10 @@ function toolRowsFromBlocks(
     const name = stringValue(block.name) ?? "tool";
     const result = resultQueues.get(name)?.shift();
     const input = asRecord(block.input);
+    const resultReason =
+      stringValue(result?.reason) ??
+      stringValue(input?.reason) ??
+      stringValue(result?.result_reason);
     return [
       {
         id: stringValue(block.id) ?? `${prefix}-tool-${index + 1}`,
@@ -313,6 +321,8 @@ function toolRowsFromBlocks(
         purpose: stringValue(result?.purpose) ?? toolPurpose(name, input),
         input: redactPreview(input ?? block.input),
         result: stringValue(result?.result_summary) ?? stringValue(result?.preview),
+        reason: resultReason,
+        confidence: confidenceValue(result?.confidence ?? input?.confidence),
         changedState: booleanValue(result?.changed_state),
         artifacts: artifactRefs(result),
       },
@@ -321,12 +331,23 @@ function toolRowsFromBlocks(
 }
 
 function logRow(record: JsonRecord, index: number): LogRow | null {
+  const indicator =
+    stringValue(record.type) ??
+    stringValue(record.kind) ??
+    stringValue(record.event) ??
+    "event";
+  const recordId =
+    stringValue(record.id) ??
+    stringValue(record.record_id) ??
+    stringValue(record.item_id) ??
+    stringValue(record.run_item_id) ??
+    stringValue(record.call_id);
   const message =
     stringValue(record.message) ??
     stringValue(record.msg) ??
     stringValue(record.event) ??
     stringValue(record.type);
-  const event = `${stringValue(record.event) ?? ""} ${stringValue(record.type) ?? ""}`.toLowerCase();
+  const event = `${stringValue(record.event) ?? ""} ${stringValue(record.type) ?? ""} ${stringValue(record.kind) ?? ""}`.toLowerCase();
   const toolName =
     stringValue(record.tool) ??
     stringValue(record.tool_name) ??
@@ -336,16 +357,66 @@ function logRow(record: JsonRecord, index: number): LogRow | null {
     stringValue(record.level) ??
     stringValue(record.outcome) ??
     "event";
+  const payload =
+    asRecord(record.payload) ??
+    asRecord(record.item) ??
+    asRecord(record.data) ??
+    asRecord(record.body);
+  const title =
+    stringValue(record.title) ??
+    stringValue(payload?.title) ??
+    stringValue(payload?.name) ??
+    stringValue(payload?.summary);
+  const tokens = tokenFields(record);
+
+  if (event.includes("item_started")) {
+    return {
+      id: `log-${index + 1}`,
+      kind: "event",
+      indicator,
+      recordId,
+      status,
+      title: title ?? nonRepeatedMessage(message, indicator) ?? "Item started",
+      body: toYaml(payload ?? displayRecord(record)),
+      bodyFormat: "yaml",
+      tokens,
+    };
+  }
+
+  if (event.includes("item_completed")) {
+    const text =
+      stringValue(record.text) ??
+      stringValue(record.output) ??
+      stringValue(record.result) ??
+      stringValue(payload?.text) ??
+      stringValue(payload?.output) ??
+      stringValue(payload?.result) ??
+      nonRepeatedMessage(message, indicator);
+    return {
+      id: `log-${index + 1}`,
+      kind: "event",
+      indicator,
+      recordId,
+      status,
+      title: title ?? "Item completed",
+      body: text,
+      bodyFormat: "markdown",
+      tokens,
+    };
+  }
 
   if (toolName || event.includes("tool")) {
     return {
       id: `log-${index + 1}`,
       kind: "tool",
+      indicator,
+      recordId,
       status,
-      title: toolName ?? message ?? "Tool call",
-      subtitle: message && toolName ? message : undefined,
+      title: toolName ?? nonRepeatedMessage(message, indicator) ?? "Tool call",
+      subtitle: message && toolName ? nonRepeatedMessage(message, indicator) : undefined,
       body: truncate(stringValue(record.result) ?? stringValue(record.preview) ?? "", 280),
-      raw: toYaml(record),
+      bodyFormat: "markdown",
+      tokens,
     };
   }
 
@@ -353,10 +424,13 @@ function logRow(record: JsonRecord, index: number): LogRow | null {
     return {
       id: `log-${index + 1}`,
       kind: "decision",
+      indicator,
+      recordId,
       status,
-      title: message ?? stringValue(record.outcome) ?? "Decision",
+      title: nonRepeatedMessage(message, indicator) ?? stringValue(record.outcome) ?? "Decision",
       body: truncate(stringValue(record.reason) ?? "", 280),
-      raw: toYaml(record),
+      bodyFormat: "markdown",
+      tokens,
     };
   }
 
@@ -364,10 +438,13 @@ function logRow(record: JsonRecord, index: number): LogRow | null {
     return {
       id: `log-${index + 1}`,
       kind: "action",
+      indicator,
+      recordId,
       status,
-      title: message ?? stringValue(record.action) ?? "Action",
+      title: nonRepeatedMessage(message, indicator) ?? stringValue(record.action) ?? "Action",
       body: truncate(stringValue(record.detail) ?? stringValue(record.reason) ?? "", 280),
-      raw: toYaml(record),
+      bodyFormat: "markdown",
+      tokens,
     };
   }
 
@@ -375,9 +452,13 @@ function logRow(record: JsonRecord, index: number): LogRow | null {
     return {
       id: `log-${index + 1}`,
       kind: "event",
+      indicator,
+      recordId,
       status,
-      title: message,
-      raw: toYaml(record),
+      title: nonRepeatedMessage(message, indicator) ?? message,
+      body: payload ? toYaml(payload) : undefined,
+      bodyFormat: payload ? "yaml" : undefined,
+      tokens,
     };
   }
 
@@ -412,6 +493,13 @@ function parseJsonRecords(text: string): JsonRecord[] {
 }
 
 function isInfrastructureLog(record: JsonRecord): boolean {
+  const eventName = `${stringValue(record.event) ?? ""} ${stringValue(record.type) ?? ""} ${stringValue(record.kind) ?? ""}`.toLowerCase();
+  if (eventName.includes("item_started") || eventName.includes("item_completed")) {
+    return false;
+  }
+  if (tokenFields(record).length > 0) {
+    return false;
+  }
   const text = [
     stringValue(record.message),
     stringValue(record.event),
@@ -425,6 +513,26 @@ function isInfrastructureLog(record: JsonRecord): boolean {
     return true;
   }
   return Object.keys(record).some((key) => INFRA_KEYS.has(key.toLowerCase()));
+}
+
+function hiddenMetadataKeys(source: string): Set<string> {
+  const normalized = source.toLowerCase();
+  if (normalized === "gmail") {
+    return new Set([
+      "external_id",
+      "subject",
+      "from",
+      "sender",
+      "date",
+      "received_at",
+      "received_date",
+      "account",
+    ]);
+  }
+  if (normalized === "slack") {
+    return new Set(["external_id", "account"]);
+  }
+  return new Set();
 }
 
 function normalizeToolStatus(result: JsonRecord | undefined): ToolRow["status"] {
@@ -454,6 +562,95 @@ function artifactRefs(result: JsonRecord | undefined): string[] {
   const eventId = stringValue(result.event_id);
   if (eventId) refs.push(`event:${eventId}`);
   return refs;
+}
+
+function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
+  const visible: EvidenceRow[] = [];
+  const groups = new Map<string, EvidenceRow[]>();
+
+  for (const row of rows) {
+    if (isUsableEvidenceTitle(row.title)) {
+      visible.push(row);
+      continue;
+    }
+    const label = row.status || row.kind;
+    groups.set(label, [...(groups.get(label) ?? []), row]);
+  }
+
+  for (const [label, group] of groups) {
+    const similarities = group
+      .map((row) => Number(row.similarity))
+      .filter((value) => Number.isFinite(value));
+    const avg =
+      similarities.length > 0
+        ? similarities.reduce((total, value) => total + value, 0) / similarities.length
+        : null;
+    const count = group.length;
+    const plural = count === 1 ? label : pluralizeStatus(label);
+    const similarity = avg === null ? undefined : avg.toFixed(2);
+    visible.push({
+      id: `aggregate:${label}`,
+      kind: group.some((row) => row.kind === "precedent") ? "precedent" : "candidate",
+      title: similarity ? `${count} ${plural}, avg sim ${similarity}` : `${count} ${plural}`,
+      status: group[0]?.status,
+      source: sameString(group.map((row) => row.source)),
+      similarity,
+      selected: group.some((row) => row.selected),
+      aggregate: true,
+    });
+  }
+
+  return visible;
+}
+
+function isUsableEvidenceTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      normalized !== "(untitled evidence)" &&
+      normalized !== "(no subject)" &&
+      normalized !== "untitled" &&
+      normalized !== "no subject",
+  );
+}
+
+function pluralizeStatus(status: string): string {
+  if (status.endsWith("s")) return status;
+  return `${status}s`;
+}
+
+function sameString(values: Array<string | undefined>): string | undefined {
+  const present = values.filter(isPresent);
+  if (present.length === 0) return undefined;
+  return present.every((value) => value === present[0]) ? present[0] : undefined;
+}
+
+function tokenFields(record: JsonRecord): ProjectionField[] {
+  const usage = asRecord(record.usage) ?? asRecord(asRecord(record.payload)?.usage);
+  const input =
+    stringValue(record.input_tokens) ??
+    stringValue(record.prompt_tokens) ??
+    stringValue(usage?.input_tokens) ??
+    stringValue(usage?.prompt_tokens);
+  const output =
+    stringValue(record.output_tokens) ??
+    stringValue(record.completion_tokens) ??
+    stringValue(usage?.output_tokens) ??
+    stringValue(usage?.completion_tokens);
+  const fields: ProjectionField[] = [];
+  addField(fields, "Input tokens", input);
+  addField(fields, "Output tokens", output);
+  return fields;
+}
+
+function nonRepeatedMessage(message: string | undefined, indicator: string): string | undefined {
+  if (!message) return undefined;
+  return message.toLowerCase() === indicator.toLowerCase() ? undefined : message;
+}
+
+function displayRecord(record: JsonRecord): JsonRecord {
+  const hidden = new Set(["event", "type", "kind", "id", "record_id", "status", "level"]);
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !hidden.has(key)));
 }
 
 function redactPreview(value: unknown): string | undefined {

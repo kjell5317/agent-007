@@ -40,3 +40,22 @@ def test_auto_decision_evidence_ref_is_compact_and_readable():
         "received_at": "2026-06-02T08:15:00+00:00",
         "selected": True,
     }
+
+
+def test_auto_decision_title_falls_back_to_sender_without_placeholder():
+    hit = SimilarInput(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000003"),
+        source="gmail",
+        status="not_task",
+        task_id=None,
+        similarity=0.9,
+        agent_trace=None,
+        subject=None,
+        sender="reader@example.com",
+        content_snippet="",
+        received_at=datetime(2026, 6, 2, 8, 15, tzinfo=timezone.utc),
+    )
+
+    ref = orchestrator._evidence_ref(hit)
+
+    assert ref["title"] == "gmail from reader@example.com"

@@ -529,17 +529,11 @@ function KotxLogView({ projection }: { projection: KotxLogProjection }) {
       ) : (
         projection.rows.map((row) => <LogItem key={row.id} row={row} />)
       )}
-      <details className="rounded-md border bg-background px-2 py-1.5">
-        <summary className="cursor-pointer text-muted-foreground">
-          diagnostics
-          {projection.infrastructureCount > 0
-            ? ` (${projection.infrastructureCount} infrastructure records)`
-            : ""}
-        </summary>
-        <pre className="mt-2 max-h-96 overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-words font-mono">
-          {projection.diagnostics || "No collapsed diagnostics."}
-        </pre>
-      </details>
+      {projection.infrastructureCount > 0 && (
+        <div className="rounded-md border bg-background px-2 py-1.5 text-muted-foreground">
+          {projection.infrastructureCount} infrastructure records hidden.
+        </div>
+      )}
     </div>
   );
 }
@@ -551,21 +545,68 @@ function LogItem({ row }: { row: LogRow }) {
         <span className="flex min-w-0 items-center gap-2">
           <span className={cn("h-2 w-2 shrink-0 rounded-full", logKindClass(row.kind))} />
           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-            {row.kind}
+            {row.indicator}
           </span>
+          {row.recordId && (
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+              {row.recordId}
+            </span>
+          )}
           <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
           <span className="shrink-0 text-muted-foreground">{row.status}</span>
+          {row.tokens.length > 0 && (
+            <span className="shrink-0 text-muted-foreground">
+              {compactTokenText(row.tokens)}
+            </span>
+          )}
         </span>
       </summary>
       <div className="mt-1 space-y-1">
         {row.subtitle && <div className="break-words text-muted-foreground">{row.subtitle}</div>}
-        {row.body && <div className="break-words">{row.body}</div>}
-        <pre className="max-h-56 overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-words font-mono text-muted-foreground">
-          {row.raw}
-        </pre>
+        {row.tokens.length > 0 && <FieldLine fields={row.tokens} />}
+        {row.body && <LogBody row={row} />}
       </div>
     </details>
   );
+}
+
+function compactTokenText(fields: LogRow["tokens"]) {
+  return fields
+    .map((field) =>
+      field.label === "Input tokens"
+        ? `in ${field.value}`
+        : field.label === "Output tokens"
+          ? `out ${field.value}`
+          : `${field.label} ${field.value}`,
+    )
+    .join(" · ");
+}
+
+function FieldLine({ fields }: { fields: LogRow["tokens"] }) {
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+      {fields.map((field) => (
+        <span key={field.label}>
+          {field.label}: <span className="font-medium text-foreground">{field.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function LogBody({ row }: { row: LogRow }) {
+  if (!row.body) return null;
+  if (row.bodyFormat === "yaml") {
+    return (
+      <pre className="max-h-56 overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-words font-mono text-muted-foreground">
+        {row.body}
+      </pre>
+    );
+  }
+  if (row.bodyFormat === "markdown") {
+    return <Markdown content={row.body} className="text-xs" />;
+  }
+  return <div className="break-words">{row.body}</div>;
 }
 
 function logKindClass(kind: LogRow["kind"]) {
