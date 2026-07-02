@@ -1,5 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CircleDot, GitBranch, GitPullRequest, Pencil } from "lucide-react";
+import {
+  CircleAlert,
+  CircleDot,
+  GitBranch,
+  GitMerge,
+  GitPullRequest,
+  Pencil,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +14,11 @@ import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { isPrFollowUpRun, subjectLabel } from "@/components/runs/runLabels";
+import {
+  isMergeProposal,
+  isPrFollowUpRun,
+  subjectLabel,
+} from "@/components/runs/runLabels";
 import { formatJsonLikeText } from "@/lib/format";
 import { kotx, type KotxPr, type KotxTask } from "@/lib/kotx";
 import { projectKotxLog, type KotxLogProjection, type LogRow } from "@/lib/projections";
@@ -18,11 +29,12 @@ interface Props {
   // The run's primary document: TASK.md for implement/conflict runs, REVIEW.md
   // for review runs. Prompt and Log are always available as read-only views.
   doc: "task" | "review";
+  sameBranchTasks?: KotxTask[];
   onClose: () => void;
   onChanged: () => Promise<void> | void;
 }
 
-type View = "primary" | "pr" | "prompt" | "log";
+type View = "primary" | "merge" | "pr" | "prompt" | "log";
 const LOG_PAGE_SIZE = 200;
 const LOG_TOP_THRESHOLD = 8;
 
@@ -31,6 +43,7 @@ function load(
   doc: Props["doc"],
   view: Exclude<View, "log" | "pr">,
 ): Promise<string | null> {
+  if (view === "merge") return kotx.getMerge(task.id);
   if (view === "prompt") return kotx.getPrompt(task.id);
   return doc === "task" ? kotx.getBrief(task.id) : kotx.getReview(task.id);
 }
@@ -52,6 +65,7 @@ function branchUrl(task: KotxTask): string | null {
 
 function subjectUrl(task: KotxTask): string {
   const prNumber =
+    task.trackedPrNumber ??
     task.prNumber ??
     (task.subjectType === "pull_request" ? task.subjectNumber : null);
   if (prNumber && /^[^/\s]+\/[^/\s]+$/.test(task.repo)) {
@@ -60,8 +74,15 @@ function subjectUrl(task: KotxTask): string {
   return task.githubUrl;
 }
 
-export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
+export function RunDocModal({
+  task,
+  doc,
+  sameBranchTasks = [],
+  onClose,
+  onChanged,
+}: Props) {
   const primaryLabel = doc === "task" ? "TASK.md" : "REVIEW.md";
+  const mergeProposal = isMergeProposal(task);
   // Resolve-conflict runs have no brief — drop the TASK.md tab and open on the
   // prompt instead.
   const showPrimary = task.kind !== "resolve_conflict";
@@ -75,9 +96,14 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     (doc === "task" && task.state === "draft") ||
     (doc === "review" && task.state === "awaiting_approval");
 
-  const [view, setView] = useState<View>(
-    showPr ? "pr" : showPrimary ? "primary" : "prompt",
-  );
+  const defaultView: View = mergeProposal
+    ? "merge"
+    : showPr
+      ? "pr"
+      : showPrimary
+        ? "primary"
+        : "prompt";
+  const [view, setView] = useState<View>(defaultView);
   const [content, setContent] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [pr, setPr] = useState<KotxPr | null>(null);
@@ -98,10 +124,20 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   >(null);
 
   useEffect(() => {
+    setView(defaultView);
+  }, [defaultView, task.id]);
+
+  useEffect(() => {
     if (view === "log") return;
     let cancelled = false;
     setLoading(true);
     setEditing(false);
+    if (view === "pr") {
+      setPr(null);
+    } else {
+      setContent(null);
+      setDraft("");
+    }
     const request =
       view === "pr"
         ? kotx.getPr(task.id).then((data) => {
@@ -248,10 +284,37 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       setEditing(false);
     }, "PR saved");
 
+  const trackedPrNumber =
+    task.trackedPrNumber ??
+    task.prNumber ??
+    (task.subjectType === "pull_request" ? task.subjectNumber : null);
+  const mergeComment = view === "merge" ? content?.trim() ?? "" : "";
+  const canStartPrFollowUp =
+    mergeProposal && mergeComment.length > 0 && trackedPrNumber !== null;
+  const activeSameBranchTasks = sameBranchTasks.filter(
+    (sibling) => sibling.state === "queued" || sibling.state === "running",
+  );
+
+  const merge = () =>
+    withBusy(() => kotx.merge(task.id), "Merged", true);
+
+  const startPrFollowUp = () =>
+    withBusy(
+      () =>
+        kotx.createRun({
+          type: "implement",
+          repo: task.repo,
+          number: trackedPrNumber ?? undefined,
+        }),
+      "Run started",
+      true,
+    );
+
   const views: { key: View; label: string }[] = [
+    ...(mergeProposal ? [{ key: "merge" as const, label: "Approval" }] : []),
     // A PR proposal supersedes TASK.md — the brief isn't relevant once the run
     // has produced a PR to open, so drop it entirely.
-    ...(showPrimary && !showPr
+    ...(showPrimary && !showPr && !mergeProposal
       ? [{ key: "primary" as const, label: primaryLabel }]
       : []),
     ...(showPr ? [{ key: "pr" as const, label: "PR.md" }] : []),
@@ -382,6 +445,20 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               <Markdown content={pr.body} />
             </div>
           )
+        ) : view === "merge" ? (
+          content?.trim() ? (
+            <div className="h-full overflow-auto rounded-lg border p-3">
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <GitMerge className="h-3.5 w-3.5" />
+                MERGE_APPROVAL.md
+              </div>
+              <Markdown content={content} />
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+              No approval comment.
+            </div>
+          )
         ) : view === "log" ? (
           logText === null ? (
             <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
@@ -432,6 +509,15 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
 
       <div className="mt-3 flex shrink-0 items-center justify-between gap-3">
         <div className="min-w-0 flex-1 text-xs text-muted-foreground">
+          {mergeProposal && activeSameBranchTasks.length > 0 && (
+            <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-300">
+              <CircleAlert className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">
+                {activeSameBranchTasks.length} other run
+                {activeSameBranchTasks.length === 1 ? "" : "s"} still queued or running on this branch.
+              </span>
+            </span>
+          )}
           {reviewAssignee && (
             <span className="block truncate" title={reviewAssignee}>
               Assignee:{" "}
@@ -492,6 +578,28 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               </Button>
             </>
           )}
+          {!editing && view === "merge" && mergeProposal && (
+            <>
+              {mergeComment.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={startPrFollowUp}
+                  disabled={busy || !canStartPrFollowUp}
+                  title={
+                    trackedPrNumber === null
+                      ? "No tracked pull request is available"
+                      : undefined
+                  }
+                >
+                  Run with feedback
+                </Button>
+              )}
+              <Button size="sm" onClick={merge} disabled={busy}>
+                Merge
+              </Button>
+            </>
+          )}
           {!editing && (view === "primary" || view === "pr") && (
             <>
               {task.canComment && (
@@ -518,7 +626,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               )}
               {/* Approve stays last so it sits farthest from the Edit button and
                   isn't clicked by mistake when reaching for Edit. */}
-              {task.canApprove && !prFollowUpRun && (
+              {task.canApprove && !prFollowUpRun && !mergeProposal && (
                 <Button
                   variant={task.proposes === "pr" ? "default" : "outline"}
                   size="sm"
