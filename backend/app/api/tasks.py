@@ -34,13 +34,22 @@ from app.db.schemas.task import (
     TaskRead,
     TaskUpdate,
 )
+from app.events import publish_task
+from app.services.kotx import (
+    KotxConfigError,
+    KotxRunError,
+    KotxUnsupportedTaskError,
+    create_issue_run,
+    has_github_url,
+)
+from app.services.plan import schedule_task
+from app.services.source_url import source_url_for_raw_input
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import dismiss_task
 from app.services.task.open import open_task_from_input
 from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
-from app.services.source_url import source_url_for_raw_input
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -166,6 +175,47 @@ async def update_task(
         row = await update_task_svc(session, task_id, fields)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual, session)
+
+
+@router.post("/{task_id}/reschedule", response_model=TaskRead)
+async def reschedule_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+
+    result = await schedule_task(session, row)
+    if result is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task could not be scheduled")
+
+    publish_task(session, task_id)
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual, session)
+
+
+@router.post("/{task_id}/github_issue", response_model=TaskRead)
+async def create_github_issue(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    if has_github_url(row.link):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Task already has a GitHub URL")
+
+    try:
+        run = await create_issue_run(row)
+    except KotxUnsupportedTaskError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except KotxConfigError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except KotxRunError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+    row.link = run.issue_url
+    session.commit()
+    publish_task(session, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return _to_read(row, status_, is_manual, session)

@@ -3,9 +3,11 @@ import {
   CalendarClock,
   ChevronLeft,
   ExternalLink,
+  Github,
   Link2,
   MapPin,
   Pencil,
+  RefreshCw,
   Timer,
   X,
 } from "lucide-react";
@@ -73,14 +75,18 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     return () => window.clearTimeout(timer);
   }, [loading]);
 
+  const syncTaskState = (saved: Task) => {
+    setCurrent(saved);
+    setPickerDue(saved.due_date);
+    setPickerEstimation(saved.estimation);
+    setPickerLabel(saved.label ?? "");
+  };
+
   async function savePatch(patch: Partial<Task>, message = "Saved") {
     setBusy(true);
     try {
       const saved = await api.updateTask(current.id, patch);
-      setCurrent(saved);
-      setPickerDue(saved.due_date);
-      setPickerEstimation(saved.estimation);
-      setPickerLabel(saved.label ?? "");
+      syncTaskState(saved);
       toast.success(message);
       await onChanged();
       return saved;
@@ -91,6 +97,30 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
       setBusy(false);
     }
   }
+
+  async function runTaskAction(action: () => Promise<Task>, message: string) {
+    setBusy(true);
+    try {
+      const saved = await action();
+      syncTaskState(saved);
+      setEditingText(null);
+      setActivePicker(null);
+      toast.success(message);
+      await onChanged();
+      return saved;
+    } catch (e) {
+      toast.error((e as Error).message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const rescheduleCurrent = () =>
+    runTaskAction(() => api.rescheduleTask(current.id), "Task rescheduled");
+
+  const createGithubIssue = () =>
+    runTaskAction(() => api.createGithubIssue(current.id), "GitHub issue created");
 
   const openTextEditor = (field: TextField) => {
     setActivePicker(null);
@@ -192,6 +222,8 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
             const saved = await savePatch({ label: pickerLabel || null });
             if (saved) setActivePicker(null);
           }}
+          onReschedule={rescheduleCurrent}
+          onCreateGithubIssue={createGithubIssue}
         />
       )}
     </Modal>
@@ -271,6 +303,8 @@ function TaskSummary({
   onClearDue,
   onSaveEstimation,
   onSaveLabel,
+  onReschedule,
+  onCreateGithubIssue,
 }: {
   task: Task;
   labels: Label[];
@@ -296,6 +330,8 @@ function TaskSummary({
   onClearDue: () => void;
   onSaveEstimation: () => void;
   onSaveLabel: () => void;
+  onReschedule: () => void;
+  onCreateGithubIssue: () => void;
 }) {
   const labelMeta = labels.find((l) => l.name === task.label);
   const dueOverdue = isOverdue(task.due_date);
@@ -419,6 +455,18 @@ function TaskSummary({
               </button>
             </PickerAnchor>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onReschedule}
+              disabled={busy}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Reschedule
+            </Button>
+          </div>
         </div>
 
         <div className="space-y-1.5">
@@ -444,6 +492,7 @@ function TaskSummary({
             onChange={onChangeText}
             onCancel={onCancelText}
             onSave={() => onSaveText("link")}
+            onCreateGithubIssue={onCreateGithubIssue}
           />
         </div>
 
@@ -550,6 +599,7 @@ function LinksSection({
   onChange,
   onCancel,
   onSave,
+  onCreateGithubIssue,
 }: {
   task: Task;
   editing: boolean;
@@ -559,6 +609,7 @@ function LinksSection({
   onChange: (value: string) => void;
   onCancel: () => void;
   onSave: () => void;
+  onCreateGithubIssue: () => void;
 }) {
   if (editing) {
     return (
@@ -604,6 +655,19 @@ function LinksSection({
       </button>
       <div className="flex flex-wrap gap-1 pl-9">
         {task.link && <OpenLink href={task.link}>Open provided link</OpenLink>}
+        {canCreateGithubIssue(task) && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onCreateGithubIssue}
+            disabled={busy}
+            className="h-8 px-2 text-primary"
+          >
+            <Github className="h-3.5 w-3.5" />
+            Create GitHub issue
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -786,4 +850,13 @@ function OpenLink({ href, children }: { href: string; children: ReactNode }) {
 function normalizeOptional(value: string) {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+function canCreateGithubIssue(task: Task) {
+  return (task.label === "CSEE" || task.label === "Social AI") && !hasGithubUrl(task.link);
+}
+
+function hasGithubUrl(value: string | null) {
+  if (!value) return false;
+  return /^(https?:\/\/)?(www\.)?github\.com(\/|$)/i.test(value.trim());
 }
