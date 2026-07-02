@@ -3,6 +3,7 @@ import { CirclePlus, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
+import { Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
@@ -171,15 +172,14 @@ export function InputBody({ data }: { data: RawInput }) {
 
   return (
     <>
-      <FieldGrid fields={metadata.fields} />
-      {data.source_metadata && Object.keys(data.source_metadata).length > 0 && (
+      {metadata.fields.length > 0 && (
         <details className="rounded-md border bg-muted/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-xs text-muted-foreground">
-            metadata diagnostics
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            Metadata
           </summary>
-          <pre className="mt-2 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
-            {metadata.diagnostics}
-          </pre>
+          <div className="mt-2">
+            <FieldGrid fields={metadata.fields} />
+          </div>
         </details>
       )}
       {data.content && (
@@ -212,46 +212,45 @@ function FieldGrid({ fields }: { fields: ProjectionField[] }) {
 
 function TraceView({ trace }: { trace: ReturnType<typeof projectAgentTrace> }) {
   return (
-    <div className="space-y-2 rounded-md border bg-muted/10 p-2">
-      <div className="text-xs font-medium text-muted-foreground">Decision</div>
-      <FieldGrid fields={trace.summary} />
-      {trace.evidence.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground">Evidence</div>
-          {trace.evidence.map((row) => (
-            <EvidenceItem key={row.id} row={row} />
-          ))}
-        </div>
-      )}
-      {trace.tools.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground">Tools</div>
-          {trace.tools.map((row) => (
-            <ToolItem key={row.id} row={row} />
-          ))}
-        </div>
-      )}
-      <details className="rounded-md border bg-muted/20 px-2 py-1.5">
-        <summary className="cursor-pointer text-xs text-muted-foreground">
-          trace diagnostics
-        </summary>
-        <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
-          {trace.diagnostics}
-        </pre>
-      </details>
-    </div>
+    <details className="rounded-md border bg-muted/10 px-2 py-1.5">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+        Decision
+      </summary>
+      <div className="mt-2 space-y-2">
+        <FieldGrid fields={trace.summary} />
+        {trace.reason && (
+          <div className="rounded-md border bg-background p-2">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Reason</div>
+            <Markdown content={trace.reason} className="text-xs" />
+          </div>
+        )}
+        {trace.evidence.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted-foreground">Precedents</div>
+            {trace.evidence.map((row) => (
+              <EvidenceItem key={row.id} row={row} />
+            ))}
+          </div>
+        )}
+        {trace.tools.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted-foreground">Tools</div>
+            {trace.tools.map((row) => (
+              <ToolItem key={row.id} row={row} />
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
 function EvidenceItem({ row }: { row: EvidenceRow }) {
   const meta = [
-    row.kind,
-    row.status,
+    row.sender,
+    row.receivedAt ? fmtWhen(row.receivedAt) : null,
     row.source,
     row.similarity ? `sim ${row.similarity}` : null,
-    row.taskId ? `task ${row.taskId}` : null,
-    row.sender,
-    row.receivedAt,
   ].filter(Boolean);
 
   return (
@@ -264,14 +263,13 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
-        {row.selected && (
-          <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-            selected
-          </span>
+        {row.status && (
+          <Badge variant={statusBadgeVariant(row.status)} className="shrink-0">
+            {row.status}
+          </Badge>
         )}
       </div>
       <div className="mt-0.5 break-words text-muted-foreground">{meta.join(" · ")}</div>
-      {row.snippet && <div className="mt-1 break-words">{row.snippet}</div>}
     </div>
   );
 }
@@ -289,6 +287,11 @@ function ToolItem({ row }: { row: ToolRow }) {
           />
           <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
           <span className="shrink-0 text-muted-foreground">{row.status}</span>
+          {row.confidence && (
+            <span className="shrink-0 text-muted-foreground">
+              {row.confidence}
+            </span>
+          )}
           {row.changedState !== undefined && (
             <span className="shrink-0 text-muted-foreground">
               {row.changedState ? "changed" : "read-only"}
@@ -303,7 +306,8 @@ function ToolItem({ row }: { row: ToolRow }) {
             {row.input}
           </pre>
         )}
-        {row.result && <div className="break-words text-foreground">{row.result}</div>}
+        {row.reason && <Markdown content={row.reason} className="text-xs text-foreground" />}
+        {row.result && <Markdown content={row.result} className="text-xs text-foreground" />}
         {row.artifacts.length > 0 && (
           <div className="break-words">Artifacts: {row.artifacts.join(", ")}</div>
         )}
@@ -318,4 +322,19 @@ function toolStatusClass(status: ToolRow["status"]) {
   if (status === "denied") return "bg-orange-500";
   if (status === "skipped") return "bg-slate-400";
   return "bg-blue-500";
+}
+
+function statusBadgeVariant(status: string) {
+  if (
+    status === "open" ||
+    status === "closed" ||
+    status === "duplicate" ||
+    status === "not_task" ||
+    status === "updated" ||
+    status === "reopened" ||
+    status === "no_change"
+  ) {
+    return status;
+  }
+  return "muted";
 }

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
 from app.agent.input import runner  # noqa: E402
+from app.agent.tools.schemas import NEW_INPUT_TOOLS  # noqa: E402
 from app.db.clients.raw_inputs import SimilarInput  # noqa: E402
 
 
@@ -100,6 +101,12 @@ def test_not_task_title_falls_back_to_first_content_line():
     assert runner._candidate_title(hit) == "First meaningful line"
 
 
+def test_candidate_title_falls_back_to_sender_without_placeholder():
+    hit = _hit(subject=None, content_snippet="", sender="Ada Lovelace")
+
+    assert runner._candidate_title(hit) == "gmail from Ada Lovelace"
+
+
 def test_candidate_trace_ref_includes_readable_evidence_fields():
     hit = _hit()
 
@@ -136,3 +143,12 @@ def test_tool_result_entry_records_status_purpose_and_artifacts():
     assert entry["changed_state"] is True
     assert entry["artifact_refs"] == ["task:10000000-0000-0000-0000-000000000001"]
     assert entry["result_summary"] == "created task 10000000-0000-0000-0000-000000000001"
+
+
+def test_create_task_schema_requires_displayable_title():
+    create_task = next(tool for tool in NEW_INPUT_TOOLS if tool["name"] == "create_task")
+    title = create_task["parameters"]["properties"]["title"]
+
+    assert "title" in create_task["parameters"]["required"]
+    assert title["minLength"] == 3
+    assert "No subject" in title["description"]

@@ -197,6 +197,7 @@ async def run_new_input_agent(
             )
             trace["outcome"] = "task_created"
             trace["task_id"] = str(task.id)
+            trace["task_title"] = task.title
             iter_log.setdefault("tool_results", []).append(
                 _tool_result_entry(
                     tu.name,
@@ -414,7 +415,10 @@ def _candidate_title(hit: SimilarInput) -> str:
         if line:
             return line
 
-    return "(no subject)"
+    sender = _truncate_inline(hit.sender or "", 80)
+    if sender:
+        return f"{hit.source} from {sender}"
+    return f"{hit.source} input"
 
 
 def _candidate_trace_ref(hit: SimilarInput) -> dict[str, Any]:

@@ -227,7 +227,10 @@ def _candidate_title(hit: SimilarInput) -> str:
         line = _truncate_inline(raw_line, 120)
         if line:
             return line
-    return "(no subject)"
+    sender = _truncate_inline(hit.sender or "", 80)
+    if sender:
+        return f"{hit.source} from {sender}"
+    return f"{hit.source} input"
 
 
 def _truncate_inline(value: str, limit: int) -> str:

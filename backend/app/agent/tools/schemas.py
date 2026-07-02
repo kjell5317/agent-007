@@ -65,7 +65,14 @@ def _label_schema(*, required: bool) -> dict:
 
 
 _CREATE_TASK_PROPS: dict = {
-    "title": {"type": "string"},
+    "title": {
+        "type": "string",
+        "minLength": 3,
+        "description": (
+            "Short, specific, displayable task title. Do not use placeholders "
+            "such as 'No subject' or 'Untitled'."
+        ),
+    },
     "description": {"type": "string"},
     "estimation": {
         "type": "integer",
