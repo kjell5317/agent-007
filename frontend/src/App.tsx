@@ -16,17 +16,20 @@ import { useThemePreference } from "@/lib/theme";
 export function App() {
   const { tasks, inputs, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
-  const [tab, setTab] = useState("tasks");
+  const [tab, setTab] = useState<"tasks" | "runs">("tasks");
+  const [mailOpen, setMailOpen] = useState(false);
+  const [mailTab, setMailTab] = useState<"inbox" | "runs">("inbox");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
-  const runs = useRuns(tab === "runs");
+  const activeRuns = useRuns(!mailOpen && tab === "runs", "active");
+  const allRuns = useRuns(mailOpen && mailTab === "runs", "all", false);
   // Runs awaiting my action (ready to start, or a review ready to post).
   const runsActionable = useMemo(
     () =>
-      runs.tasks.filter(
+      activeRuns.tasks.filter(
         (t) => t.canStart || t.canApprove || t.canComment || isMergeProposal(t),
       ).length,
-    [runs.tasks],
+    [activeRuns.tasks],
   );
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [unreadTasks, setUnreadTasks] = useState(0);
@@ -93,11 +96,13 @@ export function App() {
       setSelectedTaskId(link.id);
       setSelectedRunId(null);
       setTab("tasks");
+      setMailOpen(false);
       return;
     }
     setSelectedRunId(link.id);
     setSelectedTaskId(null);
     setTab("runs");
+    setMailOpen(false);
   }, []);
 
   useEffect(() => {
@@ -116,8 +121,16 @@ export function App() {
 
   useEffect(() => {
     if (tab === "tasks" && unreadTasks > 0) markTasksViewed();
-    if (tab === "inbox" && unreadInbox > 0) markInboxViewed();
-  }, [markInboxViewed, markTasksViewed, tab, unreadInbox, unreadTasks]);
+    if (mailOpen && mailTab === "inbox" && unreadInbox > 0) markInboxViewed();
+  }, [
+    mailOpen,
+    mailTab,
+    markInboxViewed,
+    markTasksViewed,
+    tab,
+    unreadInbox,
+    unreadTasks,
+  ]);
 
   useEffect(() => {
     if (tab !== "tasks" || document.visibilityState !== "visible") return;
@@ -125,9 +138,11 @@ export function App() {
   }, [markTasksViewed, tab, tasks]);
 
   useEffect(() => {
-    if (tab !== "inbox" || document.visibilityState !== "visible") return;
+    if (!mailOpen || mailTab !== "inbox" || document.visibilityState !== "visible") {
+      return;
+    }
     markInboxViewed();
-  }, [markInboxViewed, tab, inputs]);
+  }, [inputs, mailOpen, mailTab, markInboxViewed]);
 
   // Refresh unread badges when the app comes back to the foreground. The
   // task/input lists themselves are already refreshed by useAppData on
@@ -147,16 +162,21 @@ export function App() {
 
   const onTabChange = useCallback(
     (value: string) => {
-      setTab(value);
+      if (value === "tasks" || value === "runs") setTab(value);
     },
     [],
   );
+
+  const onMailTabChange = useCallback((value: string) => {
+    if (value === "inbox" || value === "runs") setMailTab(value);
+  }, []);
 
   const openTask = useCallback((id: string) => {
     pushDeepLink({ kind: "task", id });
     setSelectedTaskId(id);
     setSelectedRunId(null);
     setTab("tasks");
+    setMailOpen(false);
   }, []);
 
   const openRun = useCallback(
@@ -177,68 +197,87 @@ export function App() {
 
   return (
     <div className="min-h-dvh pb-[120px]">
-      <Topbar theme={theme} onThemeChange={setTheme} />
+      <Topbar
+        theme={theme}
+        onThemeChange={setTheme}
+        mode={mailOpen ? "mail" : "normal"}
+        unreadInbox={unreadInbox}
+        onMailOpen={() => {
+          setMailTab("inbox");
+          setMailOpen(true);
+        }}
+        onBack={() => setMailOpen(false)}
+      />
       <main className="mx-auto max-w-2xl px-4 py-4">
-        <Tabs value={tab} onValueChange={onTabChange}>
-          <TabsList className="mb-4 grid w-full grid-cols-3">
-            <TabsTrigger value="tasks">
-              Tasks
-              {tasks.length > 0 && (
-                <span className="ml-1.5 text-xs text-muted-foreground">
-                  {tasks.length}
-                </span>
-              )}
-              {unreadTasks > 0 && (
-                <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {unreadTasks}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="inbox">
-              Inbox
-              {unreadInbox > 0 && (
-                <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {unreadInbox}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="runs">
-              Runs
-              {runsActionable > 0 && (
-                <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {runsActionable}
-                </span>
-              )}
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="tasks">
-            <TasksPanel
-              tasks={tasks}
-              onChanged={refresh}
-              seenAfter={seenTasksAt}
-              selectedTaskId={selectedTaskId}
-              onTaskOpen={openTask}
-              onSelectedTaskClose={closeSelectedModal}
-            />
-          </TabsContent>
-          <TabsContent value="inbox">
-            <InboxPanel
-              inputs={inputs}
-              onChanged={refresh}
-              onLoadMore={loadMoreInputs}
-              hasMore={hasMoreInputs}
-              seenAfter={seenInboxAt}
-            />
-          </TabsContent>
-          <TabsContent value="runs">
-            <RunsPanel
-              {...runs}
-              selectedRunId={selectedRunId}
-              onRunOpen={openRun}
-              onSelectedRunClose={closeSelectedModal}
-            />
-          </TabsContent>
-        </Tabs>
+        {mailOpen ? (
+          <Tabs value={mailTab} onValueChange={onMailTabChange}>
+            <TabsList className="mb-4 grid w-full grid-cols-2">
+              <TabsTrigger value="inbox">Inbox</TabsTrigger>
+              <TabsTrigger value="runs">Runs</TabsTrigger>
+            </TabsList>
+            <TabsContent value="inbox">
+              <InboxPanel
+                inputs={inputs}
+                onChanged={refresh}
+                onLoadMore={loadMoreInputs}
+                hasMore={hasMoreInputs}
+                seenAfter={seenInboxAt}
+              />
+            </TabsContent>
+            <TabsContent value="runs">
+              <RunsPanel
+                {...allRuns}
+                selectedRunId={selectedRunId}
+                onRunOpen={openRun}
+                onSelectedRunClose={closeSelectedModal}
+              />
+            </TabsContent>
+          </Tabs>
+        ) : (
+          <Tabs value={tab} onValueChange={onTabChange}>
+            <TabsList className="mb-4 grid w-full grid-cols-2">
+              <TabsTrigger value="tasks">
+                Tasks
+                {tasks.length > 0 && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">
+                    {tasks.length}
+                  </span>
+                )}
+                {unreadTasks > 0 && (
+                  <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {unreadTasks}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="runs">
+                Runs
+                {runsActionable > 0 && (
+                  <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {runsActionable}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="tasks">
+              <TasksPanel
+                tasks={tasks}
+                onChanged={refresh}
+                seenAfter={seenTasksAt}
+                selectedTaskId={selectedTaskId}
+                onTaskOpen={openTask}
+                onSelectedTaskClose={closeSelectedModal}
+              />
+            </TabsContent>
+            <TabsContent value="runs">
+              <RunsPanel
+                {...activeRuns}
+                selectedRunId={selectedRunId}
+                onRunOpen={openRun}
+                onSelectedRunClose={closeSelectedModal}
+              />
+            </TabsContent>
+          </Tabs>
+        )}
       </main>
       <Composer onCreated={refresh} />
       <Toaster />

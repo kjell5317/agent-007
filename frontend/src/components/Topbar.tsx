@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut } from "lucide-react";
+import { ArrowLeft, CircleUser, ExternalLink, LogOut, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,9 +40,17 @@ function PointsIcon({ className }: { className?: string }) {
 export function Topbar({
   theme,
   onThemeChange,
+  mode = "normal",
+  unreadInbox = 0,
+  onMailOpen,
+  onBack,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
+  mode?: "normal" | "mail";
+  unreadInbox?: number;
+  onMailOpen?: () => void;
+  onBack?: () => void;
 }) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
@@ -131,47 +139,75 @@ export function Topbar({
           }
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
-        {points != null && (
-          <div className="relative">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setPointsOpen(true)}
-              className="gap-1.5 tabular-nums"
-              title="Adjust points"
-            >
-              <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
-              <span
-                key={flash?.key ?? "idle"}
-                className={cn("inline-block", flash && "animate-points-pop")}
-              >
-                {formatPoints(points)}
-              </span>
-            </Button>
-            {flash && (
-              <span
-                key={flash.key}
-                onAnimationEnd={() => setFlash(null)}
-                className={cn(
-                  "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
-                  flash.delta >= 0 ? "text-emerald-500" : "text-destructive",
+        {mode === "mail" ? (
+          <Button onClick={onBack}>
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Button>
+        ) : (
+          <>
+            {points != null && (
+              <div className="relative">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPointsOpen(true)}
+                  className="gap-1.5 tabular-nums"
+                  title="Adjust points"
+                >
+                  <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
+                  <span
+                    key={flash?.key ?? "idle"}
+                    className={cn("inline-block", flash && "animate-points-pop")}
+                  >
+                    {formatPoints(points)}
+                  </span>
+                </Button>
+                {flash && (
+                  <span
+                    key={flash.key}
+                    onAnimationEnd={() => setFlash(null)}
+                    className={cn(
+                      "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
+                      flash.delta >= 0
+                        ? "text-emerald-500"
+                        : "text-destructive",
+                    )}
+                  >
+                    {flash.delta >= 0 ? "+" : "−"}
+                    {formatPoints(Math.abs(flash.delta))}
+                  </span>
                 )}
-              >
-                {flash.delta >= 0 ? "+" : "−"}
-                {formatPoints(Math.abs(flash.delta))}
-              </span>
+              </div>
             )}
-          </div>
-        )}
-        {email && (
-          <AccountMenu
-            email={email}
-            autoPoll={autoPoll}
-            theme={theme}
-            onToggleAutoPoll={toggleAutoPoll}
-            onThemeChange={onThemeChange}
-            onLogout={logout}
-          />
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onMailOpen}
+              aria-label={
+                unreadInbox > 0
+                  ? `Open mail, ${unreadInbox} unread`
+                  : "Open mail"
+              }
+              title="Mail"
+              className="relative"
+            >
+              <Mail className="h-5 w-5" />
+              {unreadInbox > 0 && (
+                <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-emerald-500" />
+              )}
+            </Button>
+            {email && (
+              <AccountMenu
+                email={email}
+                autoPoll={autoPoll}
+                theme={theme}
+                onToggleAutoPoll={toggleAutoPoll}
+                onThemeChange={onThemeChange}
+                onLogout={logout}
+              />
+            )}
+          </>
         )}
       </div>
       <PointsModal
