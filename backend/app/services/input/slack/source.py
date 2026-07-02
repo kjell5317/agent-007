@@ -124,6 +124,8 @@ class SlackSource(IngestionSource):
                     if not result.body.strip():
                         continue
 
+                    permalink = await self.client.get_permalink(channel_id, ts)
+
                     yield RawInputCreate(
                         source="slack",
                         external_id=f"{channel_id}:{ts}",
@@ -131,6 +133,7 @@ class SlackSource(IngestionSource):
                         source_metadata={
                             "account": self.account_key,
                             "truncated": result.truncated,
+                            "permalink": permalink,
                             **result.metadata,
                         },
                     )

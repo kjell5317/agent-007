@@ -8,19 +8,34 @@ def source_url_for_raw_input(raw) -> str | None:
         return None
 
     metadata = raw.source_metadata or {}
-    if raw.source == "gmail":
-        thread_id = metadata.get("thread_id")
-        if not isinstance(thread_id, str) or not thread_id.strip():
-            return None
 
-        thread = quote(thread_id.strip(), safe="")
+    # A permalink captured at ingestion (Slack's chat.getPermalink today) is the
+    # source's own canonical URL — always prefer it over anything we rebuild.
+    permalink = metadata.get("permalink")
+    if isinstance(permalink, str) and permalink.strip():
+        return permalink.strip()
+
+    if raw.source == "gmail":
         account = metadata.get("account")
-        if isinstance(account, str) and account.strip():
-            return (
-                "https://mail.google.com/mail/?"
-                f"{urlencode({'authuser': account.strip()})}#all/{thread}"
-            )
-        return f"https://mail.google.com/mail/u/0/#all/{thread}"
+        authuser = account.strip() if isinstance(account, str) and account.strip() else None
+
+        # The web UI's thread slug (e.g. FMfcg…) can't be derived from the API's
+        # threadId, and a bare threadId in #all/ no longer reliably resolves. An
+        # rfc822msgid: search jumps straight to the message and is stable across
+        # Gmail's id changes, so prefer it; fall back to the thread id.
+        message_id = metadata.get("message_id_header")
+        if isinstance(message_id, str) and message_id.strip():
+            query = "rfc822msgid:" + message_id.strip().strip("<>")
+            fragment = f"search/{quote(query, safe=':')}"
+        else:
+            thread_id = metadata.get("thread_id")
+            if not isinstance(thread_id, str) or not thread_id.strip():
+                return None
+            fragment = f"all/{quote(thread_id.strip(), safe='')}"
+
+        if authuser:
+            return f"https://mail.google.com/mail/?{urlencode({'authuser': authuser})}#{fragment}"
+        return f"https://mail.google.com/mail/u/0/#{fragment}"
 
     if raw.source == "slack":
         channel_id = metadata.get("channel_id")

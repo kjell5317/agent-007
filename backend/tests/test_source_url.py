@@ -3,7 +3,24 @@ from types import SimpleNamespace
 from app.services.source_url import source_url_for_raw_input
 
 
-def test_gmail_source_url_uses_account_and_thread_id():
+def test_gmail_source_url_uses_rfc822msgid_search():
+    raw = SimpleNamespace(
+        source="gmail",
+        external_id="msg-1",
+        source_metadata={
+            "account": "me@example.com",
+            "thread_id": "thread-123",
+            "message_id_header": "<CAF+abc@mail.gmail.com>",
+        },
+    )
+
+    assert source_url_for_raw_input(raw) == (
+        "https://mail.google.com/mail/?authuser=me%40example.com"
+        "#search/rfc822msgid:CAF%2Babc%40mail.gmail.com"
+    )
+
+
+def test_gmail_source_url_falls_back_to_thread_id():
     raw = SimpleNamespace(
         source="gmail",
         external_id="msg-1",
@@ -19,7 +36,36 @@ def test_gmail_source_url_uses_account_and_thread_id():
     )
 
 
-def test_slack_source_url_uses_channel_and_external_message_ts():
+def test_gmail_source_url_without_account_uses_default_user():
+    raw = SimpleNamespace(
+        source="gmail",
+        external_id="msg-1",
+        source_metadata={"thread_id": "thread-123"},
+    )
+
+    assert (
+        source_url_for_raw_input(raw)
+        == "https://mail.google.com/mail/u/0/#all/thread-123"
+    )
+
+
+def test_slack_source_url_prefers_stored_permalink():
+    raw = SimpleNamespace(
+        source="slack",
+        external_id="C123:1710000000.000100",
+        source_metadata={
+            "channel_id": "C123",
+            "permalink": "https://acme.slack.com/archives/C123/p1710000000000100",
+        },
+    )
+
+    assert (
+        source_url_for_raw_input(raw)
+        == "https://acme.slack.com/archives/C123/p1710000000000100"
+    )
+
+
+def test_slack_source_url_falls_back_to_app_redirect_without_permalink():
     raw = SimpleNamespace(
         source="slack",
         external_id="C123:1710000000.000100",

@@ -73,6 +73,26 @@ class SlackClient:
                     return
                 params["cursor"] = cursor
 
+    async def get_permalink(self, channel: str, message_ts: str) -> str | None:
+        """Canonical archive URL for a message via chat.getPermalink.
+
+        Best-effort: returns None on any failure (deleted message, missing
+        scope, transient error) so a missing permalink never drops the message.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+                resp = await client.get(
+                    f"{_BASE}/chat.getPermalink",
+                    params={"channel": channel, "message_ts": message_ts},
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+        except httpx.HTTPError:
+            return None
+        if not payload.get("ok"):
+            return None
+        return payload.get("permalink")
+
     async def users_info(self, user_id: str) -> dict | None:
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             resp = await client.get(f"{_BASE}/users.info", params={"user": user_id})
