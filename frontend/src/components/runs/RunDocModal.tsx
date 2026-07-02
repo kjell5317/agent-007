@@ -7,7 +7,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { subjectLabel } from "@/components/runs/runLabels";
+import { isPrFollowUpRun, subjectLabel } from "@/components/runs/runLabels";
 import { formatJsonLikeText } from "@/lib/format";
 import { kotx, type KotxPr, type KotxTask } from "@/lib/kotx";
 import { projectKotxLog, type KotxLogProjection, type LogRow } from "@/lib/projections";
@@ -55,9 +55,10 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   // Resolve-conflict runs have no brief — drop the TASK.md tab and open on the
   // prompt instead.
   const showPrimary = task.kind !== "resolve_conflict";
+  const prFollowUpRun = isPrFollowUpRun(task);
   // The proposed PR (title + body) is editable only while the task is awaiting
   // approval — the same window in which `proposes` is "pr".
-  const showPr = task.proposes === "pr";
+  const showPr = task.proposes === "pr" && !prFollowUpRun;
   // kotx only accepts the PUT in the matching state; mirror that here so we
   // don't offer an Edit button that would 409.
   const canEditPrimary =
@@ -495,7 +496,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             )}
             {/* Approve stays last so it sits farthest from the Edit button and
                 isn't clicked by mistake when reaching for Edit. */}
-            {task.canApprove && (
+            {task.canApprove && !prFollowUpRun && (
               <Button
                 variant={task.proposes === "pr" ? "default" : "outline"}
                 size="sm"
