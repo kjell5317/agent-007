@@ -557,7 +557,7 @@ async def test_notification_done_and_dismiss_callbacks_use_task_services(monkeyp
 @pytest.mark.asyncio
 async def test_overdue_scheduled_cron_reschedules_with_previous_slot_blocked(monkeypatch):
     task_id = uuid.uuid4()
-    scheduled = datetime.now(timezone.utc) - timedelta(minutes=20)
+    scheduled = datetime.now(timezone.utc) - timedelta(minutes=50)
     task = SimpleNamespace(
         id=task_id,
         title="Write report",
@@ -602,12 +602,58 @@ async def test_overdue_scheduled_cron_reschedules_with_previous_slot_blocked(mon
 
 
 @pytest.mark.asyncio
+async def test_overdue_scheduled_cron_waits_until_frame_and_grace_elapsed(monkeypatch):
+    task_id = uuid.uuid4()
+    scheduled = datetime.now(timezone.utc) - timedelta(minutes=20)
+    task = SimpleNamespace(
+        id=task_id,
+        title="Write report",
+        due_date=datetime.now(timezone.utc) + timedelta(days=1),
+        scheduled_date=scheduled,
+        calendar_event_id="event-1",
+        estimation=30,
+    )
+    session = _sqlite_points_session()
+    calls: list[uuid.UUID] = []
+    published_points: list[float] = []
+    notified: list[int] = []
+    published_tasks: list[uuid.UUID] = []
+
+    @contextmanager
+    def fake_session_local():
+        yield session
+
+    async def fake_schedule_task(_session, _task, **_kwargs):
+        calls.append(_task.id)
+        return (scheduled + timedelta(hours=1), scheduled + timedelta(hours=1, minutes=30))
+
+    async def fake_notify(*_args, **_kwargs):
+        notified.append(1)
+
+    monkeypatch.setattr(cron, "SessionLocal", fake_session_local)
+    monkeypatch.setattr(cron.tasks_store, "overdue_scheduled_open", lambda _session, *, cutoff: [task])
+    monkeypatch.setattr(cron, "schedule_task", fake_schedule_task)
+    monkeypatch.setattr(cron, "publish_task", lambda _session, task_id_arg: published_tasks.append(task_id_arg))
+    monkeypatch.setattr(cron, "publish_points", lambda session_arg: published_points.append(points_store.total(session_arg)))
+    monkeypatch.setattr(cron, "notify_points_penalty", fake_notify)
+
+    summary = await cron.reschedule_overdue_scheduled_tasks_once()
+
+    assert summary == {"attempted": 0, "rescheduled": 0, "points_subtracted": 0}
+    assert calls == []
+    assert points_store.total(session) == 0
+    assert published_points == []
+    assert notified == []
+    assert published_tasks == []
+
+
+@pytest.mark.asyncio
 async def test_overdue_scheduled_cron_does_not_penalize_failed_reschedule(monkeypatch):
     task = SimpleNamespace(
         id=uuid.uuid4(),
         title="Write report",
         due_date=datetime.now(timezone.utc) + timedelta(days=1),
-        scheduled_date=datetime.now(timezone.utc) - timedelta(minutes=20),
+        scheduled_date=datetime.now(timezone.utc) - timedelta(minutes=50),
         calendar_event_id="event-1",
         estimation=30,
     )
