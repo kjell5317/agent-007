@@ -47,6 +47,18 @@ const TEXT_LABEL: Record<TextField, string> = {
   location: "Location",
 };
 
+const TASK_SUMMARY_BADGE_BUTTON_CLASS =
+  "relative inline-flex h-8 items-center justify-center overflow-hidden rounded-full text-xs font-medium transition-colors before:pointer-events-none before:absolute before:inset-0 before:z-10 before:rounded-full before:bg-foreground/0 before:content-[''] before:transition-colors hover:before:bg-foreground/[0.06] disabled:pointer-events-none disabled:opacity-50 dark:hover:before:bg-white/[0.08]";
+const TASK_SUMMARY_BADGE_CONTENT_CLASS =
+  "relative z-20 inline-flex h-full items-center gap-1 rounded-full border border-transparent px-3";
+const TASK_SUMMARY_MUTED_BADGE_CLASS = "bg-muted text-muted-foreground";
+const TASK_SUMMARY_OPEN_BADGE_CLASS =
+  "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200";
+const TASK_SUMMARY_URGENT_BADGE_CLASS =
+  "bg-orange-500 text-white dark:bg-orange-500/25 dark:text-orange-100";
+const TASK_SUMMARY_OVERDUE_BADGE_CLASS =
+  "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
+
 export function TaskDetailModal({ task, onClose, onChanged }: Props) {
   const labels = useLabels();
   const [current, setCurrent] = useState(task);
@@ -337,6 +349,11 @@ function TaskSummary({
   const labelMeta = labels.find((l) => l.name === task.label);
   const dueOverdue = isOverdue(task.due_date);
   const dueUrgent = isUrgent(task.due_date, task.estimation);
+  const dueClass = dueOverdue
+    ? TASK_SUMMARY_OVERDUE_BADGE_CLASS
+    : dueUrgent
+      ? TASK_SUMMARY_URGENT_BADGE_CLASS
+      : TASK_SUMMARY_OPEN_BADGE_CLASS;
 
   return (
     <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
@@ -359,23 +376,17 @@ function TaskSummary({
               type="button"
               onClick={() => onEditPicker("label")}
               disabled={busy}
-              className="rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
+              className={cn(
+                TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                task.label
+                  ? labelChipClass(labelMeta?.color)
+                  : TASK_SUMMARY_MUTED_BADGE_CLASS,
+              )}
               title={labelMeta?.description ?? task.label ?? "Set label"}
             >
-              {task.label ? (
-                <span
-                  className={cn(
-                    "inline-flex h-8 items-center rounded-full px-3 text-xs font-medium",
-                    labelChipClass(labelMeta?.color),
-                  )}
-                >
-                  {task.label}
-                </span>
-              ) : (
-                <Badge variant="muted" className="h-8 px-3">
-                  No label
-                </Badge>
-              )}
+              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                {task.label ?? "No label"}
+              </span>
             </button>
           </PickerAnchor>
 
@@ -416,22 +427,15 @@ function TaskSummary({
               onClick={() => onEditPicker("due_date")}
               disabled={busy}
               title={task.due_date ? `Due ${fmtDue(task.due_date)}` : "Set due date"}
-              className="disabled:pointer-events-none disabled:opacity-50"
-            >
-              {task.due_date ? (
-                <Badge
-                  variant={dueOverdue ? "overdue" : dueUrgent ? "urgent" : "open"}
-                  className="h-8 gap-1 px-3"
-                >
-                  <AlarmClock className="h-3 w-3" />
-                  {fmtDue(task.due_date)}
-                </Badge>
-              ) : (
-                <Badge variant="muted" className="h-8 gap-1 px-3">
-                  <AlarmClock className="h-3 w-3" />
-                  No due date
-                </Badge>
+              className={cn(
+                TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                task.due_date ? dueClass : TASK_SUMMARY_MUTED_BADGE_CLASS,
               )}
+            >
+              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                <AlarmClock className="h-3 w-3" />
+                {task.due_date ? fmtDue(task.due_date) : "No due date"}
+              </span>
             </button>
           </PickerAnchor>
 
@@ -451,10 +455,15 @@ function TaskSummary({
               type="button"
               onClick={() => onEditPicker("estimation")}
               disabled={busy}
-              className="inline-flex h-8 items-center gap-1 rounded-full bg-muted px-3 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className={cn(
+                TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                TASK_SUMMARY_MUTED_BADGE_CLASS,
+              )}
             >
-              <Timer className="h-3 w-3" />
-              {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                <Timer className="h-3 w-3" />
+                {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+              </span>
             </button>
           </PickerAnchor>
 
