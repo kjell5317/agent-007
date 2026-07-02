@@ -261,7 +261,11 @@ function evidenceFromRecord(
 ): EvidenceRow {
   const rawId = stringValue(record.row_id) ?? stringValue(record.ref) ?? stringValue(record.id);
   const id = rawId ?? fallbackId;
-  const title = stringValue(record.title) ?? stringValue(record.subject) ?? "";
+  const title =
+    stringValue(record.title) ??
+    stringValue(record.subject) ??
+    firstLine(stringValue(record.snippet) ?? stringValue(record.content_snippet)) ??
+    "";
 
   return {
     id,
@@ -667,6 +671,15 @@ function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
   }
 
   return visible;
+}
+
+function firstLine(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  for (const line of value.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
 }
 
 function isUsableEvidenceTitle(title: string): boolean {
