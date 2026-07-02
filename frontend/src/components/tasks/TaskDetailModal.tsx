@@ -134,8 +134,20 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     <Modal
       open
       onClose={onClose}
-      title="Task details"
-      titleClassName="text-lg"
+      title={
+        <TaskTitleHeader
+          task={current}
+          editing={editingText === "title"}
+          draft={textDraft}
+          busy={busy}
+          onEdit={() => openTextEditor("title")}
+          onChange={setTextDraft}
+          onCancel={closeTextEditor}
+          onSave={() => saveTextEditor("title")}
+        />
+      }
+      titleLabel={current.title}
+      titleClassName="text-2xl font-semibold leading-tight"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
     >
       {loading ? (
@@ -183,6 +195,54 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
         />
       )}
     </Modal>
+  );
+}
+
+function TaskTitleHeader({
+  task,
+  editing,
+  draft,
+  busy,
+  onEdit,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  task: Task;
+  editing: boolean;
+  draft: string;
+  busy: boolean;
+  onEdit: () => void;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  if (editing) {
+    return (
+      <div className="text-left text-sm font-normal leading-normal">
+        <InlineTextEditor
+          label={TEXT_LABEL.title}
+          value={draft}
+          busy={busy}
+          onChange={onChange}
+          onCancel={onCancel}
+          onSave={onSave}
+          inputClassName="text-2xl font-semibold leading-tight"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onEdit}
+      disabled={busy}
+      className="group flex w-full min-w-0 items-start justify-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+    >
+      <span className="min-w-0 break-words">{task.title}</span>
+      <Pencil className="ml-2 mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+    </button>
   );
 }
 
@@ -245,62 +305,42 @@ function TaskSummary({
     <div className="min-h-0 flex-1 overflow-auto pr-1">
       <div className="space-y-5">
         <div className="space-y-3">
-          {editingText === "title" ? (
-            <InlineTextEditor
-              label={TEXT_LABEL.title}
-              value={textDraft}
-              busy={busy}
-              onChange={onChangeText}
-              onCancel={onCancelText}
-              onSave={() => onSaveText("title")}
-              inputClassName="text-xl font-semibold"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => onEditText("title")}
-              disabled={busy}
-              className="group block w-full rounded-md text-left text-2xl font-semibold leading-tight transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50"
-            >
-              <span className="break-words">{task.title}</span>
-              <Pencil className="ml-2 inline h-4 w-4 align-baseline text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-            </button>
-          )}
-
-          <div className="relative inline-block">
-            <button
-              type="button"
-              onClick={() => onEditPicker("label")}
-              disabled={busy}
-              className="rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
-              title={labelMeta?.description ?? task.label ?? "Set label"}
-            >
-              {task.label ? (
-                <span
-                  className={cn(
-                    "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
-                    labelChipClass(labelMeta?.color),
-                  )}
-                >
-                  {task.label}
-                </span>
-              ) : (
-                <Badge variant="muted">No label</Badge>
-              )}
-            </button>
-            {activePicker === "label" && (
-              <InlinePickerPanel title="Label" onClose={onClosePicker}>
-                <LabelPicker
-                  value={pickerLabel}
-                  onChange={onPickerLabelChange}
-                  onSave={onSaveLabel}
-                  labels={labels}
-                />
-              </InlinePickerPanel>
-            )}
-          </div>
-
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <PickerAnchor
+              open={activePicker === "label"}
+              panel={
+                <InlinePickerPanel title="Label" onClose={onClosePicker}>
+                  <LabelPicker
+                    value={pickerLabel}
+                    onChange={onPickerLabelChange}
+                    onSave={onSaveLabel}
+                    labels={labels}
+                  />
+                </InlinePickerPanel>
+              }
+            >
+              <button
+                type="button"
+                onClick={() => onEditPicker("label")}
+                disabled={busy}
+                className="rounded-full transition-transform hover:scale-[1.02] disabled:pointer-events-none disabled:opacity-50"
+                title={labelMeta?.description ?? task.label ?? "Set label"}
+              >
+                {task.label ? (
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
+                      labelChipClass(labelMeta?.color),
+                    )}
+                  >
+                    {task.label}
+                  </span>
+                ) : (
+                  <Badge variant="muted">No label</Badge>
+                )}
+              </button>
+            </PickerAnchor>
+
             {task.scheduled_date && (
               <Badge variant="muted" className="gap-1">
                 <CalendarClock className="h-3 w-3" />
@@ -520,8 +560,6 @@ function LinksSection({
   onCancel: () => void;
   onSave: () => void;
 }) {
-  const hasSource = Boolean(task.source_url && task.source_url !== task.link);
-
   if (editing) {
     return (
       <div className="rounded-lg bg-accent/40 p-2">
@@ -539,12 +577,12 @@ function LinksSection({
   }
 
   return (
-    <div className="space-y-1 rounded-lg p-2">
+    <div className="space-y-1">
       <button
         type="button"
         onClick={onEdit}
         disabled={busy}
-        className="group flex w-full min-w-0 items-start gap-3 rounded-md text-left transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50"
+        className="group flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
       >
         <span className="mt-0.5 shrink-0 text-muted-foreground">
           <Link2 className="h-4 w-4" />
@@ -564,11 +602,8 @@ function LinksSection({
         </span>
         <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </button>
-      <div className="flex flex-wrap gap-1 pl-7">
+      <div className="flex flex-wrap gap-1 pl-9">
         {task.link && <OpenLink href={task.link}>Open provided link</OpenLink>}
-        {hasSource && task.source_url && (
-          <OpenLink href={task.source_url}>Open original source</OpenLink>
-        )}
       </div>
     </div>
   );
