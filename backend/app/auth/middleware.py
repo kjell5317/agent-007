@@ -17,7 +17,6 @@ SessionMiddleware populates request.session before AuthMiddleware reads it.
 from __future__ import annotations
 
 import logging
-import uuid
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
