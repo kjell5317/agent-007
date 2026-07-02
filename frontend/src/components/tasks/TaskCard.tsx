@@ -121,7 +121,7 @@ export function TaskCard({ task, onChanged, seenAfter, onOpen }: Props) {
                 <span
                   title={labelMeta?.description ?? task.label}
                   className={cn(
-                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                    "inline-flex items-center rounded-full border border-transparent px-2 py-0.5 text-xs font-medium",
                     labelChipClass(labelMeta?.color),
                   )}
                 >

@@ -339,9 +339,9 @@ function TaskSummary({
   const dueUrgent = isUrgent(task.due_date, task.estimation);
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto pr-1">
+    <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
       <div className="space-y-5">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
           <PickerAnchor
             open={activePicker === "label"}
             panel={
@@ -505,21 +505,20 @@ function TaskSummary({
             onSave={() => onSaveText("link")}
             onCreateGithubIssue={onCreateGithubIssue}
           />
+          <EditableTextBlock
+            field="description"
+            value={task.description}
+            fallback="Add description"
+            editing={editingText === "description"}
+            draft={textDraft}
+            busy={busy}
+            multiline
+            onEdit={() => onEditText("description")}
+            onChange={onChangeText}
+            onCancel={onCancelText}
+            onSave={() => onSaveText("description")}
+          />
         </div>
-
-        <EditableTextBlock
-          field="description"
-          value={task.description}
-          fallback="Add description"
-          editing={editingText === "description"}
-          draft={textDraft}
-          busy={busy}
-          multiline
-          onEdit={() => onEditText("description")}
-          onChange={onChangeText}
-          onCancel={onCancelText}
-          onSave={() => onSaveText("description")}
-        />
 
         <LinkedInputsSection inputs={task.raw_inputs ?? []} />
       </div>

@@ -1,12 +1,21 @@
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
 export function isToday(iso: string | null): boolean {
   if (!iso) return false;
-  const d = new Date(iso);
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
+  return sameDay(new Date(iso), new Date());
+}
+
+export function isTomorrow(iso: string | null): boolean {
+  if (!iso) return false;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return sameDay(new Date(iso), tomorrow);
 }
 
 export function isOverdue(iso: string | null): boolean {
@@ -36,8 +45,15 @@ export function fmtDue(iso: string | null): string {
   const d = new Date(iso);
   // Always show the local time alongside the date — otherwise a deadline
   // of "tomorrow 17:00" reads as just "May 26" and loses the hour.
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (isToday(iso)) return `Today ${time}`;
+  if (isTomorrow(iso)) return `Tomorrow ${time}`;
   return d.toLocaleString(undefined, {
-    ...(isToday(iso) ? {} : { month: "short", day: "numeric" }),
+    month: "short",
+    day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
