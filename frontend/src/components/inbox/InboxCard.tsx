@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -167,17 +167,39 @@ export function InputBody({ data }: { data: RawInput }) {
   return (
     <>
       {data.content && (
-        <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">
-            content
-          </summary>
+        <InputBodySection title="Source content" defaultOpen>
           <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
             {data.content}
           </pre>
-        </details>
+        </InputBodySection>
       )}
       {trace && <TraceView trace={trace} />}
     </>
+  );
+}
+
+function InputBodySection({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+      className="space-y-1"
+    >
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+        {title}
+      </summary>
+      <div className="space-y-1">{children}</div>
+    </details>
   );
 }
 
@@ -207,20 +229,18 @@ function TraceView({ trace }: { trace: ReturnType<typeof projectAgentTrace> }) {
         </div>
       )}
       {trace.evidence.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground">Precedents</div>
+        <InputBodySection title="Precedents">
           {trace.evidence.map((row) => (
             <EvidenceItem key={row.id} row={row} />
           ))}
-        </div>
+        </InputBodySection>
       )}
       {trace.tools.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground">Tools</div>
+        <InputBodySection title="Tool calls">
           {trace.tools.map((row) => (
             <ToolItem key={row.id} row={row} />
           ))}
-        </div>
+        </InputBodySection>
       )}
     </div>
   );
