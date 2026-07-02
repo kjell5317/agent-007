@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
+import { SkeletonBlock } from "@/components/ui/skeleton";
 import { IconAction, RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
 import { runTitle } from "@/components/runs/runLabels";
@@ -165,7 +166,7 @@ export function RunsPanel({
         </Collapsible>
 
         {loading && tasks.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+          <RunListSkeleton />
         ) : tasks.length === 0 ? (
           <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
             No {scope === "active" ? "active " : ""}runs.
@@ -188,6 +189,26 @@ export function RunsPanel({
         />
       )}
     </>
+  );
+}
+
+function RunListSkeleton() {
+  return (
+    <div className="space-y-2">
+      {[0, 1, 2].map((i) => (
+        <Card key={i}>
+          <CardContent className="flex items-center gap-2 p-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <SkeletonBlock className="h-4 w-3/5" />
+              <div className="flex items-center gap-2">
+                <SkeletonBlock className="h-4 w-16 rounded-full" />
+                <SkeletonBlock className="h-3 w-24" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   );
 }
 
@@ -288,16 +309,18 @@ function RunGroupCard({
             <div className="min-w-0 truncate font-medium leading-snug" title={title}>
               {title}
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              <GroupStatusBadge group={group} />
-              <span className="truncate font-medium" title={group.repo}>
+            <div className="mt-1 flex items-center gap-x-2 text-xs text-muted-foreground">
+              <span className="shrink-0">
+                <GroupStatusBadge group={group} />
+              </span>
+              <span className="min-w-0 truncate font-medium" title={group.repo}>
                 {group.repo}
               </span>
               {hasMultipleRuns && (
-                <>
+                <span className="flex shrink-0 items-center gap-x-2">
                   <MetaDot />
                   <span className="font-medium">{group.tasks.length} runs</span>
-                </>
+                </span>
               )}
             </div>
           </div>

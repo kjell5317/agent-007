@@ -141,8 +141,10 @@ export function RunCard({ task, onChanged, onOpen, displayMode = "default" }: Pr
           <div className="min-w-0 truncate font-medium leading-snug" title={title}>
             {title}
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <RunStatusBadge task={task} />
+          <div className="flex min-w-0 items-center gap-x-3 text-xs text-muted-foreground">
+            <span className="shrink-0">
+              <RunStatusBadge task={task} />
+            </span>
             <span className="min-w-0 flex-1 truncate" title={task.repo}>
               {task.repo}
             </span>
