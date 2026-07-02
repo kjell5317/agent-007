@@ -22,7 +22,7 @@ from app.agent.helpers.llm import (
     user_message,
 )
 from app.agent.tools.notes_lookup import run_search_notes
-from app.agent.helpers.text import now_iso, parse_iso
+from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
 
@@ -97,7 +97,7 @@ async def extract_task_fields(session: Session, raw, *, context_inputs=()) -> di
         messages.extend(results)
 
     if "due_date" in payload:
-        payload["due_date"] = parse_iso(str(payload["due_date"]))
+        payload["due_date"] = normalize_agent_due_date(payload["due_date"])
     _backstop_required(payload, raw_id=raw.id)
     return payload
 

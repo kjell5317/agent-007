@@ -39,6 +39,12 @@ def test_settings_prefers_llm_model_and_keeps_claude_model_fallback():
     assert defaulted.effective_llm_model == DEFAULT_ANTHROPIC_MODEL
 
 
+def test_settings_default_commute_event_buffer_is_15_minutes():
+    settings = Settings(database_url="postgresql+psycopg://test:test@localhost/test")
+
+    assert settings.commute_event_buffer_minutes == 15
+
+
 @pytest.mark.asyncio
 async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
     captured = {}

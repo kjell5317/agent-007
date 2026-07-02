@@ -52,7 +52,7 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
                 input={
                     "title": "Send quarterly report",
                     "estimation": 30,
-                    "due_date": "2026-07-02T09:00:00+00:00",
+                    "due_date": "2026-07-02T09:01:00+00:00",
                     "label": "admin",
                 },
             )
@@ -85,4 +85,4 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
     assert len(calls[1]["messages"]) == 3
     assert calls[1]["messages"][-1].role == "tool"
     assert payload["title"] == "Send quarterly report"
-    assert payload["due_date"].isoformat() == "2026-07-02T09:00:00+00:00"
+    assert payload["due_date"].isoformat() == "2026-07-02T09:05:00+00:00"
