@@ -5,8 +5,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { toYaml } from "@/lib/format";
 import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
+import {
+  projectAgentTrace,
+  projectSourceMetadata,
+  type EvidenceRow,
+  type ProjectionField,
+  type ToolRow,
+} from "@/lib/projections";
 import { cn } from "@/lib/utils";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import type { RawInput } from "@/lib/types";
@@ -156,24 +162,23 @@ export function ActionButton({
 }
 
 export function InputBody({ data }: { data: RawInput }) {
+  const metadata = projectSourceMetadata(
+    data.source,
+    data.external_id,
+    data.source_metadata,
+  );
+  const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
+
   return (
     <>
-      <div className="text-xs text-muted-foreground">
-        Source: {data.source}
-        {data.external_id ? (
-          <>
-            {" · "}
-            <code className="font-mono">{data.external_id}</code>
-          </>
-        ) : null}
-      </div>
+      <FieldGrid fields={metadata.fields} />
       {data.source_metadata && Object.keys(data.source_metadata).length > 0 && (
-        <details>
+        <details className="rounded-md border bg-muted/20 px-2 py-1.5">
           <summary className="cursor-pointer text-xs text-muted-foreground">
-            metadata
+            metadata diagnostics
           </summary>
-          <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
-            {toYaml(data.source_metadata)}
+          <pre className="mt-2 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
+            {metadata.diagnostics}
           </pre>
         </details>
       )}
@@ -187,16 +192,130 @@ export function InputBody({ data }: { data: RawInput }) {
           </pre>
         </details>
       )}
-      {data.agent_trace && (
-        <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">
-            agent trace
-          </summary>
-          <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
-            {toYaml(data.agent_trace)}
-          </pre>
-        </details>
-      )}
+      {trace && <TraceView trace={trace} />}
     </>
   );
+}
+
+function FieldGrid({ fields }: { fields: ProjectionField[] }) {
+  return (
+    <div className="grid gap-x-4 gap-y-1 rounded-md border bg-muted/20 p-2 text-xs sm:grid-cols-2">
+      {fields.map((field) => (
+        <div key={`${field.label}:${field.value}`} className="min-w-0">
+          <span className="text-muted-foreground">{field.label}: </span>
+          <span className="break-words font-medium">{field.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TraceView({ trace }: { trace: ReturnType<typeof projectAgentTrace> }) {
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/10 p-2">
+      <div className="text-xs font-medium text-muted-foreground">Decision</div>
+      <FieldGrid fields={trace.summary} />
+      {trace.evidence.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Evidence</div>
+          {trace.evidence.map((row) => (
+            <EvidenceItem key={row.id} row={row} />
+          ))}
+        </div>
+      )}
+      {trace.tools.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Tools</div>
+          {trace.tools.map((row) => (
+            <ToolItem key={row.id} row={row} />
+          ))}
+        </div>
+      )}
+      <details className="rounded-md border bg-muted/20 px-2 py-1.5">
+        <summary className="cursor-pointer text-xs text-muted-foreground">
+          trace diagnostics
+        </summary>
+        <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
+          {trace.diagnostics}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function EvidenceItem({ row }: { row: EvidenceRow }) {
+  const meta = [
+    row.kind,
+    row.status,
+    row.source,
+    row.similarity ? `sim ${row.similarity}` : null,
+    row.taskId ? `task ${row.taskId}` : null,
+    row.sender,
+    row.receivedAt,
+  ].filter(Boolean);
+
+  return (
+    <div
+      id={row.id}
+      className={cn(
+        "rounded-md border bg-background px-2 py-1.5 text-xs",
+        row.selected && "border-primary/50 bg-primary/5",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
+        {row.selected && (
+          <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+            selected
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 break-words text-muted-foreground">{meta.join(" · ")}</div>
+      {row.snippet && <div className="mt-1 break-words">{row.snippet}</div>}
+    </div>
+  );
+}
+
+function ToolItem({ row }: { row: ToolRow }) {
+  return (
+    <details className="rounded-md border bg-background px-2 py-1.5 text-xs">
+      <summary className="cursor-pointer list-none">
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              "h-2 w-2 shrink-0 rounded-full",
+              toolStatusClass(row.status),
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
+          <span className="shrink-0 text-muted-foreground">{row.status}</span>
+          {row.changedState !== undefined && (
+            <span className="shrink-0 text-muted-foreground">
+              {row.changedState ? "changed" : "read-only"}
+            </span>
+          )}
+        </span>
+      </summary>
+      <div className="mt-1 space-y-1 text-muted-foreground">
+        <div>{row.purpose}</div>
+        {row.input && (
+          <pre className="max-h-28 overflow-auto rounded bg-muted p-1.5 whitespace-pre-wrap break-words">
+            {row.input}
+          </pre>
+        )}
+        {row.result && <div className="break-words text-foreground">{row.result}</div>}
+        {row.artifacts.length > 0 && (
+          <div className="break-words">Artifacts: {row.artifacts.join(", ")}</div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function toolStatusClass(status: ToolRow["status"]) {
+  if (status === "success") return "bg-emerald-500";
+  if (status === "failed" || status === "timed_out") return "bg-red-500";
+  if (status === "denied") return "bg-orange-500";
+  if (status === "skipped") return "bg-slate-400";
+  return "bg-blue-500";
 }

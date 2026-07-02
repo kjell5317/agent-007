@@ -65,6 +65,17 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
         tu = tool_uses[0]
         frag = await apply_task_action(session, task, tu.name, tu.input or {})
         trace.update(frag)
+        trace["tool_results"] = [
+            {
+                "name": tu.name,
+                "status": "success",
+                "purpose": _tool_purpose(tu.name),
+                "preview": str(frag.get("outcome") or "handled follow-up"),
+                "result_summary": str(frag.get("outcome") or "handled follow-up"),
+                "changed_state": frag.get("outcome") != "no_change",
+                "artifact_refs": [f"task:{task.id}"],
+            }
+        ]
 
     # The follow-up references an existing task; its lifecycle state lives on
     # that task's own anchor row, which close/reopen flip directly. Recording
@@ -93,3 +104,11 @@ def _build_thread_user_message(raw, task) -> str:
     lines.append("Follow-up body:")
     lines.append((raw.content or "").strip() or "(empty)")
     return "\n".join(lines)
+
+
+def _tool_purpose(name: str) -> str:
+    if name == "update_task":
+        return "update existing task"
+    if name == "no_change":
+        return "leave existing task unchanged"
+    return name
