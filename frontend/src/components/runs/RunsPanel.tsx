@@ -7,7 +7,7 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { IconAction, RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
-import { runTitle } from "@/components/runs/runLabels";
+import { runStatusLabel, runTitle } from "@/components/runs/runLabels";
 import { cn } from "@/lib/utils";
 import type { RunsData } from "@/hooks/useRuns";
 import { kotx, type KotxContainer, type KotxTask } from "@/lib/kotx";
@@ -409,7 +409,7 @@ function RunGroupMember({
 }
 
 function GroupStatusBadge({ group }: { group: RunGroup }) {
-  const statuses = new Set(group.tasks.map((task) => task.status));
+  const statuses = new Set(group.tasks.map((task) => runStatusLabel(task)));
   if (statuses.size === 1) {
     return <RunStatusBadge task={group.tasks[0]} />;
   }

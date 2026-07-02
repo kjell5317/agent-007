@@ -4,7 +4,11 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { runTitle } from "@/components/runs/runLabels";
+import {
+  isPrFollowUpRun,
+  runStatusLabel,
+  runTitle,
+} from "@/components/runs/runLabels";
 import { kotx, type KotxState, type KotxTask } from "@/lib/kotx";
 
 interface Props {
@@ -71,11 +75,11 @@ function fallbackStatusClass(task: KotxTask): string {
 }
 
 function statusClass(task: KotxTask): string {
-  return STATUS_CLASS[normalizeStatus(task.status)] ?? fallbackStatusClass(task);
+  return STATUS_CLASS[normalizeStatus(runStatusLabel(task))] ?? fallbackStatusClass(task);
 }
 
 export function RunStatusBadge({ task }: { task: KotxTask }) {
-  return <Badge className={statusClass(task)}>{task.status}</Badge>;
+  return <Badge className={statusClass(task)}>{runStatusLabel(task)}</Badge>;
 }
 
 // The label of the modal's primary action — the card leads with the same word,
@@ -83,6 +87,7 @@ export function RunStatusBadge({ task }: { task: KotxTask }) {
 function actionHint(task: KotxTask): string | null {
   if (task.canStart) return "Start";
   if (task.canComment) return "Comment";
+  if (isPrFollowUpRun(task)) return null;
   if (task.canApprove) return task.proposes === "pr" ? "Open PR" : "Approve";
   return null;
 }
