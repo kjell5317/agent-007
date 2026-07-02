@@ -103,7 +103,8 @@ async def _calendar_discover() -> None:
 
 
 async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
-    cutoff = datetime.now(timezone.utc) - OVERDUE_TASK_GRACE
+    now = datetime.now(timezone.utc)
+    cutoff = now - OVERDUE_TASK_GRACE
     attempted = 0
     rescheduled = 0
     points_subtracted = 0
@@ -112,6 +113,8 @@ async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
         for task in overdue:
             scheduled_date = task.scheduled_date
             block = scheduled_interval_for(task)
+            if block is None or block.end + OVERDUE_TASK_GRACE > now:
+                continue
             attempted += 1
             result = await schedule_task(session, task, block=block)
             if result is None:
