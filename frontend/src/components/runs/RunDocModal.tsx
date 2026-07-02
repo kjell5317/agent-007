@@ -1,17 +1,5 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  CircleDot,
-  ExternalLink,
-  GitBranch,
-  GitPullRequest,
-  Pencil,
-} from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CircleDot, GitBranch, GitPullRequest, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -264,52 +252,48 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     <Modal
       open
       onClose={onClose}
-      title={taskSubjectLabel}
+      title={task.repo}
       titleClassName="text-lg"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
     >
-      <div className="mb-3 grid shrink-0 gap-2 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground sm:grid-cols-2">
-        <LinkMeta
-          icon={<SubjectIcon className="h-3.5 w-3.5" />}
-          label={task.repo}
-          labelTitle={task.repo}
+      <div className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+        <a
+          href={task.githubUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex min-w-0 items-center gap-1.5 font-medium text-foreground hover:underline"
+          title={taskSubjectLabel}
         >
-          <a
-            href={task.githubUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-w-0 max-w-full items-center gap-1 font-medium text-foreground hover:underline"
-            title={taskSubjectLabel}
-          >
-            <span className="min-w-0 truncate">{taskSubjectLabel}</span>
-            <ExternalLink className="h-3 w-3 shrink-0" />
-          </a>
-        </LinkMeta>
-        <LinkMeta icon={<GitBranch className="h-3.5 w-3.5" />} label="Branch">
-          {task.branch ? (
-            taskBranchUrl ? (
-              <a
-                href={taskBranchUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-foreground hover:underline"
-                title={task.branch}
-              >
-                <span className="min-w-0 truncate">{task.branch}</span>
-                <ExternalLink className="h-3 w-3 shrink-0" />
-              </a>
-            ) : (
-              <span
-                className="block min-w-0 truncate font-mono"
-                title={task.branch}
-              >
-                {task.branch}
-              </span>
-            )
+          <SubjectIcon className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 truncate">{taskSubjectLabel}</span>
+        </a>
+        {task.branch ? (
+          taskBranchUrl ? (
+            <a
+              href={taskBranchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-w-0 items-center gap-1.5 font-mono text-foreground hover:underline"
+              title={task.branch}
+            >
+              <GitBranch className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 truncate">{task.branch}</span>
+            </a>
           ) : (
-            <span>None</span>
-          )}
-        </LinkMeta>
+            <span
+              className="inline-flex min-w-0 items-center gap-1.5 font-mono"
+              title={task.branch}
+            >
+              <GitBranch className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 truncate">{task.branch}</span>
+            </span>
+          )
+        ) : (
+          <span className="inline-flex shrink-0 items-center gap-1.5">
+            <GitBranch className="h-3.5 w-3.5 shrink-0" />
+            None
+          </span>
+        )}
       </div>
 
       <div className="mb-3 inline-flex shrink-0 rounded-lg bg-muted p-0.5 text-xs">
@@ -521,27 +505,5 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
         )}
       </div>
     </Modal>
-  );
-}
-
-function LinkMeta({
-  icon,
-  label,
-  labelTitle,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  labelTitle?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="grid min-w-0 grid-cols-[auto_fit-content(7rem)_minmax(0,1fr)] items-center gap-2">
-      <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <span className="min-w-0 truncate font-medium" title={labelTitle}>
-        {label}
-      </span>
-      <span className="min-w-0 overflow-hidden">{children}</span>
-    </div>
   );
 }
