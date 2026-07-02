@@ -17,7 +17,7 @@ from app.config import get_settings
 
 router = APIRouter(prefix="/kotx", tags=["kotx"])
 
-_ALLOWED_PREFIXES = ("tasks", "containers")
+_ALLOWED_PREFIXES = ("tasks", "containers", "runs")
 _TIMEOUT = 30.0
 # Hop-by-hop / framing headers we must not copy from the upstream response.
 _SKIP_RESPONSE_HEADERS = {"content-length", "content-encoding", "transfer-encoding", "connection"}

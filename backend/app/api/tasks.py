@@ -35,11 +35,11 @@ from app.db.schemas.task import (
     TaskUpdate,
 )
 from app.events import publish_task
-from app.services.github import (
-    GitHubConfigError,
-    GitHubIssueError,
-    GitHubUnsupportedTaskError,
-    create_task_issue,
+from app.services.kotx import (
+    KotxConfigError,
+    KotxRunError,
+    KotxUnsupportedTaskError,
+    create_issue_run,
     has_github_url,
 )
 from app.services.plan import schedule_task
@@ -205,15 +205,15 @@ async def create_github_issue(task_id: uuid.UUID, session: Session = Depends(get
         raise HTTPException(status.HTTP_409_CONFLICT, "Task already has a GitHub URL")
 
     try:
-        issue = await create_task_issue(row)
-    except GitHubUnsupportedTaskError as exc:
+        run = await create_issue_run(row)
+    except KotxUnsupportedTaskError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    except GitHubConfigError as exc:
+    except KotxConfigError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-    except GitHubIssueError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except KotxRunError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
-    row.link = issue.html_url
+    row.link = run.issue_url
     session.commit()
     publish_task(session, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")

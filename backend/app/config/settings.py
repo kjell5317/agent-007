@@ -120,9 +120,6 @@ class Settings(BaseSettings):
     kotx_base_url: str = ""
     kotx_api_token: str = ""
 
-    # GitHub issue creation for selected task labels.
-    github_token: str = ""
-
     @property
     def effective_llm_provider(self) -> str:
         return self.llm_provider.strip().lower() or "anthropic"
