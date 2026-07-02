@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CirclePlus, RotateCcw, Trash2 } from "lucide-react";
+import { CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
@@ -9,7 +9,6 @@ import { fmtWhen } from "@/lib/dates";
 import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
 import {
   projectAgentTrace,
-  projectSourceMetadata,
   type EvidenceRow,
   type ProjectionField,
   type ToolRow,
@@ -163,25 +162,10 @@ export function ActionButton({
 }
 
 export function InputBody({ data }: { data: RawInput }) {
-  const metadata = projectSourceMetadata(
-    data.source,
-    data.external_id,
-    data.source_metadata,
-  );
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
 
   return (
     <>
-      {metadata.fields.length > 0 && (
-        <details className="rounded-md border bg-muted/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-            Metadata
-          </summary>
-          <div className="mt-2">
-            <FieldGrid fields={metadata.fields} />
-          </div>
-        </details>
-      )}
       {data.content && (
         <details>
           <summary className="cursor-pointer text-xs text-muted-foreground">
@@ -203,7 +187,7 @@ function FieldGrid({ fields }: { fields: ProjectionField[] }) {
       {fields.map((field) => (
         <div key={`${field.label}:${field.value}`} className="min-w-0">
           <span className="text-muted-foreground">{field.label}: </span>
-          <span className="break-words font-medium">{field.value}</span>
+          <span className="whitespace-pre-wrap break-words font-medium">{field.value}</span>
         </div>
       ))}
     </div>
@@ -211,47 +195,39 @@ function FieldGrid({ fields }: { fields: ProjectionField[] }) {
 }
 
 function TraceView({ trace }: { trace: ReturnType<typeof projectAgentTrace> }) {
+  const hasContent = trace.reason || trace.evidence.length > 0 || trace.tools.length > 0;
+  if (!hasContent) return null;
+
   return (
-    <details className="rounded-md border bg-muted/10 px-2 py-1.5">
-      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-        Decision
-      </summary>
-      <div className="mt-2 space-y-2">
-        <FieldGrid fields={trace.summary} />
-        {trace.reason && (
-          <div className="rounded-md border bg-background p-2">
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Reason</div>
-            <Markdown content={trace.reason} className="text-xs" />
-          </div>
-        )}
-        {trace.evidence.length > 0 && (
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">Precedents</div>
-            {trace.evidence.map((row) => (
-              <EvidenceItem key={row.id} row={row} />
-            ))}
-          </div>
-        )}
-        {trace.tools.length > 0 && (
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">Tools</div>
-            {trace.tools.map((row) => (
-              <ToolItem key={row.id} row={row} />
-            ))}
-          </div>
-        )}
-      </div>
-    </details>
+    <div className="space-y-2">
+      {trace.reason && (
+        <div className="rounded-md border bg-background p-2">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">Reason</div>
+          <Markdown content={trace.reason} className="text-xs" />
+        </div>
+      )}
+      {trace.evidence.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Precedents</div>
+          {trace.evidence.map((row) => (
+            <EvidenceItem key={row.id} row={row} />
+          ))}
+        </div>
+      )}
+      {trace.tools.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Tools</div>
+          {trace.tools.map((row) => (
+            <ToolItem key={row.id} row={row} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 function EvidenceItem({ row }: { row: EvidenceRow }) {
-  const meta = [
-    row.sender,
-    row.receivedAt ? fmtWhen(row.receivedAt) : null,
-    row.source,
-    row.similarity ? `sim ${row.similarity}` : null,
-  ].filter(Boolean);
+  const when = row.receivedAt ? fmtWhen(row.receivedAt) : null;
 
   return (
     <div
@@ -269,38 +245,69 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
           </Badge>
         )}
       </div>
-      <div className="mt-0.5 break-words text-muted-foreground">{meta.join(" · ")}</div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+        {row.sender && <span className="truncate font-medium">{row.sender}</span>}
+        {row.sender && when && <MetaDot />}
+        {when && <span className="font-medium">{when}</span>}
+        {(row.sender || when) && row.source && <MetaDot />}
+        {row.source && <span className="font-medium">{row.source}</span>}
+        {row.similarity && (row.sender || when || row.source) && <MetaDot />}
+        {row.similarity && (
+          <span className="inline-flex items-center gap-1 font-medium" title="Similarity">
+            <Gauge className="h-3 w-3" aria-hidden />
+            {row.similarity}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
 
 function ToolItem({ row }: { row: ToolRow }) {
+  const showPurpose = row.name !== "create_task" && row.name !== "mark_not_task";
+  const hasDetails =
+    (showPurpose && row.purpose) ||
+    row.input ||
+    (row.inputFields && row.inputFields.length > 0) ||
+    row.reason ||
+    row.result ||
+    row.artifacts.length > 0;
+  const header = (
+    <span className="flex min-w-0 items-center gap-2">
+      <span
+        className={cn(
+          "h-2 w-2 shrink-0 rounded-full",
+          toolStatusClass(row.status),
+        )}
+      />
+      <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
+      <span className="shrink-0 text-muted-foreground">{row.status}</span>
+      {row.confidence && (
+        <span className="shrink-0 text-muted-foreground">
+          {row.confidence}
+        </span>
+      )}
+    </span>
+  );
+
+  if (!hasDetails) {
+    return (
+      <div className="rounded-md border bg-background px-2 py-1.5 text-xs">
+        {header}
+      </div>
+    );
+  }
+
   return (
     <details className="rounded-md border bg-background px-2 py-1.5 text-xs">
       <summary className="cursor-pointer list-none">
-        <span className="flex min-w-0 items-center gap-2">
-          <span
-            className={cn(
-              "h-2 w-2 shrink-0 rounded-full",
-              toolStatusClass(row.status),
-            )}
-          />
-          <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
-          <span className="shrink-0 text-muted-foreground">{row.status}</span>
-          {row.confidence && (
-            <span className="shrink-0 text-muted-foreground">
-              {row.confidence}
-            </span>
-          )}
-          {row.changedState !== undefined && (
-            <span className="shrink-0 text-muted-foreground">
-              {row.changedState ? "changed" : "read-only"}
-            </span>
-          )}
-        </span>
+        {header}
       </summary>
       <div className="mt-1 space-y-1 text-muted-foreground">
-        <div>{row.purpose}</div>
+        {showPurpose && <div>{row.purpose}</div>}
+        {row.inputFields && row.inputFields.length > 0 && (
+          <FieldGrid fields={row.inputFields} />
+        )}
         {row.input && (
           <pre className="max-h-28 overflow-auto rounded bg-muted p-1.5 whitespace-pre-wrap break-words">
             {row.input}
