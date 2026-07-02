@@ -37,6 +37,7 @@ export interface KotxTask {
   stateReason: string | null;
   branch: string | null;
   prNumber: number | null;
+  assignees: string[];
   triggeredBy: string | null;
   outcome: string | null;
   attempt: number;
