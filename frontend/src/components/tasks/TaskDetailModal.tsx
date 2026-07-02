@@ -896,35 +896,40 @@ function InlinePickerPanel({
 }) {
   return (
     <div
-      className="absolute left-0 top-full z-20 mt-2 w-[min(calc(100vw-4rem),22rem)] rounded-lg border bg-card p-3 text-card-foreground shadow-lg"
-      onClick={(e) => e.stopPropagation()}
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:z-20 sm:mt-2 sm:block sm:bg-transparent sm:p-0"
+      onClick={onClose}
     >
-      <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
-        <div>
-          {onBack && (
-            <button
-              type="button"
-              aria-label="Back"
-              onClick={onBack}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-          )}
+      <div
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] overflow-y-auto rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
+          <div>
+            {onBack && (
+              <button
+                type="button"
+                aria-label="Back"
+                onClick={onBack}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <div className="truncate text-center text-sm font-semibold">{title}</div>
+          <button
+            type="button"
+            aria-label="Close picker"
+            onClick={onClose}
+            className="inline-flex h-7 w-7 items-center justify-center justify-self-end rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        <div className="truncate text-center text-sm font-semibold">{title}</div>
-        <button
-          type="button"
-          aria-label="Close picker"
-          onClick={onClose}
-          className="inline-flex h-7 w-7 items-center justify-center justify-self-end rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="space-y-3">
-        {children}
-        {footer}
+        <div className="space-y-3">
+          {children}
+          {footer}
+        </div>
       </div>
     </div>
   );
