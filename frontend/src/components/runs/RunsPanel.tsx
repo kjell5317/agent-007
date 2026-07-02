@@ -282,6 +282,7 @@ function RunGroupCard({
 }) {
   const [open, setOpen] = useState(false);
   const hasMultipleRuns = group.tasks.length > 1;
+  const hasPrimaryAction = group.tasks.some((task) => actionHint(task) !== null);
   const title = hasMultipleRuns
     ? group.branch ?? runTitle(group.tasks[0])
     : runTitle(group.tasks[0]);
@@ -326,9 +327,24 @@ function RunGroupCard({
             </div>
           </div>
 
-          {hasMultipleRuns && (
-            <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
-          )}
+          {hasMultipleRuns &&
+            (hasPrimaryAction ? (
+              <Button
+                type="button"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen((v) => !v);
+                }}
+                title={open ? "Collapse group" : "Expand group"}
+                aria-label={open ? "Collapse group" : "Expand group"}
+              >
+                <Chevron className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ))}
         </div>
 
         {hasMultipleRuns && (

@@ -50,6 +50,16 @@ function branchUrl(task: KotxTask): string | null {
   return `https://github.com/${task.repo}/tree/${encodeURIComponent(task.branch)}`;
 }
 
+function subjectUrl(task: KotxTask): string {
+  const prNumber =
+    task.prNumber ??
+    (task.subjectType === "pull_request" ? task.subjectNumber : null);
+  if (prNumber && /^[^/\s]+\/[^/\s]+$/.test(task.repo)) {
+    return `https://github.com/${task.repo}/pull/${prNumber}`;
+  }
+  return task.githubUrl;
+}
+
 export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const primaryLabel = doc === "task" ? "TASK.md" : "REVIEW.md";
   // Resolve-conflict runs have no brief — drop the TASK.md tab and open on the
@@ -249,7 +259,10 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     { key: "log", label: "Log" },
   ];
   const taskBranchUrl = branchUrl(task);
+  const taskSubjectUrl = subjectUrl(task);
   const taskSubjectLabel = subjectLabel(task);
+  const reviewAssignee =
+    task.kind === "review" || doc === "review" ? task.assignees?.[0] : null;
   const SubjectIcon =
     task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
   const logCanLoadMore = logHasMore && logBefore !== null;
@@ -263,9 +276,9 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
       titleClassName="text-lg"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
     >
-      <div className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+      <div className="mb-3 grid shrink-0 grid-cols-2 items-center gap-3 rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
         <a
-          href={task.githubUrl}
+          href={taskSubjectUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex min-w-0 items-center gap-1.5 font-medium text-foreground hover:underline"
@@ -280,7 +293,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               href={taskBranchUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-w-0 items-center gap-1.5 font-mono text-foreground hover:underline"
+              className="inline-flex min-w-0 items-center gap-1.5 font-medium text-foreground hover:underline"
               title={task.branch}
             >
               <GitBranch className="h-3.5 w-3.5 shrink-0" />
@@ -288,7 +301,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             </a>
           ) : (
             <span
-              className="inline-flex min-w-0 items-center gap-1.5 font-mono"
+              className="inline-flex min-w-0 items-center gap-1.5 font-medium text-foreground"
               title={task.branch}
             >
               <GitBranch className="h-3.5 w-3.5 shrink-0" />
@@ -296,7 +309,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             </span>
           )
         ) : (
-          <span className="inline-flex shrink-0 items-center gap-1.5">
+          <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
             <GitBranch className="h-3.5 w-3.5 shrink-0" />
             None
           </span>
@@ -417,11 +430,31 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
         )}
       </div>
 
-      <div className="mt-3 flex shrink-0 items-center justify-end gap-2">
-        {!editing &&
-          content !== null &&
-          view === "primary" &&
-          canEditPrimary && (
+      <div className="mt-3 flex shrink-0 items-center justify-between gap-3">
+        <div className="min-w-0 flex-1 text-xs text-muted-foreground">
+          {reviewAssignee && (
+            <span className="block truncate" title={reviewAssignee}>
+              Assignee:{" "}
+              <span className="font-medium text-foreground">{reviewAssignee}</span>
+            </span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2">
+          {!editing &&
+            content !== null &&
+            view === "primary" &&
+            canEditPrimary && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditing(true)}
+                disabled={busy}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </Button>
+            )}
+          {!editing && pr !== null && view === "pr" && showPr && (
             <Button
               variant="outline"
               size="sm"
@@ -432,88 +465,78 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
               Edit
             </Button>
           )}
-        {!editing && pr !== null && view === "pr" && showPr && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setEditing(true)}
-            disabled={busy}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            Edit
-          </Button>
-        )}
-        {editing && (
-          <>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (view === "pr") {
-                  setPrTitleDraft(pr?.title ?? "");
-                  setPrBodyDraft(pr?.body ?? "");
-                } else {
-                  setDraft(content ?? "");
-                }
-                setEditing(false);
-              }}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={view === "pr" ? savePr : save}
-              disabled={busy}
-            >
-              Save
-            </Button>
-          </>
-        )}
-        {!editing && (view === "primary" || view === "pr") && (
-          <>
-            {task.canComment && (
+          {editing && (
+            <>
               <Button
+                variant="ghost"
                 size="sm"
-                onClick={() =>
-                  withBusy(() => kotx.comment(task.id), "Comment posted", true)
-                }
-                disabled={busy || !content?.trim()}
-              >
-                Comment
-              </Button>
-            )}
-            {task.canStart && (
-              <Button
-                size="sm"
-                onClick={() =>
-                  withBusy(() => kotx.start(task.id), "Started", true)
-                }
+                onClick={() => {
+                  if (view === "pr") {
+                    setPrTitleDraft(pr?.title ?? "");
+                    setPrBodyDraft(pr?.body ?? "");
+                  } else {
+                    setDraft(content ?? "");
+                  }
+                  setEditing(false);
+                }}
                 disabled={busy}
               >
-                Start
+                Cancel
               </Button>
-            )}
-            {/* Approve stays last so it sits farthest from the Edit button and
-                isn't clicked by mistake when reaching for Edit. */}
-            {task.canApprove && !prFollowUpRun && (
               <Button
-                variant={task.proposes === "pr" ? "default" : "outline"}
                 size="sm"
-                onClick={() =>
-                  withBusy(
-                    () => kotx.approve(task.id),
-                    task.proposes === "pr" ? "PR opened" : "Approved",
-                    true,
-                  )
-                }
+                onClick={view === "pr" ? savePr : save}
                 disabled={busy}
               >
-                {task.proposes === "pr" ? "Open PR" : "Approve"}
+                Save
               </Button>
-            )}
-          </>
-        )}
+            </>
+          )}
+          {!editing && (view === "primary" || view === "pr") && (
+            <>
+              {task.canComment && (
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    withBusy(() => kotx.comment(task.id), "Comment posted", true)
+                  }
+                  disabled={busy || !content?.trim()}
+                >
+                  Comment
+                </Button>
+              )}
+              {task.canStart && (
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    withBusy(() => kotx.start(task.id), "Started", true)
+                  }
+                  disabled={busy}
+                >
+                  Start
+                </Button>
+              )}
+              {/* Approve stays last so it sits farthest from the Edit button and
+                  isn't clicked by mistake when reaching for Edit. */}
+              {task.canApprove && !prFollowUpRun && (
+                <Button
+                  variant={task.proposes === "pr" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() =>
+                    withBusy(
+                      () => kotx.approve(task.id),
+                      task.proposes === "pr" ? "PR opened" : "Approved",
+                      true,
+                    )
+                  }
+                  disabled={busy}
+                >
+                  {task.proposes === "pr" ? "Open PR" : "Approve"}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </Modal>
   );
