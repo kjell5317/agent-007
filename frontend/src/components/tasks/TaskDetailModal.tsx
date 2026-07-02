@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  AlarmClock,
   CalendarClock,
   ChevronLeft,
   ExternalLink,
@@ -341,17 +342,6 @@ function TaskSummary({
     <div className="min-h-0 flex-1 overflow-auto pr-1">
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onReschedule}
-            disabled={busy}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Reschedule
-          </Button>
-
           <PickerAnchor
             open={activePicker === "label"}
             panel={
@@ -386,36 +376,6 @@ function TaskSummary({
                   No label
                 </Badge>
               )}
-            </button>
-          </PickerAnchor>
-
-          {task.scheduled_date && (
-            <Badge variant="muted" className="h-8 gap-1 px-3">
-              <CalendarClock className="h-3 w-3" />
-              Scheduled {fmtDue(task.scheduled_date)}
-            </Badge>
-          )}
-
-          <PickerAnchor
-            open={activePicker === "estimation"}
-            panel={
-              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
-                <EstimationPicker
-                  value={pickerEstimation}
-                  onChange={onPickerEstimationChange}
-                  onSave={onSaveEstimation}
-                />
-              </InlinePickerPanel>
-            }
-          >
-            <button
-              type="button"
-              onClick={() => onEditPicker("estimation")}
-              disabled={busy}
-              className="inline-flex h-8 items-center gap-1 rounded-full bg-muted px-3 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Timer className="h-3 w-3" />
-              {task.estimation != null ? `${task.estimation} min` : "No estimate"}
             </button>
           </PickerAnchor>
 
@@ -455,22 +415,69 @@ function TaskSummary({
               type="button"
               onClick={() => onEditPicker("due_date")}
               disabled={busy}
+              title={task.due_date ? `Due ${fmtDue(task.due_date)}` : "Set due date"}
               className="disabled:pointer-events-none disabled:opacity-50"
             >
               {task.due_date ? (
                 <Badge
                   variant={dueOverdue ? "overdue" : dueUrgent ? "urgent" : "open"}
-                  className="h-8 px-3"
+                  className="h-8 gap-1 px-3"
                 >
-                  Due {fmtDue(task.due_date)}
+                  <AlarmClock className="h-3 w-3" />
+                  {fmtDue(task.due_date)}
                 </Badge>
               ) : (
-                <Badge variant="muted" className="h-8 px-3">
+                <Badge variant="muted" className="h-8 gap-1 px-3">
+                  <AlarmClock className="h-3 w-3" />
                   No due date
                 </Badge>
               )}
             </button>
           </PickerAnchor>
+
+          <PickerAnchor
+            open={activePicker === "estimation"}
+            panel={
+              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
+                <EstimationPicker
+                  value={pickerEstimation}
+                  onChange={onPickerEstimationChange}
+                  onSave={onSaveEstimation}
+                />
+              </InlinePickerPanel>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => onEditPicker("estimation")}
+              disabled={busy}
+              className="inline-flex h-8 items-center gap-1 rounded-full bg-muted px-3 font-medium transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <Timer className="h-3 w-3" />
+              {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+            </button>
+          </PickerAnchor>
+
+          {task.scheduled_date && (
+            <Badge
+              title={`Scheduled ${fmtDue(task.scheduled_date)}`}
+              className="h-8 gap-1 border-transparent bg-sky-100 px-3 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200"
+            >
+              <CalendarClock className="h-3 w-3" />
+              {fmtDue(task.scheduled_date)}
+            </Badge>
+          )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onReschedule}
+            disabled={busy}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Reschedule
+          </Button>
         </div>
 
         <div className="space-y-1.5">
@@ -589,7 +596,7 @@ function EditableTextBlock({
           <span className="block text-sm text-muted-foreground">{fallback}</span>
         )}
       </span>
-      <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      <Pencil className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   );
 }
@@ -655,22 +662,30 @@ function LinksSection({
             {task.link || "Add provided link"}
           </span>
         </span>
-        <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        <Pencil className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </button>
-      <div className="flex flex-wrap gap-1 pl-9">
-        {task.link && <OpenLink href={task.link}>Open provided link</OpenLink>}
+      <div className="flex flex-col items-start gap-0.5">
+        {task.link && (
+          <a
+            href={task.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 rounded-lg p-2 text-sm font-medium text-primary transition-colors hover:bg-accent/60"
+          >
+            <ExternalLink className="h-4 w-4 shrink-0" />
+            Open provided link
+          </a>
+        )}
         {canCreateGithubIssue(task) && (
-          <Button
+          <button
             type="button"
-            variant="ghost"
-            size="sm"
             onClick={onCreateGithubIssue}
             disabled={busy}
-            className="h-8 px-2 text-primary"
+            className="flex items-center gap-3 rounded-lg p-2 text-sm font-medium text-primary transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
           >
-            <Github className="h-3.5 w-3.5" />
+            <Github className="h-4 w-4 shrink-0" />
             Create GitHub issue
-          </Button>
+          </button>
         )}
       </div>
     </div>
