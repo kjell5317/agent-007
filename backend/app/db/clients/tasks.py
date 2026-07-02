@@ -223,6 +223,39 @@ def overdue_scheduled_open(
     return list(session.execute(stmt).scalars())
 
 
+def overdue_due_open(
+    session: Session,
+    *,
+    cutoff: datetime,
+    limit: int = 100,
+) -> list[Task]:
+    # Same latest-status-in-SQL guard as `overdue_scheduled_open`: closed rows
+    # must be filtered before `limit` or they can evict open overdue tasks.
+    latest = (
+        select(
+            RawInput.task_id.label("task_id"),
+            RawInput.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=RawInput.task_id,
+                order_by=RawInput.received_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(RawInput.status != "duplicate")
+        .subquery()
+    )
+    stmt = (
+        select(Task)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.due_date <= cutoff)
+        .where(func.coalesce(latest.c.status, "open") == "open")
+        .order_by(Task.due_date.asc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
 def open_scheduled_between(
     session: Session,
     *,
