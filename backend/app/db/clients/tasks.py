@@ -221,3 +221,77 @@ def overdue_scheduled_open(
         .limit(limit)
     )
     return list(session.execute(stmt).scalars())
+
+
+def overdue_due_open(
+    session: Session,
+    *,
+    cutoff: datetime,
+    limit: int = 100,
+) -> list[Task]:
+    # Same latest-status-in-SQL guard as `overdue_scheduled_open`: closed rows
+    # must be filtered before `limit` or they can evict open overdue tasks.
+    latest = (
+        select(
+            RawInput.task_id.label("task_id"),
+            RawInput.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=RawInput.task_id,
+                order_by=RawInput.received_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(RawInput.status != "duplicate")
+        .subquery()
+    )
+    stmt = (
+        select(Task)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.due_date <= cutoff)
+        .where(func.coalesce(latest.c.status, "open") == "open")
+        .order_by(Task.due_date.asc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def open_scheduled_between(
+    session: Session,
+    *,
+    time_min: datetime,
+    time_max: datetime,
+    exclude_task_id: uuid.UUID | None = None,
+) -> list[Task]:
+    """Open tasks whose stored `scheduled_date` starts in `[time_min, time_max)`.
+
+    The planner uses this as a backstop to its live Google Calendar read: a
+    task scheduled moments earlier may not appear in `events.list` yet (read-
+    after-write lag), so its DB row is the authoritative record of the slot.
+    Only genuinely open tasks count — same status filter as
+    `overdue_scheduled_open`, so completed tasks never block a fresh placement.
+    """
+    latest = (
+        select(
+            RawInput.task_id.label("task_id"),
+            RawInput.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=RawInput.task_id,
+                order_by=RawInput.received_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(RawInput.status != "duplicate")
+        .subquery()
+    )
+    stmt = (
+        select(Task)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.scheduled_date >= time_min)
+        .where(Task.scheduled_date < time_max)
+        .where(func.coalesce(latest.c.status, "open") == "open")
+    )
+    if exclude_task_id is not None:
+        stmt = stmt.where(Task.id != exclude_task_id)
+    return list(session.execute(stmt).scalars())

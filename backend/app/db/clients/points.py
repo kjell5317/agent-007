@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,7 @@ def add_entry(
     amount: float,
     section: str | None = None,
     action_name: str | None = None,
+    period_key: str | None = None,
     task_id: uuid.UUID | None = None,
 ) -> PointsEntry:
     entry = PointsEntry(
@@ -42,8 +44,62 @@ def add_entry(
         amount=amount,
         section=section,
         action_name=action_name,
+        period_key=period_key,
         task_id=task_id,
     )
     session.add(entry)
     session.commit()
     return entry
+
+
+def has_penalty_entry(
+    session: Session,
+    *,
+    task_id: uuid.UUID,
+    action_name: str,
+    period_key: str,
+) -> bool:
+    stmt = (
+        select(func.count())
+        .select_from(PointsEntry)
+        .where(
+            PointsEntry.source == "penalty",
+            PointsEntry.task_id == task_id,
+            PointsEntry.action_name == action_name,
+            PointsEntry.period_key == period_key,
+        )
+    )
+    return int(session.execute(stmt).scalar_one() or 0) > 0
+
+
+def add_penalty_entry_once(
+    session: Session,
+    *,
+    task_id: uuid.UUID,
+    action_name: str,
+    period_key: str,
+    amount: float,
+    section: str = "overdue",
+) -> PointsEntry | None:
+    if has_penalty_entry(
+        session,
+        task_id=task_id,
+        action_name=action_name,
+        period_key=period_key,
+    ):
+        return None
+    try:
+        return add_entry(
+            session,
+            source="penalty",
+            section=section,
+            action_name=action_name,
+            period_key=period_key,
+            task_id=task_id,
+            factor=float(amount),
+            quantity=1.0,
+            amount=float(amount),
+        )
+    except IntegrityError:
+        session.rollback()
+        return None
