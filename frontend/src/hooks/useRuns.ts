@@ -1,26 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { kotx, type KotxContainer, type KotxTask } from "@/lib/kotx";
+import { kotx, type KotxTask } from "@/lib/kotx";
 
 const POLL_MS = 5000;
 
 export interface RunsData {
   tasks: KotxTask[];
-  containers: KotxContainer[];
   loading: boolean;
   // Set when the proxy is unreachable / unconfigured (503) or the first load
   // fails. Cleared on the next successful refresh.
   error: string | null;
   scope: "active" | "all";
-  setScope: (s: "active" | "all") => void;
   refresh: () => Promise<void>;
 }
 
-export function useRuns(active: boolean): RunsData {
+export function useRuns(
+  active: boolean,
+  scope: "active" | "all" = "active",
+  preload = true,
+): RunsData {
   const [tasks, setTasks] = useState<KotxTask[]>([]);
-  const [containers, setContainers] = useState<KotxContainer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [scope, setScopeState] = useState<"active" | "all">("active");
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
 
@@ -29,13 +29,9 @@ export function useRuns(active: boolean): RunsData {
     // let the old scope's result land in (and clear the skeleton for) the new.
     const requested = scopeRef.current;
     try {
-      const [t, c] = await Promise.all([
-        kotx.listTasks(requested),
-        kotx.listContainers(),
-      ]);
+      const t = await kotx.listTasks(requested);
       if (scopeRef.current !== requested) return;
       setTasks(t);
-      setContainers(c);
       setError(null);
     } catch (e) {
       if (scopeRef.current !== requested) return;
@@ -45,20 +41,12 @@ export function useRuns(active: boolean): RunsData {
     }
   }, []);
 
-  // Switching scope shows a skeleton (not the previous scope's list) until the
-  // new scope's runs arrive, so the list never renders stale or half-grouped rows.
-  const setScope = useCallback((s: "active" | "all") => {
-    if (scopeRef.current === s) return;
-    setTasks([]);
-    setLoading(true);
-    setScopeState(s);
-  }, []);
-
   // Fetch once on mount even when the tab is closed, so the Runs badge count
   // is populated on page load rather than only after the tab is first opened.
   useEffect(() => {
+    if (!preload) return;
     refresh();
-  }, [refresh]);
+  }, [preload, refresh]);
 
   // Only poll while the tab is the visible one and the document has focus —
   // runs change state over seconds (queued → running → awaiting_approval),
@@ -94,5 +82,5 @@ export function useRuns(active: boolean): RunsData {
     };
   }, [active, refresh, scope]);
 
-  return { tasks, containers, loading, error, scope, setScope, refresh };
+  return { tasks, loading, error, scope, refresh };
 }
