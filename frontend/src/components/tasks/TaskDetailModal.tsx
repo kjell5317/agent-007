@@ -3,6 +3,8 @@ import {
   AlarmClock,
   CalendarClock,
   ChevronLeft,
+  Circle,
+  CircleCheckBig,
   ExternalLink,
   Github,
   Link2,
@@ -10,6 +12,7 @@ import {
   Pencil,
   RefreshCw,
   Timer,
+  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -58,6 +61,8 @@ const TASK_SUMMARY_URGENT_BADGE_CLASS =
   "bg-orange-500 text-white dark:bg-orange-500/25 dark:text-orange-100";
 const TASK_SUMMARY_OVERDUE_BADGE_CLASS =
   "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
+const TASK_SUMMARY_SCHEDULED_BADGE_CLASS =
+  "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200";
 
 export function TaskDetailModal({ task, onClose, onChanged }: Props) {
   const labels = useLabels();
@@ -71,6 +76,9 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
   const [textDraft, setTextDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [closingAction, setClosingAction] = useState<"done" | "dismiss" | null>(
+    null,
+  );
 
   useEffect(() => {
     setCurrent(task);
@@ -80,6 +88,7 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     setPickerDue(task.due_date);
     setPickerEstimation(task.estimation);
     setPickerLabel(task.label ?? "");
+    setClosingAction(null);
   }, [task]);
 
   useEffect(() => {
@@ -134,6 +143,36 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
 
   const createGithubIssue = () =>
     runTaskAction(() => api.createGithubIssue(current.id), "GitHub issue created");
+
+  async function runClosingTaskAction(
+    action: () => Promise<void>,
+    message: string,
+    nextClosingAction: "done" | "dismiss",
+  ) {
+    if (busy) return;
+    setBusy(true);
+    setClosingAction(nextClosingAction);
+    try {
+      await action();
+      toast.success(message);
+      await onChanged();
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+      setBusy(false);
+      setClosingAction(null);
+    }
+  }
+
+  const markDone = () =>
+    runClosingTaskAction(() => api.closeTask(current.id), "Marked done", "done");
+
+  const dismissTask = () =>
+    runClosingTaskAction(
+      () => api.markNotTask(current.id),
+      "Marked not a task",
+      "dismiss",
+    );
 
   const openTextEditor = (field: TextField) => {
     setActivePicker(null);
@@ -202,6 +241,7 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
           task={current}
           labels={labels}
           busy={busy}
+          closingAction={closingAction}
           editingText={editingText}
           textDraft={textDraft}
           activePicker={activePicker}
@@ -235,6 +275,8 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
             const saved = await savePatch({ label: pickerLabel || null });
             if (saved) setActivePicker(null);
           }}
+          onMarkDone={markDone}
+          onDismissTask={dismissTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
         />
@@ -283,10 +325,11 @@ function TaskTitleHeader({
       type="button"
       onClick={onEdit}
       disabled={busy}
-      className="group flex w-full min-w-0 items-start justify-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+      className="group grid w-full min-w-0 grid-cols-[1.25rem_minmax(0,1fr)_1.25rem] items-start rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
     >
+      <span aria-hidden="true" />
       <span className="min-w-0 break-words">{task.title}</span>
-      <Pencil className="ml-2 mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      <Pencil className="mt-1 h-4 w-4 justify-self-end text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   );
 }
@@ -295,6 +338,7 @@ function TaskSummary({
   task,
   labels,
   busy,
+  closingAction,
   editingText,
   textDraft,
   activePicker,
@@ -316,12 +360,15 @@ function TaskSummary({
   onClearDue,
   onSaveEstimation,
   onSaveLabel,
+  onMarkDone,
+  onDismissTask,
   onReschedule,
   onCreateGithubIssue,
 }: {
   task: Task;
   labels: Label[];
   busy: boolean;
+  closingAction: "done" | "dismiss" | null;
   editingText: TextField | null;
   textDraft: string;
   activePicker: PickerField | null;
@@ -343,6 +390,8 @@ function TaskSummary({
   onClearDue: () => void;
   onSaveEstimation: () => void;
   onSaveLabel: () => void;
+  onMarkDone: () => void;
+  onDismissTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
 }) {
@@ -359,6 +408,19 @@ function TaskSummary({
     <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
       <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
+          <TaskSummaryIconButton
+            label="Mark done"
+            disabled={busy}
+            onClick={onMarkDone}
+            className="text-muted-foreground hover:text-primary"
+          >
+            {closingAction === "done" ? (
+              <CircleCheckBig className="h-5 w-5 text-primary" />
+            ) : (
+              <Circle className="h-5 w-5" />
+            )}
+          </TaskSummaryIconButton>
+
           <PickerAnchor
             open={activePicker === "label"}
             panel={
@@ -467,26 +529,47 @@ function TaskSummary({
             </button>
           </PickerAnchor>
 
-          {task.scheduled_date && (
-            <Badge
-              title={`Scheduled ${fmtDue(task.scheduled_date)}`}
-              className="h-8 gap-1 border-transparent bg-sky-100 px-3 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200"
-            >
-              <CalendarClock className="h-3 w-3" />
-              {fmtDue(task.scheduled_date)}
-            </Badge>
-          )}
-
-          <Button
+          <button
             type="button"
-            variant="outline"
-            size="sm"
             onClick={onReschedule}
             disabled={busy}
+            title={
+              task.scheduled_date
+                ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}`
+                : "Reschedule task"
+            }
+            aria-label={
+              task.scheduled_date
+                ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}`
+                : "Reschedule task"
+            }
+            className={cn(
+              TASK_SUMMARY_BADGE_BUTTON_CLASS,
+              task.scheduled_date
+                ? TASK_SUMMARY_SCHEDULED_BADGE_CLASS
+                : TASK_SUMMARY_MUTED_BADGE_CLASS,
+            )}
           >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Reschedule
-          </Button>
+            <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+              <CalendarClock className="h-3 w-3" />
+              {task.scheduled_date ? fmtDue(task.scheduled_date) : "Reschedule"}
+              <RefreshCw className="h-3 w-3 opacity-70" />
+            </span>
+          </button>
+
+          <TaskSummaryIconButton
+            label="Mark not a task"
+            disabled={busy}
+            onClick={onDismissTask}
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <Trash2
+              className={cn(
+                "h-4 w-4",
+                closingAction === "dismiss" && "text-destructive",
+              )}
+            />
+          </TaskSummaryIconButton>
         </div>
 
         <div className="space-y-1.5">
@@ -532,6 +615,28 @@ function TaskSummary({
         <LinkedInputsSection inputs={task.raw_inputs ?? []} />
       </div>
     </div>
+  );
+}
+
+function TaskSummaryIconButton({
+  label,
+  children,
+  className,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </button>
   );
 }
 
