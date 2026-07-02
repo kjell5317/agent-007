@@ -112,6 +112,10 @@ def task_tag(task_id: UUID | str) -> str:
     return f"task-{task_id}"
 
 
+def points_tag() -> str:
+    return "points"
+
+
 def task_url(task_id: UUID | str) -> str:
     """Frontend deep link for opening a task detail modal."""
     base = get_settings().task_default_url
@@ -169,6 +173,17 @@ async def notify_no_slot(task) -> None:
         channel="Scheduling warnings",
         color="#f59e0b",
         persistent=True,
+    )
+
+
+async def notify_points_penalty(task, *, points: int, reason: str) -> None:
+    await notify(
+        title="Points subtracted",
+        message=f"-{points} points: {reason}\n{_short_title(task)}",
+        url=task_url(task.id),
+        tag=points_tag(),
+        channel="Points",
+        color="#dc2626",
     )
 
 
