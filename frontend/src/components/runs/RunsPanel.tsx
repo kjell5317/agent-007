@@ -8,7 +8,12 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { IconAction, RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
-import { actionHint, runStatusLabel, runTitle } from "@/components/runs/runLabels";
+import {
+  actionHint,
+  isMergeProposal,
+  runStatusLabel,
+  runTitle,
+} from "@/components/runs/runLabels";
 import { cn } from "@/lib/utils";
 import type { RunsData } from "@/hooks/useRuns";
 import { kotx, type KotxContainer, type KotxTask } from "@/lib/kotx";
@@ -21,7 +26,7 @@ interface RunGroup {
 }
 
 function isActionable(task: KotxTask): boolean {
-  return task.canStart || task.canApprove || task.canComment;
+  return task.canStart || task.canApprove || task.canComment || isMergeProposal(task);
 }
 
 // Float tasks that need action to the top, keeping the original order within
@@ -81,6 +86,15 @@ export function RunsPanel({
     [selectedRunId, tasks],
   );
   const selectedRun = selectedRunId ? selectedListRun ?? fetchedRun : null;
+  const selectedRunSiblings = useMemo(() => {
+    if (!selectedRun?.branch) return [];
+    return tasks.filter(
+      (task) =>
+        task.id !== selectedRun.id &&
+        task.repo === selectedRun.repo &&
+        task.branch === selectedRun.branch,
+    );
+  }, [selectedRun, tasks]);
 
   useEffect(() => {
     if (!selectedRunId || selectedListRun) {
@@ -112,6 +126,7 @@ export function RunsPanel({
           <RunDocModal
             task={selectedRun}
             doc={primaryDoc(selectedRun)}
+            sameBranchTasks={selectedRunSiblings}
             onClose={onSelectedRunClose}
             onChanged={refresh}
           />
@@ -185,6 +200,7 @@ export function RunsPanel({
         <RunDocModal
           task={selectedRun}
           doc={primaryDoc(selectedRun)}
+          sameBranchTasks={selectedRunSiblings}
           onClose={onSelectedRunClose}
           onChanged={refresh}
         />

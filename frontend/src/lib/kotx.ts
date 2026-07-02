@@ -1,7 +1,7 @@
 // Client for the external kotx coding-agent API, proxied by the backend
 // under /kotx (see backend app.api.kotx). kotx errors come back as
-// `{ "error": "…" }`; list/detail are JSON, the …/task and …/review
-// endpoints return raw markdown.
+// `{ "error": "…" }`; list/detail are JSON, the …/task, …/review, and
+// …/merge endpoints return raw markdown.
 
 export type KotxState =
   | "drafting"
@@ -37,6 +37,7 @@ export interface KotxTask {
   stateReason: string | null;
   branch: string | null;
   prNumber: number | null;
+  trackedPrNumber: number | null;
   assignees: string[];
   triggeredBy: string | null;
   outcome: string | null;
@@ -48,10 +49,12 @@ export interface KotxTask {
   githubUrl: string;
   canStart: boolean;
   canApprove: boolean;
+  canMerge: boolean;
   canComment: boolean;
   // What POST …/approve does when canApprove: "review" submits an approving PR
-  // review (REVIEW.md as body), "pr" opens the proposed PR.
-  proposes: "review" | "pr" | null;
+  // review (REVIEW.md as body), "pr" opens the proposed PR, and "merge"
+  // merges the tracked PR. Prefer POST …/merge for the explicit merge action.
+  proposes: "review" | "pr" | "merge" | null;
   canDiscard: boolean;
 }
 
@@ -90,6 +93,14 @@ export interface KotxLogPage {
 export interface KotxLogParams {
   limit?: number;
   before?: number;
+}
+
+export interface KotxRunRequest {
+  repo?: string;
+  title?: string;
+  body?: string;
+  type?: "implement" | "review" | "resolve";
+  number?: number;
 }
 
 class KotxError extends Error {
@@ -224,6 +235,7 @@ export const kotx = {
   putBrief: (id: number, content: string) => putMarkdown(`/tasks/${id}/task`, content),
   getReview: (id: number) => markdownRequest(`/tasks/${id}/review`),
   putReview: (id: number, content: string) => putMarkdown(`/tasks/${id}/review`, content),
+  getMerge: (id: number) => markdownRequest(`/tasks/${id}/merge`),
   getPrompt: (id: number) => markdownRequest(`/tasks/${id}/prompt`),
   // The proposed PR title + body for an implement task. null until proposed.
   getPr: (id: number) => jsonRequestOrNull<KotxPr>(`/tasks/${id}/pr`),
@@ -242,11 +254,19 @@ export const kotx = {
   // body); for implement tasks opens the proposed PR.
   approve: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/approve`, { method: "POST" }),
+  merge: (id: number) =>
+    jsonRequest<{ ok: true }>(`/tasks/${id}/merge`, { method: "POST" }),
   // comment (review tasks only): post REVIEW.md as a plain PR comment.
   comment: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/comment`, { method: "POST" }),
   discard: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/discard`, { method: "POST" }),
+  createRun: (payload: KotxRunRequest) =>
+    jsonRequest<unknown>(`/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
 
   listContainers: () => jsonRequest<KotxContainer[]>(`/containers`),
 };
