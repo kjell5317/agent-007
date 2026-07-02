@@ -57,6 +57,36 @@ function groupRuns(tasks: KotxTask[]): RunGroup[] {
   return order.map((key) => groups.get(key)!);
 }
 
+function timestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : time;
+}
+
+function newestRun(tasks: KotxTask[]): KotxTask {
+  return tasks.reduce((newest, task) => {
+    const newestCreatedAt = timestamp(newest.createdAt);
+    const taskCreatedAt = timestamp(task.createdAt);
+    if (newestCreatedAt !== taskCreatedAt) {
+      return (taskCreatedAt ?? Number.NEGATIVE_INFINITY) >
+        (newestCreatedAt ?? Number.NEGATIVE_INFINITY)
+        ? task
+        : newest;
+    }
+
+    const newestUpdatedAt = timestamp(newest.updatedAt);
+    const taskUpdatedAt = timestamp(task.updatedAt);
+    if (newestUpdatedAt !== taskUpdatedAt) {
+      return (taskUpdatedAt ?? Number.NEGATIVE_INFINITY) >
+        (newestUpdatedAt ?? Number.NEGATIVE_INFINITY)
+        ? task
+        : newest;
+    }
+
+    return task.id > newest.id ? task : newest;
+  });
+}
+
 interface Props extends RunsData {
   selectedRunId: number | null;
   onRunOpen: (id: number) => void;
@@ -329,7 +359,7 @@ function RunGroupCard({
             </div>
             <div className="mt-1 flex items-center gap-x-2 text-xs text-muted-foreground">
               <span className="shrink-0">
-                <GroupStatusBadge group={group} />
+                <GroupStatusBadge group={group} scope={scope} />
               </span>
               <span className="min-w-0 truncate font-medium" title={group.repo}>
                 {group.repo}
@@ -455,10 +485,13 @@ function RunGroupMember({
   );
 }
 
-function GroupStatusBadge({ group }: { group: RunGroup }) {
+function GroupStatusBadge({ group, scope }: { group: RunGroup; scope: "active" | "all" }) {
   const statuses = new Set(group.tasks.map((task) => runStatusLabel(task)));
   if (statuses.size === 1) {
     return <RunStatusBadge task={group.tasks[0]} />;
+  }
+  if (scope === "active") {
+    return <RunStatusBadge task={newestRun(group.tasks)} />;
   }
   return <Badge variant="muted">mixed</Badge>;
 }
