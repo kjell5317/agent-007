@@ -63,7 +63,6 @@ export function App() {
     try {
       const res = await api.markInputsSeen();
       setUnreadInbox(res.count);
-      setSeenInboxAt(res.last_seen_at);
     } catch {
       loadUnread();
     }
@@ -74,7 +73,6 @@ export function App() {
     try {
       const res = await api.markTasksSeen();
       setUnreadTasks(res.count);
-      setSeenTasksAt(res.last_seen_at);
     } catch {
       loadUnread();
     }
