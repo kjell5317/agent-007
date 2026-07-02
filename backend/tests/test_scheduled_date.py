@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from contextlib import contextmanager
@@ -326,6 +327,9 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
         "_repair_by_displacing_task",
         fake_repair_by_displacing_task,
     )
+    monkeypatch.setattr(
+        schedule_service, "_db_scheduled_busy", lambda *a, **k: []
+    )
 
     result = await schedule_service.plan_task_slot(SimpleNamespace(), task)
 
@@ -620,3 +624,46 @@ async def test_discover_reschedules_deleted_task_event_blocking_old_slot(monkeyp
     assert blocks == [Interval(scheduled, scheduled + timedelta(minutes=30), "event-1")]
     # Dead event id cleared before replanning.
     assert task.calendar_event_id is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_task_serializes_across_tasks(monkeypatch):
+    # Two different tasks scheduled concurrently must not overlap. The global
+    # lock forces the second plan to run only after the first has been written,
+    # so it sees the first task's slot. Without the lock both would plan against
+    # the same empty snapshot and collide.
+    placed: list[tuple[datetime, datetime]] = []
+    base = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+
+    async def fake_plan(_session, _task, **_kwargs):
+        await asyncio.sleep(0)  # yield — invites a concurrent call to interleave
+        start = placed[-1][1] if placed else base
+        return start, start + timedelta(minutes=60)
+
+    async def fake_add(_session, task, *, start, end):
+        await asyncio.sleep(0)
+        placed.append((start, end))
+        task.calendar_event_id = f"ev-{task.id}"
+
+    monkeypatch.setattr(schedule_service, "plan_task_slot", fake_plan)
+    monkeypatch.setattr("app.services.calendar.add_task_event", fake_add)
+
+    def make_task():
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            title="t",
+            due_date=base + timedelta(days=1),
+            scheduled_date=None,
+            calendar_event_id=None,
+            location=None,
+            estimation=60,
+        )
+
+    res_a, res_b = await asyncio.gather(
+        schedule_service.schedule_task(SimpleNamespace(), make_task(), notify=False),
+        schedule_service.schedule_task(SimpleNamespace(), make_task(), notify=False),
+    )
+
+    (start_a, end_a), (start_b, _end_b) = sorted([res_a, res_b])
+    assert end_a <= start_b  # back-to-back, no overlap
+    assert len(placed) == 2

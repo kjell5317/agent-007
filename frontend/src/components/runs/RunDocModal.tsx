@@ -1,5 +1,17 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { CircleDot, ExternalLink, GitBranch, GitPullRequest, Pencil } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  CircleDot,
+  ExternalLink,
+  GitBranch,
+  GitPullRequest,
+  Pencil,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +46,10 @@ function load(
   return doc === "task" ? kotx.getBrief(task.id) : kotx.getReview(task.id);
 }
 
-function prependLogText(older: string | null, newer: string | null): string | null {
+function prependLogText(
+  older: string | null,
+  newer: string | null,
+): string | null {
   if (!older) return newer;
   if (!newer) return older;
   const separator = older.endsWith("\n") || newer.startsWith("\n") ? "" : "\n";
@@ -194,7 +209,11 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
     }
   };
 
-  async function withBusy<T>(fn: () => Promise<T>, msg: string, done?: boolean) {
+  async function withBusy<T>(
+    fn: () => Promise<T>,
+    msg: string,
+    done?: boolean,
+  ) {
     setBusy(true);
     try {
       await fn();
@@ -227,8 +246,10 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
   const views: { key: View; label: string }[] = [
     // A PR proposal supersedes TASK.md — the brief isn't relevant once the run
     // has produced a PR to open, so drop it entirely.
-    ...(showPrimary && !showPr ? [{ key: "primary" as const, label: primaryLabel }] : []),
-    ...(showPr ? [{ key: "pr" as const, label: "PR" }] : []),
+    ...(showPrimary && !showPr
+      ? [{ key: "primary" as const, label: primaryLabel }]
+      : []),
+    ...(showPr ? [{ key: "pr" as const, label: "PR.md" }] : []),
     { key: "prompt", label: "Prompt" },
     { key: "log", label: "Log" },
   ];
@@ -260,9 +281,7 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             className="inline-flex min-w-0 max-w-full items-center gap-1 font-medium text-foreground hover:underline"
             title={taskSubjectLabel}
           >
-            <span className="min-w-0 truncate">
-              {taskSubjectLabel}
-            </span>
+            <span className="min-w-0 truncate">{taskSubjectLabel}</span>
             <ExternalLink className="h-3 w-3 shrink-0" />
           </a>
         </LinkMeta>
@@ -280,7 +299,10 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
                 <ExternalLink className="h-3 w-3 shrink-0" />
               </a>
             ) : (
-              <span className="block min-w-0 truncate font-mono" title={task.branch}>
+              <span
+                className="block min-w-0 truncate font-mono"
+                title={task.branch}
+              >
                 {task.branch}
               </span>
             )
@@ -405,13 +427,23 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
           content !== null &&
           view === "primary" &&
           canEditPrimary && (
-            <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={busy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing(true)}
+              disabled={busy}
+            >
               <Pencil className="h-3.5 w-3.5" />
               Edit
             </Button>
           )}
         {!editing && pr !== null && view === "pr" && showPr && (
-          <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={busy}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditing(true)}
+            disabled={busy}
+          >
             <Pencil className="h-3.5 w-3.5" />
             Edit
           </Button>
@@ -434,7 +466,11 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             >
               Cancel
             </Button>
-            <Button size="sm" onClick={view === "pr" ? savePr : save} disabled={busy}>
+            <Button
+              size="sm"
+              onClick={view === "pr" ? savePr : save}
+              disabled={busy}
+            >
               Save
             </Button>
           </>
@@ -444,7 +480,9 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             {task.canComment && (
               <Button
                 size="sm"
-                onClick={() => withBusy(() => kotx.comment(task.id), "Comment posted", true)}
+                onClick={() =>
+                  withBusy(() => kotx.comment(task.id), "Comment posted", true)
+                }
                 disabled={busy || !content?.trim()}
               >
                 Comment
@@ -453,7 +491,9 @@ export function RunDocModal({ task, doc, onClose, onChanged }: Props) {
             {task.canStart && (
               <Button
                 size="sm"
-                onClick={() => withBusy(() => kotx.start(task.id), "Started", true)}
+                onClick={() =>
+                  withBusy(() => kotx.start(task.id), "Started", true)
+                }
                 disabled={busy}
               >
                 Start

@@ -13,15 +13,17 @@ Two entry points:
     id (calendar-discover). Dispatches to schedule_task when the event maps
     to a Task, or repairs the commute plan when it doesn't.
 
-`schedule_task` is serialized per task via an asyncio.Lock so concurrent
-triggers (cron polls, HA action, queue worker) don't race on the same row.
+`schedule_task` is serialized process-wide via a single asyncio.Lock: the
+busy view is a live calendar read, so the whole plan→write section has to be
+atomic across *all* tasks, not just per task. Concurrent triggers (cron polls,
+HA action, queue worker — all one event loop) would otherwise each read a
+snapshot missing the other's not-yet-written event and place overlapping slots.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 
@@ -48,17 +50,9 @@ EARLY_MORNING = time(8, 0)
 END_OF_DAY = time(23, 59, 59)
 MAX_REPAIR_DEPTH = 8
 
-# Per-task lock table. The planner is the only async-concurrent writer to
-# a task's calendar event; serializing same-task calls is enough.
-_task_locks: dict[uuid.UUID, asyncio.Lock] = {}
-
-
-def _lock_for(task_id: uuid.UUID) -> asyncio.Lock:
-    lock = _task_locks.get(task_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _task_locks[task_id] = lock
-    return lock
+# Process-wide scheduling lock. Held across the entire plan→write section so no
+# two placements ever race on the same stale calendar snapshot. See module docs.
+_schedule_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -101,7 +95,19 @@ async def schedule_task(
         log.debug("plan.schedule · task=%s has no due_date", task.id)
         return None
 
-    async with _lock_for(task.id):
+    # Victim reschedules recurse with _depth>0 and already run inside the lock;
+    # re-acquiring would deadlock (asyncio.Lock isn't reentrant).
+    if _depth > 0:
+        return await _schedule_task_locked(
+            session,
+            task,
+            block=block,
+            account_key=account_key,
+            notify=notify,
+            _depth=_depth,
+        )
+
+    async with _schedule_lock:
         return await _schedule_task_locked(
             session,
             task,
@@ -248,6 +254,11 @@ async def plan_task_slot(
         window_end,
         exclude_event_id=task.calendar_event_id,
         account_key=account_key,
+    )
+    busy.extend(
+        _db_scheduled_busy(
+            session, task, window_start, window_end, {ev.id for ev in busy}
+        )
     )
     for itv in extra_busy or []:
         busy.append(BusyEvent(itv.event_id or "extra", itv.start, itv.end, "extra"))
@@ -560,6 +571,36 @@ def _earliest_conflict(events: list[BusyEvent], start: datetime, end: datetime) 
     if not conflicts:
         return None
     return min(conflicts, key=lambda ev: ev.end)
+
+
+def _db_scheduled_busy(
+    session: Session,
+    task: Task,
+    window_start: datetime,
+    window_end: datetime,
+    calendar_event_ids: set[str],
+) -> list[BusyEvent]:
+    """Backstop for the live calendar read: open tasks whose stored slot the
+    calendar may not reflect yet — Google's events.list lags a just-created
+    event, or the event was deleted out from under us. Skip any whose event
+    already appeared in the calendar busy set. Marked immovable ("busy"): we
+    won't try to displace a task we can only see in the DB."""
+    from app.db.clients import tasks as tasks_store
+
+    settings = get_settings()
+    out: list[BusyEvent] = []
+    for row in tasks_store.open_scheduled_between(
+        session,
+        time_min=window_start,
+        time_max=window_end,
+        exclude_task_id=task.id,
+    ):
+        if row.calendar_event_id and row.calendar_event_id in calendar_event_ids:
+            continue
+        start = to_user_tz(row.scheduled_date)
+        end = start + timedelta(minutes=_duration_minutes(row, settings))
+        out.append(BusyEvent(row.calendar_event_id or f"db:{row.id}", start, end, "busy"))
+    return out
 
 
 async def _fetch_busy_events(
