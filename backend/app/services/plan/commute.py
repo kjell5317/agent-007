@@ -1,4 +1,11 @@
-"""Plan-service wrapper for commute planning."""
+"""Plan-service wrapper for commute planning.
+
+Every commute entry point runs under the same process-wide scheduling lock
+as `schedule_task`: leg writes and the task reschedules they trigger read a
+live calendar snapshot, so they must be atomic with any concurrent task
+placement. Callers already inside the lock (the scheduler itself) pass
+`_depth > 0` to skip re-acquisition — the lock isn't reentrant.
+"""
 
 from __future__ import annotations
 
@@ -13,17 +20,15 @@ log = logging.getLogger(__name__)
 
 
 def commute_window_margin() -> timedelta:
-    """How far on either side of a task slot to sweep for commute work.
-
-    Sized so the widest possible commute leg + home-layover round-trip can
-    still fall fully inside the queried window.
-    """
+    """How far around a task slot commute work can reach — sized so the
+    widest leg + home-layover round trip still falls inside the window."""
     settings = get_settings()
     return timedelta(
         minutes=max(
-            settings.commute_bike_max_minutes,
-            settings.commute_home_layover_minutes * 2,
-            settings.commute_event_buffer_minutes,
+            120,
+            2 * settings.commute_bike_max_minutes
+            + settings.commute_home_layover_minutes
+            + 2 * settings.commute_event_buffer_minutes,
         )
     )
 
@@ -43,22 +48,30 @@ async def plan_commutes_window(
     *,
     window_start: datetime,
     window_end: datetime,
-    target_event_ids: set[str] | None = None,
-    stale_event_ids: set[str] | None = None,
     account_key: str | None = None,
+    _depth: int = 0,
 ) -> dict:
     if not get_settings().commute_enabled:
         return _disabled_summary()
     from app.services.commute.planner import plan_window_commutes
+    from app.services.plan.schedule import _schedule_lock
 
-    return await plan_window_commutes(
-        session,
-        window_start=window_start,
-        window_end=window_end,
-        target_event_ids=target_event_ids,
-        stale_event_ids=stale_event_ids,
-        account_key=account_key,
-    )
+    if _depth > 0:
+        return await plan_window_commutes(
+            session,
+            window_start=window_start,
+            window_end=window_end,
+            account_key=account_key,
+            _depth=_depth,
+        )
+    async with _schedule_lock:
+        return await plan_window_commutes(
+            session,
+            window_start=window_start,
+            window_end=window_end,
+            account_key=account_key,
+            _depth=1,
+        )
 
 
 async def refresh_commutes_for_weather(
@@ -69,8 +82,10 @@ async def refresh_commutes_for_weather(
     if not get_settings().commute_enabled:
         return _disabled_summary()
     from app.services.commute.planner import refresh_weather_sensitive_commutes
+    from app.services.plan.schedule import _schedule_lock
 
-    return await refresh_weather_sensitive_commutes(session, account_key=account_key)
+    async with _schedule_lock:
+        return await refresh_weather_sensitive_commutes(session, account_key=account_key, _depth=1)
 
 
 async def plan_commutes_window_best_effort(
@@ -78,9 +93,8 @@ async def plan_commutes_window_best_effort(
     *,
     window_start: datetime,
     window_end: datetime,
-    target_event_ids: set[str] | None = None,
-    stale_event_ids: set[str] | None = None,
     account_key: str | None = None,
+    _depth: int = 0,
 ) -> None:
     if not get_settings().commute_enabled:
         return
@@ -89,9 +103,8 @@ async def plan_commutes_window_best_effort(
             session,
             window_start=window_start,
             window_end=window_end,
-            target_event_ids=target_event_ids,
-            stale_event_ids=stale_event_ids,
             account_key=account_key,
+            _depth=_depth,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("plan.commute · window planning failed err=%s", exc)

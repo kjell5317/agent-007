@@ -12,12 +12,19 @@ official examples.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 _BASE = "https://slack.com/api"
+
+# Slack occasionally stalls a response past the read timeout or answers
+# 429/5xx under load. Retry those so one slow request doesn't abort a
+# whole poll cycle.
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+_MAX_ATTEMPTS = 3
 
 
 class SlackAPIError(Exception):
@@ -29,6 +36,24 @@ class SlackClient:
         self._headers = {"Authorization": f"Bearer {access_token}"}
         self._timeout = timeout
 
+    async def _get(
+        self, client: httpx.AsyncClient, method: str, params: dict[str, Any]
+    ) -> dict:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                resp = await client.get(f"{_BASE}/{method}", params=params)
+            except httpx.TransportError:
+                if attempt == _MAX_ATTEMPTS:
+                    raise
+                await asyncio.sleep(2 ** (attempt - 1))
+                continue
+            if resp.status_code in _RETRY_STATUS and attempt < _MAX_ATTEMPTS:
+                await asyncio.sleep(float(resp.headers.get("retry-after", 2 ** (attempt - 1))))
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        raise AssertionError("unreachable")
+
     async def users_conversations(
         self, *, types: str = "public_channel,private_channel,im,mpim"
     ) -> AsyncIterator[dict]:
@@ -36,9 +61,7 @@ class SlackClient:
         params: dict[str, Any] = {"types": types, "limit": 200, "exclude_archived": True}
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             while True:
-                resp = await client.get(f"{_BASE}/users.conversations", params=params)
-                resp.raise_for_status()
-                payload = resp.json()
+                payload = await self._get(client, "users.conversations", params)
                 if not payload.get("ok"):
                     raise SlackAPIError(payload.get("error", "unknown"))
                 for c in payload.get("channels", []):
@@ -57,9 +80,7 @@ class SlackClient:
             params["oldest"] = oldest
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             while True:
-                resp = await client.get(f"{_BASE}/conversations.history", params=params)
-                resp.raise_for_status()
-                payload = resp.json()
+                payload = await self._get(client, "conversations.history", params)
                 if not payload.get("ok"):
                     # Common errors here: not_in_channel (user isn't a member),
                     # missing_scope. Surface so the caller can skip the channel.
@@ -81,12 +102,11 @@ class SlackClient:
         """
         try:
             async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-                resp = await client.get(
-                    f"{_BASE}/chat.getPermalink",
-                    params={"channel": channel, "message_ts": message_ts},
+                payload = await self._get(
+                    client,
+                    "chat.getPermalink",
+                    {"channel": channel, "message_ts": message_ts},
                 )
-                resp.raise_for_status()
-                payload = resp.json()
         except httpx.HTTPError:
             return None
         if not payload.get("ok"):
@@ -95,9 +115,7 @@ class SlackClient:
 
     async def users_info(self, user_id: str) -> dict | None:
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-            resp = await client.get(f"{_BASE}/users.info", params={"user": user_id})
-            resp.raise_for_status()
-            payload = resp.json()
+            payload = await self._get(client, "users.info", {"user": user_id})
             if not payload.get("ok"):
                 return None
             return payload.get("user")

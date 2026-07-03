@@ -1,4 +1,4 @@
-"""Move task events that overlap freshly planned commute windows."""
+"""Move task events that overlap freshly derived commute legs."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.task import Task
-from app.services.commute.planner import CommutePlan
+from app.services.commute.legs import PlannedLeg
 from app.services.plan.schedule import Interval, schedule_task
 
 log = logging.getLogger(__name__)
@@ -21,14 +21,14 @@ BATCH_NOTIFY_THRESHOLD = 2
 
 async def reschedule_overlapping_tasks(
     session: Session,
-    plans: list[CommutePlan],
+    legs: list[PlannedLeg],
     *,
     account_key: str | None = None,
+    _depth: int = 0,
 ) -> int:
-    if not plans:
+    if not legs:
         return 0
 
-    intervals = [Interval(plan.depart, plan.arrive, plan.related_event_id) for plan in plans]
     stmt = (
         select(Task)
         .where(Task.calendar_event_id.is_not(None))
@@ -42,7 +42,7 @@ async def reschedule_overlapping_tasks(
         current = await _current_interval(session, task)
         if current is None:
             continue
-        if _first_overlap(current, intervals) is None:
+        if _first_overlap(current, legs, task.calendar_event_id) is None:
             continue
         affected.append(task)
 
@@ -58,7 +58,7 @@ async def reschedule_overlapping_tasks(
         current = await _current_interval(session, task)
         if current is None:
             continue
-        overlap = _first_overlap(current, intervals)
+        overlap = _first_overlap(current, legs, task.calendar_event_id)
         if overlap is None:
             continue
         result = await schedule_task(
@@ -67,6 +67,7 @@ async def reschedule_overlapping_tasks(
             block=overlap,
             account_key=account_key,
             notify=not batch,
+            _depth=_depth,
         )
         if result is not None:
             moved_slots.append((task, result[0], result[1]))
@@ -91,8 +92,15 @@ async def _current_interval(session: Session, task: Task) -> Interval | None:
     return Interval(event.start, event.end, event.id)
 
 
-def _first_overlap(task_interval: Interval, intervals: list[Interval]) -> Interval | None:
-    for interval in intervals:
-        if interval.start < task_interval.end and task_interval.start < interval.end:
-            return interval
+def _first_overlap(
+    task_interval: Interval,
+    legs: list[PlannedLeg],
+    task_event_id: str,
+) -> Interval | None:
+    for leg in legs:
+        # A task's own legs touch its slot by construction — not a conflict.
+        if task_event_id in leg.key:
+            continue
+        if leg.depart < task_interval.end and task_interval.start < leg.arrive:
+            return Interval(leg.depart, leg.arrive, leg.dest_anchor)
     return None

@@ -12,7 +12,8 @@ Public surface:
     event → schedule_task; commute event → recompute commute plan.
   * `update_task_to_calendar(session, task, *, changed_fields=None)`
   * `refresh_commutes_for_weather(session)` — hourly weather-driven refresh.
-  * `plan_task_slot(session, task)` — pick `(start, end)` for one task.
+  * `plan_task_slot(session, task)` — pick a `PlannedSlot` (task span plus
+    the commute trip block reserved around it) for one task.
 
 The one explicit exception to "only plan touches calendar": when a task
 update changes no plan-relevant field (estimation / due_date / location),
@@ -23,10 +24,12 @@ delete: `close` / `dismiss` go straight to
 """
 
 from app.services.plan.commute import (
+    plan_commutes_window,
     refresh_commutes_for_weather,
 )
 from app.services.plan.schedule import (
     Interval,
+    PlannedSlot,
     plan_task_slot,
     reschedule_event,
     schedule_task,
@@ -36,6 +39,8 @@ from app.services.plan.update import update_task_to_calendar
 
 __all__ = [
     "Interval",
+    "PlannedSlot",
+    "plan_commutes_window",
     "refresh_commutes_for_weather",
     "plan_task_slot",
     "reschedule_event",

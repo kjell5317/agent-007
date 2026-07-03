@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+
+from app.services.commute.legs import (  # noqa: E402
+    FAILED_LEG_SECONDS,
+    FAILED_MODE,
+    HOME,
+    Anchor,
+    derive_legs,
+    required_routes,
+)
+from app.timezones import to_user_tz  # noqa: E402
+
+HOME_ADDR = "Homestreet 1, Munich"
+GYM = "Gymstreet 5, Munich"
+OFFICE = "Officeplatz 2, Munich"
+
+SETTINGS = SimpleNamespace(
+    commute_bike_max_minutes=25,
+    commute_rain_threshold_pct=30,
+    commute_home_layover_minutes=60,
+    commute_event_buffer_minutes=15,
+)
+
+BUFFER = timedelta(minutes=15)
+
+
+def _at(hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 7, 10, hour, minute, tzinfo=timezone.utc)
+
+
+def _durations(overrides: dict | None = None) -> dict:
+    base = {
+        (HOME_ADDR, GYM, "bicycling"): 600,
+        (GYM, HOME_ADDR, "bicycling"): 600,
+        (HOME_ADDR, OFFICE, "bicycling"): 900,
+        (OFFICE, HOME_ADDR, "bicycling"): 900,
+        (GYM, OFFICE, "bicycling"): 300,
+        (OFFICE, GYM, "bicycling"): 300,
+    }
+    base.update(overrides or {})
+    return base
+
+
+def test_single_anchor_round_trip():
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    legs, skipped = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.key for leg in legs] == [(HOME, "ev1"), ("ev1", HOME)]
+    outbound, inbound = legs
+    assert outbound.arrive == anchor.start - BUFFER
+    assert outbound.depart == outbound.arrive - timedelta(seconds=600)
+    assert outbound.mode == "bicycling"
+    assert inbound.depart == anchor.end + BUFFER
+    assert inbound.arrive == inbound.depart + timedelta(seconds=600)
+
+
+def test_same_location_anchors_share_one_trip():
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(15, 30), _at(16), GYM)
+    legs, _ = derive_legs([first, second], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert [leg.key for leg in legs] == [(HOME, "ev1"), ("ev2", HOME)]
+
+
+def test_short_gap_gets_direct_leg():
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(15, 45), _at(17), OFFICE)
+    legs, _ = derive_legs([first, second], HOME_ADDR, _durations(), None, SETTINGS)
+
+    keys = [leg.key for leg in legs]
+    assert keys == [(HOME, "ev1"), ("ev1", "ev2"), ("ev2", HOME)]
+    direct = legs[1]
+    assert direct.origin == GYM
+    assert direct.destination == OFFICE
+    assert direct.arrive == second.start - BUFFER
+    assert direct.depart == direct.arrive - timedelta(seconds=300)
+
+
+def test_long_gap_goes_via_home():
+    first = Anchor("ev1", _at(10), _at(11), GYM)
+    second = Anchor("ev2", _at(16), _at(17), OFFICE)
+    legs, _ = derive_legs([first, second], HOME_ADDR, _durations(), None, SETTINGS)
+
+    keys = [leg.key for leg in legs]
+    assert keys == [
+        (HOME, "ev1"),
+        ("ev1", HOME),
+        (HOME, "ev2"),
+        ("ev2", HOME),
+    ]
+
+
+def test_rain_flips_bike_to_transit():
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({(HOME_ADDR, GYM, "transit"): 1200, (GYM, HOME_ADDR, "transit"): 1200})
+    rain = {
+        to_user_tz(anchor.start).strftime("%Y-%m-%dT%H:00"): 80,
+        to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80,
+    }
+    legs, _ = derive_legs([anchor], HOME_ADDR, durations, rain, SETTINGS)
+
+    outbound = legs[0]
+    assert outbound.mode == "transit"
+    assert "rain" in outbound.reason
+    assert outbound.depart == anchor.start - BUFFER - timedelta(seconds=1200)
+
+
+def test_bike_over_threshold_uses_transit_and_falls_back():
+    far = "Farawaystrasse 9"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 3600,  # over 25-minute cap
+        (HOME_ADDR, far, "transit"): 1800,
+        (far, HOME_ADDR, "bicycling"): 3600,
+        # no inbound transit → falls back to bike with a reason
+    }
+    anchor = Anchor("ev1", _at(14), _at(15), far)
+    legs, skipped = derive_legs([anchor], HOME_ADDR, durations, None, SETTINGS)
+
+    assert skipped == 0
+    outbound, inbound = legs
+    assert outbound.mode == "transit"
+    assert inbound.mode == "bicycling"
+    assert inbound.reason == "transit unavailable, fell back to bike"
+
+
+def test_unroutable_legs_become_30min_placeholders():
+    anchor = Anchor("ev1", _at(14), _at(15), "Nowhere 1")
+    legs, unroutable = derive_legs([anchor], HOME_ADDR, {}, None, SETTINGS)
+
+    assert unroutable == 2
+    outbound, inbound = legs
+    assert outbound.mode == FAILED_MODE
+    assert outbound.reason == "no route found"
+    assert outbound.arrive - outbound.depart == timedelta(seconds=FAILED_LEG_SECONDS)
+    assert outbound.arrive == anchor.start - BUFFER
+    assert inbound.mode == FAILED_MODE
+    assert inbound.depart == anchor.end + BUFFER
+
+
+def test_unroutable_middle_gap_gets_failed_direct_leg():
+    first = Anchor("ev1", _at(14), _at(15), "Nowhere 1")
+    second = Anchor("ev2", _at(15, 45), _at(17), "Nowhere 2")
+    legs, unroutable = derive_legs([first, second], HOME_ADDR, {}, None, SETTINGS)
+
+    assert unroutable == 3
+    direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
+    assert direct.mode == FAILED_MODE
+    assert direct.arrive - direct.depart == timedelta(seconds=FAILED_LEG_SECONDS)
+
+
+def test_home_anchor_produces_no_legs():
+    anchor = Anchor("ev1", _at(14), _at(15), HOME_ADDR.upper())
+    legs, skipped = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert legs == []
+    assert skipped == 0
+
+
+def test_required_routes_cover_home_and_chain_pairs():
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(15, 45), _at(17), OFFICE)
+    routes = required_routes([first, second], HOME_ADDR)
+
+    assert set(routes) == {
+        (HOME_ADDR, GYM),
+        (GYM, HOME_ADDR),
+        (HOME_ADDR, OFFICE),
+        (OFFICE, HOME_ADDR),
+        (GYM, OFFICE),
+    }
+    assert routes[(HOME_ADDR, GYM)] == first.start
+    assert routes[(GYM, OFFICE)] == first.end

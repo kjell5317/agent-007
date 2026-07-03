@@ -43,7 +43,7 @@ from app.services.calendar.events import (
     is_managed_event,
     is_task_event,
 )
-from app.services.location import resolve_location_alias
+from app.services.location import is_online_location, resolve_location_alias
 from app.services.plan.schedule import (
     _duration_minutes,
     reschedule_event,
@@ -107,6 +107,7 @@ async def discover_updated_events(
         "deleted": 0,
     }
 
+    changed_physical: list[CalendarEvent] = []
     for cid in ids:
         raw_items, new_token, new_baseline = await _sync_calendar(
             client,
@@ -128,6 +129,7 @@ async def discover_updated_events(
             if it.get("status") == "cancelled" and it.get("id")
         ]
         summary["updated"] += len(active)
+        changed_physical.extend(active)
 
         if cid == write_id:
             synced_task_ids: list[uuid.UUID] = []
@@ -190,7 +192,53 @@ async def discover_updated_events(
     )
     session.commit()
 
+    await _plan_legs_for_changed_events(session, changed_physical, account_key=account_key)
+
     return summary
+
+
+async def _plan_legs_for_changed_events(
+    session: Session,
+    events: list[CalendarEvent],
+    *,
+    account_key: str | None,
+) -> None:
+    """Derive commute legs around every changed physical event.
+
+    This is the leg-creation path for brand-new events (which overlap
+    nothing, so the reschedule path never fires for them). Recurring series
+    arrive as bounded single instances — the sync window caps expansion at
+    `WINDOW_DAYS`, and the daily re-baseline re-surfaces the instances
+    sliding into view — so a new endless series only ever gets legs for the
+    next week's occurrences, one pair per instance, never the whole series.
+    Idempotent: unchanged legs diff to no-op patches."""
+    if not get_settings().commute_enabled:
+        return
+    span = _physical_span(events)
+    if span is None:
+        return
+    from app.services.plan.commute import plan_commutes_window_best_effort
+
+    await plan_commutes_window_best_effort(
+        session,
+        window_start=span[0],
+        window_end=span[1],
+        account_key=account_key,
+    )
+
+
+def _physical_span(events: list[CalendarEvent]) -> tuple[datetime, datetime] | None:
+    """Time range covered by the routable events in `events`, or None."""
+    spans = [
+        (ev.start, ev.end)
+        for ev in events
+        if not ev.all_day
+        and not is_commute_event(ev)
+        and not is_online_location(ev.location)
+    ]
+    if not spans:
+        return None
+    return min(s for s, _ in spans), max(e for _, e in spans)
 
 
 async def _sync_calendar(

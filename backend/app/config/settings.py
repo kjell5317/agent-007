@@ -29,8 +29,10 @@ class Settings(BaseSettings):
     user_timezone: str = "Europe/Berlin"
     home_address: str = ""
 
-    token_encryption_key: str = Field(default="", description="Fernet key for encrypting OAuth tokens at rest")
-    session_secret: str = "" # python -c "import secrets; print(secrets.token_urlsafe(32))"
+    token_encryption_key: str = Field(
+        default="", description="Fernet key for encrypting OAuth tokens at rest"
+    )
+    session_secret: str = ""  # python -c "import secrets; print(secrets.token_urlsafe(32))"
 
     # LLM
     llm_provider: str = "anthropic"
@@ -77,6 +79,8 @@ class Settings(BaseSettings):
     # Write calendar
     google_calendar_id: str = "primary"
     google_calendar_default_event_minutes: int = 30
+    # Minimum lead before "now" a fresh slot may start at.
+    slot_min_lead_minutes: int = 15
     # Read calendars
     google_busy_calendar_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
@@ -90,12 +94,15 @@ class Settings(BaseSettings):
     # Commute planning. Disabled by default — the feature is parked while
     # we sort out a TZ/routing reliability issue. Flip to true to re-enable
     # weather refresh, commute events, and the location-driven replan path.
-    commute_enabled: bool = False
+    commute_enabled: bool = True
 
     # Google Maps
     google_maps_api_key: str = ""
     commute_bike_max_minutes: int = 25
     commute_rain_threshold_pct: int = 30
+    # Cached transit/driving durations older than this are re-fetched so
+    # timetable changes are eventually picked up. Bike/walking never expire.
+    commute_transit_ttl_days: int = 30
     commute_lookahead_days: int = 7
     commute_home_layover_minutes: int = 60
     commute_event_buffer_minutes: int = 15
@@ -126,11 +133,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_llm_model(self) -> str:
-        return (
-            self.llm_model.strip()
-            or self.claude_model.strip()
-            or DEFAULT_ANTHROPIC_MODEL
-        )
+        return self.llm_model.strip() or self.claude_model.strip() or DEFAULT_ANTHROPIC_MODEL
 
 
 @lru_cache

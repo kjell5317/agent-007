@@ -16,9 +16,10 @@ class RouteCache(Base):
     rush-hour / off-peak variation into 168 slots per pairing, which gives us
     realistic public-transport times without re-querying Google for every event.
 
-    Bike trips are mode-independent of the hour (cycling time doesn't vary with
-    traffic on the Distance Matrix); we still bucket by hour so the schema stays
-    uniform and so we can purge old rows by recency.
+    Bike and walking times don't vary with the hour (the Distance Matrix
+    ignores departure time for them), so those modes always use bucket 0 —
+    one row per route instead of up to 168. Transit/driving rows expire after
+    `commute_transit_ttl_days` (checked at lookup, refreshed on re-fetch).
     """
 
     __tablename__ = "route_cache"

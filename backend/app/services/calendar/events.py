@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -323,15 +323,19 @@ async def update_task_event(
 
 
 async def delete_task_event(session: Session, task) -> None:
-    """Drop the task's calendar mirror. No-op when nothing is mirrored or no
-    calendar is configured. Clears `task.calendar_event_id` on success so a
-    later re-open creates a fresh event. Best-effort."""
+    """Drop the task's calendar mirror and any commute legs anchored to it.
+    No-op when nothing is mirrored or no calendar is configured. Clears
+    `task.calendar_event_id` on success so a later re-open creates a fresh
+    event. Best-effort."""
     if not task.calendar_event_id:
         return
     settings = get_settings()
     calendar_id = (settings.google_calendar_id or "").strip()
     if not calendar_id:
         return
+    await _delete_anchored_commutes(
+        session, calendar_id=calendar_id, anchor_id=task.calendar_event_id, task=task,
+    )
     try:
         await delete_event(
             session, calendar_id=calendar_id, event_id=task.calendar_event_id,
@@ -342,6 +346,36 @@ async def delete_task_event(session: Session, task) -> None:
 
     tasks_store.clear_calendar_event(session, task)
     session.commit()
+
+
+# Legs sit within a few hours of their anchor; this window is generous enough
+# to catch even a long transit leg on either side of the task slot.
+_LEG_SWEEP_MARGIN = timedelta(hours=6)
+
+
+async def _delete_anchored_commutes(
+    session: Session,
+    *,
+    calendar_id: str,
+    anchor_id: str,
+    task,
+) -> None:
+    if not get_settings().commute_enabled or task.scheduled_date is None:
+        return
+    try:
+        events = await list_events_between(
+            session,
+            calendar_ids=[calendar_id],
+            time_min=task.scheduled_date - _LEG_SWEEP_MARGIN,
+            time_max=task.scheduled_date + _LEG_SWEEP_MARGIN,
+        )
+        for ev in events:
+            key = commute_leg_key(ev)
+            if key is None or anchor_id not in key:
+                continue
+            await delete_event(session, calendar_id=calendar_id, event_id=ev.id)
+    except Exception as exc:  # noqa: BLE001 — leg cleanup must not block task state changes
+        log.warning("commute leg cleanup failed · task=%s err=%s", task.id, exc)
 
 
 def _task_description(task) -> str | None:
@@ -361,13 +395,25 @@ def task_private_properties(task) -> dict[str, str]:
     }
 
 
-def commute_private_properties(*, related_event_id: str, leg: str) -> dict[str, str]:
+def commute_private_properties(*, origin_anchor: str, dest_anchor: str) -> dict[str, str]:
     return {
         PROP_MANAGED_BY: MANAGED_BY,
         PROP_KIND: KIND_COMMUTE,
-        "related_event_id": related_event_id,
-        "leg": leg,
+        "origin_anchor": origin_anchor,
+        "dest_anchor": dest_anchor,
     }
+
+
+def commute_leg_key(event: CalendarEvent) -> tuple[str, str] | None:
+    """`(origin_anchor, dest_anchor)` identity of a commute event, or None
+    for non-commutes and legacy-format commutes (which callers treat as
+    stale and delete on the next replan)."""
+    if not is_commute_event(event):
+        return None
+    props = private_properties(event)
+    origin = props.get("origin_anchor")
+    dest = props.get("dest_anchor")
+    return (origin, dest) if origin and dest else None
 
 
 def private_properties(event: CalendarEvent) -> dict[str, str]:

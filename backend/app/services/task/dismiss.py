@@ -18,16 +18,19 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.events import publish_input, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.notify import clear_task_notification
+from app.services.task.vacate import vacated_commute_window, replan_vacated_window
 
 
 async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
+    vacated = vacated_commute_window(task)
     # Best-effort calendar cleanup first, while task.calendar_event_id is
     # still readable. Errors are swallowed inside delete_task_event.
     await delete_task_event(session, task)
     await clear_task_notification(task_id)
+    await replan_vacated_window(session, vacated)
     # If an anchor raw_input still exists, flip it to `not_task` so the
     # inbox card reflects the dismissal. Orphan tasks (anchor promoted
     # away via no_change override, etc.) skip this — the deletion below

@@ -373,6 +373,9 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
+            slot_min_lead_minutes=0,
+            commute_enabled=False,
+            google_maps_api_key="",
         ),
     )
     monkeypatch.setattr(schedule_service, "_find_free_slot", fake_find_free_slot)
@@ -387,7 +390,8 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
 
     result = await schedule_service.plan_task_slot(SimpleNamespace(), task)
 
-    assert result == extended_slot
+    assert (result.start, result.end) == extended_slot
+    assert (result.block_start, result.block_end) == extended_slot
     assert searches == [False, True]
     assert repairs == [False]
 
@@ -848,7 +852,8 @@ async def test_schedule_task_serializes_across_tasks(monkeypatch):
     async def fake_plan(_session, _task, **_kwargs):
         await asyncio.sleep(0)  # yield — invites a concurrent call to interleave
         start = placed[-1][1] if placed else base
-        return start, start + timedelta(minutes=60)
+        end = start + timedelta(minutes=60)
+        return schedule_service.PlannedSlot(start, end, start, end)
 
     async def fake_add(_session, task, *, start, end):
         await asyncio.sleep(0)

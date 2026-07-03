@@ -1,56 +1,63 @@
-"""Commute event planner.
+"""Commute planning over a calendar window.
 
-This creates managed commute events for physical events and then lets the task
-scheduler repair any task that those commute windows collide with.
+Builds the anchor timeline (physical events + scheduled located tasks —
+both are just calendar events with a location), derives the desired legs
+via `app.services.commute.legs`, and diffs them against the managed
+commute events on the write calendar. Legs are identified by
+`(origin_anchor, dest_anchor)`, so a moved anchor's legs are patched in
+place rather than deleted and recreated.
+
+Callers must hold the plan-service scheduling lock (see
+`app.services.plan.commute`, which wraps every entry point) — the diff
+reads a live calendar snapshot, and the follow-up task reschedules write
+through the same planner state.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.services.calendar import (
     CalendarEvent,
+    commute_leg_key,
     commute_private_properties,
     create_event,
     delete_event,
     is_commute_event,
+    is_task_event,
     list_events_between,
     patch_event,
-    private_properties,
+)
+from app.services.commute.legs import (
+    FAILED_MODE,
+    HOME,
+    Anchor,
+    Durations,
+    PlannedLeg,
+    derive_legs,
+    required_routes,
 )
 from app.services.commute.resolver import resolve_duration
-from app.services.commute.weather import (
-    geocode,
-    precipitation_probability_at,
-    precipitation_probabilities_between,
-)
+from app.services.commute.weather import geocode, precipitation_probabilities_between
+from app.services.location import is_online_location, resolve_location_alias
+from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class CommutePlan:
-    leg: str
-    origin: str
-    destination: str
-    mode: str
-    depart: datetime
-    arrive: datetime
-    related_event_id: str
-    mode_reason: str | None = None
 
 
 async def refresh_weather_sensitive_commutes(
     session: Session,
     *,
     account_key: str | None = None,
+    _depth: int = 0,
 ) -> dict:
-    """Refresh existing commute events only when the next day has rain."""
+    """Re-derive commute legs for the next day when rain would flip a
+    bike leg to transit."""
     settings = get_settings()
     summary = _empty_summary()
     write_calendar_id = (settings.google_calendar_id or "").strip()
@@ -63,7 +70,7 @@ async def refresh_weather_sensitive_commutes(
 
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=1)
-    home_latlon = await geocode(settings.home_address)
+    home_latlon = await geocode(session, settings.home_address)
     if home_latlon is None:
         summary["errors"].append({"setup": "home address could not be geocoded"})
         return summary
@@ -90,23 +97,16 @@ async def refresh_weather_sensitive_commutes(
         time_max=window_end,
         account_key=account_key,
     )
-    related_event_ids = {
-        related
-        for ev in events
-        if is_commute_event(ev) and _commute_mode(ev) == "bicycling"
-        if (related := private_properties(ev).get("related_event_id"))
-    }
-    if not related_event_ids:
-        return _empty_summary()
+    if not any(is_commute_event(ev) and _commute_mode(ev) == "bicycling" for ev in events):
+        return summary
 
     return await plan_window_commutes(
         session,
         window_start=now,
         window_end=window_end,
-        target_event_ids=related_event_ids,
-        stale_event_ids=related_event_ids,
         hourly_rain=hourly_rain,
         account_key=account_key,
+        _depth=_depth,
     )
 
 
@@ -115,10 +115,9 @@ async def plan_window_commutes(
     *,
     window_start: datetime,
     window_end: datetime,
-    target_event_ids: set[str] | None = None,
-    stale_event_ids: set[str] | None = None,
     hourly_rain: dict[str, int] | None = None,
     account_key: str | None = None,
+    _depth: int = 0,
 ) -> dict:
     settings = get_settings()
     summary = _empty_summary()
@@ -126,13 +125,16 @@ async def plan_window_commutes(
     if not write_calendar_id:
         summary["errors"].append({"setup": "google_calendar_id not configured"})
         return summary
-    if not settings.home_address:
+    home = (settings.home_address or "").strip()
+    if not home:
         summary["errors"].append({"setup": "home_address not configured"})
         return summary
     if not settings.google_maps_api_key:
         summary["errors"].append({"setup": "google_maps_api_key not configured"})
         return summary
 
+    window_start = to_user_tz(window_start)
+    window_end = to_user_tz(window_end)
     margin = _context_margin(settings)
     events = await list_events_between(
         session,
@@ -141,25 +143,40 @@ async def plan_window_commutes(
         time_max=window_end + margin,
         account_key=account_key,
     )
-    physical, existing_commutes = _partition(events, write_calendar_id)
-    targets = _targets(physical, window_start, window_end, target_event_ids)
-    summary["skipped_online"] = len(events) - len(physical) - len(existing_commutes)
+    anchors, existing_commutes, skipped_online = _partition(events, write_calendar_id)
+    summary["skipped_online"] = skipped_online
 
-    plans: list[CommutePlan] = []
-    for ev in targets:
-        try:
-            plans.extend(await _plans_for_event(session, ev, settings, hourly_rain=hourly_rain))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("commute · event=%s planning failed err=%s", ev.id, exc)
-            summary["errors"].append({"event_id": ev.id, "error": str(exc)})
+    if hourly_rain is None:
+        hourly_rain = await _home_rain(session, home, window_start, window_end + margin)
 
-    summary["planned"] = await _write_plans(
+    durations = await _resolve_routes(
+        session, anchors, home, hourly_rain, settings, summary,
+    )
+    legs, skipped_unroutable = derive_legs(anchors, home, durations, hourly_rain, settings)
+    summary["skipped_unroutable"] = skipped_unroutable
+
+    # Only legs touching the requested window are written or deleted — the
+    # margin exists so edge anchors see their real neighbours, not to widen
+    # the replan zone.
+    to_write = [
+        leg for leg in legs if _overlaps(leg.depart, leg.arrive, window_start, window_end)
+    ]
+
+    # A task anchor whose legs collide with another anchor has a slot with
+    # no room for its trip (typically placed before trip-block planning
+    # existed). Re-place the task instead of writing overlapping legs — its
+    # own replan then derives clean ones.
+    task_event_ids = {ev.id for ev in events if is_task_event(ev)}
+    needs_replacement = _reschedule_candidates(to_write, anchors, task_event_ids)
+    if needs_replacement:
+        to_write = [leg for leg in to_write if not (set(leg.key) & needs_replacement)]
+
+    summary["planned"] = await _write_legs(
         session,
-        plans,
+        to_write,
         calendar_id=write_calendar_id,
-        existing_commutes=existing_commutes,
-        stale_window=(window_start, window_end),
-        stale_event_ids=stale_event_ids if stale_event_ids is not None else target_event_ids,
+        existing=existing_commutes,
+        window=(window_start, window_end),
         account_key=account_key,
     )
 
@@ -167,161 +184,138 @@ async def plan_window_commutes(
 
     summary["rescheduled_tasks"] = await reschedule_overlapping_tasks(
         session,
-        plans,
+        to_write,
         account_key=account_key,
+        _depth=_depth,
+    )
+    summary["rescheduled_tasks"] += await _reschedule_task_anchors(
+        session,
+        needs_replacement,
+        account_key=account_key,
+        _depth=_depth,
     )
     return summary
 
 
-async def _plans_for_event(
-    session: Session,
-    ev: CalendarEvent,
-    settings,
-    *,
-    hourly_rain: dict[str, int] | None,
-) -> list[CommutePlan]:
-    if not ev.location:
-        return []
-
-    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
-    home = settings.home_address
-    weather_latlon = None if hourly_rain is not None else await geocode(ev.location)
-    out: list[CommutePlan] = []
-
-    outbound = await _build_leg(
-        session,
-        origin=home,
-        destination=ev.location,
-        arrive_by=ev.start - buffer,
-        depart_at=None,
-        hourly_rain=hourly_rain,
-        weather_latlon=weather_latlon,
-        settings=settings,
-        related_event_id=ev.id,
-        leg="outbound",
-    )
-    if outbound is not None:
-        out.append(outbound)
-
-    inbound = await _build_leg(
-        session,
-        origin=ev.location,
-        destination=home,
-        arrive_by=None,
-        depart_at=ev.end + buffer,
-        hourly_rain=hourly_rain,
-        weather_latlon=weather_latlon,
-        settings=settings,
-        related_event_id=ev.id,
-        leg="inbound",
-    )
-    if inbound is not None:
-        out.append(inbound)
+def _reschedule_candidates(
+    legs: list[PlannedLeg],
+    anchors: list[Anchor],
+    task_event_ids: set[str],
+) -> set[str]:
+    """Task anchors whose derived legs overlap a *different* anchor. Fixed
+    events can't move, so a fixed↔fixed collision is left alone (and
+    logged by the write path as an overlapping leg)."""
+    out: set[str] = set()
+    for leg in legs:
+        for anchor in anchors:
+            if anchor.id in leg.key:
+                continue
+            if leg.depart < anchor.end and anchor.start < leg.arrive:
+                out.update(anchor_id for anchor_id in leg.key if anchor_id in task_event_ids)
+                break
     return out
 
 
-async def _build_leg(
+async def _reschedule_task_anchors(
     session: Session,
+    event_ids: set[str],
     *,
-    origin: str,
-    destination: str,
-    arrive_by: datetime | None,
-    depart_at: datetime | None,
-    hourly_rain: dict[str, int] | None,
-    weather_latlon: tuple[float, float] | None,
-    settings,
-    related_event_id: str,
-    leg: str,
-) -> CommutePlan | None:
-    if origin == destination:
-        return None
+    account_key: str | None,
+    _depth: int,
+) -> int:
+    if not event_ids:
+        return 0
+    from sqlalchemy import select
 
-    reference = depart_at or (arrive_by - timedelta(hours=1))  # type: ignore[operator]
-    bike_seconds = await resolve_duration(
-        session,
-        origin=origin,
-        destination=destination,
-        mode="bicycling",
-        departure=reference,
-    )
-    mode = "bicycling"
-    duration_s = bike_seconds
-    reason = None
+    from app.db.models.task import Task
+    from app.services.plan.schedule import schedule_task
 
-    rain_pct = None
-    when_for_weather = arrive_by or depart_at
-    if hourly_rain is not None and when_for_weather is not None:
-        rain_pct = _rain_at(hourly_rain, when_for_weather)
-    elif weather_latlon is not None and when_for_weather is not None:
-        rain_pct = await precipitation_probability_at(
-            weather_latlon[0],
-            weather_latlon[1],
-            when_for_weather,
-        )
-
-    if bike_seconds is None or bike_seconds > settings.commute_bike_max_minutes * 60:
-        mode = "transit"
-        reason = "bike unavailable" if bike_seconds is None else "bike exceeds threshold"
-    elif rain_pct is not None and rain_pct >= settings.commute_rain_threshold_pct:
-        mode = "transit"
-        reason = f"rain {rain_pct}% >= {settings.commute_rain_threshold_pct}% threshold"
-
-    if mode == "transit":
-        duration_s = await resolve_duration(
-            session,
-            origin=origin,
-            destination=destination,
-            mode="transit",
-            departure=reference,
-        )
-    if duration_s is None:
-        if bike_seconds is None:
-            return None
-        mode = "bicycling"
-        duration_s = bike_seconds
-        reason = "transit unavailable, fell back to bike"
-
-    travel = timedelta(seconds=duration_s)
-    if arrive_by is not None:
-        depart = arrive_by - travel
-        arrive = arrive_by
-    else:
-        assert depart_at is not None
-        depart = depart_at
-        arrive = depart_at + travel
-    return CommutePlan(
-        leg=leg,
-        origin=origin,
-        destination=destination,
-        mode=mode,
-        depart=depart,
-        arrive=arrive,
-        related_event_id=related_event_id,
-        mode_reason=reason,
-    )
+    stmt = select(Task).where(Task.calendar_event_id.in_(list(event_ids)))
+    moved = 0
+    for task in session.execute(stmt).scalars():
+        log.info("commute · task=%s slot has no room for its trip; re-placing", task.id)
+        result = await schedule_task(session, task, account_key=account_key, _depth=_depth)
+        if result is not None:
+            moved += 1
+    return moved
 
 
-async def _write_plans(
+async def _resolve_routes(
     session: Session,
-    plans: list[CommutePlan],
+    anchors: list[Anchor],
+    home: str,
+    hourly_rain: dict[str, int] | None,
+    settings,
+    summary: dict,
+) -> Durations:
+    max_rain = max(hourly_rain.values()) if hourly_rain else None
+    rain_possible = max_rain is not None and max_rain >= settings.commute_rain_threshold_pct
+    durations: Durations = {}
+    resolved = 0
+    for (origin, destination), reference in required_routes(anchors, home).items():
+        try:
+            bike = await resolve_duration(
+                session, origin=origin, destination=destination,
+                mode="bicycling", departure=reference,
+            )
+            durations[(origin, destination, "bicycling")] = bike
+            resolved += 1
+            if bike is None or bike > settings.commute_bike_max_minutes * 60 or rain_possible:
+                durations[(origin, destination, "transit")] = await resolve_duration(
+                    session, origin=origin, destination=destination,
+                    mode="transit", departure=reference,
+                )
+                resolved += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("commute · route %s -> %s failed err=%s", origin, destination, exc)
+            summary["errors"].append({"route": f"{origin} -> {destination}", "error": str(exc)})
+    if resolved:
+        log.info("commute · resolved %d route durations for %d anchors", resolved, len(anchors))
+    return durations
+
+
+async def _home_rain(
+    session: Session, home: str, start: datetime, end: datetime,
+) -> dict[str, int] | None:
+    # One forecast at home stands in for every leg endpoint — city-scale
+    # commutes don't cross weather systems.
+    latlon = await geocode(session, home)
+    if latlon is None:
+        return None
+    return await precipitation_probabilities_between(latlon[0], latlon[1], start, end) or None
+
+
+async def _write_legs(
+    session: Session,
+    legs: list[PlannedLeg],
     *,
     calendar_id: str,
-    existing_commutes: list[CalendarEvent],
-    stale_window: tuple[datetime, datetime],
-    stale_event_ids: set[str] | None,
+    existing: list[CalendarEvent],
+    window: tuple[datetime, datetime],
     account_key: str | None,
 ) -> int:
-    desired = {_key_for_plan(plan): plan for plan in plans}
-    existing = {
-        key: ev
-        for ev in existing_commutes
-        if (key := _key_for_event(ev)) is not None
-    }
+    desired = {leg.key: leg for leg in legs}
+    existing_by_key: dict[tuple[str, str], CalendarEvent] = {}
+    legacy: list[CalendarEvent] = []
+    for ev in existing:
+        key = commute_leg_key(ev)
+        if key is None:
+            legacy.append(ev)
+        else:
+            existing_by_key[key] = ev
 
-    for key, ev in existing.items():
+    for ev in legacy:
+        if not _overlaps(ev.start, ev.end, window[0], window[1]):
+            continue
+        try:
+            await delete_event(session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("commute · legacy delete failed event=%s err=%s", ev.id, exc)
+
+    for key, ev in existing_by_key.items():
         if key in desired:
             continue
-        if not _should_delete_stale(key, ev, stale_window, stale_event_ids):
+        if not _overlaps(ev.start, ev.end, window[0], window[1]):
             continue
         try:
             await delete_event(session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key)
@@ -329,70 +323,73 @@ async def _write_plans(
             log.warning("commute · stale delete failed event=%s err=%s", ev.id, exc)
 
     written = 0
-    for key, plan in desired.items():
-        summary = _summary_for(plan)
-        description = _description_for(plan)
-        props = commute_private_properties(related_event_id=plan.related_event_id, leg=plan.leg)
-        current = existing.get(key)
+    for key, leg in desired.items():
+        summary = _summary_for(leg)
+        description = _description_for(leg)
+        props = commute_private_properties(origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor)
+        current = existing_by_key.get(key)
         try:
             if current is None:
                 await create_event(
                     session,
                     calendar_id=calendar_id,
                     summary=summary,
-                    start=plan.depart,
-                    end=plan.arrive,
+                    start=leg.depart,
+                    end=leg.arrive,
                     description=description,
-                    location=plan.destination,
+                    location=leg.destination,
                     private_properties=props,
                     account_key=account_key,
                 )
-            elif _needs_patch(current, plan, summary, description):
+            elif _needs_patch(current, leg, summary, description):
                 await patch_event(
                     session,
                     calendar_id=calendar_id,
                     event_id=current.id,
                     summary=summary,
-                    start=plan.depart,
-                    end=plan.arrive,
+                    start=leg.depart,
+                    end=leg.arrive,
                     description=description,
-                    location=plan.destination,
+                    location=leg.destination,
                     private_properties=props,
                     account_key=account_key,
                 )
             written += 1
         except Exception as exc:  # noqa: BLE001
-            log.warning("commute · upsert failed related=%s leg=%s err=%s", plan.related_event_id, plan.leg, exc)
+            log.warning(
+                "commute · upsert failed origin=%s dest=%s err=%s",
+                leg.origin_anchor, leg.dest_anchor, exc,
+            )
     return written
 
 
-def _partition(events: list[CalendarEvent], write_calendar_id: str) -> tuple[list[CalendarEvent], list[CalendarEvent]]:
-    physical: list[CalendarEvent] = []
+def _partition(
+    events: list[CalendarEvent],
+    write_calendar_id: str,
+) -> tuple[list[Anchor], list[CalendarEvent], int]:
+    anchors: list[Anchor] = []
     commutes: list[CalendarEvent] = []
+    skipped_online = 0
     for ev in events:
         if ev.all_day:
             continue
-        if is_commute_event(ev) and ev.calendar_id == write_calendar_id:
-            commutes.append(ev)
-            continue
         if is_commute_event(ev):
+            if ev.calendar_id == write_calendar_id:
+                commutes.append(ev)
             continue
-        if _is_online(ev):
+        if is_online_location(ev.location):
+            skipped_online += 1
             continue
-        physical.append(ev)
-    physical.sort(key=lambda ev: ev.start)
-    return physical, commutes
-
-
-def _targets(
-    physical: list[CalendarEvent],
-    window_start: datetime,
-    window_end: datetime,
-    target_event_ids: set[str] | None,
-) -> list[CalendarEvent]:
-    if target_event_ids is not None:
-        return [ev for ev in physical if ev.id in target_event_ids]
-    return [ev for ev in physical if _overlaps(ev.start, ev.end, window_start, window_end)]
+        anchors.append(
+            Anchor(
+                id=ev.id,
+                start=to_user_tz(ev.start),
+                end=to_user_tz(ev.end),
+                location=resolve_location_alias(ev.location),
+            )
+        )
+    anchors.sort(key=lambda a: a.start)
+    return anchors, commutes, skipped_online
 
 
 def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:
@@ -406,50 +403,26 @@ def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:
     return out
 
 
-def _is_online(ev: CalendarEvent) -> bool:
-    loc = (ev.location or "").strip()
-    return not loc or loc.startswith(("http://", "https://")) or "zoom.us" in loc.lower()
-
-
 def _context_margin(settings) -> timedelta:
+    # Wide enough that an edge anchor's real neighbour — the one that decides
+    # direct-leg vs via-home — is inside the fetched range even for long legs.
     return timedelta(
         minutes=max(
-            settings.commute_bike_max_minutes,
-            settings.commute_home_layover_minutes * 2,
-            settings.commute_event_buffer_minutes,
+            120,
+            2 * settings.commute_bike_max_minutes
+            + settings.commute_home_layover_minutes
+            + 2 * settings.commute_event_buffer_minutes,
         )
     )
 
 
-def _key_for_plan(plan: CommutePlan) -> tuple[str, str]:
-    return plan.related_event_id, plan.leg
-
-
-def _key_for_event(ev: CalendarEvent) -> tuple[str, str] | None:
-    props = private_properties(ev)
-    related = props.get("related_event_id")
-    leg = props.get("leg")
-    return (related, leg) if related and leg else None
-
-
-def _should_delete_stale(
-    key: tuple[str, str],
-    ev: CalendarEvent,
-    stale_window: tuple[datetime, datetime],
-    stale_event_ids: set[str] | None,
-) -> bool:
-    if stale_event_ids is not None:
-        return key[0] in stale_event_ids
-    return _overlaps(ev.start, ev.end, stale_window[0], stale_window[1])
-
-
-def _needs_patch(ev: CalendarEvent, plan: CommutePlan, summary: str, description: str) -> bool:
+def _needs_patch(ev: CalendarEvent, leg: PlannedLeg, summary: str, description: str) -> bool:
     return (
         ev.summary != summary
         or (ev.description or "") != description
-        or (ev.location or "") != plan.destination
-        or _epoch(ev.start) != _epoch(plan.depart)
-        or _epoch(ev.end) != _epoch(plan.arrive)
+        or (ev.location or "") != leg.destination
+        or _epoch(ev.start) != _epoch(leg.depart)
+        or _epoch(ev.end) != _epoch(leg.arrive)
     )
 
 
@@ -457,16 +430,32 @@ def _epoch(dt: datetime) -> int:
     return int(dt.astimezone(timezone.utc).timestamp())
 
 
-def _summary_for(plan: CommutePlan) -> str:
-    mode = "Bike" if plan.mode == "bicycling" else "Transit"
-    return f"{mode} to {plan.destination.split(',')[0]}"
+def _summary_for(leg: PlannedLeg) -> str:
+    target = "home" if leg.dest_anchor == HOME else leg.destination.split(",")[0]
+    if leg.mode == FAILED_MODE:
+        return f"⚠️ Commute to {target} (no route)"
+    mode = "Bike" if leg.mode == "bicycling" else "Transit"
+    return f"{mode} {target}" if leg.dest_anchor == HOME else f"{mode} to {target}"
 
 
-def _description_for(plan: CommutePlan) -> str:
-    lines = [f"From: {plan.origin}", f"To: {plan.destination}", f"Mode: {plan.mode}"]
-    if plan.mode_reason:
-        lines.append(f"Reason: {plan.mode_reason}")
+def _description_for(leg: PlannedLeg) -> str:
+    lines = [f"From: {leg.origin}", f"To: {leg.destination}", f"Mode: {leg.mode}"]
+    if leg.reason:
+        lines.append(f"Reason: {leg.reason}")
+    if leg.mode == FAILED_MODE:
+        lines.append("No route found — reserved 30 min. Check the address.")
+    lines.append(f"Navigate: {_navigation_url(leg)}")
     return "\n".join(lines)
+
+
+def _navigation_url(leg: PlannedLeg) -> str:
+    """Google Maps universal deep link — opens the Maps app with the route
+    pre-filled (the Distance Matrix API itself returns no links). Failed
+    legs get no travelmode so Maps picks whatever it can find."""
+    params = {"api": "1", "origin": leg.origin, "destination": leg.destination}
+    if leg.mode != FAILED_MODE:
+        params["travelmode"] = leg.mode
+    return f"https://www.google.com/maps/dir/?{urlencode(params)}"
 
 
 def _commute_mode(ev: CalendarEvent) -> str | None:
@@ -475,12 +464,6 @@ def _commute_mode(ev: CalendarEvent) -> str | None:
         if sep and key.strip().lower() == "mode":
             return value.strip().lower() or None
     return None
-
-
-def _rain_at(hourly_rain: dict[str, int], when: datetime) -> int | None:
-    from app.timezones import to_user_tz
-
-    return hourly_rain.get(to_user_tz(when).strftime("%Y-%m-%dT%H:00"))
 
 
 def _overlaps(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:

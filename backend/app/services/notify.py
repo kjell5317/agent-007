@@ -176,6 +176,24 @@ async def notify_no_slot(task) -> None:
     )
 
 
+async def notify_unroutable_location(task, location: str) -> None:
+    """The task has a physical-looking location Google Maps can't route to —
+    30-minute placeholder commutes were reserved instead of real ones. Uses
+    its own tag so the regular "Scheduled" notification doesn't overwrite
+    it."""
+    await notify(
+        title=f"⚠️ Can't route: {_short_title(task)}",
+        message=(
+            f"Google Maps found no route to \"{location[:120]}\".\n"
+            "Reserved 30 min per leg as a placeholder — check the location."
+        ),
+        url=task_url(task.id),
+        tag=f"route-{task.id}",
+        channel="Scheduling warnings",
+        color="#f59e0b",
+    )
+
+
 async def notify_points_penalty(task, *, points: int, reason: str) -> None:
     await notify(
         title="Points subtracted",

@@ -24,6 +24,8 @@ import logging
 import time
 from collections.abc import AsyncIterator
 
+import httpx
+
 from app.config import get_settings
 from app.services.input.base import IngestionSource, register_source
 from app.services.input.slack.client import SlackAPIError, SlackClient
@@ -138,11 +140,14 @@ class SlackSource(IngestionSource):
                         },
                     )
                     yielded_for_channel += 1
-            except SlackAPIError as exc:
-                # not_in_channel, missing_scope, etc. Skip and keep going —
-                # don't burn the watermark on channels we can't read.
-                log.info(
-                    "slack channel skipped · %s (%s): %s",
+            except (SlackAPIError, httpx.HTTPError) as exc:
+                # SlackAPIError: not_in_channel, missing_scope, etc.
+                # httpx.HTTPError: request still failing after client retries.
+                # Skip and keep going — don't burn the watermark on channels
+                # we can't read; unadvanced watermarks make the next poll
+                # refetch, and raw-input creation is idempotent.
+                log.warning(
+                    "slack channel skipped · %s (%s): %r",
                     channel_name, channel_id, exc,
                 )
                 continue

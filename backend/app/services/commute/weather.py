@@ -101,13 +101,20 @@ async def precipitation_probabilities_between(
     return out
 
 
-async def geocode(address: str) -> tuple[float, float] | None:
+async def geocode(session, address: str) -> tuple[float, float] | None:
     """Resolve `address` to `(lat, lon)` via Google's free-tier geocoding.
 
     The Distance Matrix API geocodes implicitly on each call, but we need a
     separate coordinate to query the weather. We use the same Maps key.
+    Results are cached in the DB forever — coordinates of an address
+    effectively never change.
     """
     from app.config import get_settings
+    from app.db.clients import geocode_cache
+
+    cached = geocode_cache.lookup(session, address=address)
+    if cached is not None:
+        return cached
 
     s = get_settings()
     if not s.google_maps_api_key:
@@ -130,4 +137,7 @@ async def geocode(address: str) -> tuple[float, float] | None:
     loc = results[0].get("geometry", {}).get("location") or {}
     if "lat" not in loc or "lng" not in loc:
         return None
-    return float(loc["lat"]), float(loc["lng"])
+    lat, lon = float(loc["lat"]), float(loc["lng"])
+    geocode_cache.upsert(session, address=address, lat=lat, lon=lon)
+    session.commit()
+    return lat, lon

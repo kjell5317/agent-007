@@ -9,6 +9,7 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.services.location import resolve_location_alias
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,19 @@ async def update_task_to_calendar(
     """Patch or reschedule a task after a plan-relevant edit."""
     changed = set(changed_fields or ())
     if not changed & PLAN_TRIGGER_FIELDS:
+        return
+
+    if "location" in changed:
+        # A location edit changes the trip block around the task, so the slot
+        # must be re-planned. When the location was removed, the placement
+        # no longer replans commutes itself — sweep the vacated window so
+        # the orphaned legs are dropped and the old neighbours reconnect.
+        from app.services.plan.schedule import schedule_task, scheduled_interval_for
+
+        prior = scheduled_interval_for(task)
+        await schedule_task(session, task)
+        if not resolve_location_alias(task.location) and prior is not None:
+            await _replan_window(session, prior.start, prior.end)
         return
 
     current = await _current_event(session, task)
@@ -55,21 +69,21 @@ async def update_task_to_calendar(
         changed_fields=changed or None,
     )
 
-    if "location" in changed:
-        from app.services.plan.commute import (
-            commute_window_margin,
-            plan_commutes_window_best_effort,
-        )
+    # An in-place resize of a located task leaves its legs anchored to the
+    # old span — re-derive them around the new one.
+    if "estimation" in changed and resolve_location_alias(task.location):
+        await _replan_window(session, current.start, end)
 
-        margin = commute_window_margin()
-        event_ids = {task.calendar_event_id} if task.calendar_event_id else None
-        await plan_commutes_window_best_effort(
-            session,
-            window_start=current.start - margin,
-            window_end=end + margin,
-            target_event_ids=event_ids if (task.location or "").strip() else None,
-            stale_event_ids=event_ids,
-        )
+
+async def _replan_window(session: Session, start, end) -> None:
+    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
+
+    margin = commute_window_margin()
+    await plan_commutes_window_best_effort(
+        session,
+        window_start=start - margin,
+        window_end=end + margin,
+    )
 
 
 async def _patch_requires_reschedule(session: Session, task, current, changed: set[str]) -> bool:
