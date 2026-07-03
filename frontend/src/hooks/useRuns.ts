@@ -22,6 +22,7 @@ export function useRuns(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const scopeRef = useRef(scope);
+  const backgroundRefreshScopesRef = useRef(new Set<"active" | "all">());
   scopeRef.current = scope;
 
   const refresh = useCallback(async () => {
@@ -41,23 +42,60 @@ export function useRuns(
     }
   }, []);
 
+  const backgroundRefresh = useCallback(async () => {
+    const requested = scopeRef.current;
+    if (backgroundRefreshScopesRef.current.has(requested)) return;
+
+    backgroundRefreshScopesRef.current.add(requested);
+    try {
+      await refresh();
+    } catch {
+      // `refresh` owns visible error state; background triggers should not throw.
+    } finally {
+      backgroundRefreshScopesRef.current.delete(requested);
+    }
+  }, [refresh]);
+
   // Fetch once on mount even when the tab is closed, so the Runs badge count
   // is populated on page load rather than only after the tab is first opened.
   useEffect(() => {
     if (!preload) return;
-    refresh();
-  }, [preload, refresh]);
+    backgroundRefresh();
+  }, [backgroundRefresh, preload]);
+
+  // Refresh whenever the page returns to the foreground. Preloaded hooks keep
+  // badges current even while their view is closed; non-preloaded hooks only
+  // listen while their view is active.
+  useEffect(() => {
+    if (!preload && !active) return;
+
+    let cancelled = false;
+    const safeRefresh = () => {
+      if (!cancelled) backgroundRefresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") safeRefresh();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", safeRefresh);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", safeRefresh);
+    };
+  }, [active, backgroundRefresh, preload]);
 
   // Only poll while the tab is the visible one and the document has focus —
   // runs change state over seconds (queued → running → awaiting_approval),
   // so a short interval keeps the list and container view live.
   useEffect(() => {
     if (!active) return;
-    refresh();
+    backgroundRefresh();
     let timer: ReturnType<typeof setInterval> | null = null;
     const start = () => {
       if (timer == null && document.visibilityState === "visible") {
-        timer = setInterval(refresh, POLL_MS);
+        timer = setInterval(backgroundRefresh, POLL_MS);
       }
     };
     const stop = () => {
@@ -68,7 +106,6 @@ export function useRuns(
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        refresh();
         start();
       } else {
         stop();
@@ -80,7 +117,7 @@ export function useRuns(
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [active, refresh, scope]);
+  }, [active, backgroundRefresh, scope]);
 
   return { tasks, loading, error, scope, refresh };
 }
