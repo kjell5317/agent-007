@@ -445,6 +445,63 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     assert finalized["status"] == "open"
 
 
+@pytest.mark.asyncio
+async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypatch):
+    # Two transitions for the same kotx task arrive at once (overlapping webhook
+    # deliveries, or a webhook racing the poll). Before the per-id lock, both
+    # passed the get_by_kotx_id check while the first awaited its LLM call, and
+    # each created a task — tripping uq_tasks_kotx_task_id. The lock must
+    # serialize them so exactly one task is created.
+    import asyncio
+
+    store: dict[int, SimpleNamespace] = {}  # visible only after commit
+    creates: list[SimpleNamespace] = []
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: store.get(i))
+    monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
+    monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
+    monkeypatch.setattr(kotx_runner.tasks, "latest_status_for", lambda s, ids: {})
+    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    async def fake_extract(session, raw):
+        await asyncio.sleep(0)  # the yield point that opened the race
+        return {"title": "t", "estimation": 20, "due_date": None, "label": None}
+
+    def fake_create(session, payload):
+        task = SimpleNamespace(id=uuid.uuid4(), title=payload.title, kotx_task_id=None)
+        creates.append(task)
+        return task
+
+    async def fake_schedule(session, task):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner.tasks, "create", fake_create)
+    monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
+
+    def _session() -> SimpleNamespace:
+        def commit():
+            for task in creates:
+                if task.kotx_task_id is not None:
+                    store[task.kotx_task_id] = task
+
+        return SimpleNamespace(commit=commit, flush=lambda: None)
+
+    traces = await asyncio.gather(
+        kotx_runner.run_kotx_transition(
+            _session(), _raw(_meta(state="draft"), raw_id=uuid.uuid4())
+        ),
+        kotx_runner.run_kotx_transition(
+            _session(), _raw(_meta(state="draft"), raw_id=uuid.uuid4())
+        ),
+    )
+
+    assert len(creates) == 1
+    outcomes = sorted(t["outcome"] for t in traces)
+    assert outcomes == ["no_change", "task_created"]
+
+
 def test_label_for_repo_prefers_config_match(monkeypatch):
     monkeypatch.setattr(
         kotx_runner, "load_labels", lambda: {"Uni": None, "CSEE": None, "SocialAI": None}

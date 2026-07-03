@@ -16,6 +16,7 @@ on an existing task (the "007 task created the issue" adoption path).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -35,7 +36,35 @@ from app.services.task.reopen import reopen_task
 log = logging.getLogger(__name__)
 
 
+# Per-kotx-id locks serialize processing of the same kotx task. Keyed by id so
+# transitions for different tasks still run concurrently; the set of live ids is
+# small and bounded (personal use), so the dict never needs pruning.
+_locks: dict[int, asyncio.Lock] = {}
+
+
+def _lock_for(kotx_id: int) -> asyncio.Lock:
+    # Safe on a single event loop: no await between the read and the insert.
+    lock = _locks.get(kotx_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _locks[kotx_id] = lock
+    return lock
+
+
 async def run_kotx_transition(session: Session, raw) -> dict:
+    # One 007 task per kotx task. Concurrent transitions for the same kotx id —
+    # overlapping webhook deliveries, or a webhook racing the reconciliation poll
+    # — would otherwise both pass the get_by_kotx_id check (the LLM call in
+    # _create_task_from_brief is the await that opens the window) and each create
+    # a task, tripping uq_tasks_kotx_task_id. Serialize per id so the
+    # check-then-create is atomic. Single process, so an in-process lock is
+    # enough; the unique constraint stays as the backstop.
+    kotx_id = int((raw.source_metadata or {})["kotx_task_id"])
+    async with _lock_for(kotx_id):
+        return await _run_transition(session, raw)
+
+
+async def _run_transition(session: Session, raw) -> dict:
     meta = raw.source_metadata or {}
     kind = str(meta.get("kotx_kind") or "")
     state = str(meta.get("kotx_state") or "")
