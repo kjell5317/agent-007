@@ -2,9 +2,14 @@
 
 Flow:
 
+  0. kotx transitions and suppressed GitHub notification emails (push /
+     review_requested / assign on kotx-tracked repos) are handled
+     deterministically — zero LLM calls (creation of a task from a kotx
+     brief runs the extract-fields agent for estimation/due date only).
+
   1. If the input has a `thread_id` (e.g. Gmail) AND we've already linked a
      prior raw_input on that thread to a task → run the thread-follow-up agent.
-     One LLM call, no embedding.
+     One LLM call, no embedding. `github:` thread keys match across sources.
 
   2. Otherwise embed the input once (cached on the row), then:
      a. If a past raw_input with status='not_task' is similar enough → auto
@@ -26,13 +31,20 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.agent.input.runner import run_new_input_agent
+from app.agent.kotx.runner import run_kotx_transition
 from app.agent.retrieval import search_raw_inputs
 from app.agent.thread.runner import run_thread_followup
 from app.config import get_settings
 from app.db.clients import raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
+from app.services.kotx import client as kotx_client
 
 log = logging.getLogger(__name__)
+
+# GitHub notification reasons that kotx already covers on repos it tracks —
+# these emails are linked silently, never shown to the agent. `mention` and
+# `ci_activity` stay out of this set on purpose: kotx doesn't handle them.
+SUPPRESSED_GITHUB_REASONS = frozenset({"push", "review_requested", "assign"})
 
 SIMILAR_K = 4
 # How many ranked candidates (across all statuses) the new-input agent sees.
@@ -56,13 +68,24 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         raw_input_id, raw.source, thread_id or "—",
     )
 
+    # --- 0. Deterministic branches: kotx + suppressed GitHub emails ----------
+    if raw.source == "kotx":
+        return await run_kotx_transition(session, raw)
+
+    suppressed = await _github_email_shortcut(session, raw, meta)
+    if suppressed is not None:
+        return suppressed
+
     # --- 1. Thread shortcut --------------------------------------------------
+    # `github:` thread keys are a cross-source namespace — a gmail follow-up
+    # must find the task a kotx transition anchored, and vice versa.
     if thread_id:
+        cross_source = str(thread_id).startswith("github:")
         prior = raw_inputs.find_by_thread(
             session,
-            raw.source,
+            None if cross_source else raw.source,
             thread_id,
-            metadata_filters=_thread_lookup_filters(meta),
+            metadata_filters={} if cross_source else _thread_lookup_filters(meta),
         )
         if prior is not None and prior.task_id is not None:
             task = tasks.get(session, prior.task_id)
@@ -193,6 +216,51 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         reverse=True,
     )[:CANDIDATE_K]
     return await run_new_input_agent(session, raw, candidates, query_embedding)
+
+
+async def _github_email_shortcut(session: Session, raw, meta: dict) -> dict | None:
+    """Zero-LLM handling for GitHub notification emails whose reason kotx
+    already covers on a repo it tracks: link to the task when one exists,
+    otherwise mark not_task. Returns None when the shortcut doesn't apply."""
+    if raw.source != "gmail":
+        return None
+    reason = meta.get("github_reason")
+    repo = meta.get("github_repo")
+    if reason not in SUPPRESSED_GITHUB_REASONS or not repo:
+        return None
+    if str(repo).lower() not in await kotx_client.tracked_repo_names():
+        return None
+
+    trace: dict = {
+        "branch": "github_suppressed",
+        "auto_decided": True,
+        "github_reason": reason,
+        "repo": repo,
+    }
+    thread_id = meta.get("thread_id")
+    prior = (
+        raw_inputs.find_by_thread(session, None, str(thread_id)) if thread_id else None
+    )
+    if prior is not None and prior.task_id is not None:
+        trace["outcome"] = "no_change"
+        trace["existing_task_id"] = str(prior.task_id)
+        raw_inputs.finalize(
+            session, raw.id, status="duplicate", task_id=prior.task_id, agent_trace=trace
+        )
+    else:
+        trace["outcome"] = "not_task"
+        trace["reason"] = f"GitHub {reason} notification on kotx-tracked repo"
+        # Drop the embedding: a policy-suppressed row must not become a
+        # similarity precedent that auto-swallows future mention/ci emails
+        # about the same issue.
+        raw.embedding = None
+        raw_inputs.finalize(session, raw.id, status="not_task", agent_trace=trace)
+    session.commit()
+    log.info(
+        "branch=github_suppressed · raw=%s reason=%s repo=%s outcome=%s",
+        raw.id, reason, repo, trace["outcome"],
+    )
+    return trace
 
 
 def _thread_lookup_filters(meta: dict) -> dict[str, str]:

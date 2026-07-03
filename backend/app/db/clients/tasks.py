@@ -56,6 +56,25 @@ def get(session: Session, task_id: uuid.UUID) -> Task | None:
     return session.get(Task, task_id)
 
 
+def get_by_kotx_id(session: Session, kotx_task_id: int) -> Task | None:
+    return session.execute(
+        select(Task).where(Task.kotx_task_id == kotx_task_id)
+    ).scalar_one_or_none()
+
+
+def github_link_candidates(session: Session, repo: str, number: int) -> list[Task]:
+    """LIKE prefilter for tasks whose link points at a GitHub issue/PR.
+    Callers must verify the exact subject (so #31 never matches #310)."""
+    return list(
+        session.execute(
+            select(Task).where(
+                Task.link.like(f"%github.com/{repo}/issues/{number}%")
+                | Task.link.like(f"%github.com/{repo}/pull/{number}%")
+            )
+        ).scalars()
+    )
+
+
 def set_schedule(
     session: Session,
     task: Task,

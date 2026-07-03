@@ -41,6 +41,11 @@ class Task(Base):
 
     calendar_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
+    # Link to the kotx coding-agent task driving this work, when there is one.
+    # One 007 task per kotx task; transitions arrive via webhook/poll and are
+    # matched back through this id (see app.agent.kotx).
+    kotx_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

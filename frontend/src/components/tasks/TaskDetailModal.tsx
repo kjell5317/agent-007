@@ -27,10 +27,12 @@ import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { InputBody, MetaDot } from "@/components/inbox/InboxCard";
+import { KotxRunSection } from "@/components/tasks/KotxRunSection";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
+import type { KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
@@ -38,8 +40,10 @@ import type { Label, Task, TaskRawInput } from "@/lib/types";
 
 interface Props {
   task: Task;
+  kotxTask?: KotxTask | null;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
+  onKotxChanged?: () => Promise<void> | void;
 }
 
 type TextField = "title" | "description" | "link" | "location";
@@ -66,7 +70,13 @@ const TASK_SUMMARY_OVERDUE_BADGE_CLASS =
 const TASK_SUMMARY_SCHEDULED_BADGE_CLASS =
   "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200";
 
-export function TaskDetailModal({ task, onClose, onChanged }: Props) {
+export function TaskDetailModal({
+  task,
+  kotxTask = null,
+  onClose,
+  onChanged,
+  onKotxChanged,
+}: Props) {
   const labels = useLabels();
   const [current, setCurrent] = useState(task);
   const [editingText, setEditingText] = useState<TextField | null>(null);
@@ -335,6 +345,9 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
       ) : (
         <TaskSummary
           task={current}
+          kotxTask={kotxTask}
+          onKotxChanged={onKotxChanged}
+          onKotxActionDone={onClose}
           labels={labels}
           busy={busy}
           closingAction={closingAction}
@@ -435,6 +448,9 @@ function TaskTitleHeader({
 
 function TaskSummary({
   task,
+  kotxTask,
+  onKotxChanged,
+  onKotxActionDone,
   labels,
   busy,
   closingAction,
@@ -468,6 +484,9 @@ function TaskSummary({
   onCreateGithubIssue,
 }: {
   task: Task;
+  kotxTask: KotxTask | null;
+  onKotxChanged?: () => Promise<void> | void;
+  onKotxActionDone: () => void;
   labels: Label[];
   busy: boolean;
   closingAction: "done" | "dismiss" | null;
@@ -677,7 +696,7 @@ function TaskSummary({
             </span>
           </button>
 
-          {task.status === "open" && (
+          {task.status === "open" && !kotxTask && (
             <TaskSummaryIconButton
               label="Mark not a task"
               disabled={busy}
@@ -693,6 +712,14 @@ function TaskSummary({
             </TaskSummaryIconButton>
           )}
         </div>
+
+        {kotxTask && (
+          <KotxRunSection
+            task={kotxTask}
+            onChanged={onKotxChanged ?? (() => {})}
+            onActionDone={onKotxActionDone}
+          />
+        )}
 
         <div className="space-y-1.5">
           <EditableTextBlock

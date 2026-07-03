@@ -124,7 +124,34 @@ def preprocess_message(
         "has_attachments": _has_attachments(payload),
         "directed_at_me": _directed_at_me(headers, account_email),
     }
+    _apply_github_identity(metadata, headers)
     return PreprocessResult(body=body, metadata=metadata, truncated=truncated)
+
+
+# GitHub notification emails get a canonical cross-source thread key so they
+# fold onto the same task as kotx transitions and other emails about the same
+# issue/PR — regardless of how Gmail threads them.
+_GITHUB_SUBJECT_URL_RE = re.compile(
+    r"github\.com/([^/\s]+/[^/\s#?]+)/(?:issues|pull)/(\d+)(?:\D|$)"
+)
+
+
+def _apply_github_identity(metadata: dict[str, Any], headers: dict[str, str]) -> None:
+    sender = (metadata.get("from") or "").lower()
+    reason = headers.get("x-github-reason")
+    if "notifications@github.com" not in sender and not reason:
+        return
+    if reason:
+        metadata["github_reason"] = reason
+    for url in metadata.get("urls") or []:
+        m = _GITHUB_SUBJECT_URL_RE.search(url)
+        if m:
+            repo, number = m.group(1), int(m.group(2))
+            metadata["github_repo"] = repo
+            metadata["github_number"] = number
+            metadata["gmail_thread_id"] = metadata.get("thread_id")
+            metadata["thread_id"] = f"github:{repo}#{number}"
+            return
 
 
 def _directed_at_me(headers: dict[str, str], account_email: str | None) -> bool:

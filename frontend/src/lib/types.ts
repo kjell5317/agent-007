@@ -14,6 +14,7 @@ export interface Task {
   label: string | null;
   status: TaskStatus;
   is_manual: boolean;
+  kotx_task_id: number | null;
   created_at: string;
   updated_at: string;
 }

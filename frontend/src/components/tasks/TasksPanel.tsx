@@ -3,12 +3,15 @@ import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { api } from "@/lib/api";
 import { isOverdue, isToday } from "@/lib/dates";
+import type { KotxTask } from "@/lib/kotx";
 import { compareTasksBySchedule, taskGroupDate } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 
 interface Props {
   tasks: Task[];
+  kotxTasks: ReadonlyMap<number, KotxTask>;
   onChanged: () => Promise<void> | void;
+  onKotxChanged: () => Promise<void> | void;
   selectedTaskId: string | null;
   onTaskOpen: (id: string) => void;
   onSelectedTaskClose: () => void;
@@ -18,7 +21,9 @@ interface Props {
 
 export function TasksPanel({
   tasks,
+  kotxTasks,
   onChanged,
+  onKotxChanged,
   selectedTaskId,
   onTaskOpen,
   onSelectedTaskClose,
@@ -26,6 +31,8 @@ export function TasksPanel({
   onTaskVisible,
 }: Props) {
   const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
+  const kotxFor = (task: Task) =>
+    task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
   const [today, later] = useMemo(() => {
     const sorted = [...tasks].sort(compareTasksBySchedule);
     const t: Task[] = [];
@@ -74,8 +81,10 @@ export function TasksPanel({
         {selectedTask && (
           <TaskDetailModal
             task={selectedTask}
+            kotxTask={kotxFor(selectedTask)}
             onClose={onSelectedTaskClose}
             onChanged={onChanged}
+            onKotxChanged={onKotxChanged}
           />
         )}
       </>
@@ -91,6 +100,7 @@ export function TasksPanel({
               <TaskCard
                 key={t.id}
                 task={t}
+                kotxTask={kotxFor(t)}
                 onChanged={onChanged}
                 onOpen={onTaskOpen}
                 unseen={unseenTaskIds.has(t.id)}
@@ -105,6 +115,7 @@ export function TasksPanel({
               <TaskCard
                 key={t.id}
                 task={t}
+                kotxTask={kotxFor(t)}
                 onChanged={onChanged}
                 onOpen={onTaskOpen}
                 unseen={unseenTaskIds.has(t.id)}

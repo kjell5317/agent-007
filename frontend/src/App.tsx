@@ -1,46 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
-import { RunsPanel } from "@/components/runs/RunsPanel";
-import { isRunActionable } from "@/components/runs/runLabels";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
 import { api } from "@/lib/api";
 import { clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
+import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
 
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
-  const [tab, setTab] = useState<"tasks" | "runs">("tasks");
   const [mailOpen, setMailOpen] = useState(false);
-  const [mailTab, setMailTab] = useState<"inbox" | "runs">("inbox");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
-  const activeRuns = useRuns(!mailOpen && tab === "runs", "active");
-  const allRuns = useRuns(mailOpen && mailTab === "runs", "all", false);
+  // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
+  // load so it can resolve to the adopting task.
+  const [pendingRunId, setPendingRunId] = useState<number | null>(null);
+  const runs = useRuns(!mailOpen, "active");
   const [unreadInbox, setUnreadInbox] = useState(0);
-  const [taskTabUnseen, setTaskTabUnseen] = useState(false);
-  const [runTabUnseen, setRunTabUnseen] = useState(false);
   const [unseenTaskIds, setUnseenTaskIds] = useState<Set<string>>(() => new Set());
   const [unseenInputIds, setUnseenInputIds] = useState<Set<string>>(() => new Set());
   const knownTaskIdsRef = useRef<Set<string> | null>(null);
   const knownInputIdsRef = useRef<Set<string> | null>(null);
-  const knownActionableRunIdsRef = useRef<Set<number> | null>(null);
   const newestInputReceivedAtRef = useRef<number | null>(null);
   const pendingClearTaskIdsRef = useRef(new Set<string>());
   const pendingClearInputIdsRef = useRef(new Set<string>());
-  const tasksActive = !mailOpen && tab === "tasks";
-  const runsActive = !mailOpen && tab === "runs";
-  const inboxActive = mailOpen && mailTab === "inbox";
-  const actionableRunIds = useMemo(
-    () => activeRuns.tasks.filter(isRunActionable).map((task) => task.id),
-    [activeRuns.tasks],
-  );
+  const tasksActive = !mailOpen;
+  const inboxActive = mailOpen;
+
+  const kotxTasks = useMemo(() => {
+    const map = new Map<number, KotxTask>();
+    for (const run of runs.tasks) map.set(run.id, run);
+    return map;
+  }, [runs.tasks]);
 
   const loadInboxUnread = useCallback(async () => {
     try {
@@ -69,19 +64,17 @@ export function App() {
     const link = parseDeepLink();
     if (!link) {
       setSelectedTaskId(null);
-      setSelectedRunId(null);
+      setPendingRunId(null);
       return;
     }
     if (link.kind === "task") {
       setSelectedTaskId(link.id);
-      setSelectedRunId(null);
-      setTab("tasks");
+      setPendingRunId(null);
       setMailOpen(false);
       return;
     }
-    setSelectedRunId(link.id);
+    setPendingRunId(link.id);
     setSelectedTaskId(null);
-    setTab("runs");
     setMailOpen(false);
   }, []);
 
@@ -95,20 +88,31 @@ export function App() {
     };
   }, [applyLocation]);
 
+  // Resolve legacy #run/<kotxId> links to the adopting task once tasks load.
+  useEffect(() => {
+    if (pendingRunId === null || loading) return;
+    const match = tasks.find((task) => task.kotx_task_id === pendingRunId);
+    setPendingRunId(null);
+    if (match) {
+      pushDeepLink({ kind: "task", id: match.id });
+      setSelectedTaskId(match.id);
+    } else {
+      clearDeepLink();
+    }
+  }, [loading, pendingRunId, tasks]);
+
   useEffect(() => {
     loadInboxUnread();
   }, [inputs, loadInboxUnread]);
 
   useEffect(() => {
-    if (mailOpen && mailTab === "inbox" && unreadInbox > 0) markInboxViewed();
-  }, [mailOpen, mailTab, markInboxViewed, unreadInbox]);
+    if (mailOpen && unreadInbox > 0) markInboxViewed();
+  }, [mailOpen, markInboxViewed, unreadInbox]);
 
   useEffect(() => {
-    if (!mailOpen || mailTab !== "inbox" || document.visibilityState !== "visible") {
-      return;
-    }
+    if (!mailOpen || document.visibilityState !== "visible") return;
     markInboxViewed();
-  }, [inputs, mailOpen, mailTab, markInboxViewed]);
+  }, [inputs, mailOpen, markInboxViewed]);
 
   // Refresh the unread badge when the app comes back to the foreground. The
   // input list itself is already refreshed by useAppData on visibilitychange /
@@ -134,7 +138,6 @@ export function App() {
     if (previousIds && !tasksActive) {
       const arrived = tasks.filter((task) => !previousIds.has(task.id));
       if (arrived.length > 0) {
-        setTaskTabUnseen(true);
         setUnseenTaskIds((prev) => addAll(prev, arrived.map((task) => task.id)));
       }
     }
@@ -167,27 +170,6 @@ export function App() {
     knownInputIdsRef.current = currentIds;
     newestInputReceivedAtRef.current = newestReceivedAt;
   }, [inboxActive, inputs, loading]);
-
-  useEffect(() => {
-    if (activeRuns.loading) return;
-
-    const currentIds = new Set(actionableRunIds);
-    const previousIds = knownActionableRunIdsRef.current;
-
-    if (previousIds && !runsActive && actionableRunIds.some((id) => !previousIds.has(id))) {
-      setRunTabUnseen(true);
-    }
-
-    knownActionableRunIdsRef.current = currentIds;
-  }, [actionableRunIds, activeRuns.loading, runsActive]);
-
-  useEffect(() => {
-    if (tasksActive) setTaskTabUnseen(false);
-  }, [tasksActive]);
-
-  useEffect(() => {
-    if (runsActive) setRunTabUnseen(false);
-  }, [runsActive]);
 
   useEffect(() => {
     const currentIds = new Set(tasks.map((task) => task.id));
@@ -243,39 +225,15 @@ export function App() {
     [inboxActive, unseenInputIds],
   );
 
-  const onTabChange = useCallback(
-    (value: string) => {
-      if (value === "tasks" || value === "runs") setTab(value);
-    },
-    [],
-  );
-
-  const onMailTabChange = useCallback((value: string) => {
-    if (value === "inbox" || value === "runs") setMailTab(value);
-  }, []);
-
   const openTask = useCallback((id: string) => {
     pushDeepLink({ kind: "task", id });
     setSelectedTaskId(id);
-    setSelectedRunId(null);
-    setTab("tasks");
     setMailOpen(false);
   }, []);
-
-  const openRun = useCallback(
-    (id: number) => {
-      pushDeepLink({ kind: "run", id });
-      setSelectedRunId(id);
-      setSelectedTaskId(null);
-      setTab("runs");
-    },
-    [],
-  );
 
   const closeSelectedModal = useCallback(() => {
     clearDeepLink();
     setSelectedTaskId(null);
-    setSelectedRunId(null);
   }, []);
 
   return (
@@ -285,80 +243,31 @@ export function App() {
         onThemeChange={setTheme}
         mode={mailOpen ? "mail" : "normal"}
         unreadInbox={unreadInbox}
-        onMailOpen={() => {
-          setMailTab(tab === "runs" ? "runs" : "inbox");
-          setMailOpen(true);
-        }}
+        onMailOpen={() => setMailOpen(true)}
         onBack={() => setMailOpen(false)}
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
         {mailOpen ? (
-          <Tabs value={mailTab} onValueChange={onMailTabChange}>
-            <TabsList className="mb-4 grid w-full grid-cols-2">
-              <TabsTrigger value="inbox">Inbox</TabsTrigger>
-              <TabsTrigger value="runs">Code</TabsTrigger>
-            </TabsList>
-            <TabsContent value="inbox">
-              <InboxPanel
-                inputs={inputs}
-                onChanged={refresh}
-                onLoadMore={loadMoreInputs}
-                hasMore={hasMoreInputs}
-                unseenInputIds={unseenInputIds}
-                onInputsVisible={markInputsVisible}
-              />
-            </TabsContent>
-            <TabsContent value="runs">
-              <RunsPanel
-                {...allRuns}
-                selectedRunId={selectedRunId}
-                onRunOpen={openRun}
-                onSelectedRunClose={closeSelectedModal}
-              />
-            </TabsContent>
-          </Tabs>
+          <InboxPanel
+            inputs={inputs}
+            onChanged={refresh}
+            onLoadMore={loadMoreInputs}
+            hasMore={hasMoreInputs}
+            unseenInputIds={unseenInputIds}
+            onInputsVisible={markInputsVisible}
+          />
         ) : (
-          <Tabs value={tab} onValueChange={onTabChange}>
-            <TabsList className="mb-4 grid w-full grid-cols-2">
-              <TabsTrigger value="tasks">
-                {taskTabUnseen && <UnseenDot />}
-                Tasks
-                {tasks.length > 0 && (
-                  <span className="ml-1.5 text-xs text-muted-foreground">
-                    {tasks.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="runs">
-                {runTabUnseen && <UnseenDot />}
-                Code
-                {activeRuns.tasks.length > 0 && (
-                  <span className="ml-1.5 text-xs text-muted-foreground">
-                    {activeRuns.tasks.length}
-                  </span>
-                )}
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="tasks">
-              <TasksPanel
-                tasks={tasks}
-                onChanged={refresh}
-                selectedTaskId={selectedTaskId}
-                onTaskOpen={openTask}
-                onSelectedTaskClose={closeSelectedModal}
-                unseenTaskIds={unseenTaskIds}
-                onTaskVisible={markTaskVisible}
-              />
-            </TabsContent>
-            <TabsContent value="runs">
-              <RunsPanel
-                {...activeRuns}
-                selectedRunId={selectedRunId}
-                onRunOpen={openRun}
-                onSelectedRunClose={closeSelectedModal}
-              />
-            </TabsContent>
-          </Tabs>
+          <TasksPanel
+            tasks={tasks}
+            kotxTasks={kotxTasks}
+            onChanged={refresh}
+            onKotxChanged={runs.refresh}
+            selectedTaskId={selectedTaskId}
+            onTaskOpen={openTask}
+            onSelectedTaskClose={closeSelectedModal}
+            unseenTaskIds={unseenTaskIds}
+            onTaskVisible={markTaskVisible}
+          />
         )}
       </main>
       <Composer onCreated={refresh} />
@@ -397,14 +306,4 @@ function intersect<T>(source: ReadonlySet<T>, allowed: ReadonlySet<T>): Set<T> {
     if (allowed.has(value)) next.add(value);
   }
   return next;
-}
-
-function UnseenDot() {
-  return (
-    <span
-      aria-label="Unread"
-      title="Unread"
-      className="mr-1.5 inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-    />
-  );
 }
