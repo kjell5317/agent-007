@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { subscribeEvents } from "@/lib/events";
 import { kotx, type KotxTask } from "@/lib/kotx";
-
-const POLL_MS = 5000;
 
 export interface RunsData {
   tasks: KotxTask[];
@@ -86,40 +85,23 @@ export function useRuns(
     };
   }, [active, backgroundRefresh, preload]);
 
-  // Refresh once when the owning view becomes active. Only active-scope hooks
-  // use the short interval: the all-scope list can be much larger, and kotx
-  // mutations still call `refresh` directly through onKotxChanged.
+  // Refresh once when the owning view becomes active (or its scope changes).
   useEffect(() => {
     if (!active) return;
     backgroundRefresh();
-    if (scope !== "active") return;
-
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const start = () => {
-      if (timer == null && document.visibilityState === "visible") {
-        timer = setInterval(backgroundRefresh, POLL_MS);
-      }
-    };
-    const stop = () => {
-      if (timer != null) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        start();
-      } else {
-        stop();
-      }
-    };
-    start();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      stop();
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
   }, [active, backgroundRefresh, scope]);
+
+  // Live updates ride the shared SSE stream instead of an interval: the
+  // backend publishes a `kotx` nudge whenever the kotx webhook (or the
+  // reconciliation poll) lands a transition. Events missed while disconnected
+  // are reconciled by the focus/visibility refetch above; kotx mutations from
+  // this client still call `refresh` directly through onKotxChanged.
+  useEffect(() => {
+    if (!preload && !active) return;
+    return subscribeEvents((event) => {
+      if (event.type === "kotx") backgroundRefresh();
+    });
+  }, [active, backgroundRefresh, preload]);
 
   return { tasks, loading, error, scope, refresh };
 }
