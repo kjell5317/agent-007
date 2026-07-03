@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Circle,
   CircleCheckBig,
@@ -23,16 +23,97 @@ interface Props {
 }
 
 const CROSS_OFF_MS = 350;
+const LOCATION_WRAP_TOLERANCE_PX = 1;
+
+function formatTaskCardLocation(location: string | null) {
+  if (!location) return null;
+
+  const formatted =
+    location.charAt(0).toUpperCase() +
+    (location.length > 10 ? `${location.slice(1, 10)}...` : location.slice(1));
+
+  return formatted;
+}
 
 export function TaskCard({ task, onChanged, onOpen }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
+  const [locationVisible, setLocationVisible] = useState(true);
+  const [measurementVersion, setMeasurementVersion] = useState(0);
+  const metadataRef = useRef<HTMLDivElement>(null);
+  const locationRef = useRef<HTMLSpanElement>(null);
+  const lastMeasuredWidthRef = useRef<number | null>(null);
+  const lastProbeKeyRef = useRef<string | null>(null);
   const labels = useLabels();
 
   const displayDate = task.scheduled_date ?? task.due_date;
   const displayOverdue = isOverdue(displayDate);
   const displayUrgent = isUrgent(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
+  const displayLocation = formatTaskCardLocation(task.location);
+  const locationProbeKey = [
+    displayDate ?? "",
+    task.estimation ?? "",
+    task.label ?? "",
+    displayLocation ?? "",
+    measurementVersion,
+  ].join("|");
+
+  useLayoutEffect(() => {
+    if (!displayLocation) return;
+
+    if (!locationVisible) {
+      if (lastProbeKeyRef.current !== locationProbeKey) {
+        lastProbeKeyRef.current = locationProbeKey;
+        setLocationVisible(true);
+      }
+      return;
+    }
+
+    const metadata = metadataRef.current;
+    const location = locationRef.current;
+    if (!metadata || !location) return;
+
+    lastProbeKeyRef.current = locationProbeKey;
+
+    const metadataTop = metadata.getBoundingClientRect().top;
+    const locationTop = location.getBoundingClientRect().top;
+    const nextVisible =
+      locationTop <= metadataTop + LOCATION_WRAP_TOLERANCE_PX;
+
+    setLocationVisible((prev) => (prev === nextVisible ? prev : nextVisible));
+  }, [displayLocation, locationProbeKey, locationVisible]);
+
+  useEffect(() => {
+    const metadata = metadataRef.current;
+    if (!metadata || !displayLocation) return;
+
+    const updateMeasuredWidth = (width: number) => {
+      const lastWidth = lastMeasuredWidthRef.current;
+      if (lastWidth != null && Math.abs(lastWidth - width) < 0.5) return;
+
+      lastMeasuredWidthRef.current = width;
+      setMeasurementVersion((version) => version + 1);
+    };
+
+    updateMeasuredWidth(metadata.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver === "undefined") {
+      const onResize = () =>
+        updateMeasuredWidth(metadata.getBoundingClientRect().width);
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      updateMeasuredWidth(entry.contentRect.width);
+    });
+
+    observer.observe(metadata);
+    return () => observer.disconnect();
+  }, [displayLocation]);
 
   async function withBusy<T>(fn: () => Promise<T>, msg: string) {
     setBusy(true);
@@ -93,7 +174,10 @@ export function TaskCard({ task, onChanged, onOpen }: Props) {
                 {task.title}
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div
+              ref={metadataRef}
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+            >
               {displayDate && (
                 <Badge
                   variant={displayOverdue ? "overdue" : displayUrgent ? "urgent" : "open"}
@@ -120,16 +204,14 @@ export function TaskCard({ task, onChanged, onOpen }: Props) {
                   {task.estimation} min
                 </span>
               )}
-              {task.location && (
+              {displayLocation && locationVisible && (
                 <span
+                  ref={locationRef}
                   className="inline-flex items-center gap-1"
-                  title={task.location}
+                  title={task.location ?? undefined}
                 >
                   <MapPin className="h-3 w-3" />
-                  {task.location.length > 10
-                    ? `${String(task.location).charAt(0).toUpperCase() + String(task.location).slice(1, 10)}...`
-                    : String(task.location).charAt(0).toUpperCase() +
-                      String(task.location).slice(1)}
+                  {displayLocation}
                 </span>
               )}
             </div>
