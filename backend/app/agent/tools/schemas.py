@@ -35,6 +35,20 @@ _CONFIDENCE_SCHEMA = {
     ),
 }
 
+# Every terminal tool carries this: long-term memory is harvested from all
+# decisions, not just rejected inputs.
+_NOTES_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": (
+        "Zero or more short, self-contained facts worth keeping as long-term "
+        "memory (someone's role, an account number, a reference, a policy, a "
+        "recurring context). Each entry must stand on its own without the "
+        "original input. Future runs retrieve these via `search_notes`. Only "
+        "save genuinely useful information; skip ephemeral content."
+    ),
+}
+
 
 def _label_schema(*, required: bool) -> dict:
     """Build the `label` property from the current label config.
@@ -95,6 +109,7 @@ _CREATE_TASK_PROPS: dict = {
             "body for URLs unless that section is absent."
         ),
     },
+    "notes": _NOTES_SCHEMA,
 }
 _CREATE_TASK_REQUIRED = ["title", "estimation", "due_date"]
 
@@ -134,6 +149,7 @@ _UPDATE_TASK_PROPS: dict = {
             "is absent."
         ),
     },
+    "notes": _NOTES_SCHEMA,
 }
 
 # Patch the label field into the create / update schemas at import time.
@@ -159,8 +175,8 @@ NEW_INPUT_TOOLS = [
     {
         "name": "search_notes",
         "description": (
-            "Look up previously saved notes (the agent's long-term memory carved "
-            "out of past `mark_not_task` inputs). Use this before deciding when "
+            "Look up previously saved notes (the agent's long-term memory, "
+            "saved from past inputs). Use this before deciding when "
             "the current input references a person, project, account, or fact "
             "you might have recorded earlier. Returns the top matching notes "
             "by semantic similarity. Non-terminal — you can call it more than "
@@ -264,6 +280,7 @@ NEW_INPUT_TOOLS = [
                 "existing_task_id": _EXISTING_TASK_ID_SCHEMA,
                 "reason": {"type": "string"},
                 "confidence": _CONFIDENCE_SCHEMA,
+                "notes": _NOTES_SCHEMA,
             },
             "required": ["existing_task_id"],
         },
@@ -290,25 +307,15 @@ NEW_INPUT_TOOLS = [
         "description": (
             "Record that the current input is not actionable for the user. "
             "Optionally include `notes` — short standalone facts worth keeping "
-            "as long-term memory (someone's role, an account number, a "
-            "reference, a policy). Future agent runs can retrieve these via "
-            "`search_notes`. Only save genuinely useful information; skip "
-            "ephemeral content."
+            "as long-term memory. Future agent runs can retrieve these via "
+            "`search_notes`."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "reason": {"type": "string"},
                 "confidence": _CONFIDENCE_SCHEMA,
-                "notes": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Zero or more short, self-contained facts to remember "
-                        "for future decisions. Each entry must stand on its own "
-                        "without the original input."
-                    ),
-                },
+                "notes": _NOTES_SCHEMA,
             },
             "required": ["reason"],
         },
@@ -340,6 +347,7 @@ THREAD_FOLLOWUP_TOOLS = [
             "properties": {
                 "reason": {"type": "string"},
                 "confidence": _CONFIDENCE_SCHEMA,
+                "notes": _NOTES_SCHEMA,
             },
         },
     },

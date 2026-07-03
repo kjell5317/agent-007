@@ -20,8 +20,11 @@ from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
 
 # Fields carried on the tool variants that aren't task columns and must be
-# stripped before patching (`status` drives the lifecycle, not a column).
-_NON_PATCH_FIELDS = frozenset({"existing_task_id", "reason", "confidence", "status"})
+# stripped before patching (`status` drives the lifecycle, not a column;
+# `notes` is long-term memory the runners persist separately).
+_NON_PATCH_FIELDS = frozenset(
+    {"existing_task_id", "reason", "confidence", "status", "notes"}
+)
 
 
 async def apply_task_action(

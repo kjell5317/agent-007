@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
-import { api } from "@/lib/api";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { api, type PointsLogEntry } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
 import type { ThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,22 @@ const OAUTH_PROVIDERS: { label: string; href: string }[] = [
 
 function formatPoints(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+function formatSignedPoints(n: number): string {
+  if (n === 0) return formatPoints(0);
+  return `${n > 0 ? "+" : "−"}${formatPoints(Math.abs(n))}`;
+}
+
+function formatLogTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 // Minimal invented points glyph — a four-point sparkle.
@@ -233,7 +250,52 @@ function PointsModal({
   onTotal: (total: number) => void;
 }) {
   const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [tab, setTab] = useState("adjust");
+  const [logEntries, setLogEntries] = useState<PointsLogEntry[]>([]);
+  const [logCount, setLogCount] = useState(0);
+  const [logLoaded, setLogLoaded] = useState(false);
+  const [logBusy, setLogBusy] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const resetLog = () => {
+    setTab("adjust");
+    setLogEntries([]);
+    setLogCount(0);
+    setLogLoaded(false);
+    setLogBusy(false);
+  };
+
+  const close = () => {
+    resetLog();
+    onClose();
+  };
+
+  useEffect(() => {
+    if (!open || tab !== "log" || logLoaded) return;
+    let cancelled = false;
+    setLogBusy(true);
+    api
+      .getPointsLog()
+      .then(async (res) => {
+        if (cancelled) return;
+        setLogEntries(res.entries);
+        setLogCount(res.count);
+        setLogLoaded(true);
+        await api.markPointsLogSeen();
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          toast.error(`Failed to load log: ${(err as Error).message}`);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLogBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [logLoaded, open, tab]);
 
   const apply = async (sign: 1 | -1) => {
     const magnitude = Math.abs(Number(amount));
@@ -244,12 +306,17 @@ function PointsModal({
     const delta = sign * magnitude;
     setBusy(true);
     try {
-      const res = await api.adjustPoints(delta);
+      const cleanReason = reason.trim();
+      const res = await api.adjustPoints(delta, {
+        caller: "Manual",
+        ...(cleanReason ? { reason: cleanReason } : {}),
+      });
       onTotal(res.total);
       const s = delta >= 0 ? "+" : "";
       toast.success(`${s}${formatPoints(delta)} points`);
       setAmount("");
-      onClose();
+      setReason("");
+      close();
     } catch (err) {
       toast.error(`Failed: ${(err as Error).message}`);
     } finally {
@@ -258,40 +325,114 @@ function PointsModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Adjust points">
-      {total != null && (
-        <div className="mb-4 text-center">
-          <span className="text-4xl font-bold tabular-nums">
-            {formatPoints(total)}
-          </span>
-          <span className="ml-1 text-sm text-muted-foreground">points</span>
-        </div>
-      )}
-      <Input
-        type="number"
-        inputMode="decimal"
-        min="0"
-        step="any"
-        autoFocus
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        placeholder="Amount"
-        aria-label="Amount"
-        className="mb-3"
-      />
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          className="flex-1"
-          disabled={busy}
-          onClick={() => apply(-1)}
-        >
-          − Subtract
-        </Button>
-        <Button className="flex-1" disabled={busy} onClick={() => apply(1)}>
-          + Add
-        </Button>
-      </div>
+    <Modal
+      open={open}
+      onClose={close}
+      title="Adjust points"
+      className="max-w-md"
+    >
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="mb-4 grid w-full grid-cols-2">
+          <TabsTrigger value="adjust">Adjust</TabsTrigger>
+          <TabsTrigger value="log">
+            Log
+            {logCount > 0 && (
+              <span className="ml-2 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
+                {logCount}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="adjust">
+          {total != null && (
+            <div className="mb-4 text-center">
+              <span className="text-4xl font-bold tabular-nums">
+                {formatPoints(total)}
+              </span>
+              <span className="ml-1 text-sm text-muted-foreground">points</span>
+            </div>
+          )}
+          <Input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="any"
+            autoFocus
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="Amount"
+            aria-label="Amount"
+            className="mb-3"
+          />
+          <Input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            maxLength={128}
+            placeholder="Reason"
+            aria-label="Reason"
+            className="mb-3"
+          />
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              disabled={busy}
+              onClick={() => apply(-1)}
+            >
+              − Subtract
+            </Button>
+            <Button className="flex-1" disabled={busy} onClick={() => apply(1)}>
+              + Add
+            </Button>
+          </div>
+        </TabsContent>
+        <TabsContent value="log">
+          <div className="max-h-[22rem] overflow-y-auto pr-1">
+            {logBusy ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                Loading...
+              </div>
+            ) : logEntries.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                No new point changes.
+              </div>
+            ) : (
+              <div className="divide-y">
+                {logEntries.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">
+                        {entry.reason}
+                      </div>
+                      <div className="mt-0.5 flex min-w-0 gap-2 text-xs text-muted-foreground">
+                        <span className="shrink-0">
+                          {formatLogTime(entry.created_at)}
+                        </span>
+                        {entry.caller && (
+                          <span className="min-w-0 truncate">{entry.caller}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div
+                      className={cn(
+                        "self-center text-sm font-semibold tabular-nums",
+                        entry.amount >= 0
+                          ? "text-emerald-500"
+                          : "text-destructive",
+                      )}
+                    >
+                      {formatSignedPoints(entry.amount)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
     </Modal>
   );
 }

@@ -53,9 +53,13 @@ id as `existing_task_id`:
   `label` enum values on `create_task` plausibly fits the input — an item
   that doesn't belong to any of the user's categories is unlikely to be
   a real task for them. If uncertain, prefer creating a task.
-  When the input contains a genuinely useful standalone fact, include it under
-  `notes` so future runs can recall it. Skip ephemeral content (greetings,
-  newsletters, marketing).
+
+Every terminal tool accepts an optional `notes` array: short, self-contained
+facts worth keeping as long-term memory (someone's role, an account number, a
+reference, a policy, a recurring context). Include them whenever the input
+teaches something durable — also when you create or update a task, not only
+when rejecting one. Skip ephemeral content (greetings, newsletters,
+marketing).
 
 Events vs. tasks — these are different things:
 
@@ -73,9 +77,9 @@ You have three non-terminal tools — call them as needed, then finish with
 exactly one terminal tool:
 
 - `search_notes(query)` — look up the agent's long-term memory (facts
-  saved from past `mark_not_task` inputs). Call this before deciding when
-  the current input mentions a person, project, account, or fact you might
-  have recorded earlier. You may call it more than once.
+  saved from past inputs). Call this before deciding when the current
+  input mentions a person, project, account, or fact you might have
+  recorded earlier. You may call it more than once.
 
 - `find_calendar_events(time_min, time_max)` — list events already on the
   user's calendar in a window. Call this before `create_event` so you don't

@@ -12,10 +12,10 @@ EMBEDDING_DIM = 1536
 
 
 class Note(Base):
-    """A standalone fact extracted from a raw input the agent did NOT turn
-    into a task. Notes are the agent's long-term memory — when deciding
-    about a future input it can call `search_notes(query)` to retrieve
-    relevant ones."""
+    """A standalone fact an agent flow extracted from a raw input alongside
+    its terminal decision (create/update/no_change/mark_not_task). Notes are
+    the agent's long-term memory — when deciding about a future input it can
+    call `search_notes(query)` to retrieve relevant ones."""
 
     __tablename__ = "notes"
 

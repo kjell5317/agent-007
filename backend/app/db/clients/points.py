@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select
@@ -13,6 +14,23 @@ def total(session: Session) -> float:
     """Current points total — the sum of every ledger entry's amount."""
     stmt = select(func.coalesce(func.sum(PointsEntry.amount), 0.0))
     return float(session.execute(stmt).scalar_one() or 0.0)
+
+
+def list_since(session: Session, ts: datetime, *, limit: int = 50) -> list[PointsEntry]:
+    """Return points entries newer than `ts`, newest first."""
+    stmt = (
+        select(PointsEntry)
+        .where(PointsEntry.created_at > ts)
+        .order_by(PointsEntry.created_at.desc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def count_since(session: Session, ts: datetime) -> int:
+    """Count points entries created after `ts`."""
+    stmt = select(func.count(PointsEntry.id)).where(PointsEntry.created_at > ts)
+    return int(session.execute(stmt).scalar_one() or 0)
 
 
 def has_task_entry(session: Session, task_id: uuid.UUID) -> bool:

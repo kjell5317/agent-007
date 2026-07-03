@@ -48,14 +48,63 @@ def test_manual_adjust_publishes_new_total(monkeypatch):
     monkeypatch.setattr(publish_events.bus, "publish", published.append)
 
     result = points_api.adjust(
-        points_api.AdjustPayload(amount=7),
+        points_api.AdjustPayload(amount=7, caller="Manual", reason="Goodwill credit"),
         SimpleNamespace(session={}),
         session=session,
     )
 
     assert result.total == 7
     assert points_store.total(session) == 7
+    entry = session.query(PointsEntry).one()
+    assert entry.section == "Manual"
+    assert entry.action_name == "Goodwill credit"
     assert _decode(published) == [{"type": "points", "total": 7.0}]
+
+
+def test_points_log_returns_entries_after_checkpoint_and_marks_seen(monkeypatch):
+    session = _sqlite_session()
+    before_seen = points_store.add_entry(
+        session,
+        source="manual",
+        section="Manual",
+        action_name="Old change",
+        factor=2,
+        quantity=1,
+        amount=2,
+    )
+    after_seen = points_store.add_entry(
+        session,
+        source="manual",
+        section="Manual",
+        action_name="New change",
+        factor=-3,
+        quantity=1,
+        amount=-3,
+    )
+    before_seen.created_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    after_seen.created_at = datetime(2026, 7, 1, 13, 0, tzinfo=timezone.utc)
+    session.commit()
+
+    checkpoint = datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(points_api.state, "last_seen_points_log_at", checkpoint)
+
+    log = points_api.get_points_log(
+        SimpleNamespace(session={}),
+        session=session,
+    )
+
+    assert log.count == 1
+    assert log.last_seen_at == checkpoint
+    assert [entry.id for entry in log.entries] == [after_seen.id]
+    assert log.entries[0].amount == -3
+    assert log.entries[0].reason == "New change"
+    assert log.entries[0].caller == "Manual"
+
+    seen = points_api.mark_points_log_seen(SimpleNamespace(session={}), session=session)
+
+    assert seen.count == 0
+    assert seen.last_seen_at > checkpoint
+    assert points_api.get_points_log(SimpleNamespace(session={}), session=session).entries == []
 
 
 @pytest.mark.asyncio

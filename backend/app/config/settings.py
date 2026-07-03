@@ -51,7 +51,12 @@ class Settings(BaseSettings):
 
     # Notes similarity recency boost. Long half-life → small bias toward
     # recent notes when re-ranking equally-similar hits.
-    notes_similarity_half_life_days: float = 365.0
+    notes_similarity_half_life_days: float = 300
+
+    # Same decay for raw-input precedent search. The decayed score is what the
+    # orchestrator compares against `input_dedup_threshold`, so an old
+    # precedent stops auto-deciding and falls through to the agent instead.
+    input_similarity_half_life_days: float = 400
 
     # Google OAuth
     google_oauth_client_id: str = ""
@@ -108,7 +113,7 @@ class Settings(BaseSettings):
     commute_transit_ttl_days: int = 30
     commute_lookahead_days: int = 7
     commute_home_layover_minutes: int = 60
-    commute_event_buffer_minutes: int = 15
+    commute_event_buffer_minutes: int = 5
 
     # Home Assistant
     home_assistant_url: str = ""

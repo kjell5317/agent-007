@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -53,7 +54,15 @@ async def test_search_notes_uses_gemini_embedding_and_notes_store(monkeypatch):
     def fake_search_similar(session, **kwargs):
         captured["session"] = session
         captured.update(kwargs)
-        return [SimpleNamespace(similarity=0.876, content="Alice owns Project Alpha")]
+        return [
+            SimpleNamespace(
+                similarity=0.876,
+                content="Alice owns Project Alpha",
+                created_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+                source_from="alice@example.com",
+                source_subject="Project Alpha kickoff",
+            )
+        ]
 
     monkeypatch.setattr(retrieval, "embed", fake_embed)
     monkeypatch.setattr(retrieval.notes_store, "search_similar", fake_search_similar)
@@ -67,7 +76,10 @@ async def test_search_notes_uses_gemini_embedding_and_notes_store(monkeypatch):
         "embedding": [0.3, 0.4],
         "k": 5,
     }
-    assert text == "Notes:\n- sim=0.88 | Alice owns Project Alpha"
+    assert text == (
+        "Notes:\n- sim=0.88 · 2026-05-12 · from: alice@example.com · "
+        "subject: Project Alpha kickoff | Alice owns Project Alpha"
+    )
 
 
 @pytest.mark.asyncio

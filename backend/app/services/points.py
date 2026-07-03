@@ -24,18 +24,33 @@ SCHEDULED_OVERDUE_ACTION = "scheduled_overdue_reschedule"
 DUE_OVERDUE_ACTION = "due_overdue_hour"
 
 
-def adjust_points(session: Session, amount: float) -> float:
+def adjust_points(
+    session: Session,
+    amount: float,
+    *,
+    caller: str | None = None,
+    reason: str | None = None,
+) -> float:
     """Add a signed amount to the ledger and return the new total."""
     points_store.add_entry(
         session,
         source="manual",
+        section=_clean_manual_field(caller, limit=32),
+        action_name=_clean_manual_field(reason, limit=128),
         factor=float(amount),
         quantity=1.0,
         amount=float(amount),
     )
-    log.info("points · manual adjust amount=%s", amount)
+    log.info("points · manual adjust amount=%s caller=%s", amount, caller)
     publish_points(session)
     return points_store.total(session)
+
+
+def _clean_manual_field(value: str | None, *, limit: int) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned[:limit] or None
 
 
 def award_for_task(session: Session, task) -> bool:

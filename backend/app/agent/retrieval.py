@@ -42,5 +42,15 @@ async def search_notes(session: Any, *, query: str, k: int = 5) -> str:
     hits = notes_store.search_similar(session, embedding=vec, k=k)
     if not hits:
         return "search_notes: no matching notes."
-    lines = [f"- sim={h.similarity:.2f} | {h.content}" for h in hits]
-    return "Notes:\n" + "\n".join(lines)
+    return "Notes:\n" + "\n".join(_note_line(h) for h in hits)
+
+
+def _note_line(h) -> str:
+    parts = [f"sim={h.similarity:.2f}"]
+    if h.created_at is not None:
+        parts.append(h.created_at.date().isoformat())
+    if h.source_from:
+        parts.append(f"from: {h.source_from}")
+    if h.source_subject:
+        parts.append(f"subject: {h.source_subject}")
+    return "- " + " · ".join(parts) + f" | {h.content}"
