@@ -13,3 +13,7 @@ auto_poll_enabled: bool = True
 # counts/dots are 0 on first load and rise as new rows land before the user
 # opens the inbox; reset to "now" whenever the inbox is viewed.
 last_seen_input_at: datetime = datetime.now(timezone.utc)
+
+# Watermark for the points log. This intentionally matches the inbox unread
+# pattern: process-local and reset on restart.
+last_seen_points_log_at: datetime = datetime.now(timezone.utc)
