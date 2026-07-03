@@ -35,7 +35,7 @@ export function LabelPicker({ value, onChange, onSave, labels }: Props) {
 
   return (
     <div className="space-y-3">
-      <div ref={wrapRef} className="relative w-full">
+      <div ref={wrapRef} className="w-full space-y-1">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -68,7 +68,7 @@ export function LabelPicker({ value, onChange, onSave, labels }: Props) {
         {open && (
           <div
             role="listbox"
-            className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-card py-1 shadow-md"
+            className="max-h-60 w-full overflow-y-auto rounded-md border bg-card py-1 shadow-md"
           >
             <Option
               onClick={() => pick("")}

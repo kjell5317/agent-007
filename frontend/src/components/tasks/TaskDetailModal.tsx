@@ -559,11 +559,7 @@ function TaskSummary({
           <PickerAnchor
             open={activePicker === "label"}
             panel={
-              <InlinePickerPanel
-                title="Label"
-                onClose={onClosePicker}
-                allowOverflow
-              >
+              <InlinePickerPanel title="Label" onClose={onClosePicker}>
                 <LabelPicker
                   value={pickerLabel}
                   onChange={onPickerLabelChange}
@@ -1130,14 +1126,12 @@ function InlinePickerPanel({
   footer,
   onBack,
   onClose,
-  allowOverflow = false,
 }: {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
   onBack?: () => void;
   onClose: () => void;
-  allowOverflow?: boolean;
 }) {
   return (
     <div
@@ -1145,12 +1139,7 @@ function InlinePickerPanel({
       onClick={onClose}
     >
       <div
-        className={cn(
-          "flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]",
-          allowOverflow
-            ? "overflow-visible sm:overflow-y-auto"
-            : "overflow-hidden",
-        )}
+        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
@@ -1176,12 +1165,7 @@ function InlinePickerPanel({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div
-          className={cn(
-            "space-y-3",
-            allowOverflow ? "overflow-visible" : "min-h-0 overflow-y-auto",
-          )}
-        >
+        <div className="min-h-0 space-y-3 overflow-y-auto">
           {children}
           {footer}
         </div>
