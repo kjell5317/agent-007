@@ -24,13 +24,10 @@ export interface ToolRow {
   name: string;
   status: "success" | "failed" | "skipped" | "denied" | "timed_out" | "called";
   purpose: string;
-  input?: string;
   inputFields?: ProjectionField[];
   result?: string;
   reason?: string;
   confidence?: string;
-  changedState?: boolean;
-  artifacts: string[];
 }
 
 export interface TraceProjection {
@@ -321,10 +318,9 @@ function toolRowsFromBlocks(
         name,
         status: normalizeToolStatus(result),
         purpose: stringValue(result?.purpose) ?? toolPurpose(name, input),
-        input: display.hideInput
-          ? undefined
-          : display.input ?? redactPreview(input ?? block.input),
-        inputFields: display.inputFields,
+        inputFields:
+          display.inputFields ??
+          (display.hideInput ? undefined : genericInputFields(input)),
         result: display.hideResult
           ? undefined
           : stringValue(result?.result_summary) ?? stringValue(result?.preview),
@@ -332,8 +328,6 @@ function toolRowsFromBlocks(
         confidence: display.hideConfidence
           ? undefined
           : confidenceValue(result?.confidence ?? input?.confidence),
-        changedState: booleanValue(result?.changed_state),
-        artifacts: display.hideArtifacts ? [] : artifactRefs(result),
       },
     ];
   });
@@ -569,12 +563,10 @@ function toolDisplay(
   name: string,
   input: JsonRecord | null | undefined,
 ): {
-  input?: string;
   inputFields?: ProjectionField[];
   hideInput?: boolean;
   hideReason?: boolean;
   hideResult?: boolean;
-  hideArtifacts?: boolean;
   hideConfidence?: boolean;
 } {
   if (name === "create_task") {
@@ -584,7 +576,6 @@ function toolDisplay(
       inputFields: fields.length > 0 ? fields : undefined,
       hideInput: true,
       hideResult: true,
-      hideArtifacts: true,
     };
   }
 
@@ -596,7 +587,6 @@ function toolDisplay(
       hideInput: true,
       hideReason: true,
       hideResult: true,
-      hideArtifacts: true,
     };
   }
 
@@ -607,14 +597,24 @@ function toolDisplay(
       hideInput: true,
       hideReason: true,
       hideResult: true,
-      hideArtifacts: true,
       hideConfidence: true,
     };
   }
 
-  if (!input) return {};
-
   return {};
+}
+
+function genericInputFields(input: JsonRecord | null | undefined): ProjectionField[] | undefined {
+  if (!input) return undefined;
+  const fields: ProjectionField[] = [];
+  for (const [key, entry] of Object.entries(input)) {
+    const value = /(token|secret|password|key|credential)/i.test(key)
+      ? "[redacted]"
+      : renderValue(entry);
+    if (!value) continue;
+    fields.push({ label: key, value: truncate(value, 200) ?? value });
+  }
+  return fields.length > 0 ? fields : undefined;
 }
 
 function createTaskFields(input: JsonRecord): ProjectionField[] {
@@ -650,14 +650,6 @@ function updateTaskFields(input: JsonRecord): ProjectionField[] {
   addField(fields, "link", stringValue(input.link));
   addField(fields, "label", stringValue(input.label));
   return fields;
-}
-
-function artifactRefs(result: JsonRecord | undefined): string[] {
-  if (!result) return [];
-  const refs = arrayValue(result.artifact_refs).map(renderValue).filter(isPresent);
-  const eventId = stringValue(result.event_id);
-  if (eventId) refs.push(`event:${eventId}`);
-  return refs;
 }
 
 function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
@@ -749,20 +741,6 @@ function displayRecord(record: JsonRecord): JsonRecord {
   return Object.fromEntries(Object.entries(record).filter(([key]) => !hidden.has(key)));
 }
 
-function redactPreview(value: unknown): string | undefined {
-  const record = asRecord(value);
-  if (!record) return truncate(renderValue(value) ?? "", 220);
-  const redacted: JsonRecord = {};
-  for (const [key, entry] of Object.entries(record)) {
-    if (/(token|secret|password|key|credential)/i.test(key)) {
-      redacted[key] = "[redacted]";
-    } else {
-      redacted[key] = entry;
-    }
-  }
-  return truncate(toYaml(redacted), 360);
-}
-
 function renderValue(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") return undefined;
   if (typeof value === "string") return value;
@@ -790,11 +768,6 @@ function senderDisplayName(value: string | undefined): string | undefined {
 function stringValue(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return undefined;
-}
-
-function booleanValue(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") return value;
   return undefined;
 }
 

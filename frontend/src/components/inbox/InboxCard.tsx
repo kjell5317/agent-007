@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { CODE_BLOCK_CLASS, Markdown } from "@/components/ui/markdown";
+import { Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
@@ -89,6 +89,8 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
         ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
         : null;
 
+  const Chevron = open ? ChevronDown : ChevronRight;
+
   return (
     <Card ref={cardRef}>
       <CardContent
@@ -127,6 +129,8 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
               <span className="font-medium">{when}</span>
             </div>
           </div>
+
+          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
         </div>
 
         <Collapsible open={open}>
@@ -184,92 +188,59 @@ export function InputBody({ data }: { data: RawInput }) {
   return (
     <>
       {data.content && (
-        <InputBodySection title="Source content" collapsible={false}>
-          <pre className="max-h-60 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-words">
+        <Section title="Source content">
+          <div className="max-h-60 overflow-y-auto whitespace-pre-wrap break-words text-xs">
             {data.content}
-          </pre>
-        </InputBodySection>
+          </div>
+        </Section>
       )}
-      {trace && <TraceView trace={trace} />}
+      {trace?.reason && (
+        <Section title="Reason">
+          <Markdown content={trace.reason} className="text-xs" />
+        </Section>
+      )}
+      {trace && trace.evidence.length > 0 && (
+        <Section title="Precedents">
+          <div className="space-y-1">
+            {trace.evidence.map((row) => (
+              <EvidenceItem key={row.id} row={row} />
+            ))}
+          </div>
+        </Section>
+      )}
+      {trace && trace.tools.length > 0 && (
+        <Section title="Tool calls">
+          <div className="space-y-1">
+            {trace.tools.map((row) => (
+              <ToolItem key={row.id} row={row} />
+            ))}
+          </div>
+        </Section>
+      )}
     </>
   );
 }
 
-function InputBodySection({
-  title,
-  collapsible = true,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  collapsible?: boolean;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const content = <div className="mt-1 space-y-1">{children}</div>;
-
-  if (!collapsible) {
-    return (
-      <section className="rounded-md border bg-background p-2">
-        <div className="text-xs font-medium text-muted-foreground">{title}</div>
-        {content}
-      </section>
-    );
-  }
-
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <details
-      open={open}
-      onToggle={(e) => setOpen(e.currentTarget.open)}
-      className="rounded-md border bg-background p-2"
-    >
-      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+    <section className="space-y-1">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         {title}
-      </summary>
-      {content}
-    </details>
+      </div>
+      {children}
+    </section>
   );
 }
 
 function FieldGrid({ fields }: { fields: ProjectionField[] }) {
   return (
-    <div className="grid gap-x-4 gap-y-1 rounded-lg border bg-muted/40 p-3 text-xs sm:grid-cols-2">
+    <div className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
       {fields.map((field) => (
         <div key={`${field.label}:${field.value}`} className="min-w-0">
           <span className="text-muted-foreground">{field.label}: </span>
           <span className="whitespace-pre-wrap break-words font-medium">{field.value}</span>
         </div>
       ))}
-    </div>
-  );
-}
-
-function TraceView({ trace }: { trace: ReturnType<typeof projectAgentTrace> }) {
-  const hasContent = trace.reason || trace.evidence.length > 0 || trace.tools.length > 0;
-  if (!hasContent) return null;
-
-  return (
-    <div className="space-y-2">
-      {trace.reason && (
-        <InputBodySection title="Reason">
-          <Markdown content={trace.reason} className="text-xs" />
-        </InputBodySection>
-      )}
-      {trace.evidence.length > 0 && (
-        <InputBodySection title="Precedents">
-          {trace.evidence.map((row) => (
-            <EvidenceItem key={row.id} row={row} />
-          ))}
-        </InputBodySection>
-      )}
-      {trace.tools.length > 0 && (
-        <InputBodySection title="Tool calls">
-          {trace.tools.map((row) => (
-            <ToolItem key={row.id} row={row} />
-          ))}
-        </InputBodySection>
-      )}
     </div>
   );
 }
@@ -312,99 +283,66 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
 }
 
 function ToolItem({ row }: { row: ToolRow }) {
-  const showPurpose =
-    row.name !== "create_task" && row.name !== "update_task" && row.name !== "mark_not_task";
-  const hasFields = Boolean(row.inputFields && row.inputFields.length > 0);
-  const hasDetails =
-    (showPurpose && row.purpose) ||
-    row.input ||
-    hasFields ||
-    row.reason ||
-    row.result ||
-    row.artifacts.length > 0;
+  const [open, setOpen] = useState(false);
+  const hasDetails = Boolean(
+    (row.inputFields && row.inputFields.length > 0) || row.reason || row.result,
+  );
+  const Chevron = open ? ChevronDown : ChevronRight;
+
   const header = (
-    <span className="flex min-w-0 items-center gap-2">
+    <>
       <span
-        className={cn(
-          "h-2 w-2 shrink-0 rounded-full",
-          toolStatusClass(row.status),
-        )}
+        className={cn("h-2 w-2 shrink-0 rounded-full", toolStatusClass(row.status))}
       />
-      <span className="min-w-0 flex-1 truncate font-mono font-medium">{row.name}</span>
+      <span className="min-w-0 flex-1 truncate font-medium">{row.purpose}</span>
       {row.confidence && (
         <span className="shrink-0 tabular-nums text-muted-foreground">{row.confidence}</span>
       )}
-      <span className="shrink-0 text-muted-foreground">{row.status}</span>
-    </span>
+      {row.status !== "success" && (
+        <span className="shrink-0 text-muted-foreground">
+          {row.status.replace("_", " ")}
+        </span>
+      )}
+    </>
   );
 
   if (!hasDetails) {
     return (
-      <div className="rounded-md border bg-background px-2 py-1.5 text-xs">
+      <div className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs">
         {header}
       </div>
     );
   }
 
   return (
-    <details className="rounded-md border bg-background px-2 py-1.5 text-xs">
-      <summary className="cursor-pointer list-none">
+    <div className="rounded-md border bg-background text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
+      >
         {header}
-      </summary>
-      <div className="mt-2 space-y-2.5 border-t pt-2">
-        {showPurpose && row.purpose && (
-          <ToolSection label="Purpose">
-            <p className="text-foreground">{row.purpose}</p>
-          </ToolSection>
-        )}
-        {hasFields && (
-          <ToolSection label="Input">
-            <FieldGrid fields={row.inputFields!} />
-          </ToolSection>
-        )}
-        {row.input && (
-          <ToolSection label="Input">
-            <pre className={cn(CODE_BLOCK_CLASS, "max-h-40 whitespace-pre-wrap break-words")}>
-              {row.input}
-            </pre>
-          </ToolSection>
-        )}
-        {row.reason && (
-          <ToolSection label="Reason">
-            <Markdown content={row.reason} className="text-xs text-foreground" />
-          </ToolSection>
-        )}
-        {row.result && (
-          <ToolSection label="Result">
-            <Markdown content={row.result} className="text-xs text-foreground" />
-          </ToolSection>
-        )}
-        {row.artifacts.length > 0 && (
-          <ToolSection label="Artifacts">
-            <div className="flex flex-wrap gap-1">
-              {row.artifacts.map((artifact) => (
-                <span
-                  key={artifact}
-                  className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono break-all"
-                >
-                  {artifact}
-                </span>
-              ))}
-            </div>
-          </ToolSection>
-        )}
-      </div>
-    </details>
-  );
-}
-
-function ToolSection({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="space-y-1">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
+        <Chevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      </button>
+      <Collapsible open={open}>
+        <div className="space-y-2 border-t px-2 pb-2 pt-2">
+          {row.inputFields && row.inputFields.length > 0 && (
+            <Section title="Input">
+              <FieldGrid fields={row.inputFields} />
+            </Section>
+          )}
+          {row.reason && (
+            <Section title="Reason">
+              <Markdown content={row.reason} className="text-xs" />
+            </Section>
+          )}
+          {row.result && (
+            <Section title="Result">
+              <Markdown content={row.result} className="text-xs" />
+            </Section>
+          )}
+        </div>
+      </Collapsible>
     </div>
   );
 }

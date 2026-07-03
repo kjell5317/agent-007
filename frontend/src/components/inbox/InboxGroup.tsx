@@ -168,7 +168,6 @@ function GroupMember({ data }: { data: RawInput }) {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
       >
-        <MemberChevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm">
           {senderName(data)}
         </span>
@@ -176,6 +175,7 @@ function GroupMember({ data }: { data: RawInput }) {
         <span className="shrink-0 text-xs text-muted-foreground">
           {fmtWhen(data.received_at)}
         </span>
+        <MemberChevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
       <Collapsible open={open}>
         <div className="space-y-3 border-t px-2 pb-2 pt-2 text-sm">
