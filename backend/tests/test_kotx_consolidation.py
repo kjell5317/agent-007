@@ -288,6 +288,7 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
 
     finalized = {}
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {"CSEE": None})
     monkeypatch.setattr(kotx_runner.tasks, "create", fake_create)
     monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
     monkeypatch.setattr(
@@ -300,6 +301,27 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="draft")))
 
     assert trace["outcome"] == "task_created"
-    assert created["payload"].link == "https://github.com/owner/repo/issues/31"
+    payload = created["payload"]
+    # Deterministic fields: title from the github subject minus the repo,
+    # no description / location / link — the frontend's run section carries
+    # that context.
+    assert payload.title == "#31 Add a metadata index"
+    assert payload.description is None
+    assert payload.location is None
+    assert payload.link is None
+    # Extracted fields plus the agent's label (no configured label matches
+    # "owner/repo").
+    assert payload.estimation == 20
+    assert payload.label == "SocialAI"
     assert created["scheduled"] is True
     assert finalized["status"] == "open"
+
+
+def test_label_for_repo_prefers_config_match(monkeypatch):
+    monkeypatch.setattr(
+        kotx_runner, "load_labels", lambda: {"Uni": None, "CSEE": None, "SocialAI": None}
+    )
+    assert kotx_runner._label_for_repo("askLio/CSEE-strategic-negotiation-agent") == "CSEE"
+    # Alphanumeric-only comparison bridges hyphenated org names.
+    assert kotx_runner._label_for_repo("TUM-Social-AI/AflaConnect") == "SocialAI"
+    assert kotx_runner._label_for_repo("owner/repo") is None

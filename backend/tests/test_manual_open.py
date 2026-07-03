@@ -12,6 +12,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.services.task import open as open_svc  # noqa: E402
 from app.services.task import queue as queue_svc  # noqa: E402
+from app.agent.helpers.llm import ToolCall  # noqa: E402
 
 
 @pytest.mark.asyncio
@@ -158,3 +159,82 @@ async def test_worker_runs_followup_for_queued_item(monkeypatch):
     assert followups == [(raw, task)]
     assert published_inputs == [raw.id]
     assert published_tasks == [task_id]
+
+
+@pytest.mark.asyncio
+async def test_thread_followup_trace_records_current_task_context(monkeypatch):
+    import app.agent.thread.runner as thread_runner
+
+    now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    raw = SimpleNamespace(
+        id=uuid.UUID("20000000-0000-0000-0000-000000000006"),
+        source="manual",
+        source_metadata={"action": "reopen_task"},
+        content="Re-open this task and choose an appropriate new future due date.",
+    )
+    task = SimpleNamespace(
+        id=uuid.UUID("10000000-0000-0000-0000-000000000006"),
+        title="Submit renewal paperwork",
+        description="Use the current account packet.",
+        due_date=now,
+        scheduled_date=None,
+        estimation=45,
+        location="Office",
+        link="https://example.test/task",
+        label="Admin",
+    )
+    finalized = {}
+
+    async def fake_chat(messages, *_args, **_kwargs):
+        assert "Current task:" in (messages[0].text or "")
+        assert "title: Submit renewal paperwork" in (messages[0].text or "")
+        return SimpleNamespace(
+            text="",
+            stop_reason="tool_use",
+            usage={},
+            provider="test",
+            model="test-model",
+            tool_calls=(
+                ToolCall(
+                    id="toolu_1",
+                    name="update_task",
+                    input={
+                        "status": "open",
+                        "due_date": "2026-07-02T12:00:00+00:00",
+                    },
+                ),
+            ),
+        )
+
+    async def fake_apply_task_action(_session, _task, _name, _input):
+        return {"outcome": "reopened", "status_change": "open"}
+
+    async def fake_save_notes(*_args):
+        return []
+
+    monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner, "apply_task_action", fake_apply_task_action)
+    monkeypatch.setattr(thread_runner, "save_notes", fake_save_notes)
+    monkeypatch.setattr(
+        thread_runner.raw_inputs,
+        "finalize",
+        lambda _session, raw_id, **kwargs: finalized.update(
+            {"raw_id": raw_id, **kwargs}
+        ),
+    )
+
+    trace = await thread_runner.run_thread_followup(
+        SimpleNamespace(commit=lambda: None), raw, task
+    )
+
+    assert trace["current_task"] == {
+        "id": str(task.id),
+        "title": "Submit renewal paperwork",
+        "description": "Use the current account packet.",
+        "due_date": now.isoformat(),
+        "estimation": 45,
+        "location": "Office",
+        "link": "https://example.test/task",
+        "label": "Admin",
+    }
+    assert finalized["agent_trace"]["current_task"] == trace["current_task"]

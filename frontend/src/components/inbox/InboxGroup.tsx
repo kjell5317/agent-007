@@ -4,10 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { ActionButton, InputBody, MetaDot } from "@/components/inbox/InboxCard";
+import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { inboxBadge, isAgentTaskFollowup, senderName, type InboxGroup as GroupData } from "@/lib/inbox";
+import { isAgentTaskFollowup, senderName, type InboxGroup as GroupData } from "@/lib/inbox";
 import type { RawInput } from "@/lib/types";
 
 interface Props {
@@ -30,7 +31,7 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
   // Header shows the task's *status* (a no_change / duplicate follow-up on a
   // closed task is still a closed task); each member below shows its own
   // outcome badge. Groups with no task fall back to the newest member's badge.
-  const badge = liveTask ? "open" : closedTask ? "closed" : inboxBadge(newest);
+  const taskBadge = liveTask ? "open" : closedTask ? "closed" : null;
 
   const senders = Array.from(new Set(members.map(senderName)));
   const sendersLabel =
@@ -125,7 +126,11 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
               </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              <Badge variant={badge}>{badge}</Badge>
+              {taskBadge ? (
+                <Badge variant={taskBadge}>{taskBadge}</Badge>
+              ) : (
+                <InputStatusBadge input={newest} />
+              )}
               <span className="truncate font-medium">{sendersLabel}</span>
               <MetaDot />
               <span className="font-medium">{fmtWhen(newest.received_at)}</span>
@@ -156,10 +161,6 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
 function GroupMember({ data }: { data: RawInput }) {
   const [open, setOpen] = useState(false);
   const MemberChevron = open ? ChevronDown : ChevronRight;
-  // Per-member badge is the input's own outcome (duplicate / no_change /
-  // updated / reopened / closed) — its individual decision, distinct from the
-  // task status shown in the group header.
-  const badge = inboxBadge(data);
   return (
     <div className="rounded-md border bg-muted/30">
       <button
@@ -170,7 +171,7 @@ function GroupMember({ data }: { data: RawInput }) {
         <span className="min-w-0 flex-1 truncate text-sm">
           {senderName(data)}
         </span>
-        <Badge variant={badge}>{badge}</Badge>
+        <InputStatusBadge input={data} />
         <span className="shrink-0 text-xs text-muted-foreground">
           {fmtWhen(data.received_at)}
         </span>
