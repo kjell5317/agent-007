@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlarmClock,
   CalendarClock,
@@ -74,11 +74,13 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
   const [pickerEstimation, setPickerEstimation] = useState(task.estimation);
   const [pickerLabel, setPickerLabel] = useState(task.label ?? "");
   const [textDraft, setTextDraft] = useState("");
+  const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [closingAction, setClosingAction] = useState<"done" | "dismiss" | null>(
     null,
   );
+  const locationSuggestionRequestRef = useRef(0);
 
   useEffect(() => {
     setCurrent(task);
@@ -96,6 +98,35 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     const timer = window.setTimeout(() => setLoading(false), 120);
     return () => window.clearTimeout(timer);
   }, [loading]);
+
+  useEffect(() => {
+    if (editingText !== "location") {
+      locationSuggestionRequestRef.current += 1;
+      setLocationSuggestions([]);
+      return;
+    }
+
+    const requestId = locationSuggestionRequestRef.current + 1;
+    locationSuggestionRequestRef.current = requestId;
+    let cancelled = false;
+
+    api
+      .locationSuggestions(textDraft)
+      .then(({ suggestions }) => {
+        if (!cancelled && locationSuggestionRequestRef.current === requestId) {
+          setLocationSuggestions(suggestions);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && locationSuggestionRequestRef.current === requestId) {
+          setLocationSuggestions([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editingText, textDraft]);
 
   const syncTaskState = (saved: Task) => {
     setCurrent(saved);
@@ -182,8 +213,10 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
   };
 
   const closeTextEditor = () => {
+    locationSuggestionRequestRef.current += 1;
     setEditingText(null);
     setTextDraft("");
+    setLocationSuggestions([]);
   };
 
   const saveTextEditor = async (field: TextField) => {
@@ -252,6 +285,8 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
           onEditText={openTextEditor}
           onCancelText={closeTextEditor}
           onChangeText={setTextDraft}
+          locationSuggestions={locationSuggestions}
+          onSelectLocationSuggestion={setTextDraft}
           onSaveText={saveTextEditor}
           onEditPicker={openPicker}
           onClosePicker={() => setActivePicker(null)}
@@ -349,6 +384,8 @@ function TaskSummary({
   onEditText,
   onCancelText,
   onChangeText,
+  locationSuggestions,
+  onSelectLocationSuggestion,
   onSaveText,
   onEditPicker,
   onClosePicker,
@@ -379,6 +416,8 @@ function TaskSummary({
   onEditText: (field: TextField) => void;
   onCancelText: () => void;
   onChangeText: (value: string) => void;
+  locationSuggestions: string[];
+  onSelectLocationSuggestion: (value: string) => void;
   onSaveText: (field: TextField) => void;
   onEditPicker: (field: PickerField) => void;
   onClosePicker: () => void;
@@ -587,6 +626,8 @@ function TaskSummary({
             busy={busy}
             onEdit={() => onEditText("location")}
             onChange={onChangeText}
+            suggestions={locationSuggestions}
+            onSelectSuggestion={onSelectLocationSuggestion}
             onCancel={onCancelText}
             onSave={() => onSaveText("location")}
           />
@@ -653,8 +694,10 @@ function EditableTextBlock({
   draft,
   busy,
   multiline,
+  suggestions = [],
   onEdit,
   onChange,
+  onSelectSuggestion,
   onCancel,
   onSave,
 }: {
@@ -666,24 +709,40 @@ function EditableTextBlock({
   draft: string;
   busy: boolean;
   multiline?: boolean;
+  suggestions?: string[];
   onEdit: () => void;
   onChange: (value: string) => void;
+  onSelectSuggestion?: (value: string) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   if (editing) {
     return (
       <div className="rounded-lg bg-accent/40 p-2">
-        <InlineTextEditor
-          label={TEXT_LABEL[field]}
-          value={draft}
-          busy={busy}
-          multiline={multiline}
-          placeholder={fallback}
-          onChange={onChange}
-          onCancel={onCancel}
-          onSave={onSave}
-        />
+        {field === "location" ? (
+          <LocationTextEditor
+            label={TEXT_LABEL[field]}
+            value={draft}
+            busy={busy}
+            placeholder={fallback}
+            suggestions={suggestions}
+            onChange={onChange}
+            onSelectSuggestion={onSelectSuggestion ?? onChange}
+            onCancel={onCancel}
+            onSave={onSave}
+          />
+        ) : (
+          <InlineTextEditor
+            label={TEXT_LABEL[field]}
+            value={draft}
+            busy={busy}
+            multiline={multiline}
+            placeholder={fallback}
+            onChange={onChange}
+            onCancel={onCancel}
+            onSave={onSave}
+          />
+        )}
       </div>
     );
   }
@@ -804,6 +863,69 @@ function LinksSection({
             Create GitHub issue
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function LocationTextEditor({
+  label,
+  value,
+  busy,
+  placeholder,
+  suggestions,
+  onChange,
+  onSelectSuggestion,
+  onCancel,
+  onSave,
+}: {
+  label: string;
+  value: string;
+  busy: boolean;
+  placeholder?: string;
+  suggestions: string[];
+  onChange: (value: string) => void;
+  onSelectSuggestion: (value: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="space-y-1.5">
+        <span className="text-xs font-medium uppercase text-muted-foreground">
+          {label}
+        </span>
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={busy}
+          placeholder={placeholder}
+          autoFocus
+        />
+      </label>
+      {suggestions.length > 0 && (
+        <div className="rounded-md border bg-background p-1 shadow-sm">
+          {suggestions.map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              onClick={() => onSelectSuggestion(suggestion)}
+              disabled={busy}
+              className="flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+            >
+              <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{suggestion}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button type="button" size="sm" onClick={onSave} disabled={busy}>
+          Save
+        </Button>
       </div>
     </div>
   );

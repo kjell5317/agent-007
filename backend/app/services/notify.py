@@ -194,6 +194,30 @@ async def notify_unroutable_location(task, location: str) -> None:
     )
 
 
+async def notify_unroutable_leg(
+    *,
+    origin: str,
+    destination: str,
+    depart: datetime,
+    tag: str,
+) -> None:
+    """A calendar-derived commute leg has no route — a 30-minute ⚠️
+    placeholder event was written instead. Counterpart of
+    `notify_unroutable_location` for legs whose anchors are plain calendar
+    events rather than tasks."""
+    await notify(
+        title="⚠️ Commute has no route",
+        message=(
+            f"{origin[:100]} → {destination[:100]}\n"
+            f"Departs {_fmt_when(depart)}. Reserved 30 min per leg — check the event address."
+        ),
+        url=get_settings().task_default_url,
+        tag=tag,
+        channel="Scheduling warnings",
+        color="#f59e0b",
+    )
+
+
 async def notify_points_penalty(task, *, points: int, reason: str) -> None:
     await notify(
         title="Points subtracted",
