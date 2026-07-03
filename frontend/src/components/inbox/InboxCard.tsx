@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,25 +26,42 @@ export interface InboxItem {
 interface Props {
   item: InboxItem;
   onChanged: () => Promise<void> | void;
-  seenAfter: string | null;
+  unseen: boolean;
+  onVisible: (id: string) => void;
 }
 
-export function InboxCard({ item, onChanged, seenAfter }: Props) {
+export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
   const [open, setOpen] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
   const { busy, runTaskAction, promote } = useInboxActions(onChanged);
 
   const data = item.data;
   const label = inboxBadge(data);
   const title = inputTitle(data);
   const when = fmtWhen(data.received_at);
-  // Manual entries are excluded from the inbox unread badge (count_since
-  // filters source="manual" — the user just created them, no need to
-  // notify themselves). Suppress the per-card dot too so the two stay
-  // consistent.
-  const unread =
-    seenAfter !== null &&
-    data.source !== "manual" &&
-    new Date(data.received_at).getTime() > new Date(seenAfter).getTime();
+
+  useEffect(() => {
+    if (!unseen) return;
+    const node = cardRef.current;
+    if (!node) return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      onVisible(item.id);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        onVisible(item.id);
+        observer.disconnect();
+      },
+      { threshold: 0.5 },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [item.id, onVisible, unseen]);
 
   const dismiss = () => {
     if (data.task_id) runTaskAction(data.task_id, api.markNotTask, "Task dismissed");
@@ -73,7 +90,7 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
         : null;
 
   return (
-    <Card>
+    <Card ref={cardRef}>
       <CardContent
         className="cursor-pointer"
         onClick={(e) => {
@@ -92,7 +109,7 @@ export function InboxCard({ item, onChanged, seenAfter }: Props) {
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              {unread && (
+              {unseen && (
                 <span
                   aria-label="Unread"
                   title="Unread"
