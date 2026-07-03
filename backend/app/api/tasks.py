@@ -19,9 +19,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.db.clients import route_cache as route_cache_store
 from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.task import (
+    LocationSuggestionsRead,
     TaskCreationAccepted,
     TaskOpenRequest,
     TaskPromote,
@@ -76,6 +78,15 @@ async def list_tasks(
     rows = tasks_store.list_(session, status=status_filter, limit=limit)
     manual_map = tasks_store.is_manual_for(session, [t.id for t, _ in rows])
     return [_to_read(t, s, manual_map.get(t.id, False), session) for t, s in rows]
+
+
+@router.get("/location_suggestions", response_model=LocationSuggestionsRead)
+async def location_suggestions(
+    q: str = Query("", max_length=512),
+    session: Session = Depends(get_session),
+) -> LocationSuggestionsRead:
+    suggestions = route_cache_store.location_suggestions(session, query=q, limit=3)
+    return LocationSuggestionsRead(suggestions=suggestions)
 
 
 @router.get("/{task_id}", response_model=TaskRead)

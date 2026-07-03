@@ -286,7 +286,7 @@ export function App() {
         mode={mailOpen ? "mail" : "normal"}
         unreadInbox={unreadInbox}
         onMailOpen={() => {
-          setMailTab("inbox");
+          setMailTab(tab === "runs" ? "runs" : "inbox");
           setMailOpen(true);
         }}
         onBack={() => setMailOpen(false)}
@@ -296,7 +296,7 @@ export function App() {
           <Tabs value={mailTab} onValueChange={onMailTabChange}>
             <TabsList className="mb-4 grid w-full grid-cols-2">
               <TabsTrigger value="inbox">Inbox</TabsTrigger>
-              <TabsTrigger value="runs">Runs</TabsTrigger>
+              <TabsTrigger value="runs">Code</TabsTrigger>
             </TabsList>
             <TabsContent value="inbox">
               <InboxPanel
@@ -331,7 +331,7 @@ export function App() {
               </TabsTrigger>
               <TabsTrigger value="runs">
                 {runTabUnseen && <UnseenDot />}
-                Runs
+                Code
                 {activeRuns.tasks.length > 0 && (
                   <span className="ml-1.5 text-xs text-muted-foreground">
                     {activeRuns.tasks.length}
