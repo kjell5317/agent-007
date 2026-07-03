@@ -26,6 +26,10 @@ export function isMergeProposal(task: KotxTask): boolean {
   return task.canMerge || task.proposes === "merge";
 }
 
+export function isRunActionable(task: KotxTask): boolean {
+  return task.canStart || task.canApprove || task.canComment || isMergeProposal(task);
+}
+
 export function runStatusLabel(task: KotxTask): string {
   return isPrFollowUpRun(task) ? "in review" : task.status;
 }

@@ -10,7 +10,7 @@ import { IconAction, RunCard, RunStatusBadge } from "@/components/runs/RunCard";
 import { RunDocModal } from "@/components/runs/RunDocModal";
 import {
   actionHint,
-  isMergeProposal,
+  isRunActionable,
   runStatusLabel,
   runTitle,
 } from "@/components/runs/runLabels";
@@ -25,16 +25,12 @@ interface RunGroup {
   tasks: KotxTask[];
 }
 
-function isActionable(task: KotxTask): boolean {
-  return task.canStart || task.canApprove || task.canComment || isMergeProposal(task);
-}
-
 // Float tasks that need action to the top, keeping the original order within
 // each bucket (stable). Sorting before grouping lifts whole repo+branch groups
 // that contain something actionable, and orders runs within a group too.
 function sortActionableFirst(tasks: KotxTask[]): KotxTask[] {
   return [...tasks].sort(
-    (a, b) => Number(isActionable(b)) - Number(isActionable(a)),
+    (a, b) => Number(isRunActionable(b)) - Number(isRunActionable(a)),
   );
 }
 

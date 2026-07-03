@@ -20,6 +20,8 @@ interface Props {
   task: Task;
   onChanged: () => Promise<void> | void;
   onOpen: (id: string) => void;
+  unseen?: boolean;
+  onVisible?: (id: string) => void;
 }
 
 const CROSS_OFF_MS = 350;
@@ -35,11 +37,12 @@ function formatTaskCardLocation(location: string | null) {
   return formatted;
 }
 
-export function TaskCard({ task, onChanged, onOpen }: Props) {
+export function TaskCard({ task, onChanged, onOpen, unseen = false, onVisible }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
   const [locationVisible, setLocationVisible] = useState(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
   const metadataRef = useRef<HTMLDivElement>(null);
   const locationRef = useRef<HTMLSpanElement>(null);
   const lastMeasuredWidthRef = useRef<number | null>(null);
@@ -83,6 +86,29 @@ export function TaskCard({ task, onChanged, onOpen }: Props) {
 
     setLocationVisible((prev) => (prev === nextVisible ? prev : nextVisible));
   }, [displayLocation, locationProbeKey, locationVisible]);
+
+  useEffect(() => {
+    if (!unseen || !onVisible) return;
+    const node = cardRef.current;
+    if (!node) return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      onVisible(task.id);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        onVisible(task.id);
+        observer.disconnect();
+      },
+      { threshold: 0.5 },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onVisible, task.id, unseen]);
 
   useEffect(() => {
     const metadata = metadataRef.current;
@@ -138,6 +164,7 @@ export function TaskCard({ task, onChanged, onOpen }: Props) {
 
   return (
     <Card
+      ref={cardRef}
       className={cn(
         "transition-opacity duration-300",
         crossing && "pointer-events-none opacity-40",
@@ -165,6 +192,13 @@ export function TaskCard({ task, onChanged, onOpen }: Props) {
           </IconButton>
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
+              {unseen && (
+                <span
+                  aria-label="Unread"
+                  title="Unread"
+                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                />
+              )}
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate font-medium leading-snug transition-all duration-300",

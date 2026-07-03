@@ -12,6 +12,8 @@ interface Props {
   selectedTaskId: string | null;
   onTaskOpen: (id: string) => void;
   onSelectedTaskClose: () => void;
+  unseenTaskIds: ReadonlySet<string>;
+  onTaskVisible: (id: string) => void;
 }
 
 export function TasksPanel({
@@ -20,6 +22,8 @@ export function TasksPanel({
   selectedTaskId,
   onTaskOpen,
   onSelectedTaskClose,
+  unseenTaskIds,
+  onTaskVisible,
 }: Props) {
   const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const [today, later] = useMemo(() => {
@@ -89,6 +93,8 @@ export function TasksPanel({
                 task={t}
                 onChanged={onChanged}
                 onOpen={onTaskOpen}
+                unseen={unseenTaskIds.has(t.id)}
+                onVisible={onTaskVisible}
               />
             ))}
           </Section>
@@ -101,6 +107,8 @@ export function TasksPanel({
                 task={t}
                 onChanged={onChanged}
                 onOpen={onTaskOpen}
+                unseen={unseenTaskIds.has(t.id)}
+                onVisible={onTaskVisible}
               />
             ))}
           </Section>

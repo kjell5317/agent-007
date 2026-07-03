@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, CirclePlus, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,14 +13,20 @@ import type { RawInput } from "@/lib/types";
 interface Props {
   group: GroupData;
   onChanged: () => Promise<void> | void;
-  seenAfter: string | null;
+  unseenMemberIds: string[];
+  onVisible: (ids: string[]) => void;
 }
 
-export function InboxGroup({ group, onChanged, seenAfter }: Props) {
+export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Props) {
   const [open, setOpen] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
   const { busy, runTaskAction, promote } = useInboxActions(onChanged);
 
   const { members, newest, liveTask, closedTask } = group;
+  const unseenMemberKey = useMemo(
+    () => unseenMemberIds.join("\u0000"),
+    [unseenMemberIds],
+  );
   // Header shows the task's *status* (a no_change / duplicate follow-up on a
   // closed task is still a closed task); each member below shows its own
   // outcome badge. Groups with no task fall back to the newest member's badge.
@@ -32,13 +38,30 @@ export function InboxGroup({ group, onChanged, seenAfter }: Props) {
       ? senders[0]
       : `${senders[0]} +${senders.length - 1}`;
 
-  const unread =
-    seenAfter !== null &&
-    members.some(
-      (m) =>
-        m.source !== "manual" &&
-        new Date(m.received_at).getTime() > new Date(seenAfter).getTime(),
+  const unread = unseenMemberIds.length > 0;
+
+  useEffect(() => {
+    if (!unread) return;
+    const node = cardRef.current;
+    if (!node) return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      onVisible(unseenMemberIds);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        onVisible(unseenMemberIds);
+        observer.disconnect();
+      },
+      { threshold: 0.5 },
     );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onVisible, unread, unseenMemberIds, unseenMemberKey]);
 
   // Group-level action mirrors a single card, but "Make a task" feeds the
   // whole thread's context into extraction (anchored on the newest message).
@@ -74,7 +97,7 @@ export function InboxGroup({ group, onChanged, seenAfter }: Props) {
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card>
+    <Card ref={cardRef}>
       <CardContent
         className="cursor-pointer"
         onClick={(e) => {
