@@ -16,20 +16,6 @@ from app.db.schemas.task import TaskCreate
 DEFAULT_DUE_HORIZON = timedelta(days=7)
 
 
-def count_since(session: Session, ts: datetime) -> int:
-    """Count tasks created after `ts` — drives the Tasks-tab unread badge.
-
-    Excludes manual tasks (every linked raw_input has source='manual'): the
-    user just created those via POST /tasks, no need to badge themselves.
-    """
-    stmt = (
-        select(func.count(func.distinct(Task.id)))
-        .join(RawInput, RawInput.task_id == Task.id)
-        .where(Task.created_at > ts, RawInput.source != "manual")
-    )
-    return int(session.execute(stmt).scalar_one() or 0)
-
-
 def is_manual_for(
     session: Session, task_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, bool]:

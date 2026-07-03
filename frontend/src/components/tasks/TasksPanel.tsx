@@ -9,7 +9,6 @@ import type { Task } from "@/lib/types";
 interface Props {
   tasks: Task[];
   onChanged: () => Promise<void> | void;
-  seenAfter: string | null;
   selectedTaskId: string | null;
   onTaskOpen: (id: string) => void;
   onSelectedTaskClose: () => void;
@@ -18,7 +17,6 @@ interface Props {
 export function TasksPanel({
   tasks,
   onChanged,
-  seenAfter,
   selectedTaskId,
   onTaskOpen,
   onSelectedTaskClose,
@@ -90,7 +88,6 @@ export function TasksPanel({
                 key={t.id}
                 task={t}
                 onChanged={onChanged}
-                seenAfter={seenAfter}
                 onOpen={onTaskOpen}
               />
             ))}
@@ -103,7 +100,6 @@ export function TasksPanel({
                 key={t.id}
                 task={t}
                 onChanged={onChanged}
-                seenAfter={seenAfter}
                 onOpen={onTaskOpen}
               />
             ))}

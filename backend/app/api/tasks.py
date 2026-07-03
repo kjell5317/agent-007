@@ -2,8 +2,6 @@
 
   * GET    /tasks                       — list tasks
   * GET    /tasks/{task_id}             — fetch one
-  * GET    /tasks/unread_count          — Tasks-tab unread badge
-  * POST   /tasks/mark_seen             — reset the unread watermark
   * POST   /tasks                       — manual create (async via queue)
   * POST   /tasks/open/{raw_input_id}   — promote a raw_input to a task
   * PATCH  /tasks/{task_id}             — edit fields
@@ -16,13 +14,10 @@ the HTTP surface.
 """
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app import state
 from app.db import get_session
 from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
@@ -54,11 +49,6 @@ from app.services.task.update import update_task as update_task_svc
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-class UnreadCount(BaseModel):
-    count: int
-    last_seen_at: datetime
-
-
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
     raw = raw_inputs_store.latest_for_task(session, task.id)
     linked_inputs = raw_inputs_store.list_for_task(session, task.id)
@@ -86,26 +76,6 @@ async def list_tasks(
     rows = tasks_store.list_(session, status=status_filter, limit=limit)
     manual_map = tasks_store.is_manual_for(session, [t.id for t, _ in rows])
     return [_to_read(t, s, manual_map.get(t.id, False), session) for t, s in rows]
-
-
-# Static paths must precede the dynamic /{task_id} GET — FastAPI matches in
-# registration order, otherwise "unread_count" / "mark_seen" would be parsed
-# as a task UUID and 422 out.
-@router.get("/unread_count", response_model=UnreadCount)
-async def get_unread_count(session: Session = Depends(get_session)) -> UnreadCount:
-    return UnreadCount(
-        count=tasks_store.count_since(session, state.last_seen_task_at),
-        last_seen_at=state.last_seen_task_at,
-    )
-
-
-@router.post("/mark_seen", response_model=UnreadCount)
-async def mark_tasks_seen(session: Session = Depends(get_session)) -> UnreadCount:
-    state.last_seen_task_at = datetime.now(timezone.utc)
-    return UnreadCount(
-        count=tasks_store.count_since(session, state.last_seen_task_at),
-        last_seen_at=state.last_seen_task_at,
-    )
 
 
 @router.get("/{task_id}", response_model=TaskRead)
