@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # Notes similarity recency boost. Long half-life → small bias toward
     # recent notes when re-ranking equally-similar hits.
-    notes_similarity_half_life_days: float = 365.0
+    notes_similarity_half_life_days: float = 100
 
     # Google OAuth
     google_oauth_client_id: str = ""

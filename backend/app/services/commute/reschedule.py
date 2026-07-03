@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
 from app.services.commute.legs import PlannedLeg
 from app.services.plan.schedule import Interval, schedule_task
@@ -17,6 +17,10 @@ log = logging.getLogger(__name__)
 # Above this many simultaneously-moved tasks we collapse the per-task
 # "Rescheduled" notifications into one summary.
 BATCH_NOTIFY_THRESHOLD = 2
+
+# Slack around the legs' span when pre-filtering candidate tasks by their
+# stored slot — covers an event the user dragged since the last discover sync.
+_CANDIDATE_MARGIN = timedelta(days=1)
 
 
 async def reschedule_overlapping_tasks(
@@ -29,13 +33,19 @@ async def reschedule_overlapping_tasks(
     if not legs:
         return 0
 
-    stmt = (
-        select(Task)
-        .where(Task.calendar_event_id.is_not(None))
-        .where(Task.due_date.is_not(None))
-        .order_by(Task.due_date.asc())
-    )
-    tasks = list(session.execute(stmt).scalars())
+    # Only *open* tasks whose stored slot sits near the replanned legs can
+    # overlap them — probing every task ever mirrored would fetch (and 404 on)
+    # long-closed tasks with stale event links, every single pass.
+    span_start = min(leg.depart for leg in legs) - _CANDIDATE_MARGIN
+    span_end = max(leg.arrive for leg in legs) + _CANDIDATE_MARGIN
+    tasks = [
+        task
+        for task in tasks_store.open_scheduled_between(
+            session, time_min=span_start, time_max=span_end
+        )
+        if task.calendar_event_id and task.due_date
+    ]
+    tasks.sort(key=lambda task: task.due_date)
 
     affected: list[Task] = []
     for task in tasks:
@@ -87,9 +97,28 @@ async def _current_interval(session: Session, task: Task) -> Interval | None:
     try:
         event = await get_event(session, calendar_id=calendar_id, event_id=task.calendar_event_id)
     except Exception as exc:  # noqa: BLE001
-        log.warning("commute.reschedule · current event lookup failed task=%s err=%s", task.id, exc)
+        if _is_gone(exc):
+            # The mirrored event was deleted out from under us — drop the
+            # stale link so the task stops 404ing on every pass and gets a
+            # fresh event on its next (re)schedule.
+            log.info(
+                "commute.reschedule · event gone; clearing stale link task=%s event=%s",
+                task.id, task.calendar_event_id,
+            )
+            task.calendar_event_id = None
+            session.commit()
+        else:
+            log.warning(
+                "commute.reschedule · current event lookup failed task=%s err=%s", task.id, exc,
+            )
         return None
     return Interval(event.start, event.end, event.id)
+
+
+def _is_gone(exc: Exception) -> bool:
+    import httpx
+
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (404, 410)
 
 
 def _first_overlap(
