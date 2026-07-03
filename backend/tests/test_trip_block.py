@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -11,8 +12,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar.discover import _physical_span  # noqa: E402
-from app.services.commute.legs import Anchor, PlannedLeg  # noqa: E402
-from app.services.commute.planner import _reschedule_candidates  # noqa: E402
+from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
+from app.services.commute.planner import (  # noqa: E402
+    _description_for,
+    _navigation_url,
+    _reschedule_candidates,
+)
 from app.services.commute.reschedule import _first_overlap  # noqa: E402
 from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.plan.schedule import (  # noqa: E402
@@ -36,6 +41,60 @@ BUFFER = timedelta(minutes=15)
 def _day_at(hour: int, minute: int = 0, day_offset: int = 3) -> datetime:
     base = datetime.now(user_tz()) + timedelta(days=day_offset)
     return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _url_query(url: str) -> dict[str, list[str]]:
+    return parse_qs(urlparse(url).query)
+
+
+def test_transit_navigation_url_includes_departure_time():
+    depart = datetime(2026, 7, 3, 8, 30, tzinfo=timezone(timedelta(hours=2)))
+    arrive = depart + timedelta(minutes=40)
+    leg = PlannedLeg(
+        origin_anchor="home",
+        dest_anchor="office",
+        origin="Home",
+        destination=OFFICE,
+        mode="transit",
+        depart=depart,
+        arrive=arrive,
+    )
+
+    query = _url_query(_navigation_url(leg))
+
+    assert query["travelmode"] == ["transit"]
+    assert query["departure_time"] == [
+        str(int(depart.astimezone(timezone.utc).timestamp()))
+    ]
+
+    navigate_line = next(
+        line.removeprefix("Navigate: ")
+        for line in _description_for(leg).splitlines()
+        if line.startswith("Navigate: ")
+    )
+    assert _url_query(navigate_line)["departure_time"] == query["departure_time"]
+
+
+@pytest.mark.parametrize("mode", ["bicycling", FAILED_MODE])
+def test_non_transit_navigation_url_omits_departure_time(mode):
+    depart = _day_at(8)
+    leg = PlannedLeg(
+        origin_anchor="home",
+        dest_anchor="office",
+        origin="Home",
+        destination=OFFICE,
+        mode=mode,
+        depart=depart,
+        arrive=depart + timedelta(minutes=30),
+    )
+
+    query = _url_query(_navigation_url(leg))
+
+    assert "departure_time" not in query
+    if mode == FAILED_MODE:
+        assert "travelmode" not in query
+    else:
+        assert query["travelmode"] == [mode]
 
 
 def test_block_geometry_wraps_task_with_legs():
