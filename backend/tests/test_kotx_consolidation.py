@@ -65,8 +65,24 @@ def test_envelope_distinguishes_pr_and_merge_proposals():
     assert pr.external_id != merge.external_id
 
 
-def test_resolve_conflict_runs_are_skipped():
-    assert envelope_for_transition(_kotx_task(kind="resolve_conflict")) is None
+def test_resolve_conflict_runs_are_ingested_with_thread_metadata_and_dedup_id():
+    env = envelope_for_transition(
+        _kotx_task(
+            kind="resolve_conflict",
+            state="running",
+            status="resolving conflicts",
+            attempt=2,
+        )
+    )
+
+    assert env is not None
+    assert env.source == "kotx"
+    assert env.external_id == "42:2:running:"
+    assert env.source_metadata["thread_id"] == "github:owner/repo#31"
+    assert env.source_metadata["kotx_task_id"] == 42
+    assert env.source_metadata["kotx_kind"] == "resolve_conflict"
+    assert env.source_metadata["github_url"] == "https://github.com/owner/repo/issues/31"
+    assert "State: resolving conflicts" in env.content
 
 
 def test_parse_github_subject_rejects_number_prefix_match():
@@ -200,6 +216,40 @@ async def test_done_transition_closes_linked_task_without_discard(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["done", "cancelled"])
+async def test_resolve_conflict_terminal_transition_closes_linked_task(monkeypatch, state):
+    task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
+    closed = {}
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+
+    async def fake_close(session, task_id, *, discard_kotx=True):
+        closed["task_id"] = task_id
+        closed["discard_kotx"] = discard_kotx
+
+    finalized = {}
+
+    def fake_finalize(session, raw_id, **kw):
+        finalized.update(kw)
+
+    monkeypatch.setattr(kotx_runner, "close_task", fake_close)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", fake_finalize)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="resolve_conflict", state=state, status=state))
+    )
+
+    assert trace["outcome"] == "closed"
+    assert closed == {"task_id": task.id, "discard_kotx": False}
+    assert finalized["status"] == "duplicate"
+    assert finalized["task_id"] == task.id
+
+
+@pytest.mark.asyncio
 async def test_review_sent_marks_task_done(monkeypatch):
     task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
@@ -243,6 +293,32 @@ async def test_informational_transition_without_task_is_not_task(monkeypatch):
         session, _raw(_meta(state="running"))
     )
     assert trace["outcome"] == "not_task"
+    assert finalized["status"] == "not_task"
+
+
+@pytest.mark.asyncio
+async def test_unmatched_resolve_conflict_transition_is_visible_as_not_task(monkeypatch):
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None
+    )
+    monkeypatch.setattr(
+        kotx_runner.tasks, "github_link_candidates", lambda s, r, n: []
+    )
+    finalized = {}
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "finalize",
+        lambda session, raw_id, **kw: finalized.update(kw),
+    )
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="resolve_conflict", state="running"))
+    )
+
+    assert trace["outcome"] == "not_task"
+    assert trace["reason"] == "kotx resolve_conflict is running; nothing to do yet"
     assert finalized["status"] == "not_task"
 
 

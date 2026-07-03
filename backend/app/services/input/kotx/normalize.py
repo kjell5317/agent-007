@@ -11,16 +11,18 @@ from typing import Any
 
 from app.db.schemas.raw_input import RawInputCreate
 
-# resolve_conflict runs are fully automatic — they never surface in 007.
-INGESTED_KINDS = frozenset({"implement", "review"})
+# All kotx run kinds should surface in the inbox. Automatic resolve-conflict
+# runs stay informational unless a terminal transition matches an existing task.
+INGESTED_KINDS = frozenset({"implement", "review", "resolve_conflict"})
 
 # States where the user must act — these carry the brief and may create a task.
 ACTIONABLE = frozenset(
     {("implement", "draft"), ("implement", "awaiting_approval"), ("review", "awaiting_approval")}
 )
 
-# States that complete the 007 task: merged/terminal for implement, and a
-# sent review (awaiting_external) for review tasks.
+# States that complete the linked 007 task: merged/terminal for implement,
+# a sent review (awaiting_external) for review tasks, and finished automatic
+# conflict-resolution runs.
 DONE_STATES = frozenset(
     {
         ("implement", "done"),
@@ -28,6 +30,8 @@ DONE_STATES = frozenset(
         ("review", "awaiting_external"),
         ("review", "done"),
         ("review", "cancelled"),
+        ("resolve_conflict", "done"),
+        ("resolve_conflict", "cancelled"),
     }
 )
 
