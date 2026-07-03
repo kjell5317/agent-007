@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, CircleUser, ExternalLink, LogOut, Mail } from "lucide-react";
+import {
+  ArrowLeft,
+  CircleUser,
+  ExternalLink,
+  LogOut,
+  Mail,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -140,10 +146,7 @@ export function Topbar({
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
         {mode === "mail" ? (
-          <Button onClick={onBack}>
-            <ArrowLeft className="h-4 w-4" />
-            Back
-          </Button>
+          <Button onClick={onBack}>Back</Button>
         ) : (
           <>
             {points != null && (
@@ -158,7 +161,10 @@ export function Topbar({
                   <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
                   <span
                     key={flash?.key ?? "idle"}
-                    className={cn("inline-block", flash && "animate-points-pop")}
+                    className={cn(
+                      "inline-block",
+                      flash && "animate-points-pop",
+                    )}
                   >
                     {formatPoints(points)}
                   </span>

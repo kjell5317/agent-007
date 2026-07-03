@@ -309,16 +309,21 @@ async def plan_task_slot(
     if window_end <= window_start:
         raise ValueError("deadline is in the past")
 
+    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
+    # Fetch one buffer beyond the window on both sides: conflict probes reach
+    # `buffer` past a candidate slot, and Google's timeMax is exclusive on the
+    # event *start* — without the pad, an event starting exactly at the due
+    # date is invisible and the task lands flush against it.
     busy = await _fetch_busy_events(
         session,
-        window_start,
-        window_end,
+        window_start - buffer,
+        window_end + buffer,
         exclude_event_id=task.calendar_event_id,
         account_key=account_key,
     )
     busy.extend(
         _db_scheduled_busy(
-            session, task, window_start, window_end, {ev.id for ev in busy}
+            session, task, window_start - buffer, window_end + buffer, {ev.id for ev in busy}
         )
     )
     for itv in extra_busy or []:
@@ -327,7 +332,6 @@ async def plan_task_slot(
         busy.append(BusyEvent(block.event_id or "block", block.start, block.end, "block"))
 
     duration = timedelta(minutes=_duration_minutes(task, settings))
-    buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
     out_s, in_s, unroutable = await _estimate_trip_legs(session, task, reference=window_end)
 
     def _finalize(ps: PlannedSlot) -> PlannedSlot:

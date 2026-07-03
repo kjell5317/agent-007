@@ -27,6 +27,7 @@ from app.services.calendar.discover import discover_updated_events
 from app.services.input.poll import poll_sources
 from app.services.notify import notify_points_penalty
 from app.services.plan import (
+    cleanup_past_commute_legs,
     plan_commutes_window,
     refresh_commutes_for_weather,
     schedule_task,
@@ -50,6 +51,7 @@ WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 MIGRATION_DELAY_S = 120
 MIGRATION_RETRY_S = 300
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
+COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=24).total_seconds())
 
 
 async def _auto_poll() -> None:
@@ -265,14 +267,16 @@ async def _commute_migration() -> None:
             settings = get_settings()
             now = datetime.now(timezone.utc)
             with SessionLocal() as session:
+                removed_past = await cleanup_past_commute_legs(session)
                 summary = await plan_commutes_window(
                     session,
                     window_start=now,
                     window_end=now + timedelta(days=settings.commute_lookahead_days),
                 )
             log.info(
-                "commute-migration done · planned=%d rescheduled_tasks=%d"
-                " unroutable=%d errors=%d",
+                "commute-migration done · removed_past=%d planned=%d"
+                " rescheduled_tasks=%d unroutable=%d errors=%d",
+                removed_past,
                 summary["planned"],
                 summary["rescheduled_tasks"],
                 summary["skipped_unroutable"],
@@ -280,6 +284,13 @@ async def _commute_migration() -> None:
             )
             if summary["errors"]:
                 log.warning("commute-migration errors · %s", summary["errors"])
+            if any(err.get("transient") for err in summary["errors"]):
+                log.info(
+                    "commute-migration hit a transient Maps failure; retrying in %ds",
+                    MIGRATION_RETRY_S,
+                )
+                await asyncio.sleep(MIGRATION_RETRY_S)
+                continue
             return
         except asyncio.CancelledError:
             log.info("commute-migration cancelled")
@@ -289,6 +300,26 @@ async def _commute_migration() -> None:
             await asyncio.sleep(MIGRATION_RETRY_S)
 
 
+async def _commute_cleanup() -> None:
+    """Daily sweep deleting commute legs that already ended (the startup
+    migration also runs one, so restarts don't wait a day for it)."""
+    log.info("commute-cleanup loop started · interval=%ds", COMMUTE_CLEANUP_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(COMMUTE_CLEANUP_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                log.debug("commute-cleanup skipped (disabled)")
+                continue
+            with SessionLocal() as session:
+                deleted = await cleanup_past_commute_legs(session)
+            log.info("commute-cleanup done · deleted=%d", deleted)
+        except asyncio.CancelledError:
+            log.info("commute-cleanup loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("commute-cleanup iteration failed")
+
+
 _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("auto-poll", _auto_poll),
     ("calendar-discover", _calendar_discover),
@@ -296,10 +327,11 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("overdue-due-tasks", _overdue_due_tasks),
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-migration", _commute_migration),
+    ("commute-cleanup", _commute_cleanup),
 ]
 
 # Names of jobs that only make sense with commute enabled.
-_COMMUTE_JOBS = {"weather-commute-refresh", "commute-migration"}
+_COMMUTE_JOBS = {"weather-commute-refresh", "commute-migration", "commute-cleanup"}
 
 _tasks: list[asyncio.Task] = []
 

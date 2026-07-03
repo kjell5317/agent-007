@@ -142,6 +142,23 @@ async def plan_window_commutes(
         summary["errors"].append({"setup": "google_maps_api_key not configured"})
         return summary
 
+    # Legs in the past can't be ridden, and every anchor pair in the window
+    # costs routing quota — so a stale caller window (e.g. re-placing a
+    # long-overdue task whose prior slot is months back) must not fan out
+    # over historical events. Clamp to now and cap the width at the
+    # configured lookahead.
+    now = datetime.now(timezone.utc)
+    window_start = max(window_start, now)
+    max_end = window_start + timedelta(days=settings.commute_lookahead_days)
+    if window_end > max_end:
+        log.warning(
+            "commute · window capped at %d days (requested until %s)",
+            settings.commute_lookahead_days, window_end.isoformat(),
+        )
+        window_end = max_end
+    if window_end <= window_start:
+        return summary
+
     window_start = to_user_tz(window_start)
     window_end = to_user_tz(window_end)
     margin = _context_margin(settings)
@@ -162,6 +179,11 @@ async def plan_window_commutes(
     durations = await _resolve_routes(
         session, anchors, home, hourly_rain, settings, summary,
     )
+    if durations is None:
+        # Transient Maps failure — anything derived now would turn every leg
+        # into a bogus "no route" placeholder. Leave the calendar untouched;
+        # the next scheduled pass retries.
+        return summary
     legs, skipped_unroutable = derive_legs(anchors, home, durations, hourly_rain, settings)
     summary["skipped_unroutable"] = skipped_unroutable
 
@@ -353,7 +375,13 @@ async def _resolve_routes(
     hourly_rain: dict[str, int] | None,
     settings,
     summary: dict,
-) -> Durations:
+) -> Durations | None:
+    """Route durations for every anchor pair, or None when a transient Maps
+    failure aborted resolution. `resolve_duration` answers definitive
+    no-route lookups with None values; it only *raises* on transient
+    failures (quota, network) — and those would hit every remaining pair
+    identically, so bail on the first instead of burning a quota-priced
+    call per pair."""
     max_rain = max(hourly_rain.values()) if hourly_rain else None
     rain_possible = max_rain is not None and max_rain >= settings.commute_rain_threshold_pct
     durations: Durations = {}
@@ -373,8 +401,16 @@ async def _resolve_routes(
                 )
                 resolved += 1
         except Exception as exc:  # noqa: BLE001
-            log.warning("commute · route %s -> %s failed err=%s", origin, destination, exc)
-            summary["errors"].append({"route": f"{origin} -> {destination}", "error": str(exc)})
+            log.warning(
+                "commute · route resolution aborted at %s -> %s err=%s",
+                origin, destination, exc,
+            )
+            summary["errors"].append({
+                "route": f"{origin} -> {destination}",
+                "error": str(exc),
+                "transient": True,
+            })
+            return None
     if resolved:
         log.info("commute · resolved %d route durations for %d anchors", resolved, len(anchors))
     return durations
@@ -389,6 +425,43 @@ async def _home_rain(
     if latlon is None:
         return None
     return await precipitation_probabilities_between(latlon[0], latlon[1], start, end) or None
+
+
+# How far back the past-leg sweep looks. Wide enough to also catch strays
+# that pre-window-clamp replans wrote next to years-old events.
+_PAST_LEG_LOOKBACK = timedelta(days=1825)
+
+
+async def delete_past_commute_legs(
+    session: Session,
+    *,
+    account_key: str | None = None,
+) -> int:
+    """Delete managed commute events that already ended — a ride in the past
+    is dead weight on the calendar."""
+    write_calendar_id = (get_settings().google_calendar_id or "").strip()
+    if not write_calendar_id:
+        return 0
+    now = datetime.now(timezone.utc)
+    events = await list_events_between(
+        session,
+        calendar_ids=[write_calendar_id],
+        time_min=now - _PAST_LEG_LOOKBACK,
+        time_max=now,
+        account_key=account_key,
+    )
+    deleted = 0
+    for ev in events:
+        if ev.all_day or not is_commute_event(ev) or ev.end > now:
+            continue
+        try:
+            await delete_event(
+                session, calendar_id=write_calendar_id, event_id=ev.id, account_key=account_key,
+            )
+            deleted += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("commute · past leg delete failed event=%s err=%s", ev.id, exc)
+    return deleted
 
 
 async def _resolve_tum_anchors(anchors: list[Anchor]) -> list[Anchor]:

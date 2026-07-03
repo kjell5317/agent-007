@@ -331,3 +331,31 @@ def test_reschedule_overlap_skips_tasks_own_legs():
     assert _first_overlap(slot, [own], "ev-1") is None
     hit = _first_overlap(slot, [foreign], "ev-1")
     assert hit is not None and hit.start == foreign.depart
+
+
+@pytest.mark.asyncio
+async def test_slot_keeps_buffer_before_event_starting_at_due(monkeypatch):
+    tz = user_tz()
+    due = (datetime.now(tz) + timedelta(days=1)).replace(
+        hour=14, minute=0, second=0, microsecond=0
+    )
+    meeting = BusyEvent("meeting", due, due + timedelta(hours=1), "busy")
+    wall = BusyEvent("wall", datetime.now(tz) - timedelta(hours=1), due - timedelta(hours=2), "busy")
+
+    async def fake_fetch(session, time_min, time_max, **kwargs):
+        # Google's timeMax is an exclusive bound on the event *start* — an
+        # event starting exactly at time_max is not returned.
+        return [ev for ev in (wall, meeting) if ev.start < time_max and ev.end > time_min]
+
+    monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        due_date=due,
+        location=None,
+        estimation=60,
+        calendar_event_id=None,
+    )
+    planned = await schedule_service.plan_task_slot(None, task)
+    assert planned.end <= meeting.start - BUFFER
