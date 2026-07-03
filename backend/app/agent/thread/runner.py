@@ -34,7 +34,12 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
     settings = get_settings()
 
     user_msg = _build_thread_user_message(raw, task)
-    trace: dict[str, Any] = {"outcome": None, "branch": "thread_followup", "task_id": str(task.id)}
+    trace: dict[str, Any] = {
+        "outcome": None,
+        "branch": "thread_followup",
+        "task_id": str(task.id),
+        "current_task": _task_trace_snapshot(task),
+    }
 
     messages: list[LLMMessage] = [user_message(user_msg)]
     log.info("llm call · branch=thread_followup raw=%s task=%s", raw.id, task.id)
@@ -116,3 +121,25 @@ def _tool_purpose(name: str) -> str:
     if name == "no_change":
         return "leave existing task unchanged"
     return name
+
+
+def _task_trace_snapshot(task) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "id": str(task.id),
+        "title": task.title,
+    }
+    if task.description:
+        snapshot["description"] = task.description
+    if task.due_date:
+        snapshot["due_date"] = task.due_date.isoformat()
+    if getattr(task, "scheduled_date", None):
+        snapshot["scheduled_date"] = task.scheduled_date.isoformat()
+    if task.estimation is not None:
+        snapshot["estimation"] = task.estimation
+    if task.location:
+        snapshot["location"] = task.location
+    if task.link:
+        snapshot["link"] = task.link
+    if task.label:
+        snapshot["label"] = task.label
+    return snapshot

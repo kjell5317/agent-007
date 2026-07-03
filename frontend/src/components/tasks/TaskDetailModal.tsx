@@ -17,7 +17,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EstimationPicker } from "@/components/ui/estimation-picker";
@@ -28,10 +27,11 @@ import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { InputBody, MetaDot } from "@/components/inbox/InboxCard";
 import { KotxRunSection } from "@/components/tasks/KotxRunSection";
+import { InputStatusBadge, RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
-import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
+import { inputTitle, senderName } from "@/lib/inbox";
 import type { KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
@@ -696,6 +696,8 @@ function TaskSummary({
             </span>
           </button>
 
+          {kotxTask && <RunStatusBadge task={kotxTask} />}
+
           {task.status === "open" && !kotxTask && (
             <TaskSummaryIconButton
               label="Mark not a task"
@@ -721,47 +723,51 @@ function TaskSummary({
           />
         )}
 
-        <div className="space-y-1.5">
-          <EditableTextBlock
-            field="location"
-            icon={<MapPin className="h-4 w-4" />}
-            value={task.location}
-            fallback="Add location"
-            editing={editingText === "location"}
-            draft={textDraft}
-            busy={busy}
-            onEdit={() => onEditText("location")}
-            onChange={onChangeText}
-            suggestions={locationSuggestions}
-            onSelectSuggestion={onSelectLocationSuggestion}
-            onCancel={onCancelText}
-            onSave={() => onSaveText("location")}
-          />
-          <LinksSection
-            task={task}
-            editing={editingText === "link"}
-            draft={textDraft}
-            busy={busy}
-            onEdit={() => onEditText("link")}
-            onChange={onChangeText}
-            onCancel={onCancelText}
-            onSave={() => onSaveText("link")}
-            onCreateGithubIssue={onCreateGithubIssue}
-          />
-          <EditableTextBlock
-            field="description"
-            value={task.description}
-            fallback="Add description"
-            editing={editingText === "description"}
-            draft={textDraft}
-            busy={busy}
-            multiline
-            onEdit={() => onEditText("description")}
-            onChange={onChangeText}
-            onCancel={onCancelText}
-            onSave={() => onSaveText("description")}
-          />
-        </div>
+        {/* kotx tasks carry no location/link/description — the run section
+            above holds that context, so the fields stay hidden entirely. */}
+        {task.kotx_task_id == null && (
+          <div className="space-y-1.5">
+            <EditableTextBlock
+              field="location"
+              icon={<MapPin className="h-4 w-4" />}
+              value={task.location}
+              fallback="Add location"
+              editing={editingText === "location"}
+              draft={textDraft}
+              busy={busy}
+              onEdit={() => onEditText("location")}
+              onChange={onChangeText}
+              suggestions={locationSuggestions}
+              onSelectSuggestion={onSelectLocationSuggestion}
+              onCancel={onCancelText}
+              onSave={() => onSaveText("location")}
+            />
+            <LinksSection
+              task={task}
+              editing={editingText === "link"}
+              draft={textDraft}
+              busy={busy}
+              onEdit={() => onEditText("link")}
+              onChange={onChangeText}
+              onCancel={onCancelText}
+              onSave={() => onSaveText("link")}
+              onCreateGithubIssue={onCreateGithubIssue}
+            />
+            <EditableTextBlock
+              field="description"
+              value={task.description}
+              fallback="Add description"
+              editing={editingText === "description"}
+              draft={textDraft}
+              busy={busy}
+              multiline
+              onEdit={() => onEditText("description")}
+              onChange={onChangeText}
+              onCancel={onCancelText}
+              onSave={() => onSaveText("description")}
+            />
+          </div>
+        )}
 
         <LinkedInputsSection inputs={task.raw_inputs ?? []} />
       </div>
@@ -1194,7 +1200,7 @@ function LinkedInputsSection({ inputs }: { inputs: TaskRawInput[] }) {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{inputTitle(input)}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                  <Badge variant={inboxBadge(input)}>{inboxBadge(input)}</Badge>
+                  <InputStatusBadge input={input} />
                   <span className="truncate font-medium">{senderName(input)}</span>
                   <MetaDot />
                   <span className="font-medium">{fmtWhen(input.received_at)}</span>

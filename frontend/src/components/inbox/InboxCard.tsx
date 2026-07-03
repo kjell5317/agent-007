@@ -4,9 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { Markdown } from "@/components/ui/markdown";
+import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
+import { inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
 import {
   projectAgentTrace,
   type EvidenceRow,
@@ -39,7 +40,6 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
   const { busy, runTaskAction, promote, reopenTask } = useInboxActions(onChanged);
 
   const data = item.data;
-  const label = inboxBadge(data);
   const title = inputTitle(data);
   const when = fmtWhen(data.received_at);
 
@@ -126,7 +126,7 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
               </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              <Badge variant={label}>{label}</Badge>
+              <InputStatusBadge input={data} />
               <span className="truncate font-medium">{senderName(data)}</span>
               <MetaDot />
               <span className="font-medium">{when}</span>
@@ -203,8 +203,16 @@ export function InputBody({ data }: { data: RawInput }) {
           <Markdown content={trace.reason} className="text-xs" />
         </Section>
       )}
-      {trace && (evidence.length > 0 || trace.tools.length > 0) && (
+      {trace &&
+        (trace.currentTask.length > 0 ||
+          evidence.length > 0 ||
+          trace.tools.length > 0) && (
         <CollapsibleSection title="Agent trace">
+          {trace.currentTask.length > 0 && (
+            <Section title="Current task">
+              <FieldGrid fields={trace.currentTask} />
+            </Section>
+          )}
           {evidence.length > 0 && (
             <Section title="Precedents">
               <div className="space-y-1">

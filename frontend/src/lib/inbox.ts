@@ -32,8 +32,9 @@ export function inboxBadge(data: RawInput): BadgeKind {
 }
 
 // Human-readable sender. Gmail's `from` is "Name <email>" → the name (or the
-// address when unnamed); Slack's is already "display (workspace)". Falls back
-// to a source label when there's no `from` (e.g. manual entries).
+// address when unnamed); Slack's is already "display (workspace)"; kotx
+// transitions come from their repo. Falls back to a source label when
+// there's no `from` (e.g. manual entries).
 export function senderName(data: RawInput): string {
   const raw = data.source_metadata?.from;
   const from = typeof raw === "string" ? raw.trim() : "";
@@ -42,6 +43,10 @@ export function senderName(data: RawInput): string {
     const name = m ? m[1].trim() || m[2].trim() : from;
     // Drop a trailing parenthetical (e.g. Slack's "(workspace)" suffix).
     return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+  }
+  if (data.source === "kotx") {
+    const repo = data.source_metadata?.repo;
+    if (typeof repo === "string" && repo) return repo;
   }
   return data.source === "manual" ? "Manual" : data.source;
 }
