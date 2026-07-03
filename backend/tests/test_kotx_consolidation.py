@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
+from app.services.input.kotx import poll as kotx_poll  # noqa: E402
 from app.services.input.gmail.preprocess import _apply_github_identity  # noqa: E402
 from app.services.input.kotx.normalize import (  # noqa: E402
     envelope_for_transition,
@@ -107,6 +108,37 @@ def test_non_github_email_is_untouched():
     _apply_github_identity(metadata, {})
     assert metadata["thread_id"] == "t1"
     assert "github_reason" not in metadata
+
+
+# --- kotx poll -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kotx_poll_fetches_all_scope(monkeypatch):
+    latest = kotx_poll.datetime(2026, 7, 3, 10, 0, tzinfo=kotx_poll.timezone.utc)
+    calls = {}
+
+    class FakeResult:
+        def scalar_one(self):
+            return latest
+
+    class FakeSession:
+        def execute(self, stmt):
+            calls["stmt"] = stmt
+            return FakeResult()
+
+    async def fake_fetch_tasks(*, updated_since=None, scope="active"):
+        calls["updated_since"] = updated_since
+        calls["scope"] = scope
+        return []
+
+    monkeypatch.setattr(kotx_poll.kotx_client, "fetch_tasks", fake_fetch_tasks)
+
+    summary = await kotx_poll.poll(FakeSession(), account_key=None)
+
+    assert summary["fetched"] == 0
+    assert calls["scope"] == "all"
+    assert calls["updated_since"] == latest - kotx_poll._OVERLAP
 
 
 # --- kotx runner state machine ----------------------------------------------------

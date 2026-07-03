@@ -128,8 +128,10 @@ export function TasksPanel({
       {selectedTask && (
         <TaskDetailModal
           task={selectedTask}
+          kotxTask={kotxFor(selectedTask)}
           onClose={onSelectedTaskClose}
           onChanged={onChanged}
+          onKotxChanged={onKotxChanged}
         />
       )}
     </>

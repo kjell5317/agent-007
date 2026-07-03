@@ -19,7 +19,7 @@ export function App() {
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
   // load so it can resolve to the adopting task.
   const [pendingRunId, setPendingRunId] = useState<number | null>(null);
-  const runs = useRuns(!mailOpen, "active");
+  const runs = useRuns(!mailOpen, "all");
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [unseenTaskIds, setUnseenTaskIds] = useState<Set<string>>(() => new Set());
   const [unseenInputIds, setUnseenInputIds] = useState<Set<string>>(() => new Set());
