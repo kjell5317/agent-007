@@ -20,10 +20,19 @@ def _session():
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
 
 
-def _seed(session, *, mode: str, hour_bucket: int, duration: int, age_days: int = 0):
+def _seed(
+    session,
+    *,
+    mode: str,
+    hour_bucket: int,
+    duration: int,
+    origin: str = "Home",
+    destination: str = "Gym",
+    age_days: int = 0,
+):
     row = RouteCache(
-        origin="Home",
-        destination="Gym",
+        origin=origin,
+        destination=destination,
         mode=mode,
         hour_bucket=hour_bucket,
         duration_seconds=duration,
@@ -53,6 +62,76 @@ async def test_bike_uses_single_bucket_regardless_of_hour(monkeypatch):
             mode="bicycling", departure=departure,
         )
         assert result == 600
+
+
+@pytest.mark.asyncio
+async def test_bike_reuses_reversed_cached_route_without_maps(monkeypatch):
+    session = _session()
+    _seed(session, mode="bicycling", hour_bucket=0, duration=700, origin="Home", destination="Gym")
+
+    async def boom(**_kwargs):
+        raise AssertionError("reverse bike cache hit expected — no API call")
+
+    monkeypatch.setattr(resolver, "distance", boom)
+
+    result = await resolver.resolve_duration(
+        session,
+        origin="Gym",
+        destination="Home",
+        mode="bicycling",
+        departure=datetime(2026, 7, 6, 8, 0, tzinfo=timezone.utc),
+    )
+    assert result == 700
+
+
+@pytest.mark.asyncio
+async def test_bike_prefers_exact_cached_route_over_reversed(monkeypatch):
+    session = _session()
+    _seed(session, mode="bicycling", hour_bucket=0, duration=700, origin="Home", destination="Gym")
+    _seed(session, mode="bicycling", hour_bucket=0, duration=500, origin="Gym", destination="Home")
+
+    async def boom(**_kwargs):
+        raise AssertionError("exact bike cache hit expected — no API call")
+
+    monkeypatch.setattr(resolver, "distance", boom)
+
+    result = await resolver.resolve_duration(
+        session,
+        origin="Gym",
+        destination="Home",
+        mode="bicycling",
+        departure=datetime(2026, 7, 6, 8, 0, tzinfo=timezone.utc),
+    )
+    assert result == 500
+
+
+@pytest.mark.asyncio
+async def test_transit_does_not_reuse_reversed_cached_route(monkeypatch):
+    session = _session()
+    departure = datetime(2026, 7, 6, 8, 0, tzinfo=timezone.utc)
+    bucket = resolver._hour_bucket(departure, "transit")
+    _seed(session, mode="transit", hour_bucket=bucket, duration=1200, origin="Home", destination="Gym")
+    calls = []
+
+    async def fresh(**kwargs):
+        calls.append(kwargs)
+        return 1500, 5000
+
+    monkeypatch.setattr(resolver, "distance", fresh)
+    monkeypatch.setattr(resolver.route_cache, "upsert", lambda *_args, **_kwargs: None)
+
+    result = await resolver.resolve_duration(
+        session, origin="Gym", destination="Home", mode="transit", departure=departure,
+    )
+    assert result == 1500
+    assert calls == [
+        {
+            "origin": "Gym",
+            "destination": "Home",
+            "mode": "transit",
+            "departure": departure,
+        }
+    ]
 
 
 @pytest.mark.asyncio

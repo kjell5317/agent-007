@@ -33,7 +33,7 @@ async def resolve_duration(
     departure: datetime | None = None,
 ) -> int | None:
     bucket = _hour_bucket(departure, mode)
-    cached = route_cache.lookup(
+    cached = route_cache.lookup_with_bicycling_reverse(
         session,
         origin=origin,
         destination=destination,

@@ -24,6 +24,32 @@ def lookup(
     return session.execute(stmt).scalar_one_or_none()
 
 
+def lookup_with_bicycling_reverse(
+    session: Session,
+    *,
+    origin: str,
+    destination: str,
+    mode: str,
+    hour_bucket: int,
+) -> RouteCache | None:
+    row = lookup(
+        session,
+        origin=origin,
+        destination=destination,
+        mode=mode,
+        hour_bucket=hour_bucket,
+    )
+    if row is not None or mode != "bicycling":
+        return row
+    return lookup(
+        session,
+        origin=destination,
+        destination=origin,
+        mode=mode,
+        hour_bucket=hour_bucket,
+    )
+
+
 def location_suggestions(session: Session, *, query: str, limit: int = 3) -> list[str]:
     """Return cached origin/destination strings matching a location draft."""
     trimmed = query.strip()

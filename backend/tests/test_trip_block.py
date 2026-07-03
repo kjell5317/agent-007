@@ -7,9 +7,12 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
+from app.db.models.route_cache import RouteCache  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar.discover import _physical_span  # noqa: E402
 from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
@@ -25,6 +28,7 @@ from app.services.plan.schedule import (  # noqa: E402
     Interval,
     _block_total,
     _chain_insert_slot,
+    _cached_trip_legs,
     _effective_freed_range,
     _piggyback_slot,
     _planned_from_block,
@@ -36,6 +40,12 @@ OFFICE = "Officeplatz 2, Munich"
 LIBRARY = "Bookweg 3, Munich"
 
 BUFFER = timedelta(minutes=15)
+
+
+def _route_session():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    RouteCache.__table__.create(engine)
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
 
 
 def _day_at(hour: int, minute: int = 0, day_offset: int = 3) -> datetime:
@@ -116,6 +126,28 @@ def test_block_geometry_without_legs_is_bare_task():
     planned = _planned_from_block((block_start, block_start + duration), duration, BUFFER, 0, 0)
     assert planned.start == block_start
     assert planned.block_end == planned.end
+
+
+def test_cached_trip_legs_reuse_one_bike_direction_for_round_trip():
+    session = _route_session()
+    session.add(
+        RouteCache(
+            origin="Homestreet 1",
+            destination=GYM,
+            mode="bicycling",
+            hour_bucket=0,
+            duration_seconds=600,
+        )
+    )
+    session.commit()
+    task = SimpleNamespace(location=GYM)
+    settings = SimpleNamespace(
+        commute_enabled=True,
+        google_maps_api_key="key",
+        home_address="Homestreet 1",
+    )
+
+    assert _cached_trip_legs(session, task, settings) == (600, 600)
 
 
 def test_piggyback_after_anchor_ignores_its_replaced_leg():

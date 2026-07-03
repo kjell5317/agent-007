@@ -686,7 +686,7 @@ def _cached_trip_legs(
 
     def cached(origin: str, destination: str) -> int:
         # Bike routes live in the time-invariant bucket 0 (see resolver).
-        row = route_cache.lookup(
+        row = route_cache.lookup_with_bicycling_reverse(
             session, origin=origin, destination=destination,
             mode="bicycling", hour_bucket=0,
         )
