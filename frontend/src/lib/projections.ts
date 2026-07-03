@@ -329,7 +329,9 @@ function toolRowsFromBlocks(
           ? undefined
           : stringValue(result?.result_summary) ?? stringValue(result?.preview),
         reason: display.hideReason ? undefined : resultReason,
-        confidence: confidenceValue(result?.confidence ?? input?.confidence),
+        confidence: display.hideConfidence
+          ? undefined
+          : confidenceValue(result?.confidence ?? input?.confidence),
         changedState: booleanValue(result?.changed_state),
         artifacts: display.hideArtifacts ? [] : artifactRefs(result),
       },
@@ -573,10 +575,10 @@ function toolDisplay(
   hideReason?: boolean;
   hideResult?: boolean;
   hideArtifacts?: boolean;
+  hideConfidence?: boolean;
 } {
-  if (!input) return {};
-
   if (name === "create_task") {
+    if (!input) return {};
     const fields = createTaskFields(input);
     return {
       inputFields: fields.length > 0 ? fields : undefined,
@@ -587,6 +589,7 @@ function toolDisplay(
   }
 
   if (name === "mark_not_task") {
+    if (!input) return {};
     const fields = markNotTaskFields(input);
     return {
       inputFields: fields.length > 0 ? fields : undefined,
@@ -596,6 +599,20 @@ function toolDisplay(
       hideArtifacts: true,
     };
   }
+
+  if (name === "update_task") {
+    const fields = input ? updateTaskFields(input) : [];
+    return {
+      inputFields: fields.length > 0 ? fields : undefined,
+      hideInput: true,
+      hideReason: true,
+      hideResult: true,
+      hideArtifacts: true,
+      hideConfidence: true,
+    };
+  }
+
+  if (!input) return {};
 
   return {};
 }
@@ -619,6 +636,19 @@ function markNotTaskFields(input: JsonRecord): ProjectionField[] {
     fields.push({ label: "notes", value: notes.join("\n") });
   }
   addField(fields, "text", stringValue(input.text) ?? stringValue(input.input));
+  return fields;
+}
+
+function updateTaskFields(input: JsonRecord): ProjectionField[] {
+  const fields: ProjectionField[] = [];
+  addField(fields, "status", stringValue(input.status));
+  addField(fields, "title", stringValue(input.title));
+  addField(fields, "description", stringValue(input.description));
+  addField(fields, "estimation", estimationValue(input.estimation));
+  addField(fields, "due_date", stringValue(input.due_date));
+  addField(fields, "location", stringValue(input.location));
+  addField(fields, "link", stringValue(input.link));
+  addField(fields, "label", stringValue(input.label));
   return fields;
 }
 

@@ -3,7 +3,7 @@ import { CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { Markdown } from "@/components/ui/markdown";
+import { CODE_BLOCK_CLASS, Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import { inboxBadge, inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
@@ -217,7 +217,7 @@ function InputBodySection({
 
 function FieldGrid({ fields }: { fields: ProjectionField[] }) {
   return (
-    <div className="grid gap-x-4 gap-y-1 rounded-md border bg-muted/20 p-2 text-xs sm:grid-cols-2">
+    <div className="grid gap-x-4 gap-y-1 rounded-lg border bg-muted/40 p-3 text-xs sm:grid-cols-2">
       {fields.map((field) => (
         <div key={`${field.label}:${field.value}`} className="min-w-0">
           <span className="text-muted-foreground">{field.label}: </span>
@@ -295,11 +295,13 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
 }
 
 function ToolItem({ row }: { row: ToolRow }) {
-  const showPurpose = row.name !== "create_task" && row.name !== "mark_not_task";
+  const showPurpose =
+    row.name !== "create_task" && row.name !== "update_task" && row.name !== "mark_not_task";
+  const hasFields = Boolean(row.inputFields && row.inputFields.length > 0);
   const hasDetails =
     (showPurpose && row.purpose) ||
     row.input ||
-    (row.inputFields && row.inputFields.length > 0) ||
+    hasFields ||
     row.reason ||
     row.result ||
     row.artifacts.length > 0;
@@ -311,13 +313,11 @@ function ToolItem({ row }: { row: ToolRow }) {
           toolStatusClass(row.status),
         )}
       />
-      <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
-      <span className="shrink-0 text-muted-foreground">{row.status}</span>
+      <span className="min-w-0 flex-1 truncate font-mono font-medium">{row.name}</span>
       {row.confidence && (
-        <span className="shrink-0 text-muted-foreground">
-          {row.confidence}
-        </span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">{row.confidence}</span>
       )}
+      <span className="shrink-0 text-muted-foreground">{row.status}</span>
     </span>
   );
 
@@ -334,23 +334,61 @@ function ToolItem({ row }: { row: ToolRow }) {
       <summary className="cursor-pointer list-none">
         {header}
       </summary>
-      <div className="mt-1 space-y-1 text-muted-foreground">
-        {showPurpose && <div>{row.purpose}</div>}
-        {row.inputFields && row.inputFields.length > 0 && (
-          <FieldGrid fields={row.inputFields} />
+      <div className="mt-2 space-y-2.5 border-t pt-2">
+        {showPurpose && row.purpose && (
+          <ToolSection label="Purpose">
+            <p className="text-foreground">{row.purpose}</p>
+          </ToolSection>
+        )}
+        {hasFields && (
+          <ToolSection label="Input">
+            <FieldGrid fields={row.inputFields!} />
+          </ToolSection>
         )}
         {row.input && (
-          <pre className="max-h-28 overflow-auto rounded bg-muted p-1.5 whitespace-pre-wrap break-words">
-            {row.input}
-          </pre>
+          <ToolSection label="Input">
+            <pre className={cn(CODE_BLOCK_CLASS, "max-h-40 whitespace-pre-wrap break-words")}>
+              {row.input}
+            </pre>
+          </ToolSection>
         )}
-        {row.reason && <Markdown content={row.reason} className="text-xs text-foreground" />}
-        {row.result && <Markdown content={row.result} className="text-xs text-foreground" />}
+        {row.reason && (
+          <ToolSection label="Reason">
+            <Markdown content={row.reason} className="text-xs text-foreground" />
+          </ToolSection>
+        )}
+        {row.result && (
+          <ToolSection label="Result">
+            <Markdown content={row.result} className="text-xs text-foreground" />
+          </ToolSection>
+        )}
         {row.artifacts.length > 0 && (
-          <div className="break-words">Artifacts: {row.artifacts.join(", ")}</div>
+          <ToolSection label="Artifacts">
+            <div className="flex flex-wrap gap-1">
+              {row.artifacts.map((artifact) => (
+                <span
+                  key={artifact}
+                  className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono break-all"
+                >
+                  {artifact}
+                </span>
+              ))}
+            </div>
+          </ToolSection>
         )}
       </div>
     </details>
+  );
+}
+
+function ToolSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {children}
+    </div>
   );
 }
 

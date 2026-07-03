@@ -34,6 +34,11 @@ const INLINE: InlineRule[] = [
   },
 ];
 
+// Single source of truth for fenced-code styling — shared with raw tool-call
+// input so code renders identically whether embedded in markdown or standalone.
+export const CODE_BLOCK_CLASS =
+  "overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-relaxed";
+
 function safeLink(text: string, href: string, key: string): ReactNode {
   if (!/^(https?:\/\/|\/)/.test(href)) return <span key={key}>{text}</span>;
   return (
@@ -109,10 +114,7 @@ function parseBlocks(src: string): ReactNode[] {
       while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
       i++; // skip closing fence
       out.push(
-        <pre
-          key={k++}
-          className="overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-relaxed"
-        >
+        <pre key={k++} className={CODE_BLOCK_CLASS}>
           <code>{buf.join("\n")}</code>
         </pre>,
       );
