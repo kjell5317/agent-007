@@ -66,6 +66,10 @@ class TaskCreationAccepted(BaseModel):
     status: str = "processing"
 
 
+class LocationSuggestionsRead(BaseModel):
+    suggestions: list[str]
+
+
 class TaskRawInputRead(BaseModel):
     id: uuid.UUID
     source: str

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select, union_all
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,30 @@ def lookup(
         RouteCache.hour_bucket == hour_bucket,
     )
     return session.execute(stmt).scalar_one_or_none()
+
+
+def location_suggestions(session: Session, *, query: str, limit: int = 3) -> list[str]:
+    """Return cached origin/destination strings matching a location draft."""
+    trimmed = query.strip()
+
+    origin_stmt = select(RouteCache.origin.label("location")).where(RouteCache.origin != "")
+    destination_stmt = select(RouteCache.destination.label("location")).where(
+        RouteCache.destination != ""
+    )
+    if trimmed:
+        pattern = f"%{trimmed}%"
+        origin_stmt = origin_stmt.where(RouteCache.origin.ilike(pattern))
+        destination_stmt = destination_stmt.where(RouteCache.destination.ilike(pattern))
+
+    locations = union_all(origin_stmt, destination_stmt).subquery()
+    location = locations.c.location
+    stmt = (
+        select(location)
+        .group_by(location)
+        .order_by(func.lower(location), location)
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars().all())
 
 
 def upsert(

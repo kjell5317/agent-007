@@ -47,6 +47,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(fields),
     }),
+  locationSuggestions: (query: string) =>
+    request<LocationSuggestions>(
+      `/tasks/location_suggestions?q=${encodeURIComponent(query)}`,
+    ),
   rescheduleTask: (id: string) =>
     request<Task>(`/tasks/${id}/reschedule`, { method: "POST" }),
   createGithubIssue: (id: string) =>
@@ -109,6 +113,10 @@ export interface AppSettings {
 export interface TaskCreationAccepted {
   raw_input_id: string;
   status: string;
+}
+
+export interface LocationSuggestions {
+  suggestions: string[];
 }
 
 export interface UnreadInputs {
