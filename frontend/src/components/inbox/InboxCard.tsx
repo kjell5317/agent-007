@@ -284,7 +284,8 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
 }
 
 function ToolItem({ row }: { row: ToolRow }) {
-  const showPurpose = row.name !== "create_task" && row.name !== "mark_not_task";
+  const showPurpose =
+    row.name !== "create_task" && row.name !== "update_task" && row.name !== "mark_not_task";
   const hasFields = Boolean(row.inputFields && row.inputFields.length > 0);
   const hasDetails =
     (showPurpose && row.purpose) ||
