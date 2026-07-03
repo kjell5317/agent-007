@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     google_calendar_default_event_minutes: int = 30
     # Minimum lead before "now" a fresh slot may start at.
     slot_min_lead_minutes: int = 15
+    # Google Calendar popup reminder lead. Rides carry the reminder when they
+    # precede an event/task; otherwise the event itself does.
+    reminder_lead_minutes: int = 15
     # Read calendars
     google_busy_calendar_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 

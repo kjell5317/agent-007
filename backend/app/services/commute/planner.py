@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.services.calendar import (
+    SILENT_REMINDERS,
     CalendarEvent,
     commute_leg_key,
     commute_private_properties,
@@ -32,6 +33,9 @@ from app.services.calendar import (
     is_task_event,
     list_events_between,
     patch_event,
+    popup_reminders,
+    private_properties,
+    reminders_differ,
 )
 from app.services.commute.legs import (
     FAILED_MODE,
@@ -180,6 +184,18 @@ async def plan_window_commutes(
         account_key=account_key,
     )
 
+    # Arrival truth comes from the full derived set — an anchor at the window
+    # edge may keep a leg that was written by an earlier replan.
+    await _sync_anchor_reminders(
+        session,
+        events=events,
+        legs=legs,
+        window=(window_start, window_end),
+        calendar_id=write_calendar_id,
+        settings=settings,
+        account_key=account_key,
+    )
+
     from app.services.commute.reschedule import reschedule_overlapping_tasks
 
     summary["rescheduled_tasks"] = await reschedule_overlapping_tasks(
@@ -195,6 +211,89 @@ async def plan_window_commutes(
         _depth=_depth,
     )
     return summary
+
+
+# Marks a foreign (user-created) event whose reminders we silenced because an
+# arriving leg carries the notification — so we know to restore the calendar
+# default when the leg goes away, and never touch events the user silenced
+# themselves.
+_REMINDERS_MANAGED_PROP = "reminders_managed"
+
+
+def _reminders_for_leg(leg: PlannedLeg) -> dict:
+    """Legs arriving at an anchor carry the pre-event popup; rides home stay
+    silent (explicitly, so calendar defaults don't fire on them)."""
+    if leg.dest_anchor == HOME:
+        return SILENT_REMINDERS
+    return popup_reminders(get_settings().reminder_lead_minutes)
+
+
+def _desired_anchor_reminders(
+    ev: CalendarEvent,
+    has_arriving_leg: bool,
+    settings,
+) -> tuple[dict | None, dict | None]:
+    """`(reminders, private_property_patch)` an anchor should get, or
+    `(None, None)` to leave it alone.
+
+    Task events are fully managed: silent behind an arriving leg, popup
+    otherwise. Foreign events are only silenced when a leg takes over —
+    marked so the calendar default comes back when the leg disappears —
+    and never touched if the user silenced them independently."""
+    if is_task_event(ev):
+        desired = SILENT_REMINDERS if has_arriving_leg else popup_reminders(settings.reminder_lead_minutes)
+        return desired, None
+
+    managed = private_properties(ev).get(_REMINDERS_MANAGED_PROP) == "true"
+    if has_arriving_leg:
+        if managed:
+            return SILENT_REMINDERS, None
+        return SILENT_REMINDERS, {_REMINDERS_MANAGED_PROP: "true"}
+    if managed:
+        return {"useDefault": True}, {_REMINDERS_MANAGED_PROP: ""}
+    return None, None
+
+
+async def _sync_anchor_reminders(
+    session: Session,
+    *,
+    events: list[CalendarEvent],
+    legs: list[PlannedLeg],
+    window: tuple[datetime, datetime],
+    calendar_id: str,
+    settings,
+    account_key: str | None,
+) -> None:
+    """Move the pre-start popup onto the arriving leg (and back) for every
+    anchor on the write calendar inside the replanned window."""
+    arriving = {leg.dest_anchor for leg in legs if leg.dest_anchor != HOME}
+    for ev in events:
+        if ev.calendar_id != calendar_id or ev.all_day or is_commute_event(ev):
+            continue
+        if not _overlaps(ev.start, ev.end, window[0], window[1]):
+            continue
+        desired, prop_patch = _desired_anchor_reminders(ev, ev.id in arriving, settings)
+        if desired is None:
+            continue
+        differ = reminders_differ(ev, desired)
+        claiming = prop_patch is not None and prop_patch.get(_REMINDERS_MANAGED_PROP) == "true"
+        if claiming and not differ:
+            # Already silent by the user's own hand — don't claim it, or the
+            # leg's later removal would "restore" defaults they never wanted.
+            continue
+        if not differ and prop_patch is None:
+            continue
+        try:
+            await patch_event(
+                session,
+                calendar_id=calendar_id,
+                event_id=ev.id,
+                reminders=desired,
+                private_properties=prop_patch,
+                account_key=account_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("commute · reminder sync failed event=%s err=%s", ev.id, exc)
 
 
 def _reschedule_candidates(
@@ -327,6 +426,7 @@ async def _write_legs(
         summary = _summary_for(leg)
         description = _description_for(leg)
         props = commute_private_properties(origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor)
+        reminders = _reminders_for_leg(leg)
         current = existing_by_key.get(key)
         try:
             if current is None:
@@ -339,9 +439,10 @@ async def _write_legs(
                     description=description,
                     location=leg.destination,
                     private_properties=props,
+                    reminders=reminders,
                     account_key=account_key,
                 )
-            elif _needs_patch(current, leg, summary, description):
+            elif _needs_patch(current, leg, summary, description, reminders):
                 await patch_event(
                     session,
                     calendar_id=calendar_id,
@@ -352,6 +453,7 @@ async def _write_legs(
                     description=description,
                     location=leg.destination,
                     private_properties=props,
+                    reminders=reminders,
                     account_key=account_key,
                 )
             written += 1
@@ -416,13 +518,20 @@ def _context_margin(settings) -> timedelta:
     )
 
 
-def _needs_patch(ev: CalendarEvent, leg: PlannedLeg, summary: str, description: str) -> bool:
+def _needs_patch(
+    ev: CalendarEvent,
+    leg: PlannedLeg,
+    summary: str,
+    description: str,
+    reminders: dict,
+) -> bool:
     return (
         ev.summary != summary
         or (ev.description or "") != description
         or (ev.location or "") != leg.destination
         or _epoch(ev.start) != _epoch(leg.depart)
         or _epoch(ev.end) != _epoch(leg.arrive)
+        or reminders_differ(ev, reminders)
     )
 
 

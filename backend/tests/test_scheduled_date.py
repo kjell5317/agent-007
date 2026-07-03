@@ -330,7 +330,7 @@ async def test_add_task_event_persists_scheduled_date_after_calendar_create(monk
     monkeypatch.setattr(
         calendar_events,
         "get_settings",
-        lambda: SimpleNamespace(google_calendar_id="primary"),
+        lambda: SimpleNamespace(google_calendar_id="primary", reminder_lead_minutes=15),
     )
     monkeypatch.setattr(calendar_events, "create_event", fake_create_event)
 

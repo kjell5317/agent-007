@@ -97,6 +97,7 @@ async def create_event(
     location: str | None = None,
     color_id: str | None = None,
     private_properties: dict[str, str] | None = None,
+    reminders: dict | None = None,
     account_key: str | None = None,
 ) -> CalendarEvent:
     """Create an event on `calendar_id`. `start`/`end` must be tz-aware."""
@@ -118,6 +119,8 @@ async def create_event(
         body["colorId"] = color_id
     if private_properties:
         body["extendedProperties"] = {"private": _clean_private_properties(private_properties)}
+    if reminders is not None:
+        body["reminders"] = reminders
 
     client = await authorized_client(session, account_key)
     log.info("calendar insert · calendar=%s summary=%r", calendar_id, summary)
@@ -150,6 +153,7 @@ async def patch_event(
     location: str | None = None,
     color_id: str | None = None,
     private_properties: dict[str, str] | None = None,
+    reminders: dict | None = None,
     account_key: str | None = None,
 ) -> CalendarEvent:
     """Patch an existing event on `calendar_id`. Only provided fields change."""
@@ -172,6 +176,8 @@ async def patch_event(
         body["colorId"] = color_id
     if private_properties is not None:
         body["extendedProperties"] = {"private": _clean_private_properties(private_properties)}
+    if reminders is not None:
+        body["reminders"] = reminders
 
     client = await authorized_client(session, account_key)
     log.info("calendar patch · calendar=%s event=%s", calendar_id, event_id)
@@ -213,6 +219,8 @@ async def add_task_event(
     calendar_id = (settings.google_calendar_id or "").strip()
     if not calendar_id:
         return
+    # Default to a popup before the task; the commute planner silences it
+    # when an arriving leg takes over the notification.
     event = await create_event(
         session,
         calendar_id=calendar_id,
@@ -223,6 +231,7 @@ async def add_task_event(
         location=resolve_location_alias(task.location),
         color_id=color_for(task.label),
         private_properties=task_private_properties(task),
+        reminders=popup_reminders(settings.reminder_lead_minutes),
     )
     tasks_store.set_schedule(
         session,
@@ -376,6 +385,31 @@ async def _delete_anchored_commutes(
             await delete_event(session, calendar_id=calendar_id, event_id=ev.id)
     except Exception as exc:  # noqa: BLE001 — leg cleanup must not block task state changes
         log.warning("commute leg cleanup failed · task=%s err=%s", task.id, exc)
+
+
+def popup_reminders(minutes: int) -> dict:
+    return {"useDefault": False, "overrides": [{"method": "popup", "minutes": minutes}]}
+
+
+# Explicitly no reminder — distinct from omitting the field, which would let
+# the calendar's default reminders fire.
+SILENT_REMINDERS: dict = {"useDefault": False, "overrides": []}
+
+
+def event_reminders(event: CalendarEvent) -> dict:
+    """The requesting user's reminder config as Google returned it."""
+    return event.raw.get("reminders") or {"useDefault": True}
+
+
+def reminders_differ(event: CalendarEvent, desired: dict) -> bool:
+    def _norm(r: dict) -> tuple:
+        overrides = tuple(sorted(
+            (str(o.get("method", "popup")), int(o.get("minutes", 0)))
+            for o in r.get("overrides") or []
+        ))
+        return bool(r.get("useDefault")), overrides
+
+    return _norm(event_reminders(event)) != _norm(desired)
 
 
 def _task_description(task) -> str | None:
