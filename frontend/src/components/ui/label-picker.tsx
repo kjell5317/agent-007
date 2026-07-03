@@ -36,39 +36,39 @@ export function LabelPicker({ value, onChange, onSave, labels }: Props) {
   return (
     <div className="space-y-3">
       <div ref={wrapRef} className="relative w-full">
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors hover:bg-accent"
-          >
-            <span className="flex items-center gap-2">
-              <span
-                aria-hidden
-                className={cn(
-                  "h-3 w-3 shrink-0 rounded-full",
-                  selected
-                    ? labelChipClass(selected.color)
-                    : "bg-muted-foreground/30",
-                )}
-              />
-              <span className={cn(!selected && "text-muted-foreground")}>
-                {selected?.name || "No label"}
-              </span>
-            </span>
-            <ChevronDown
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors hover:bg-accent"
+        >
+          <span className="flex items-center gap-2">
+            <span
+              aria-hidden
               className={cn(
-                "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-180",
+                "h-3 w-3 shrink-0 rounded-full",
+                selected
+                  ? labelChipClass(selected.color)
+                  : "bg-muted-foreground/30",
               )}
             />
-          </button>
+            <span className={cn(!selected && "text-muted-foreground")}>
+              {selected?.name || "No label"}
+            </span>
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </button>
 
         {open && (
           <div
             role="listbox"
-            className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-card py-1 shadow-md"
+            className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-card py-1 shadow-md"
           >
             <Option
               onClick={() => pick("")}
