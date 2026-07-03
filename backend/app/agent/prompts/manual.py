@@ -22,14 +22,17 @@ REQUIRED fields:
     * label — pick the single best-fitting value from the enum. If nothing
         plausibly fits, call `mark_not_task` instead.
 
-Optional: description, location (home is possible), link (most relevant source URL).
+Optional: description, location (home is possible), link (most relevant
+source URL), notes (short, self-contained facts worth keeping as long-term
+memory — someone's role, an account number, a reference, a policy; skip
+ephemeral content).
 
 You also have one non-terminal tool:
 
 - `search_notes(query)` — look up the agent's long-term memory (facts
-  saved from past `mark_not_task` inputs). Call this before deciding when
-  the current input mentions a person, project, account, or fact you might
-  have recorded earlier. You may call it more than once. After searching
+  saved from past inputs). Call this before deciding when the current
+  input mentions a person, project, account, or fact you might have
+  recorded earlier. You may call it more than once. After searching
   you still need to call one of the terminal tools above to finish.
 
 The user message may include a "Past similar inputs" section listing prior

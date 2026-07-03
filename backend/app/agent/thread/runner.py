@@ -22,6 +22,7 @@ from app.agent.helpers.llm import (
 )
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.helpers.text import append_meta_lines, now_iso, task_field_lines
+from app.agent.tools.notes_lookup import save_notes
 from app.agent.tools import THREAD_FOLLOWUP_TOOLS
 from app.config import get_settings
 from app.db.clients import raw_inputs
@@ -65,6 +66,9 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
         tu = tool_uses[0]
         frag = await apply_task_action(session, task, tu.name, tu.input or {})
         trace.update(frag)
+        saved = await save_notes(session, raw.id, (tu.input or {}).get("notes"))
+        if saved:
+            trace["notes_saved"] = saved
         trace["tool_results"] = [
             {
                 "name": tu.name,

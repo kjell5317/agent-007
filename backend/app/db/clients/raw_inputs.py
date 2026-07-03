@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import String, bindparam, func, select, text
 from sqlalchemy.orm import Session
 
+from app.config.settings import get_settings
 from app.db.models.raw_input import RawInput
 from app.db.schemas.raw_input import RawInputCreate
 
@@ -234,6 +235,7 @@ class SimilarInput:
     status: str
     task_id: uuid.UUID | None
     similarity: float
+    decayed_similarity: float
     agent_trace: dict | None
     subject: str | None
     sender: str | None
@@ -246,13 +248,16 @@ _SIMILAR_INPUTS_SQL = text(
     SELECT
       id, source, status, task_id, received_at, agent_trace, source_metadata,
       LEFT(content, 1000) AS content_snippet,
-      1.0 - (embedding <=> CAST(:emb AS vector)) AS similarity
+      1.0 - (embedding <=> CAST(:emb AS vector)) AS similarity,
+      (1.0 - (embedding <=> CAST(:emb AS vector)))
+        * exp(- EXTRACT(EPOCH FROM (now() - received_at))
+              / (:half_life_days * 86400.0)) AS decayed_similarity
     FROM raw_inputs
     WHERE embedding IS NOT NULL
       AND processed_at IS NOT NULL
       AND status = ANY(:statuses)
       AND id <> :exclude_id
-    ORDER BY embedding <=> CAST(:emb AS vector)
+    ORDER BY decayed_similarity DESC
     LIMIT :k
     """
 ).bindparams(bindparam("emb", type_=String()))
@@ -266,7 +271,9 @@ def search_similar(
     statuses: list[str],
     k: int = 5,
 ) -> list[SimilarInput]:
-    """Top-k past raw inputs by cosine similarity, filtered to the given statuses."""
+    """Top-k past raw inputs by recency-decayed cosine similarity, filtered to
+    the given statuses. `similarity` stays the raw cosine score;
+    `decayed_similarity` drives ranking and the orchestrator's auto-decide."""
     emb_literal = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
     rows = session.execute(
         _SIMILAR_INPUTS_SQL,
@@ -275,6 +282,7 @@ def search_similar(
             "exclude_id": exclude_id,
             "statuses": statuses,
             "k": k,
+            "half_life_days": get_settings().input_similarity_half_life_days,
         },
     ).all()
     out: list[SimilarInput] = []
@@ -287,6 +295,11 @@ def search_similar(
                 status=r.status,
                 task_id=r.task_id,
                 similarity=float(r.similarity) if r.similarity is not None else 0.0,
+                decayed_similarity=(
+                    float(r.decayed_similarity)
+                    if r.decayed_similarity is not None
+                    else 0.0
+                ),
                 agent_trace=r.agent_trace,
                 subject=meta.get("subject"),
                 sender=meta.get("from"),

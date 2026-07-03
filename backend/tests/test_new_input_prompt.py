@@ -20,6 +20,7 @@ def _hit(**overrides) -> SimilarInput:
         "status": "not_task",
         "task_id": None,
         "similarity": 0.8123,
+        "decayed_similarity": 0.8123,
         "agent_trace": {"reason": "Informational newsletter with no action requested."},
         "subject": "Weekly FYI",
         "sender": "sender@example.com",

@@ -35,18 +35,23 @@ class SimilarNote:
     similarity: float
     source_raw_input_id: uuid.UUID | None
     created_at: datetime
+    source_from: str | None
+    source_subject: str | None
 
 
 _SIMILAR_NOTES_SQL = text(
     """
     SELECT
-      id, content, source_raw_input_id, created_at,
-      1.0 - (embedding <=> CAST(:emb AS vector)) AS similarity
-    FROM notes
-    WHERE embedding IS NOT NULL
+      n.id, n.content, n.source_raw_input_id, n.created_at,
+      r.source_metadata->>'from' AS source_from,
+      r.source_metadata->>'subject' AS source_subject,
+      1.0 - (n.embedding <=> CAST(:emb AS vector)) AS similarity
+    FROM notes n
+    LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
+    WHERE n.embedding IS NOT NULL
     ORDER BY
-      (1.0 - (embedding <=> CAST(:emb AS vector)))
-        * exp(- EXTRACT(EPOCH FROM (now() - created_at))
+      (1.0 - (n.embedding <=> CAST(:emb AS vector)))
+        * exp(- EXTRACT(EPOCH FROM (now() - n.created_at))
               / (:half_life_days * 86400.0))
       DESC
     LIMIT :k
@@ -71,6 +76,8 @@ def search_similar(
             similarity=float(r.similarity) if r.similarity is not None else 0.0,
             source_raw_input_id=r.source_raw_input_id,
             created_at=r.created_at,
+            source_from=r.source_from,
+            source_subject=r.source_subject,
         )
         for r in rows
     ]

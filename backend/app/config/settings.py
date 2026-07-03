@@ -51,7 +51,12 @@ class Settings(BaseSettings):
 
     # Notes similarity recency boost. Long half-life → small bias toward
     # recent notes when re-ranking equally-similar hits.
-    notes_similarity_half_life_days: float = 100
+    notes_similarity_half_life_days: float = 300
+
+    # Same decay for raw-input precedent search. The decayed score is what the
+    # orchestrator compares against `input_dedup_threshold`, so an old
+    # precedent stops auto-deciding and falls through to the agent instead.
+    input_similarity_half_life_days: float = 400
 
     # Google OAuth
     google_oauth_client_id: str = ""

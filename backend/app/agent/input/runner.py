@@ -28,7 +28,7 @@ from app.agent.helpers.llm import (
 )
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import run_create_event, run_find_calendar_events
-from app.agent.tools.notes_lookup import run_search_notes
+from app.agent.tools.notes_lookup import run_search_notes, save_notes
 from app.agent.helpers.text import (
     append_meta_lines,
     normalize_agent_due_date,
@@ -37,10 +37,9 @@ from app.agent.helpers.text import (
 )
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
-from app.services.input.embedding import embed
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
-from app.db.clients import notes as notes_store, raw_inputs, tasks
+from app.db.clients import raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
 
 log = logging.getLogger(__name__)
@@ -198,6 +197,9 @@ async def run_new_input_agent(
             trace["outcome"] = "task_created"
             trace["task_id"] = str(task.id)
             trace["task_title"] = task.title
+            saved = await save_notes(session, raw.id, payload.get("notes"))
+            if saved:
+                trace["notes_saved"] = saved
             iter_log.setdefault("tool_results", []).append(
                 _tool_result_entry(
                     tu.name,
@@ -240,6 +242,9 @@ async def run_new_input_agent(
             frag = await apply_task_action(session, existing_task, tu.name, tu_input)
             trace.update(frag)
             trace["existing_task_id"] = str(existing_id)
+            saved = await save_notes(session, raw.id, tu_input.get("notes"))
+            if saved:
+                trace["notes_saved"] = saved
             selected_ref = _selected_candidate_ref(candidates, existing_id)
             if selected_ref:
                 trace["selected_evidence_ref"] = selected_ref
@@ -261,8 +266,7 @@ async def run_new_input_agent(
             trace["reason"] = tu_input.get("reason")
             trace["confidence"] = tu_input.get("confidence")
             final_status = "not_task"
-            raw_notes = tu_input.get("notes") or []
-            saved = await _save_notes(session, raw.id, raw_notes)
+            saved = await save_notes(session, raw.id, tu_input.get("notes"))
             if saved:
                 trace["notes_saved"] = saved
             iter_log.setdefault("tool_results", []).append(
@@ -307,30 +311,6 @@ async def run_new_input_agent(
     )
     session.commit()
     return trace
-
-
-async def _save_notes(session, raw_input_id, raw_notes) -> list[str]:
-    """Persist the notes the agent attached to `mark_not_task`. Each note is
-    embedded so future `search_notes` calls can retrieve it. Returns the
-    list of saved note contents (for the trace)."""
-    saved: list[str] = []
-    if not isinstance(raw_notes, list):
-        return saved
-    for entry in raw_notes:
-        content = str(entry or "").strip()
-        if not content:
-            continue
-        vec = await embed(content)
-        notes_store.create(
-            session,
-            content=content,
-            source_raw_input_id=raw_input_id,
-            embedding=vec,
-        )
-        saved.append(content)
-    if saved:
-        session.commit()
-    return saved
 
 
 def _build_new_input_message(

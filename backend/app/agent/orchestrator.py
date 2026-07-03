@@ -112,13 +112,14 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         )
 
     # Auto-decide against the strongest precedent over the threshold. The
-    # not_task and open(=duplicate) candidates compete on similarity — the
-    # higher one wins, rather than not_task always taking precedence. Open
-    # wins exact ties: acting on an existing task is safer than silently
-    # dropping the input as not-a-task.
-    top_not_task = not_task_hits[0].similarity if not_task_hits else 0.0
+    # not_task and open(=duplicate) candidates compete on their recency-decayed
+    # similarity — an old precedent decays below the threshold and falls
+    # through to the agent instead of auto-deciding. Open wins exact ties:
+    # acting on an existing task is safer than silently dropping the input
+    # as not-a-task.
+    top_not_task = not_task_hits[0].decayed_similarity if not_task_hits else 0.0
     top_open = (
-        open_hits[0].similarity if open_hits and open_hits[0].task_id else 0.0
+        open_hits[0].decayed_similarity if open_hits and open_hits[0].task_id else 0.0
     )
 
     if max(top_not_task, top_open) >= auto_threshold:
@@ -134,6 +135,7 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
                 "auto_decided": True,
                 "precedent_id": str(top.id),
                 "precedent_similarity": round(top.similarity, 4),
+                "precedent_decayed_similarity": round(top.decayed_similarity, 4),
                 "existing_task_id": str(top.task_id),
                 "selected_evidence_ref": f"precedent:{top.id}",
                 "selected_precedent": _evidence_ref(top, selected=True),
@@ -159,6 +161,7 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
                 "auto_decided": True,
                 "precedent_id": str(top.id),
                 "precedent_similarity": round(top.similarity, 4),
+                "precedent_decayed_similarity": round(top.decayed_similarity, 4),
                 "selected_evidence_ref": f"precedent:{top.id}",
                 "selected_precedent": _evidence_ref(top, selected=True),
                 "evidence_refs": [_evidence_ref(top, selected=True)],
@@ -186,7 +189,7 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     # that doesn't matter here.
     candidates = sorted(
         [*open_hits, *closed_hits, *not_task_hits],
-        key=lambda h: h.similarity,
+        key=lambda h: h.decayed_similarity,
         reverse=True,
     )[:CANDIDATE_K]
     return await run_new_input_agent(session, raw, candidates, query_embedding)
@@ -211,6 +214,7 @@ def _evidence_ref(hit: SimilarInput, *, selected: bool = False) -> dict:
         "source": hit.source,
         "task_id": str(hit.task_id) if hit.task_id else None,
         "similarity": round(hit.similarity, 4),
+        "decayed_similarity": round(hit.decayed_similarity, 4),
         "title": _candidate_title(hit),
         "snippet": _truncate_inline(hit.content_snippet or "", 300),
         "sender": hit.sender,
