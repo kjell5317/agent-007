@@ -86,12 +86,14 @@ export function useRuns(
     };
   }, [active, backgroundRefresh, preload]);
 
-  // Only poll while the tab is the visible one and the document has focus —
-  // runs change state over seconds (queued → running → awaiting_approval),
-  // so a short interval keeps the list and container view live.
+  // Refresh once when the owning view becomes active. Only active-scope hooks
+  // use the short interval: the all-scope list can be much larger, and kotx
+  // mutations still call `refresh` directly through onKotxChanged.
   useEffect(() => {
     if (!active) return;
     backgroundRefresh();
+    if (scope !== "active") return;
+
     let timer: ReturnType<typeof setInterval> | null = null;
     const start = () => {
       if (timer == null && document.visibilityState === "visible") {
