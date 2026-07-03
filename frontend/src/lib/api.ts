@@ -4,13 +4,22 @@ class ApiError extends Error {
   status: number;
   body: unknown;
   constructor(status: number, statusText: string, body: unknown) {
-    const detail =
-      (body && typeof body === "object" && "detail" in body && (body as { detail: unknown }).detail) ||
-      statusText;
-    super(typeof detail === "string" ? detail : statusText);
+    super(apiErrorMessage(status, statusText, body));
     this.status = status;
     this.body = body;
   }
+}
+
+// Always yields a non-empty message: `statusText` is empty over HTTP/2, and
+// FastAPI validation errors carry a list (not a string) in `detail`.
+function apiErrorMessage(status: number, statusText: string, body: unknown): string {
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string" && detail) return detail;
+    if (detail) return JSON.stringify(detail).slice(0, 200);
+  }
+  if (typeof body === "string" && body.trim()) return body.trim().slice(0, 200);
+  return statusText || `Request failed (HTTP ${status})`;
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {

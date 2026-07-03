@@ -14,12 +14,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agent.thread.runner import run_thread_followup
 from app.db.clients import (
     raw_inputs as raw_inputs_store,
     tasks as tasks_store,
 )
-from app.events import publish_input, publish_task, publish_task_removed
+from app.events import publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.task.queue import enqueue
 
@@ -39,10 +38,11 @@ async def open_task_from_input(
     (`raw_input_id`) is the row that links to the new task.
 
     When the anchor, an explicit target, or a context input already identifies
-    a task, route the raw input through the thread-follow-up agent instead of
-    creating a fresh task. That lets the agent update fields, close the task,
+    a task, enqueue the raw input for the thread-follow-up agent instead of
+    fresh task creation. That lets the agent update fields, close the task,
     reopen it, or leave it unchanged using the same action dispatcher as
-    automatic thread follow-ups.
+    automatic thread follow-ups — run by the queue worker, like every other
+    path behind this endpoint's 202 + poll contract.
 
     Raises:
       * `LookupError` — no raw_input with that id.
@@ -57,10 +57,10 @@ async def open_task_from_input(
     context_input_ids = context_input_ids or []
     target = _find_followup_target(session, raw, context_input_ids, target_task_id)
     if target is not None:
-        trace = await run_thread_followup(session, raw, target)
-        publish_input(session, raw.id)
-        affected_task_id = trace.get("task_id") or trace.get("existing_task_id") or target.id
-        publish_task(session, uuid.UUID(str(affected_task_id)))
+        # Run through the queue worker like fresh creation: the follow-up is
+        # an LLM round-trip, and the endpoint promises 202 + poll. A failure
+        # gets marked on the row by the worker, so the poll terminates.
+        await enqueue(raw_input_id, user_fields, context_input_ids, followup_task_id=target.id)
         return
 
     if raw.task_id is not None:

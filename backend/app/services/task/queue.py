@@ -36,7 +36,7 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 
 log = logging.getLogger(__name__)
 
-_QueueItem = tuple[uuid.UUID, dict[str, Any], list[uuid.UUID]]
+_QueueItem = tuple[uuid.UUID, dict[str, Any], list[uuid.UUID], uuid.UUID | None]
 
 _queue: asyncio.Queue[_QueueItem] | None = None
 _worker: asyncio.Task | None = None
@@ -69,17 +69,20 @@ async def enqueue(
     raw_input_id: uuid.UUID,
     user_fields: dict[str, Any],
     context_input_ids: list[uuid.UUID] | None = None,
+    followup_task_id: uuid.UUID | None = None,
 ) -> None:
+    """`followup_task_id` routes the item through the thread-follow-up agent
+    against that task instead of fresh task extraction."""
     if _queue is None:
         raise RuntimeError("task-creation queue is not running")
-    await _queue.put((raw_input_id, user_fields, context_input_ids or []))
+    await _queue.put((raw_input_id, user_fields, context_input_ids or [], followup_task_id))
 
 
 async def _run(queue: asyncio.Queue[_QueueItem]) -> None:
     while True:
-        raw_input_id, user_fields, context_input_ids = await queue.get()
+        raw_input_id, user_fields, context_input_ids, followup_task_id = await queue.get()
         try:
-            await _process(raw_input_id, user_fields, context_input_ids)
+            await _process(raw_input_id, user_fields, context_input_ids, followup_task_id)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — never let one bad item kill the worker
@@ -93,12 +96,28 @@ async def _process(
     raw_input_id: uuid.UUID,
     user_fields: dict[str, Any],
     context_input_ids: list[uuid.UUID],
+    followup_task_id: uuid.UUID | None = None,
 ) -> None:
     with SessionLocal() as session:
         raw = raw_inputs_store.get(session, raw_input_id)
         if raw is None:
             log.warning("task-creation · raw_input missing id=%s", raw_input_id)
             return
+        if followup_task_id is not None:
+            task = tasks_store.get(session, followup_task_id)
+            if task is not None:
+                from app.agent.thread.runner import run_thread_followup
+
+                trace = await run_thread_followup(session, raw, task)
+                publish_input(session, raw.id)
+                affected = trace.get("task_id") or trace.get("existing_task_id") or task.id
+                publish_task(session, uuid.UUID(str(affected)))
+                return
+            # The target vanished between enqueue and processing — detach the
+            # stale link and fall through to fresh creation.
+            if raw.task_id == followup_task_id:
+                raw.task_id = None
+                session.commit()
         if raw.task_id is not None:
             log.debug("task-creation · task already linked id=%s", raw_input_id)
             return
