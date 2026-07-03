@@ -24,10 +24,10 @@ SETTINGS = SimpleNamespace(
     commute_bike_max_minutes=25,
     commute_rain_threshold_pct=30,
     commute_home_layover_minutes=60,
-    commute_event_buffer_minutes=15,
+    commute_event_buffer_minutes=5,
 )
 
-BUFFER = timedelta(minutes=15)
+BUFFER = timedelta(minutes=5)
 
 
 def _at(hour: int, minute: int = 0) -> datetime:

@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     commute_transit_ttl_days: int = 30
     commute_lookahead_days: int = 7
     commute_home_layover_minutes: int = 60
-    commute_event_buffer_minutes: int = 15
+    commute_event_buffer_minutes: int = 5
 
     # Home Assistant
     home_assistant_url: str = ""

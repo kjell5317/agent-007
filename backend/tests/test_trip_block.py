@@ -39,7 +39,7 @@ GYM = "Gymstreet 5, Munich"
 OFFICE = "Officeplatz 2, Munich"
 LIBRARY = "Bookweg 3, Munich"
 
-BUFFER = timedelta(minutes=15)
+BUFFER = timedelta(minutes=5)
 
 
 def _route_session():
@@ -173,8 +173,8 @@ def test_piggyback_after_anchor_ignores_its_replaced_leg():
     )
 
     assert planned is not None
-    assert planned.start == _day_at(15, 15)
-    assert planned.end == _day_at(15, 45)
+    assert planned.start == _day_at(15, 5)
+    assert planned.end == _day_at(15, 35)
     assert planned.out_s == 0  # arrives with the anchor's trip
     assert planned.in_s == 600
     assert planned.block_end == planned.end + BUFFER + timedelta(seconds=600)
@@ -285,7 +285,7 @@ async def test_plan_task_slot_reserves_whole_trip_block(monkeypatch):
         schedule_service,
         "get_settings",
         lambda: SimpleNamespace(
-            commute_event_buffer_minutes=15,
+            commute_event_buffer_minutes=5,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -328,7 +328,7 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
         schedule_service,
         "get_settings",
         lambda: SimpleNamespace(
-            commute_event_buffer_minutes=15,
+            commute_event_buffer_minutes=5,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
