@@ -15,7 +15,10 @@ import {
 } from "@/lib/projections";
 import { cn } from "@/lib/utils";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
+import { useResolvedEvidence } from "@/hooks/useResolvedEvidence";
 import type { RawInput } from "@/lib/types";
+
+const NO_EVIDENCE: EvidenceRow[] = [];
 
 export interface InboxItem {
   id: string;
@@ -184,6 +187,7 @@ export function ActionButton({
 
 export function InputBody({ data }: { data: RawInput }) {
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
+  const evidence = useResolvedEvidence(trace?.evidence ?? NO_EVIDENCE);
 
   return (
     <>
@@ -199,35 +203,68 @@ export function InputBody({ data }: { data: RawInput }) {
           <Markdown content={trace.reason} className="text-xs" />
         </Section>
       )}
-      {trace && trace.evidence.length > 0 && (
-        <Section title="Precedents">
-          <div className="space-y-1">
-            {trace.evidence.map((row) => (
-              <EvidenceItem key={row.id} row={row} />
-            ))}
-          </div>
-        </Section>
-      )}
-      {trace && trace.tools.length > 0 && (
-        <Section title="Tool calls">
-          <div className="space-y-1">
-            {trace.tools.map((row) => (
-              <ToolItem key={row.id} row={row} />
-            ))}
-          </div>
-        </Section>
+      {trace && (evidence.length > 0 || trace.tools.length > 0) && (
+        <CollapsibleSection title="Agent trace">
+          {evidence.length > 0 && (
+            <Section title="Precedents">
+              <div className="space-y-1">
+                {evidence.map((row) => (
+                  <EvidenceItem key={row.id} row={row} />
+                ))}
+              </div>
+            </Section>
+          )}
+          {trace.tools.length > 0 && (
+            <Section title="Tool calls">
+              <div className="space-y-1">
+                {trace.tools.map((row) => (
+                  <ToolItem key={row.id} row={row} />
+                ))}
+              </div>
+            </Section>
+          )}
+        </CollapsibleSection>
       )}
     </>
+  );
+}
+
+function SectionLabel({ title }: { title: string }) {
+  return (
+    <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      {title}
+    </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-1">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {title}
-      </div>
+      <SectionLabel title={title} />
       {children}
+    </section>
+  );
+}
+
+function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const Chevron = open ? ChevronDown : ChevronRight;
+
+  return (
+    <section className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <span className="min-w-0 flex-1">
+          <SectionLabel title={title} />
+        </span>
+        <Chevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      </button>
+      <Collapsible open={open}>
+        <div className="space-y-3">{children}</div>
+      </Collapsible>
     </section>
   );
 }
