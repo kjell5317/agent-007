@@ -242,7 +242,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
         </div>
       )}
 
-      <div className="max-h-80 min-h-24 overflow-auto rounded-lg border">
+      <div className="max-h-[32rem] min-h-64 overflow-auto rounded-lg border">
         {loading ? (
           <div className="p-3 text-sm text-muted-foreground">Loading…</div>
         ) : editing && view === "pr" ? (
@@ -258,7 +258,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
               value={prBodyDraft}
               onChange={(e) => setPrBodyDraft(e.target.value)}
               placeholder="PR body"
-              className="min-h-48 resize-y rounded-lg font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-0"
+              className="min-h-64 resize-y rounded-lg font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-0"
             />
           </div>
         ) : editing ? (
@@ -435,7 +435,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
 
 function EmptyDoc({ label = "Not generated yet." }: { label?: string }) {
   return (
-    <div className="flex min-h-24 items-center justify-center text-sm text-muted-foreground">
+    <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">
       {label}
     </div>
   );
