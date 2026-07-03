@@ -11,6 +11,7 @@ import {
   MapPin,
   Pencil,
   RefreshCw,
+  RotateCcw,
   Timer,
   Trash2,
   X,
@@ -31,6 +32,7 @@ import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inboxBadge, inputTitle, senderName } from "@/lib/inbox";
 import { labelChipClass } from "@/lib/labels";
+import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
 import type { Label, Task, TaskRawInput } from "@/lib/types";
 
@@ -81,6 +83,7 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     null,
   );
   const locationSuggestionRequestRef = useRef(0);
+  const activeReopenPoll = useRef<PollHandle | null>(null);
 
   useEffect(() => {
     setCurrent(task);
@@ -98,6 +101,14 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
     const timer = window.setTimeout(() => setLoading(false), 120);
     return () => window.clearTimeout(timer);
   }, [loading]);
+
+  useEffect(
+    () => () => {
+      activeReopenPoll.current?.cancel();
+      activeReopenPoll.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (editingText !== "location") {
@@ -204,6 +215,58 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
       "Marked not a task",
       "dismiss",
     );
+
+  async function reopenCurrentTask() {
+    if (busy) return;
+    const taskId = current.id;
+    setBusy(true);
+    const toastId = toast.loading("Re-opening task…", { duration: Infinity });
+
+    const clearPoll = () => {
+      activeReopenPoll.current = null;
+      toast.dismiss(toastId);
+    };
+
+    const refreshAfterReopen = async () => {
+      clearPoll();
+      try {
+        const saved = await api.getTask(taskId);
+        syncTaskState(saved);
+        setEditingText(null);
+        setActivePicker(null);
+        toast.success("Task re-opened");
+        await onChanged();
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    try {
+      const { raw_input_id } = await api.reopenTask(taskId);
+      const handle = pollTaskCreation(raw_input_id, {
+        onSuccess: () => {
+          void refreshAfterReopen();
+        },
+        onFailure: (message) => {
+          clearPoll();
+          toast.error(message);
+          setBusy(false);
+        },
+        onTimeout: () => {
+          clearPoll();
+          toast.error("Task is taking longer than expected");
+          setBusy(false);
+        },
+      });
+      activeReopenPoll.current = handle;
+    } catch (e) {
+      clearPoll();
+      toast.error((e as Error).message);
+      setBusy(false);
+    }
+  }
 
   const openTextEditor = (field: TextField) => {
     setActivePicker(null);
@@ -312,6 +375,7 @@ export function TaskDetailModal({ task, onClose, onChanged }: Props) {
           }}
           onMarkDone={markDone}
           onDismissTask={dismissTask}
+          onReopenTask={reopenCurrentTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
         />
@@ -399,6 +463,7 @@ function TaskSummary({
   onSaveLabel,
   onMarkDone,
   onDismissTask,
+  onReopenTask,
   onReschedule,
   onCreateGithubIssue,
 }: {
@@ -431,6 +496,7 @@ function TaskSummary({
   onSaveLabel: () => void;
   onMarkDone: () => void;
   onDismissTask: () => void;
+  onReopenTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
 }) {
@@ -447,18 +513,29 @@ function TaskSummary({
     <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
       <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
-          <TaskSummaryIconButton
-            label="Mark done"
-            disabled={busy}
-            onClick={onMarkDone}
-            className="text-muted-foreground hover:text-primary"
-          >
-            {closingAction === "done" ? (
-              <CircleCheckBig className="h-5 w-5 text-primary" />
-            ) : (
-              <Circle className="h-5 w-5" />
-            )}
-          </TaskSummaryIconButton>
+          {task.status === "open" ? (
+            <TaskSummaryIconButton
+              label="Mark done"
+              disabled={busy}
+              onClick={onMarkDone}
+              className="text-muted-foreground hover:text-primary"
+            >
+              {closingAction === "done" ? (
+                <CircleCheckBig className="h-5 w-5 text-primary" />
+              ) : (
+                <Circle className="h-5 w-5" />
+              )}
+            </TaskSummaryIconButton>
+          ) : (
+            <TaskSummaryIconButton
+              label="Re-open task"
+              disabled={busy}
+              onClick={onReopenTask}
+              className="text-muted-foreground hover:text-primary"
+            >
+              <RotateCcw className="h-5 w-5" />
+            </TaskSummaryIconButton>
+          )}
 
           <PickerAnchor
             open={activePicker === "label"}
@@ -600,19 +677,21 @@ function TaskSummary({
             </span>
           </button>
 
-          <TaskSummaryIconButton
-            label="Mark not a task"
-            disabled={busy}
-            onClick={onDismissTask}
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2
-              className={cn(
-                "h-4 w-4",
-                closingAction === "dismiss" && "text-destructive",
-              )}
-            />
-          </TaskSummaryIconButton>
+          {task.status === "open" && (
+            <TaskSummaryIconButton
+              label="Mark not a task"
+              disabled={busy}
+              onClick={onDismissTask}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2
+                className={cn(
+                  "h-4 w-4",
+                  closingAction === "dismiss" && "text-destructive",
+                )}
+              />
+            </TaskSummaryIconButton>
+          )}
         </div>
 
         <div className="space-y-1.5">

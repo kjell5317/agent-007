@@ -45,7 +45,7 @@ from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import dismiss_task
 from app.services.task.open import open_task_from_input
-from app.services.task.reopen import reopen_task as reopen_task_svc
+from app.services.task.reopen import enqueue_reopen_task
 from app.services.task.update import update_task as update_task_svc
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -219,9 +219,16 @@ async def mark_not_task(task_id: uuid.UUID, session: Session = Depends(get_sessi
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
 
-@router.post("/{task_id}/reopen", status_code=status.HTTP_204_NO_CONTENT)
-async def reopen_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
+@router.post(
+    "/{task_id}/reopen",
+    response_model=TaskCreationAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reopen_task(
+    task_id: uuid.UUID, session: Session = Depends(get_session)
+) -> TaskCreationAccepted:
     try:
-        await reopen_task_svc(session, task_id)
+        raw = await enqueue_reopen_task(session, task_id)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return TaskCreationAccepted(raw_input_id=raw.id, status="processing")
