@@ -672,6 +672,8 @@ def _navigation_url(leg: PlannedLeg) -> str:
     params = {"api": "1", "origin": leg.origin, "destination": leg.destination}
     if leg.mode != FAILED_MODE:
         params["travelmode"] = leg.mode
+    if leg.mode == "transit":
+        params["departure_time"] = str(int(leg.depart.astimezone(timezone.utc).timestamp()))
     return f"https://www.google.com/maps/dir/?{urlencode(params)}"
 
 
