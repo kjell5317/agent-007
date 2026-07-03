@@ -10,7 +10,8 @@ interface Props {
   onChanged: () => Promise<void> | void;
   onLoadMore: () => Promise<void>;
   hasMore: boolean;
-  seenAfter: string | null;
+  unseenInputIds: ReadonlySet<string>;
+  onInputsVisible: (ids: string[]) => void;
 }
 
 export function InboxPanel({
@@ -18,7 +19,8 @@ export function InboxPanel({
   onChanged,
   onLoadMore,
   hasMore,
-  seenAfter,
+  unseenInputIds,
+  onInputsVisible,
 }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -74,14 +76,18 @@ export function InboxPanel({
               data: group.newest,
             }}
             onChanged={onChanged}
-            seenAfter={seenAfter}
+            unseen={unseenInputIds.has(group.newest.id)}
+            onVisible={(id) => onInputsVisible([id])}
           />
         ) : (
           <InboxGroup
             key={group.key}
             group={group}
             onChanged={onChanged}
-            seenAfter={seenAfter}
+            unseenMemberIds={group.members
+              .filter((member) => unseenInputIds.has(member.id))
+              .map((member) => member.id)}
+            onVisible={onInputsVisible}
           />
         ),
       )}
