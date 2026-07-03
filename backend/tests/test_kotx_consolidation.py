@@ -144,9 +144,9 @@ async def test_kotx_poll_fetches_all_scope(monkeypatch):
 # --- kotx runner state machine ----------------------------------------------------
 
 
-def _raw(meta: dict) -> SimpleNamespace:
+def _raw(meta: dict, raw_id: uuid.UUID | None = None) -> SimpleNamespace:
     return SimpleNamespace(
-        id=uuid.UUID("00000000-0000-0000-0000-00000000aaaa"),
+        id=raw_id or uuid.UUID("00000000-0000-0000-0000-00000000aaaa"),
         source="kotx",
         source_metadata=meta,
         content="kotx transition",
@@ -157,6 +157,15 @@ def _meta(**overrides) -> dict:
     env = envelope_for_transition(_kotx_task(**overrides))
     assert env is not None
     return env.source_metadata
+
+
+@pytest.fixture(autouse=True)
+def _no_thread_backfill(monkeypatch):
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "link_unassigned_by_thread",
+        lambda *_args, **_kwargs: 0,
+    )
 
 
 @pytest.mark.asyncio
@@ -235,6 +244,94 @@ async def test_informational_transition_without_task_is_not_task(monkeypatch):
     )
     assert trace["outcome"] == "not_task"
     assert finalized["status"] == "not_task"
+
+
+@pytest.mark.asyncio
+async def test_actionable_transition_backfills_preparing_thread_inputs(monkeypatch):
+    task_id = uuid.uuid4()
+    task = SimpleNamespace(
+        id=task_id,
+        title="#31 Add a metadata index",
+        kotx_task_id=None,
+        link=None,
+    )
+    preparing_id = uuid.UUID("00000000-0000-0000-0000-00000000bbbb")
+    actionable_id = uuid.UUID("00000000-0000-0000-0000-00000000cccc")
+    preparing_meta = _meta(state="drafting", status="preparing task")
+    actionable_meta = _meta(state="draft")
+    rows = {
+        preparing_id: {
+            "source": "kotx",
+            "thread_id": preparing_meta["thread_id"],
+            "status": None,
+            "task_id": None,
+        },
+        actionable_id: {
+            "source": "kotx",
+            "thread_id": actionable_meta["thread_id"],
+            "status": None,
+            "task_id": None,
+        },
+    }
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None
+    )
+    monkeypatch.setattr(
+        kotx_runner.tasks, "github_link_candidates", lambda s, r, n: []
+    )
+
+    async def fake_extract(session, raw):
+        return {"estimation": 20, "due_date": None, "label": None}
+
+    def fake_create(session, payload):
+        return task
+
+    async def fake_schedule(session, created_task):
+        assert created_task is task
+
+    def fake_finalize(session, raw_id, **kw):
+        rows[raw_id]["status"] = kw["status"]
+        if "task_id" in kw:
+            rows[raw_id]["task_id"] = kw["task_id"]
+
+    def fake_link_unassigned_by_thread(session, *, source, thread_id, task_id):
+        linked = 0
+        for row in rows.values():
+            if (
+                row["source"] == source
+                and row["thread_id"] == thread_id
+                and row["task_id"] is None
+            ):
+                row["task_id"] = task_id
+                linked += 1
+        return linked
+
+    monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner.tasks, "create", fake_create)
+    monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", fake_finalize)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "link_unassigned_by_thread",
+        fake_link_unassigned_by_thread,
+    )
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    preparing_trace = await kotx_runner.run_kotx_transition(
+        session, _raw(preparing_meta, preparing_id)
+    )
+    actionable_trace = await kotx_runner.run_kotx_transition(
+        session, _raw(actionable_meta, actionable_id)
+    )
+
+    assert preparing_trace["outcome"] == "not_task"
+    assert rows[preparing_id]["status"] == "not_task"
+    assert rows[actionable_id]["status"] == "open"
+    assert rows[preparing_id]["task_id"] == task_id
+    assert rows[actionable_id]["task_id"] == task_id
+    assert actionable_trace["backfilled_inputs"] == 1
 
 
 @pytest.mark.asyncio

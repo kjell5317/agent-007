@@ -102,6 +102,7 @@ export function TasksPanel({
                 task={t}
                 kotxTask={kotxFor(t)}
                 onChanged={onChanged}
+                onKotxChanged={onKotxChanged}
                 onOpen={onTaskOpen}
                 unseen={unseenTaskIds.has(t.id)}
                 onVisible={onTaskVisible}
@@ -117,6 +118,7 @@ export function TasksPanel({
                 task={t}
                 kotxTask={kotxFor(t)}
                 onChanged={onChanged}
+                onKotxChanged={onKotxChanged}
                 onOpen={onTaskOpen}
                 unseen={unseenTaskIds.has(t.id)}
                 onVisible={onTaskVisible}
