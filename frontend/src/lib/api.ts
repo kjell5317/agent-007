@@ -101,10 +101,17 @@ export const api = {
   listLabels: () => request<Label[]>("/labels"),
 
   getPoints: () => request<{ total: number }>("/points"),
-  adjustPoints: (amount: number) =>
+  getPointsLog: (limit = 50) =>
+    request<PointsLog>(`/points/log?limit=${limit}`),
+  markPointsLogSeen: () =>
+    request<PointsLogSeen>("/points/log/mark_seen", { method: "POST" }),
+  adjustPoints: (
+    amount: number,
+    metadata: { caller?: string; reason?: string } = {},
+  ) =>
     request<{ total: number }>("/points/adjust", {
       method: "POST",
-      body: JSON.stringify({ amount }),
+      body: JSON.stringify({ amount, ...metadata }),
     }),
 
   getSettings: () => request<AppSettings>("/settings"),
@@ -129,6 +136,26 @@ export interface LocationSuggestions {
 }
 
 export interface UnreadInputs {
+  count: number;
+  last_seen_at: string;
+}
+
+export interface PointsLogEntry {
+  id: string;
+  amount: number;
+  source: string;
+  reason: string;
+  caller: string | null;
+  created_at: string;
+}
+
+export interface PointsLog {
+  entries: PointsLogEntry[];
+  count: number;
+  last_seen_at: string;
+}
+
+export interface PointsLogSeen {
   count: number;
   last_seen_at: string;
 }
