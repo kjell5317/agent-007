@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 // Google is intentionally omitted: /auth/login already captures Gmail +
 // Calendar scopes alongside the session, so a separate entry would duplicate it.
 const OAUTH_PROVIDERS: { label: string; href: string }[] = [
+  { label: "Notion", href: "/oauth/notion/authorize" },
   { label: "CSEE", href: "/oauth/slack/authorize?app=csee" },
   { label: "Social AI", href: "/oauth/slack/authorize?app=social" },
 ];

@@ -31,6 +31,7 @@ class _State(NamedTuple):
     provider: str
     app_name: str | None
     expires_at: float
+    context: dict | None = None
 
 
 # In-process CSRF state. Lost on restart; fine for personal use on localhost.
@@ -50,6 +51,8 @@ def _redirect_uri(provider: str) -> str:
         return s.google_oauth_redirect_uri
     if provider == "slack":
         return s.slack_oauth_redirect_uri
+    if provider == "notion":
+        return s.notion_oauth_redirect_uri
     raise HTTPException(status.HTTP_400_BAD_REQUEST, f"No redirect URI configured for {provider!r}")
 
 
@@ -77,19 +80,23 @@ async def authorize(
 
     try:
         provider_instance = _build_provider(provider, app)
-        url = provider_instance.authorize_url(state=state, redirect_uri=_redirect_uri(provider))
+        authorization = await provider_instance.authorize(
+            state=state, redirect_uri=_redirect_uri(provider)
+        )
+        issued = _state_store[state]
+        _state_store[state] = issued._replace(context=authorization.context)
     except RuntimeError as exc:
         _state_store.pop(state, None)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
-    return RedirectResponse(url)
+    return RedirectResponse(authorization.url)
 
 
 @router.get("/{provider}/callback")
 async def callback(
     provider: str,
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str | None = Query(None),
+    state: str | None = Query(None),
     session: Session = Depends(get_session),
 ) -> dict:
     try:
@@ -97,13 +104,27 @@ async def callback(
     except KeyError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown provider {provider!r}")
 
+    if not state:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing OAuth state")
+    if not code:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing OAuth code")
+
     issued = _state_store.pop(state, None)
     if issued is None or issued.provider != provider or issued.expires_at < time.time():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired state")
 
     provider_instance = _build_provider(provider, issued.app_name)
-    bundle = await provider_instance.exchange_code(code=code, redirect_uri=_redirect_uri(provider))
-    account_key = await provider_instance.identify(bundle.access_token)
+    try:
+        bundle = await provider_instance.exchange_code_with_context(
+            code=code,
+            redirect_uri=_redirect_uri(provider),
+            context=issued.context,
+        )
+        account_key = await provider_instance.identify_with_context(
+            bundle.access_token, issued.context
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
     oauth_tokens.upsert(
         session,
