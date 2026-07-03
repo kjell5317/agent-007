@@ -248,7 +248,7 @@ function collectEvidence(trace: JsonRecord): EvidenceRow[] {
     rows.push(row);
   });
 
-  return aggregateUntitledEvidence(dedupeEvidence(rows));
+  return dedupeEvidence(rows);
 }
 
 function evidenceFromRecord(
@@ -652,7 +652,7 @@ function updateTaskFields(input: JsonRecord): ProjectionField[] {
   return fields;
 }
 
-function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
+export function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
   const visible: EvidenceRow[] = [];
   const groups = new Map<string, EvidenceRow[]>();
 
@@ -674,15 +674,13 @@ function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
         ? similarities.reduce((total, value) => total + value, 0) / similarities.length
         : null;
     const count = group.length;
-    const plural = count === 1 ? label : pluralizeStatus(label);
-    const similarity = avg === null ? undefined : avg.toFixed(2);
     visible.push({
       id: `aggregate:${label}`,
       kind: group.some((row) => row.kind === "precedent") ? "precedent" : "candidate",
-      title: similarity ? `${count} ${plural}, avg sim ${similarity}` : `${count} ${plural}`,
+      title: count === 1 ? "1 similar input" : `${count} similar inputs`,
       status: group[0]?.status,
       source: sameString(group.map((row) => row.source)),
-      similarity,
+      similarity: avg === null ? undefined : avg.toFixed(2),
       selected: group.some((row) => row.selected),
       aggregate: true,
     });
@@ -691,7 +689,7 @@ function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
   return visible;
 }
 
-function isUsableEvidenceTitle(title: string): boolean {
+export function isUsableEvidenceTitle(title: string): boolean {
   const normalized = title.trim().toLowerCase();
   return Boolean(
     normalized &&
@@ -700,11 +698,6 @@ function isUsableEvidenceTitle(title: string): boolean {
       normalized !== "untitled" &&
       normalized !== "no subject",
   );
-}
-
-function pluralizeStatus(status: string): string {
-  if (status.endsWith("s")) return status;
-  return `${status}s`;
 }
 
 function sameString(values: Array<string | undefined>): string | undefined {
