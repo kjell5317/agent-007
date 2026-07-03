@@ -19,13 +19,12 @@ import type { Task } from "@/lib/types";
 interface Props {
   task: Task;
   onChanged: () => Promise<void> | void;
-  seenAfter: string | null;
   onOpen: (id: string) => void;
 }
 
 const CROSS_OFF_MS = 350;
 
-export function TaskCard({ task, onChanged, seenAfter, onOpen }: Props) {
+export function TaskCard({ task, onChanged, onOpen }: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
   const labels = useLabels();
@@ -34,13 +33,6 @@ export function TaskCard({ task, onChanged, seenAfter, onOpen }: Props) {
   const displayOverdue = isOverdue(displayDate);
   const displayUrgent = isUrgent(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
-  // Manual tasks are excluded from the Tasks-tab unread count on the
-  // server (count_since skips manual-only tasks). Suppress the per-card
-  // dot too so the badge and the dots stay consistent.
-  const unread =
-    seenAfter !== null &&
-    !task.is_manual &&
-    new Date(task.created_at).getTime() > new Date(seenAfter).getTime();
 
   async function withBusy<T>(fn: () => Promise<T>, msg: string) {
     setBusy(true);
@@ -92,13 +84,6 @@ export function TaskCard({ task, onChanged, seenAfter, onOpen }: Props) {
           </IconButton>
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
-              {unread && (
-                <span
-                  aria-label="Unread"
-                  title="Unread"
-                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                />
-              )}
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate font-medium leading-snug transition-all duration-300",

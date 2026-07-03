@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
-import { isMergeProposal } from "@/components/runs/runLabels";
 import { RunsPanel } from "@/components/runs/RunsPanel";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
@@ -23,41 +22,25 @@ export function App() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const activeRuns = useRuns(!mailOpen && tab === "runs", "active");
   const allRuns = useRuns(mailOpen && mailTab === "runs", "all", false);
-  // Runs awaiting my action (ready to start, or a review ready to post).
-  const runsActionable = useMemo(
-    () =>
-      activeRuns.tasks.filter(
-        (t) => t.canStart || t.canApprove || t.canComment || isMergeProposal(t),
-      ).length,
-    [activeRuns.tasks],
-  );
   const [unreadInbox, setUnreadInbox] = useState(0);
-  const [unreadTasks, setUnreadTasks] = useState(0);
-  // Page-load snapshots of the per-tab "last seen" watermarks. Used to draw
+  // Page-load snapshot of the inbox "last seen" watermark. Used to draw
   // per-card unread dots. We snapshot once at mount and intentionally do NOT
-  // update during the session — so the dots persist through tab switches
+  // update during the session, so the dots persist through tab switches
   // (which reset the server-side watermark) and only clear on the next full
   // page load.
   const [seenInboxAt, setSeenInboxAt] = useState<string | null>(null);
-  const [seenTasksAt, setSeenTasksAt] = useState<string | null>(null);
-  const snapshotsTaken = useRef(false);
+  const inboxSnapshotTaken = useRef(false);
 
-  const loadUnread = useCallback(async () => {
+  const loadInboxUnread = useCallback(async () => {
     try {
-      const [inboxRes, tasksRes] = await Promise.all([
-        api.unreadInputCount(),
-        api.unreadTaskCount(),
-      ]);
+      const inboxRes = await api.unreadInputCount();
       setUnreadInbox(inboxRes.count);
-      setUnreadTasks(tasksRes.count);
-      if (!snapshotsTaken.current) {
+      if (!inboxSnapshotTaken.current) {
         setSeenInboxAt(inboxRes.last_seen_at);
-        setSeenTasksAt(tasksRes.last_seen_at);
-        snapshotsTaken.current = true;
+        inboxSnapshotTaken.current = true;
       }
     } catch {
       setUnreadInbox(0);
-      setUnreadTasks(0);
     }
   }, []);
 
@@ -67,23 +50,13 @@ export function App() {
       const res = await api.markInputsSeen();
       setUnreadInbox(res.count);
     } catch {
-      loadUnread();
+      loadInboxUnread();
     }
-  }, [loadUnread]);
-
-  const markTasksViewed = useCallback(async () => {
-    setUnreadTasks(0);
-    try {
-      const res = await api.markTasksSeen();
-      setUnreadTasks(res.count);
-    } catch {
-      loadUnread();
-    }
-  }, [loadUnread]);
+  }, [loadInboxUnread]);
 
   useEffect(() => {
-    loadUnread();
-  }, [loadUnread]);
+    loadInboxUnread();
+  }, [loadInboxUnread]);
 
   const applyLocation = useCallback(() => {
     const link = parseDeepLink();
@@ -116,26 +89,12 @@ export function App() {
   }, [applyLocation]);
 
   useEffect(() => {
-    loadUnread();
-  }, [tasks, inputs, loadUnread]);
+    loadInboxUnread();
+  }, [inputs, loadInboxUnread]);
 
   useEffect(() => {
-    if (tab === "tasks" && unreadTasks > 0) markTasksViewed();
     if (mailOpen && mailTab === "inbox" && unreadInbox > 0) markInboxViewed();
-  }, [
-    mailOpen,
-    mailTab,
-    markInboxViewed,
-    markTasksViewed,
-    tab,
-    unreadInbox,
-    unreadTasks,
-  ]);
-
-  useEffect(() => {
-    if (tab !== "tasks" || document.visibilityState !== "visible") return;
-    markTasksViewed();
-  }, [markTasksViewed, tab, tasks]);
+  }, [mailOpen, mailTab, markInboxViewed, unreadInbox]);
 
   useEffect(() => {
     if (!mailOpen || mailTab !== "inbox" || document.visibilityState !== "visible") {
@@ -144,21 +103,20 @@ export function App() {
     markInboxViewed();
   }, [inputs, mailOpen, mailTab, markInboxViewed]);
 
-  // Refresh unread badges when the app comes back to the foreground. The
-  // task/input lists themselves are already refreshed by useAppData on
-  // visibilitychange / focus; the badges are owned here, so they need
-  // their own listener.
+  // Refresh the unread badge when the app comes back to the foreground. The
+  // input list itself is already refreshed by useAppData on visibilitychange /
+  // focus; the badge is owned here, so it needs its own listener.
   useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === "visible") loadUnread();
+      if (document.visibilityState === "visible") loadInboxUnread();
     };
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", loadUnread);
+    window.addEventListener("focus", loadInboxUnread);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", loadUnread);
+      window.removeEventListener("focus", loadInboxUnread);
     };
-  }, [loadUnread]);
+  }, [loadInboxUnread]);
 
   const onTabChange = useCallback(
     (value: string) => {
@@ -243,17 +201,12 @@ export function App() {
                     {tasks.length}
                   </span>
                 )}
-                {unreadTasks > 0 && (
-                  <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                    {unreadTasks}
-                  </span>
-                )}
               </TabsTrigger>
               <TabsTrigger value="runs">
                 Runs
-                {runsActionable > 0 && (
-                  <span className="ml-1.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                    {runsActionable}
+                {activeRuns.tasks.length > 0 && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">
+                    {activeRuns.tasks.length}
                   </span>
                 )}
               </TabsTrigger>
@@ -262,7 +215,6 @@ export function App() {
               <TasksPanel
                 tasks={tasks}
                 onChanged={refresh}
-                seenAfter={seenTasksAt}
                 selectedTaskId={selectedTaskId}
                 onTaskOpen={openTask}
                 onSelectedTaskClose={closeSelectedModal}
