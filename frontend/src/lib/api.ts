@@ -69,7 +69,7 @@ export const api = {
   markNotTask: (id: string) =>
     request<void>(`/tasks/${id}/not_task`, { method: "POST" }),
   reopenTask: (id: string) =>
-    request<void>(`/tasks/${id}/reopen`, { method: "POST" }),
+    request<TaskCreationAccepted>(`/tasks/${id}/reopen`, { method: "POST" }),
 
   listInputs: (params: { limit?: number; status?: string; source?: string } = {}) => {
     const qs = new URLSearchParams();
