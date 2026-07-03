@@ -8,13 +8,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { actionHint } from "@/components/runs/runLabels";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
-import type { KotxTask } from "@/lib/kotx";
+import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/lib/types";
@@ -23,6 +21,7 @@ interface Props {
   task: Task;
   kotxTask?: KotxTask | null;
   onChanged: () => Promise<void> | void;
+  onKotxChanged: () => Promise<void> | void;
   onOpen: (id: string) => void;
   unseen?: boolean;
   onVisible?: (id: string) => void;
@@ -45,6 +44,7 @@ export function TaskCard({
   task,
   kotxTask = null,
   onChanged,
+  onKotxChanged,
   onOpen,
   unseen = false,
   onVisible,
@@ -60,7 +60,6 @@ export function TaskCard({
   const lastProbeKeyRef = useRef<string | null>(null);
   const labels = useLabels();
 
-  const kotxAction = kotxTask ? actionHint(kotxTask) : null;
   const displayDate = task.scheduled_date ?? task.due_date;
   const displayOverdue = isOverdue(displayDate);
   const displayUrgent = isUrgent(displayDate, task.estimation);
@@ -153,12 +152,16 @@ export function TaskCard({
     return () => observer.disconnect();
   }, [displayLocation]);
 
-  async function withBusy<T>(fn: () => Promise<T>, msg: string) {
+  async function withBusy<T>(
+    fn: () => Promise<T>,
+    msg: string,
+    afterChanged: () => Promise<void> | void = onChanged,
+  ) {
     setBusy(true);
     try {
       await fn();
       toast.success(msg);
-      await onChanged();
+      await afterChanged();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -264,18 +267,21 @@ export function TaskCard({
           </div>
 
           {kotxTask ? (
-            // kotx-linked task: the pending run action replaces the trash icon.
-            // The button opens the modal (where the doc + action buttons live)
-            // rather than acting directly — a one-tap merge is too risky.
-            kotxAction && (
-              <Button
-                size="sm"
-                className="shrink-0"
+            kotxTask.canDiscard && (
+              <IconButton
+                label="Discard run"
                 disabled={busy || crossing}
-                onClick={() => onOpen(task.id)}
+                onClick={() =>
+                  withBusy(
+                    () => kotx.discard(kotxTask.id),
+                    "Run discarded",
+                    onKotxChanged,
+                  )
+                }
+                className="text-muted-foreground hover:text-destructive"
               >
-                {kotxAction}
-              </Button>
+                <Trash2 className="h-4 w-4" />
+              </IconButton>
             )
           ) : (
             <IconButton
