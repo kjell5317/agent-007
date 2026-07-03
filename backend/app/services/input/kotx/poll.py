@@ -45,7 +45,9 @@ def _cursor(session: Session) -> datetime:
 
 
 async def poll(session: Session, account_key: str | None) -> dict:
-    payloads = await kotx_client.fetch_tasks(updated_since=_cursor(session))
+    payloads = await kotx_client.fetch_tasks(
+        updated_since=_cursor(session), scope="all"
+    )
     if not payloads:
         return _empty("")
     log.debug("kotx poll · %d updated tasks", len(payloads))
