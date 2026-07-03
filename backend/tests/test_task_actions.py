@@ -12,14 +12,26 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.api import tasks as tasks_api  # noqa: E402
 from app.services.kotx import runs as kotx_runs  # noqa: E402
+from app.services.task import reopen as reopen_svc  # noqa: E402
 
 
 class FakeSession:
     def __init__(self):
+        self.added = []
         self.commits = 0
+
+    def add(self, row):
+        if getattr(row, "id", None) is None:
+            row.id = uuid.UUID("10000000-0000-0000-0000-000000000002")
+        if getattr(row, "received_at", None) is None:
+            row.received_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+        self.added.append(row)
 
     def commit(self):
         self.commits += 1
+
+    def refresh(self, _row):
+        return None
 
 
 def _task(*, label: str | None = None, link: str | None = None):
@@ -98,6 +110,69 @@ async def test_reschedule_task_returns_clear_error_when_unschedulable(monkeypatc
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "Task could not be scheduled"
+
+
+@pytest.mark.asyncio
+async def test_reopen_task_endpoint_accepts_queued_followup(monkeypatch):
+    raw_id = uuid.UUID("20000000-0000-0000-0000-000000000001")
+    raw = SimpleNamespace(id=raw_id)
+    task_id = uuid.UUID("30000000-0000-0000-0000-000000000001")
+    calls = []
+
+    async def fake_enqueue_reopen_task(session, queued_task_id):
+        calls.append((session, queued_task_id))
+        return raw
+
+    session = FakeSession()
+    monkeypatch.setattr(tasks_api, "enqueue_reopen_task", fake_enqueue_reopen_task)
+
+    accepted = await tasks_api.reopen_task(task_id, session=session)
+
+    assert accepted.raw_input_id == raw_id
+    assert accepted.status == "processing"
+    assert calls == [(session, task_id)]
+
+
+@pytest.mark.asyncio
+async def test_reopen_task_service_creates_fresh_followup_input(monkeypatch):
+    task = _task()
+    anchor = SimpleNamespace(
+        id=uuid.UUID("40000000-0000-0000-0000-000000000001"),
+        status="closed",
+        processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    session = FakeSession()
+    enqueued = []
+    published = []
+
+    async def fake_enqueue_followup(raw_input_id, followup_task_id):
+        enqueued.append((raw_input_id, followup_task_id))
+
+    monkeypatch.setattr(reopen_svc.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(
+        reopen_svc.raw_inputs_store,
+        "latest_for_task",
+        lambda *_args: pytest.fail("queued reopen must not mutate the anchor input"),
+    )
+    monkeypatch.setattr(reopen_svc, "_enqueue_followup", fake_enqueue_followup)
+    monkeypatch.setattr(reopen_svc, "publish_input", lambda _session, raw_id: published.append(raw_id))
+
+    raw = await reopen_svc.enqueue_reopen_task(session, task.id)
+
+    assert raw in session.added
+    assert raw.source == "manual"
+    assert raw.status == "processing"
+    assert raw.task_id is None
+    assert "Re-open this task" in raw.content
+    assert "future due date" in raw.content
+    assert raw.source_metadata == {
+        "manual": True,
+        "action": "reopen_task",
+        "task_id": str(task.id),
+    }
+    assert enqueued == [(raw.id, task.id)]
+    assert published == [raw.id]
+    assert anchor.status == "closed"
 
 
 @pytest.mark.asyncio

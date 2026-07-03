@@ -20,7 +20,7 @@ interface Props {
 export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-  const { busy, runTaskAction, promote } = useInboxActions(onChanged);
+  const { busy, runTaskAction, promote, reopenTask } = useInboxActions(onChanged);
 
   const { members, newest, liveTask, closedTask } = group;
   const unseenMemberKey = useMemo(
@@ -89,8 +89,7 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
           ? {
               label: "Re-open task",
               Icon: RotateCcw,
-              run: () =>
-                runTaskAction(closedTask.task_id!, api.reopenTask, "Task re-opened"),
+              run: () => reopenTask(closedTask.task_id!),
             }
           : null;
 

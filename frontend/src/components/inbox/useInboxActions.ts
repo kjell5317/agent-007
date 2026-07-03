@@ -76,5 +76,38 @@ export function useInboxActions(onChanged: () => Promise<void> | void) {
     [onChanged],
   );
 
-  return { busy, runTaskAction, promote };
+  const reopenTask = useCallback(
+    async (taskId: string) => {
+      setBusy(true);
+      const toastId = toast.loading("Re-opening task…", { duration: Infinity });
+      let handle: PollHandle | null = null;
+      const finish = (run: () => void) => {
+        toast.dismiss(toastId);
+        run();
+        if (handle) activePolls.current.delete(handle);
+        setBusy(false);
+      };
+      try {
+        const { raw_input_id } = await api.reopenTask(taskId);
+        handle = pollTaskCreation(raw_input_id, {
+          onSuccess: () =>
+            finish(() => {
+              toast.success("Task re-opened");
+              void onChanged();
+            }),
+          onFailure: (message) => finish(() => toast.error(message)),
+          onTimeout: () =>
+            finish(() => toast.error("Task is taking longer than expected")),
+        });
+        activePolls.current.add(handle);
+      } catch (err) {
+        toast.dismiss(toastId);
+        toast.error((err as Error).message);
+        setBusy(false);
+      }
+    },
+    [onChanged],
+  );
+
+  return { busy, runTaskAction, promote, reopenTask };
 }

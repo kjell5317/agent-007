@@ -36,7 +36,7 @@ interface Props {
 export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-  const { busy, runTaskAction, promote } = useInboxActions(onChanged);
+  const { busy, runTaskAction, promote, reopenTask } = useInboxActions(onChanged);
 
   const data = item.data;
   const label = inboxBadge(data);
@@ -70,7 +70,7 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
     if (data.task_id) runTaskAction(data.task_id, api.markNotTask, "Task dismissed");
   };
   const reopen = () => {
-    if (data.task_id) runTaskAction(data.task_id, api.reopenTask, "Task re-opened");
+    if (data.task_id) reopenTask(data.task_id);
   };
 
   // Promote when the input isn't the anchor of an active task: no link at all,

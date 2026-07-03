@@ -125,3 +125,35 @@ async def test_update_task_action_normalizes_agent_due_date(monkeypatch):
 
     assert result == {"outcome": "updated", "status_change": None}
     assert patches[0]["due_date"].isoformat() == "2026-07-02T09:05:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_reopen_action_reopens_then_applies_due_date(monkeypatch):
+    task_id = uuid.UUID("30000000-0000-0000-0000-000000000002")
+    calls = []
+    patches = []
+
+    async def fake_reopen_task_svc(_session, reopened_task_id):
+        calls.append(("reopen", reopened_task_id))
+
+    async def fake_update_task_svc(_session, updated_task_id, patch):
+        calls.append(("update", updated_task_id))
+        patches.append(patch)
+
+    monkeypatch.setattr(dispatch, "reopen_task_svc", fake_reopen_task_svc)
+    monkeypatch.setattr(dispatch, "update_task_svc", fake_update_task_svc)
+
+    task = SimpleNamespace(id=task_id)
+    result = await dispatch.apply_task_action(
+        SimpleNamespace(),
+        task,
+        "update_task",
+        {
+            "status": "open",
+            "due_date": "2026-07-04T10:01:00+00:00",
+        },
+    )
+
+    assert result == {"outcome": "reopened", "status_change": "open"}
+    assert calls == [("reopen", task_id), ("update", task_id)]
+    assert patches == [{"due_date": datetime(2026, 7, 4, 10, 5, tzinfo=timezone.utc)}]
