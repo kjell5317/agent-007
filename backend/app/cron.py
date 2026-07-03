@@ -238,6 +238,8 @@ async def _weather_commute_refresh() -> None:
                 summary["rescheduled_tasks"],
                 len(summary["errors"]),
             )
+            if summary["errors"]:
+                log.warning("weather-commute-refresh errors · %s", summary["errors"])
         except asyncio.CancelledError:
             log.info("weather-commute-refresh loop cancelled")
             raise
@@ -276,6 +278,8 @@ async def _commute_migration() -> None:
                 summary["skipped_unroutable"],
                 len(summary["errors"]),
             )
+            if summary["errors"]:
+                log.warning("commute-migration errors · %s", summary["errors"])
             return
         except asyncio.CancelledError:
             log.info("commute-migration cancelled")

@@ -16,6 +16,7 @@ through the same planner state.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -48,7 +49,11 @@ from app.services.commute.legs import (
 )
 from app.services.commute.resolver import resolve_duration
 from app.services.commute.weather import geocode, precipitation_probabilities_between
-from app.services.location import is_online_location, resolve_location_alias
+from app.services.location import (
+    is_online_location,
+    resolve_location_alias,
+    resolve_tum_room,
+)
 from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
@@ -148,6 +153,7 @@ async def plan_window_commutes(
         account_key=account_key,
     )
     anchors, existing_commutes, skipped_online = _partition(events, write_calendar_id)
+    anchors = await _resolve_tum_anchors(anchors)
     summary["skipped_online"] = skipped_online
 
     if hourly_rain is None:
@@ -175,7 +181,7 @@ async def plan_window_commutes(
     if needs_replacement:
         to_write = [leg for leg in to_write if not (set(leg.key) & needs_replacement)]
 
-    summary["planned"] = await _write_legs(
+    summary["planned"], new_failures = await _write_legs(
         session,
         to_write,
         calendar_id=write_calendar_id,
@@ -183,6 +189,7 @@ async def plan_window_commutes(
         window=(window_start, window_end),
         account_key=account_key,
     )
+    await _notify_new_failures(new_failures)
 
     # Arrival truth comes from the full derived set — an anchor at the window
     # edge may keep a leg that was written by an earlier replan.
@@ -384,6 +391,26 @@ async def _home_rain(
     return await precipitation_probabilities_between(latlon[0], latlon[1], start, end) or None
 
 
+async def _resolve_tum_anchors(anchors: list[Anchor]) -> list[Anchor]:
+    out: list[Anchor] = []
+    for anchor in anchors:
+        address = await resolve_tum_room(anchor.location)
+        out.append(replace(anchor, location=address) if address else anchor)
+    return out
+
+
+async def _notify_new_failures(legs: list[PlannedLeg]) -> None:
+    from app.services.notify import notify_unroutable_leg
+
+    for leg in legs:
+        await notify_unroutable_leg(
+            origin=leg.origin,
+            destination=leg.destination,
+            depart=leg.depart,
+            tag=f"route-{leg.origin_anchor}-{leg.dest_anchor}",
+        )
+
+
 async def _write_legs(
     session: Session,
     legs: list[PlannedLeg],
@@ -392,7 +419,7 @@ async def _write_legs(
     existing: list[CalendarEvent],
     window: tuple[datetime, datetime],
     account_key: str | None,
-) -> int:
+) -> tuple[int, list[PlannedLeg]]:
     desired = {leg.key: leg for leg in legs}
     existing_by_key: dict[tuple[str, str], CalendarEvent] = {}
     legacy: list[CalendarEvent] = []
@@ -422,12 +449,18 @@ async def _write_legs(
             log.warning("commute · stale delete failed event=%s err=%s", ev.id, exc)
 
     written = 0
+    new_failures: list[PlannedLeg] = []
     for key, leg in desired.items():
         summary = _summary_for(leg)
         description = _description_for(leg)
         props = commute_private_properties(origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor)
         reminders = _reminders_for_leg(leg)
         current = existing_by_key.get(key)
+        # Notify only when a leg *becomes* failed — a replan that re-writes an
+        # already-failed placeholder shouldn't re-alert on every pass.
+        newly_failed = leg.mode == FAILED_MODE and (
+            current is None or _commute_mode(current) != FAILED_MODE
+        )
         try:
             if current is None:
                 await create_event(
@@ -457,12 +490,14 @@ async def _write_legs(
                     account_key=account_key,
                 )
             written += 1
+            if newly_failed:
+                new_failures.append(leg)
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "commute · upsert failed origin=%s dest=%s err=%s",
                 leg.origin_anchor, leg.dest_anchor, exc,
             )
-    return written
+    return written, new_failures
 
 
 def _partition(
