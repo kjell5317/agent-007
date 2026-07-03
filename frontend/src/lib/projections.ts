@@ -32,6 +32,7 @@ export interface ToolRow {
 
 export interface TraceProjection {
   summary: ProjectionField[];
+  currentTask: ProjectionField[];
   reason?: string;
   confidence?: string;
   evidence: EvidenceRow[];
@@ -159,11 +160,28 @@ export function projectAgentTrace(trace: unknown): TraceProjection {
 
   return {
     summary,
+    currentTask: currentTaskFields(record),
     reason,
     confidence,
     evidence,
     tools,
   };
+}
+
+function currentTaskFields(trace: JsonRecord): ProjectionField[] {
+  const task = asRecord(trace.current_task);
+  if (!task) return [];
+
+  const fields: ProjectionField[] = [];
+  addField(fields, "title", stringValue(task.title));
+  addField(fields, "description", stringValue(task.description));
+  addField(fields, "due_date", stringValue(task.due_date));
+  addField(fields, "scheduled_date", stringValue(task.scheduled_date));
+  addField(fields, "estimation", estimationValue(task.estimation));
+  addField(fields, "location", stringValue(task.location));
+  addField(fields, "link", stringValue(task.link));
+  addField(fields, "label", stringValue(task.label));
+  return fields;
 }
 
 export function projectKotxLog(text: string | null): KotxLogProjection {

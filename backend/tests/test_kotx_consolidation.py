@@ -13,10 +13,10 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
+from app.services.input.kotx import poll as kotx_poll  # noqa: E402
 from app.services.input.gmail.preprocess import _apply_github_identity  # noqa: E402
 from app.services.input.kotx.normalize import (  # noqa: E402
     envelope_for_transition,
-    github_thread_key,
     parse_github_subject,
 )
 
@@ -108,6 +108,37 @@ def test_non_github_email_is_untouched():
     _apply_github_identity(metadata, {})
     assert metadata["thread_id"] == "t1"
     assert "github_reason" not in metadata
+
+
+# --- kotx poll -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kotx_poll_fetches_all_scope(monkeypatch):
+    latest = kotx_poll.datetime(2026, 7, 3, 10, 0, tzinfo=kotx_poll.timezone.utc)
+    calls = {}
+
+    class FakeResult:
+        def scalar_one(self):
+            return latest
+
+    class FakeSession:
+        def execute(self, stmt):
+            calls["stmt"] = stmt
+            return FakeResult()
+
+    async def fake_fetch_tasks(*, updated_since=None, scope="active"):
+        calls["updated_since"] = updated_since
+        calls["scope"] = scope
+        return []
+
+    monkeypatch.setattr(kotx_poll.kotx_client, "fetch_tasks", fake_fetch_tasks)
+
+    summary = await kotx_poll.poll(FakeSession(), account_key=None)
+
+    assert summary["fetched"] == 0
+    assert calls["scope"] == "all"
+    assert calls["updated_since"] == latest - kotx_poll._OVERLAP
 
 
 # --- kotx runner state machine ----------------------------------------------------
@@ -288,6 +319,7 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
 
     finalized = {}
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {"CSEE": None})
     monkeypatch.setattr(kotx_runner.tasks, "create", fake_create)
     monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
     monkeypatch.setattr(
@@ -300,6 +332,27 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="draft")))
 
     assert trace["outcome"] == "task_created"
-    assert created["payload"].link == "https://github.com/owner/repo/issues/31"
+    payload = created["payload"]
+    # Deterministic fields: title from the github subject minus the repo,
+    # no description / location / link — the frontend's run section carries
+    # that context.
+    assert payload.title == "#31 Add a metadata index"
+    assert payload.description is None
+    assert payload.location is None
+    assert payload.link is None
+    # Extracted fields plus the agent's label (no configured label matches
+    # "owner/repo").
+    assert payload.estimation == 20
+    assert payload.label == "SocialAI"
     assert created["scheduled"] is True
     assert finalized["status"] == "open"
+
+
+def test_label_for_repo_prefers_config_match(monkeypatch):
+    monkeypatch.setattr(
+        kotx_runner, "load_labels", lambda: {"Uni": None, "CSEE": None, "SocialAI": None}
+    )
+    assert kotx_runner._label_for_repo("askLio/CSEE-strategic-negotiation-agent") == "CSEE"
+    # Alphanumeric-only comparison bridges hyphenated org names.
+    assert kotx_runner._label_for_repo("TUM-Social-AI/AflaConnect") == "SocialAI"
+    assert kotx_runner._label_for_repo("owner/repo") is None

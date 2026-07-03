@@ -3,7 +3,12 @@
 kotx transition semantics are fixed, so — matching the auto-branch
 philosophy — no LLM decides here. The one exception: when an actionable
 transition creates a new 007 task, the extract-fields agent runs over the
-brief (TASK.md / REVIEW.md) to set estimation and due date.
+brief (TASK.md / REVIEW.md) to set estimation and due date. Everything else
+is deterministic: title comes from the github subject (minus the repo,
+which the label already carries), the label from a repo ↔ label-name
+match (the agent's pick is only a fallback), and
+description/location/link stay empty — the kotx run section carries that
+context in the frontend.
 
 Task matching order: kotx_task_id → github thread precedent → github link
 on an existing task (the "007 task created the issue" adoption path).
@@ -12,12 +17,14 @@ on an existing task (the "007 task created the issue" adoption path).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.agent.manual.runner import extract_task_fields
 from app.db.clients import raw_inputs, tasks
+from app.labels import load_labels
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
 from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_github_subject
@@ -125,19 +132,34 @@ async def _create_task_from_brief(
     session: Session, raw, meta: dict, kotx_id: int
 ) -> Task:
     payload = await extract_task_fields(session, raw)
+    repo = str(meta.get("repo") or "")
+    label = _label_for_repo(repo)
+    if label is None and payload.get("label"):
+        label = str(payload["label"])
+    # The subject is "{repo}#{number} {title}" — the repo is already carried
+    # by the label, so the task title drops it.
+    title = str(meta.get("subject") or "kotx task").removeprefix(repo)
     task = tasks.create(
         session,
         TaskCreate(
-            title=str(payload.get("title") or meta.get("subject") or "kotx task"),
-            description=str(payload.get("description")) if payload.get("description") else None,
+            title=title,
             estimation=payload.get("estimation"),
             due_date=payload.get("due_date"),
-            location=str(payload.get("location")) if payload.get("location") else None,
-            link=str(meta.get("github_url") or payload.get("link") or "") or None,
-            label=str(payload.get("label")) if payload.get("label") else None,
+            label=label,
         ),
     )
     task.kotx_task_id = kotx_id
     session.flush()
     await schedule_task(session, task)
     return task
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _label_for_repo(repo: str) -> str | None:
+    # Compare alphanumerics only so hyphenated org/repo names still match
+    # (TUM-Social-AI → SocialAI).
+    haystack = _squash(repo)
+    return next((name for name in load_labels() if _squash(name) in haystack), None)
