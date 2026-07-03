@@ -142,6 +142,11 @@ async def create_raw_input(session: Session, envelope: RawInputCreate) -> RawInp
     if raw.processed_at is not None:
         return raw
 
+    # kotx transitions are handled deterministically and matched by id/thread
+    # key — embedding them would only pollute the similarity precedents.
+    if raw.source == "kotx":
+        return raw
+
     query_text = candidate_query_text(raw.content, raw.source_metadata or {})
     if not query_text:
         return raw

@@ -109,6 +109,7 @@ class TaskRead(TaskBase):
     raw_inputs: list[TaskRawInputRead] = Field(default_factory=list)
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
+    kotx_task_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -142,6 +143,7 @@ class TaskRead(TaskBase):
                 "label": task.label,
                 "status": status_,
                 "is_manual": is_manual,
+                "kotx_task_id": getattr(task, "kotx_task_id", None),
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
             }

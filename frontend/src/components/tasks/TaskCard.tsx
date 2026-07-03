@@ -8,16 +8,20 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { actionHint } from "@/components/runs/runLabels";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
+import type { KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/lib/types";
 
 interface Props {
   task: Task;
+  kotxTask?: KotxTask | null;
   onChanged: () => Promise<void> | void;
   onOpen: (id: string) => void;
   unseen?: boolean;
@@ -37,7 +41,14 @@ function formatTaskCardLocation(location: string | null) {
   return formatted;
 }
 
-export function TaskCard({ task, onChanged, onOpen, unseen = false, onVisible }: Props) {
+export function TaskCard({
+  task,
+  kotxTask = null,
+  onChanged,
+  onOpen,
+  unseen = false,
+  onVisible,
+}: Props) {
   const [busy, setBusy] = useState(false);
   const [crossing, setCrossing] = useState(false);
   const [locationVisible, setLocationVisible] = useState(true);
@@ -49,6 +60,7 @@ export function TaskCard({ task, onChanged, onOpen, unseen = false, onVisible }:
   const lastProbeKeyRef = useRef<string | null>(null);
   const labels = useLabels();
 
+  const kotxAction = kotxTask ? actionHint(kotxTask) : null;
   const displayDate = task.scheduled_date ?? task.due_date;
   const displayOverdue = isOverdue(displayDate);
   const displayUrgent = isUrgent(displayDate, task.estimation);
@@ -251,16 +263,32 @@ export function TaskCard({ task, onChanged, onOpen, unseen = false, onVisible }:
             </div>
           </div>
 
-          <IconButton
-            label="Mark not a task"
-            disabled={busy || crossing}
-            onClick={() =>
-              withBusy(() => api.markNotTask(task.id), "Marked not a task")
-            }
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </IconButton>
+          {kotxTask ? (
+            // kotx-linked task: the pending run action replaces the trash icon.
+            // The button opens the modal (where the doc + action buttons live)
+            // rather than acting directly — a one-tap merge is too risky.
+            kotxAction && (
+              <Button
+                size="sm"
+                className="shrink-0"
+                disabled={busy || crossing}
+                onClick={() => onOpen(task.id)}
+              >
+                {kotxAction}
+              </Button>
+            )
+          ) : (
+            <IconButton
+              label="Mark not a task"
+              disabled={busy || crossing}
+              onClick={() =>
+                withBusy(() => api.markNotTask(task.id), "Marked not a task")
+              }
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </IconButton>
+          )}
         </div>
       </CardContent>
 

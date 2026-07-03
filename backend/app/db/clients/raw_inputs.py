@@ -68,6 +68,10 @@ _GROUPED_INPUT_IDS_SQL = text(
             CASE
                 WHEN task_id IS NOT NULL
                     THEN 'task:' || task_id::text
+                -- github:* thread keys are a cross-source namespace (gmail +
+                -- kotx share them), so the source prefix is dropped.
+                WHEN source_metadata->>'thread_id' LIKE 'github:%'
+                    THEN 'thread:' || (source_metadata->>'thread_id')
                 WHEN COALESCE(source_metadata->>'thread_id', '') <> ''
                     THEN source || ':thread:' || (source_metadata->>'thread_id')
                 ELSE 'input:' || id::text
@@ -199,21 +203,24 @@ def list_for_task(session: Session, task_id: uuid.UUID) -> list[RawInput]:
 
 def find_by_thread(
     session: Session,
-    source: str,
+    source: str | None,
     thread_id: str,
     *,
     metadata_filters: dict[str, str] | None = None,
 ) -> RawInput | None:
-    """Return the most-recent raw_input on a scoped thread that linked to a task."""
+    """Return the most-recent raw_input on a scoped thread that linked to a
+    task. `source=None` searches across sources — used for canonical thread
+    namespaces (`github:owner/repo#N`) shared by gmail and kotx."""
     metadata_filters = metadata_filters or {}
     metadata_clauses = [
         RawInput.source_metadata[key].as_string() == value
         for key, value in metadata_filters.items()
     ]
+    if source is not None:
+        metadata_clauses.append(RawInput.source == source)
     stmt = (
         select(RawInput)
         .where(
-            RawInput.source == source,
             RawInput.task_id.is_not(None),
             text("source_metadata->>'thread_id' = :thread_id"),
             *metadata_clauses,

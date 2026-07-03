@@ -71,7 +71,10 @@ export function inputGroupKey(r: RawInput): string {
   if (r.task_id) return `task:${r.task_id}`;
   const threadId = r.source_metadata?.thread_id;
   if (typeof threadId === "string" && threadId) {
-    return `${r.source}:thread:${threadId}`;
+    // github:* thread keys are cross-source (gmail + kotx share them).
+    return threadId.startsWith("github:")
+      ? `thread:${threadId}`
+      : `${r.source}:thread:${threadId}`;
   }
   return `input:${r.id}`;
 }

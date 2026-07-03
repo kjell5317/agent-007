@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy.orm import Session
 
 from app.services.input.gmail import poll as gmail_poll
+from app.services.input.kotx import poll as kotx_poll
 from app.services.input.slack import poll as slack_poll
 
 log = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ _Poller = Callable[[Session, str | None], Awaitable[dict]]
 _POLLERS: dict[str, _Poller] = {
     "gmail": gmail_poll.poll,
     "slack": slack_poll.poll,
+    "kotx": kotx_poll.poll,
 }
 
 SUPPORTED_SOURCES: tuple[str, ...] = tuple(_POLLERS)

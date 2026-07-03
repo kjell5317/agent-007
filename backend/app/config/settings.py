@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     # Empty base URL or token disables the proxy (it answers 503).
     kotx_base_url: str = ""
     kotx_api_token: str = ""
+    # Shared secret for the incoming kotx state webhook (X-Kotx-Signature,
+    # HMAC-SHA256 over the raw body). Empty disables the endpoint.
+    kotx_webhook_secret: str = ""
 
     @property
     def effective_llm_provider(self) -> str:
