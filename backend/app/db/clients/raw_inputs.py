@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import String, bindparam, func, select, text
+from sqlalchemy import String, bindparam, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config.settings import get_settings
@@ -171,6 +171,29 @@ def finalize(
         row.agent_trace = agent_trace
     session.flush()
     return row
+
+
+def link_unassigned_by_thread(
+    session: Session,
+    *,
+    source: str,
+    thread_id: str,
+    task_id: uuid.UUID,
+) -> int:
+    """Attach unlinked inputs on a source/thread to a task without changing status."""
+    stmt = (
+        update(RawInput)
+        .where(
+            RawInput.task_id.is_(None),
+            RawInput.source == source,
+            text("source_metadata->>'thread_id' = :thread_id"),
+        )
+        .values(task_id=task_id)
+        .execution_options(synchronize_session=False)
+    )
+    result = session.execute(stmt, {"thread_id": thread_id})
+    session.flush()
+    return int(result.rowcount or 0)
 
 
 def latest_for_task(session: Session, task_id: uuid.UUID) -> RawInput | None:

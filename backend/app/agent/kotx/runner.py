@@ -71,6 +71,7 @@ async def run_kotx_transition(session: Session, raw) -> dict:
         raw_inputs.finalize(
             session, raw.id, status="open", task_id=task.id, agent_trace=trace
         )
+        _backfill_unlinked_thread_inputs(session, meta, task, trace)
         session.commit()
         return trace
 
@@ -102,6 +103,7 @@ async def run_kotx_transition(session: Session, raw) -> dict:
     raw_inputs.finalize(
         session, raw.id, status="duplicate", task_id=task.id, agent_trace=trace
     )
+    _backfill_unlinked_thread_inputs(session, meta, task, trace)
     session.commit()
     return trace
 
@@ -126,6 +128,23 @@ def _match_task(
             if parse_github_subject(candidate.link or "") == (repo, number):
                 return candidate, "github_link"
     return None, None
+
+
+def _backfill_unlinked_thread_inputs(
+    session: Session, meta: dict, task: Task, trace: dict[str, Any]
+) -> None:
+    thread_id = meta.get("thread_id")
+    if not isinstance(thread_id, str) or not thread_id.startswith("github:"):
+        return
+
+    linked = raw_inputs.link_unassigned_by_thread(
+        session,
+        source="kotx",
+        thread_id=thread_id,
+        task_id=task.id,
+    )
+    if linked:
+        trace["backfilled_inputs"] = linked
 
 
 async def _create_task_from_brief(
