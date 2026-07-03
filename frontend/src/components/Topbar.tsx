@@ -253,6 +253,7 @@ function PointsModal({
   const [tab, setTab] = useState("adjust");
   const [logEntries, setLogEntries] = useState<PointsLogEntry[]>([]);
   const [logCount, setLogCount] = useState(0);
+  const [logSeenBefore, setLogSeenBefore] = useState<string | null>(null);
   const [logLoaded, setLogLoaded] = useState(false);
   const [logBusy, setLogBusy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -261,6 +262,7 @@ function PointsModal({
     setTab("adjust");
     setLogEntries([]);
     setLogCount(0);
+    setLogSeenBefore(null);
     setLogLoaded(false);
     setLogBusy(false);
   };
@@ -280,6 +282,7 @@ function PointsModal({
         if (cancelled) return;
         setLogEntries(res.entries);
         setLogCount(res.count);
+        setLogSeenBefore(res.last_seen_at);
         setLogLoaded(true);
         await api.markPointsLogSeen();
       })
@@ -393,7 +396,7 @@ function PointsModal({
               </div>
             ) : logEntries.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                No new point changes.
+                No point changes yet.
               </div>
             ) : (
               <div className="divide-y">
@@ -403,8 +406,19 @@ function PointsModal({
                     className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">
-                        {entry.reason}
+                      <div className="flex items-center gap-2">
+                        {logSeenBefore != null &&
+                          new Date(entry.created_at).getTime() >
+                            new Date(logSeenBefore).getTime() && (
+                            <span
+                              aria-label="Unseen"
+                              title="Unseen"
+                              className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                            />
+                          )}
+                        <div className="min-w-0 flex-1 truncate text-sm font-medium">
+                          {entry.reason}
+                        </div>
                       </div>
                       <div className="mt-0.5 flex min-w-0 gap-2 text-xs text-muted-foreground">
                         <span className="shrink-0">

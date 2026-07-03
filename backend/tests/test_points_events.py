@@ -42,8 +42,19 @@ def _decode(payloads: list[str]) -> list[dict]:
     return [json.loads(payload) for payload in payloads]
 
 
+def _open_access(monkeypatch) -> None:
+    """Make `_check_access` a no-op regardless of the local .env — the fake
+    SimpleNamespace requests carry no headers to read a notify secret from."""
+    monkeypatch.setattr(
+        points_api,
+        "get_settings",
+        lambda: SimpleNamespace(auth_allowed_emails=[], home_assistant_action_secret=""),
+    )
+
+
 def test_manual_adjust_publishes_new_total(monkeypatch):
     session = _sqlite_session()
+    _open_access(monkeypatch)
     published: list[str] = []
     monkeypatch.setattr(publish_events.bus, "publish", published.append)
 
@@ -61,8 +72,9 @@ def test_manual_adjust_publishes_new_total(monkeypatch):
     assert _decode(published) == [{"type": "points", "total": 7.0}]
 
 
-def test_points_log_returns_entries_after_checkpoint_and_marks_seen(monkeypatch):
+def test_points_log_keeps_history_and_counts_unseen(monkeypatch):
     session = _sqlite_session()
+    _open_access(monkeypatch)
     before_seen = points_store.add_entry(
         session,
         source="manual",
@@ -95,7 +107,9 @@ def test_points_log_returns_entries_after_checkpoint_and_marks_seen(monkeypatch)
 
     assert log.count == 1
     assert log.last_seen_at == checkpoint
-    assert [entry.id for entry in log.entries] == [after_seen.id]
+    # The log is a history padded to MIN_LOG_ENTRIES — seen entries stay
+    # visible; only `count` reflects the watermark.
+    assert [entry.id for entry in log.entries] == [after_seen.id, before_seen.id]
     assert log.entries[0].amount == -3
     assert log.entries[0].reason == "New change"
     assert log.entries[0].caller == "Manual"
@@ -104,7 +118,9 @@ def test_points_log_returns_entries_after_checkpoint_and_marks_seen(monkeypatch)
 
     assert seen.count == 0
     assert seen.last_seen_at > checkpoint
-    assert points_api.get_points_log(SimpleNamespace(session={}), session=session).entries == []
+    after = points_api.get_points_log(SimpleNamespace(session={}), session=session)
+    assert after.count == 0
+    assert [entry.id for entry in after.entries] == [after_seen.id, before_seen.id]
 
 
 @pytest.mark.asyncio
