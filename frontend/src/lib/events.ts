@@ -14,7 +14,10 @@ export type ServerEvent =
   | { type: "task"; data: Task }
   | { type: "task_removed"; id: string }
   | { type: "input"; data: RawInput }
-  | { type: "points"; total: number };
+  | { type: "points"; total: number }
+  // A kotx run changed upstream (webhook or reconciliation poll landed) —
+  // no payload; subscribers refetch /kotx/tasks.
+  | { type: "kotx" };
 
 type Handler = (event: ServerEvent) => void;
 

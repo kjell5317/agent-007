@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.config import get_settings
 from app.db import SessionLocal
+from app.events import publish_kotx
 from app.services.input.create import drain
 from app.services.input.kotx.source import KotxSource
 
@@ -61,6 +62,10 @@ async def kotx_webhook(request: Request) -> dict:
         summary = await drain(KotxSource([task]), session)
     finally:
         session.close()
+
+    # Nudge connected browsers to refetch /kotx/tasks — every delivery means a
+    # run changed upstream, including kinds the drain skips (resolve_conflict).
+    publish_kotx()
 
     log.info(
         "kotx webhook · task=%s state=%s fetched=%d errors=%d",

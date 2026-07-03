@@ -11,6 +11,10 @@ Frontend contract — every event is `{"type": ..., ...}`:
   * {"type": "task_removed", "id": <uuid>}   — task row deleted (dismiss / orphan)
   * {"type": "input", "data": <RawInputRead>} — upsert into the inbox
   * {"type": "points", "total": <float>}     — new points total (topbar display)
+  * {"type": "kotx"}                         — a kotx run changed; the client
+                                               refetches /kotx/tasks (the run
+                                               list lives upstream, so there is
+                                               no payload to push)
 """
 
 from __future__ import annotations
@@ -67,3 +71,7 @@ def publish_input(session: Session, raw_input_id: uuid.UUID) -> None:
 
 def publish_points(session: Session) -> None:
     _emit({"type": "points", "total": points_store.total(session)})
+
+
+def publish_kotx() -> None:
+    _emit({"type": "kotx"})

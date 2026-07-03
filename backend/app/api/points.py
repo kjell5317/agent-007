@@ -80,6 +80,13 @@ def get_points(session: Session = Depends(get_session)) -> TotalRead:
     return TotalRead(total=points_store.total(session))
 
 
+# The log is a history, not an unread feed: viewing it (mark_seen) must not
+# empty it, and a process restart (which resets the in-memory watermark) must
+# not hide older entries. The watermark only drives `count` — the unseen
+# badge — while the entries pad out to at least this many recent rows.
+MIN_LOG_ENTRIES = 10
+
+
 @router.get("/log", response_model=PointsLogRead)
 def get_points_log(
     request: Request,
@@ -87,10 +94,13 @@ def get_points_log(
     session: Session = Depends(get_session),
 ) -> PointsLogRead:
     _check_access(request)
-    entries = points_store.list_since(session, state.last_seen_points_log_at, limit=limit)
+    unseen = points_store.count_since(session, state.last_seen_points_log_at)
+    entries = points_store.list_recent(
+        session, limit=min(max(MIN_LOG_ENTRIES, unseen), limit)
+    )
     return PointsLogRead(
         entries=[_log_entry(e) for e in entries],
-        count=points_store.count_since(session, state.last_seen_points_log_at),
+        count=unseen,
         last_seen_at=state.last_seen_points_log_at,
     )
 

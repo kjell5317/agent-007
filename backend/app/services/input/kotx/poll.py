@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models.raw_input import RawInput
+from app.events import publish_kotx
 from app.services.input.create import drain
 from app.services.input.kotx.source import KotxSource
 from app.services.kotx import client as kotx_client
@@ -51,4 +52,8 @@ async def poll(session: Session, account_key: str | None) -> dict:
     if not payloads:
         return _empty("")
     log.debug("kotx poll · %d updated tasks", len(payloads))
-    return await drain(KotxSource(payloads), session)
+    summary = await drain(KotxSource(payloads), session)
+    # Updated runs found outside the webhook path (missed deliveries) — give
+    # the browser the same refetch nudge the webhook would have sent.
+    publish_kotx()
+    return summary
