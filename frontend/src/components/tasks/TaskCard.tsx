@@ -222,7 +222,7 @@ export function TaskCard({
             </div>
             <div
               ref={metadataRef}
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+              className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
             >
               {displayDate && (
                 <Badge
