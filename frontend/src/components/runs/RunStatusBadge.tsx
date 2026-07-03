@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { runStatusLabel } from "@/components/runs/runLabels";
 import { inboxBadge } from "@/lib/inbox";
 import type { KotxState, KotxTask } from "@/lib/kotx";
+import { cn } from "@/lib/utils";
 import type { RawInput } from "@/lib/types";
 
 const STATE_CLASS: Record<Exclude<KotxState, "awaiting_external">, string> = {
@@ -61,10 +62,21 @@ function statusClass(label: string, state: string, subjectType: string): string 
   return STATE_CLASS[state as Exclude<KotxState, "awaiting_external">] ?? "";
 }
 
-export function RunStatusBadge({ task }: { task: KotxTask }) {
+export function RunStatusBadge({
+  task,
+  className,
+}: {
+  task: KotxTask;
+  className?: string;
+}) {
   const label = runStatusLabel(task);
   return (
-    <Badge className={statusClass(normalizeStatus(label), task.state, task.subjectType)}>
+    <Badge
+      className={cn(
+        statusClass(normalizeStatus(label), task.state, task.subjectType),
+        className,
+      )}
+    >
       {label}
     </Badge>
   );

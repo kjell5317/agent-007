@@ -692,7 +692,12 @@ function TaskSummary({
             </span>
           </button>
 
-          {kotxTask && <RunStatusBadge task={kotxTask} />}
+          {kotxTask && (
+            <RunStatusBadge
+              task={kotxTask}
+              className="h-8 shrink-0 justify-center rounded-full border-transparent px-3 py-0 text-xs font-medium leading-none"
+            />
+          )}
 
           {task.status === "open" && !kotxTask && (
             <TaskSummaryIconButton
