@@ -80,21 +80,10 @@ def envelope_for_transition(task: dict, doc: str | None = None) -> RawInputCreat
     title = str(task.get("title") or f"{repo}#{number}")
     kind = str(task.get("kind") or "")
 
-    lines = [
-        f"kotx {kind} · {repo}#{number} — {title}",
-        f"State: {task.get('status') or state}"
-        + (f" (proposes {proposes})" if proposes else ""),
-    ]
-    if task.get("stateReason"):
-        lines.append(f"Reason: {task['stateReason']}")
-    if doc:
-        lines.append("")
-        lines.append(doc[:6000])
-
     return RawInputCreate(
         source="kotx",
         external_id=f"{kotx_id}:{task.get('attempt') or 1}:{state}:{proposes}",
-        content="\n".join(lines),
+        content=doc[:6000] if doc else "",
         source_metadata={
             "thread_id": github_thread_key(repo, number),
             "kotx_task_id": kotx_id,
