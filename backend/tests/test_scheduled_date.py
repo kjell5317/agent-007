@@ -83,11 +83,11 @@ def test_task_read_serializes_scheduled_date():
     assert read.model_dump(mode="json")["scheduled_date"] == "2026-07-01T12:30:00Z"
 
 
-def test_task_list_orders_by_display_date(monkeypatch):
+def test_task_list_orders_by_scheduled_date(monkeypatch):
     session = _sqlite_session()
     created = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
-    # Every task carries a scheduled_date now; display order follows it, and it
-    # wins over due_date in the coalesce (this row's due is latest of all).
+    # Every task carries a scheduled_date now; list order follows that slot,
+    # independent of the due date shown on the card.
     early = Task(
         title="Scheduled earliest",
         due_date=datetime(2026, 7, 5, 9, 0, tzinfo=timezone.utc),
@@ -102,13 +102,20 @@ def test_task_list_orders_by_display_date(monkeypatch):
         calendar_event_id="event-mid",
         created_at=created + timedelta(minutes=1),
     )
+    middle_newer = Task(
+        title="Scheduled middle newer",
+        due_date=datetime(2026, 7, 6, 17, 0, tzinfo=timezone.utc),
+        scheduled_date=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        calendar_event_id="event-mid-newer",
+        created_at=created + timedelta(minutes=3),
+    )
     late = Task(
         title="Scheduled latest",
         scheduled_date=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc),
         calendar_event_id="event-late",
         created_at=created + timedelta(minutes=2),
     )
-    session.add_all([late, early, middle])
+    session.add_all([late, early, middle, middle_newer])
     session.commit()
 
     monkeypatch.setattr(
@@ -121,14 +128,15 @@ def test_task_list_orders_by_display_date(monkeypatch):
 
     assert [task.title for task, _status in rows] == [
         "Scheduled earliest",
+        "Scheduled middle newer",
         "Scheduled middle",
         "Scheduled latest",
     ]
 
 
 def test_open_filter_survives_limit_with_many_closed(monkeypatch):
-    # Regression: with display_date-ASC ordering, completed tasks (old due
-    # dates) sort first. If `limit` is applied before the status filter, they
+    # Regression: with schedule-ASC ordering, completed tasks (old scheduled
+    # slots) sort first. If `limit` is applied before the status filter, they
     # fill the window and evict every open task. The filter must run in SQL.
     session = _sqlite_session()
     # The ORM RawInput carries a pgvector column that won't create on SQLite,
@@ -148,7 +156,7 @@ def test_open_filter_survives_limit_with_many_closed(monkeypatch):
 
     def add(title: str, *, status: str, due=None, scheduled=None, created):
         # due_date and scheduled_date are both NOT NULL; fall back to created so
-        # display order is deterministic (closed tasks land oldest, filling the
+        # schedule order is deterministic (closed tasks land oldest, filling the
         # limit window).
         task = Task(
             title=title,

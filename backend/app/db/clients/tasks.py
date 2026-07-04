@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, case, func, select, text
 from sqlalchemy.orm import Session
 
 from app.db.models.raw_input import RawInput
@@ -163,7 +163,6 @@ def list_(
     runs in SQL (not after `limit`) so `limit` bounds the matching rows — else
     an early row could evict every open task out of the window.
     """
-    display_date = func.coalesce(Task.scheduled_date, Task.due_date)
     stmt = select(Task)
     if status is not None:
         latest = (
@@ -183,9 +182,12 @@ def list_(
         stmt = stmt.outerjoin(
             latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1)
         ).where(func.coalesce(latest.c.status, "open") == status)
+    fallback_date = case((Task.scheduled_date.is_(None), Task.due_date), else_=None)
     stmt = stmt.order_by(
-        display_date.is_(None),
-        display_date.asc(),
+        Task.scheduled_date.is_(None),
+        Task.scheduled_date.asc(),
+        fallback_date.is_(None),
+        fallback_date.asc(),
         Task.created_at.desc(),
     ).limit(limit)
     rows = list(session.execute(stmt).scalars())
