@@ -15,10 +15,13 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 from app.db.models.route_cache import RouteCache  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar.discover import _physical_span  # noqa: E402
+from app.services.commute import planner as commute_planner  # noqa: E402
 from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
 from app.services.commute.planner import (  # noqa: E402
     _description_for,
+    _partition,
     _navigation_url,
+    _resolve_routable_anchors,
     _reschedule_candidates,
 )
 from app.services.commute.reschedule import _first_overlap  # noqa: E402
@@ -358,6 +361,90 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
     # 30-minute failed placeholders reserved on both sides.
     assert planned.start - planned.block_start == timedelta(minutes=30) + BUFFER
     assert planned.block_end - planned.end == timedelta(minutes=30) + BUFFER
+
+
+@pytest.mark.asyncio
+async def test_estimate_trip_legs_routes_google_maps_task_location(monkeypatch):
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        location="https://www.google.com/maps/place/Library/@48.137154,11.576124,17z",
+    )
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_enabled=True,
+            google_maps_api_key="key",
+            home_address="Homestreet 1",
+        ),
+    )
+    calls = []
+
+    async def fake_one_way(_session, origin, destination, reference):
+        calls.append((origin, destination, reference))
+        return 600
+
+    monkeypatch.setattr(schedule_service, "_one_way_seconds", fake_one_way)
+
+    reference = _day_at(12)
+    out_s, in_s, unroutable = await schedule_service._estimate_trip_legs(
+        SimpleNamespace(), task, reference=reference
+    )
+
+    assert (out_s, in_s, unroutable) == (600, 600, False)
+    assert calls == [
+        ("Homestreet 1", "48.137154,11.576124", reference),
+        ("48.137154,11.576124", "Homestreet 1", reference),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_google_maps_anchor_routes_resolved_location(monkeypatch):
+    event = _calendar_event(
+        "event-1",
+        _day_at(14),
+        _day_at(15),
+        location="https://www.google.com/maps/place/Library/@48.137154,11.576124,17z",
+    )
+    anchors, existing_commutes, skipped_online = _partition([event], "primary")
+    anchors = await _resolve_routable_anchors(anchors)
+    calls = []
+
+    async def fake_resolve_duration(_session, *, origin, destination, mode, departure):
+        calls.append(
+            {
+                "origin": origin,
+                "destination": destination,
+                "mode": mode,
+                "departure": departure,
+            }
+        )
+        return 600
+
+    monkeypatch.setattr(commute_planner, "resolve_duration", fake_resolve_duration)
+    settings = SimpleNamespace(
+        commute_bike_max_minutes=25,
+        commute_rain_threshold_pct=30,
+    )
+
+    durations = await commute_planner._resolve_routes(
+        SimpleNamespace(),
+        anchors,
+        "Homestreet 1",
+        None,
+        settings,
+        {"errors": []},
+    )
+
+    assert skipped_online == 0
+    assert existing_commutes == []
+    assert anchors[0].location == "48.137154,11.576124"
+    assert durations[("Homestreet 1", "48.137154,11.576124", "bicycling")] == 600
+    assert durations[("48.137154,11.576124", "Homestreet 1", "bicycling")] == 600
+    assert [(call["origin"], call["destination"]) for call in calls] == [
+        ("Homestreet 1", "48.137154,11.576124"),
+        ("48.137154,11.576124", "Homestreet 1"),
+    ]
 
 
 def test_colliding_task_anchor_is_replaced_not_overlapped():
