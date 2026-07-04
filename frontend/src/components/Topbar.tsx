@@ -414,7 +414,12 @@ function PointsModal({
             </div>
           </TabsContent>
           <TabsContent value="log" className="mt-0 h-full">
-            <div className="h-full overflow-y-auto pr-1">
+            <div
+              className={cn(
+                "h-full overflow-y-auto",
+                logEntries.length > 0 && "[scrollbar-gutter:stable]",
+              )}
+            >
               {logBusy ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   Loading...
@@ -424,7 +429,7 @@ function PointsModal({
                   No point changes yet.
                 </div>
               ) : (
-                <div className="divide-y">
+                <div className="divide-y pr-4">
                   {logEntries.map((entry) => (
                     <div
                       key={entry.id}
