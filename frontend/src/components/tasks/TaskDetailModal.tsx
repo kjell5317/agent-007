@@ -32,7 +32,7 @@ import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
-import type { KotxTask } from "@/lib/kotx";
+import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
@@ -226,6 +226,25 @@ export function TaskDetailModal({
       "dismiss",
     );
 
+  // kotx tasks: done is handled through kotx, so the check-off dismisses —
+  // discard the run upstream, or drop the 007 task when the run is already
+  // terminal.
+  const dismissRun = () => {
+    if (!kotxTask) return;
+    runClosingTaskAction(
+      async () => {
+        if (kotxTask.canDiscard) {
+          await kotx.discard(kotxTask.id);
+          await onKotxChanged?.();
+        } else {
+          await api.markNotTask(current.id);
+        }
+      },
+      kotxTask.canDiscard ? "Run discarded" : "Marked not a task",
+      "done",
+    );
+  };
+
   async function reopenCurrentTask() {
     if (busy) return;
     const taskId = current.id;
@@ -388,6 +407,7 @@ export function TaskDetailModal({
           }}
           onMarkDone={markDone}
           onDismissTask={dismissTask}
+          onDismissRun={dismissRun}
           onReopenTask={reopenCurrentTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
@@ -479,6 +499,7 @@ function TaskSummary({
   onSaveLabel,
   onMarkDone,
   onDismissTask,
+  onDismissRun,
   onReopenTask,
   onReschedule,
   onCreateGithubIssue,
@@ -515,6 +536,7 @@ function TaskSummary({
   onSaveLabel: () => void;
   onMarkDone: () => void;
   onDismissTask: () => void;
+  onDismissRun: () => void;
   onReopenTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
@@ -532,11 +554,21 @@ function TaskSummary({
     <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
       <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
+          {/* Only actions that apply to the current state: open → check-off
+              (which dismisses on kotx tasks — done is handled through kotx),
+              closed/dismissed non-kotx → re-open. A non-open kotx task gets no
+              lifecycle button; its run section carries the applicable actions. */}
           {task.status === "open" ? (
             <TaskSummaryIconButton
-              label="Mark done"
+              label={
+                kotxTask
+                  ? kotxTask.canDiscard
+                    ? "Dismiss run"
+                    : "Mark not a task"
+                  : "Mark done"
+              }
               disabled={busy}
-              onClick={onMarkDone}
+              onClick={kotxTask ? onDismissRun : onMarkDone}
               className="text-muted-foreground hover:text-primary"
             >
               {closingAction === "done" ? (
@@ -545,7 +577,7 @@ function TaskSummary({
                 <Circle className="h-5 w-5" />
               )}
             </TaskSummaryIconButton>
-          ) : (
+          ) : !kotxTask ? (
             <TaskSummaryIconButton
               label="Re-open task"
               disabled={busy}
@@ -554,7 +586,7 @@ function TaskSummary({
             >
               <RotateCcw className="h-5 w-5" />
             </TaskSummaryIconButton>
-          )}
+          ) : null}
 
           <PickerAnchor
             open={activePicker === "label"}

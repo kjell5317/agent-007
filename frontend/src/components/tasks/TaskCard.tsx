@@ -172,11 +172,25 @@ export function TaskCard({
     }
   }
 
+  // On kotx cards the check-off dismisses (discards the run — done is handled
+  // through kotx), but keeps the same icon and animation as every other task.
   const crossOff = () => {
     if (crossing || busy) return;
     setCrossing(true);
     setTimeout(() => {
-      withBusy(() => api.closeTask(task.id), "Marked done");
+      if (kotxTask) {
+        if (kotxTask.canDiscard) {
+          withBusy(
+            () => kotx.discard(kotxTask.id),
+            "Run discarded",
+            onKotxChanged,
+          );
+        } else {
+          withBusy(() => api.markNotTask(task.id), "Marked not a task");
+        }
+      } else {
+        withBusy(() => api.closeTask(task.id), "Marked done");
+      }
     }, CROSS_OFF_MS);
   };
 
@@ -197,38 +211,24 @@ export function TaskCard({
         }}
       >
         <div className="flex items-center gap-2">
-          {kotxTask ? (
-            // Done is handled through kotx — the leading slot dismisses instead.
-            <IconButton
-              label={kotxTask.canDiscard ? "Dismiss run" : "Mark not a task"}
-              disabled={busy || crossing}
-              onClick={() =>
-                kotxTask.canDiscard
-                  ? withBusy(
-                      () => kotx.discard(kotxTask.id),
-                      "Run discarded",
-                      onKotxChanged,
-                    )
-                  : withBusy(() => api.markNotTask(task.id), "Marked not a task")
-              }
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="h-5 w-5" />
-            </IconButton>
-          ) : (
-            <IconButton
-              label="Mark done"
-              disabled={busy || crossing}
-              onClick={crossOff}
-              className="text-muted-foreground hover:text-primary"
-            >
-              {crossing ? (
-                <CircleCheckBig className="h-5 w-5 text-primary" />
-              ) : (
-                <Circle className="h-5 w-5" />
-              )}
-            </IconButton>
-          )}
+          <IconButton
+            label={
+              kotxTask
+                ? kotxTask.canDiscard
+                  ? "Dismiss run"
+                  : "Mark not a task"
+                : "Mark done"
+            }
+            disabled={busy || crossing}
+            onClick={crossOff}
+            className="text-muted-foreground hover:text-primary"
+          >
+            {crossing ? (
+              <CircleCheckBig className="h-5 w-5 text-primary" />
+            ) : (
+              <Circle className="h-5 w-5" />
+            )}
+          </IconButton>
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
               {unseen && (

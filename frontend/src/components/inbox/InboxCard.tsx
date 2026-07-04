@@ -45,9 +45,16 @@ interface Props {
   onChanged: () => Promise<void> | void;
   unseen: boolean;
   onVisible: (id: string) => void;
+  onOpenTask: (id: string) => void;
 }
 
-export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
+export function InboxCard({
+  item,
+  onChanged,
+  unseen,
+  onVisible,
+  onOpenTask,
+}: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const { busy, runTaskAction, promote, reopenTask, dismissRun } =
@@ -118,14 +125,16 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
   const expandable = hasInputDetails(data);
   const Chevron = open ? ChevronDown : ChevronRight;
 
+  // Clicking the card opens the linked task's modal; expansion lives on the
+  // chevron. Inputs without a task do nothing.
   return (
     <Card ref={cardRef} className={cn(isKotxRun(data) && "border-primary/50")}>
       <CardContent
-        className={cn(expandable && "cursor-pointer")}
+        className={cn(data.task_id && "cursor-pointer")}
         onClick={(e) => {
-          if (!expandable) return;
+          if (!data.task_id) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          setOpen((v) => !v);
+          onOpenTask(data.task_id);
         }}
       >
         <div className="flex items-center gap-2">
@@ -159,7 +168,15 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
           </div>
 
           {expandable && (
-            <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <button
+              type="button"
+              aria-label={open ? "Collapse details" : "Expand details"}
+              title={open ? "Collapse details" : "Expand details"}
+              onClick={() => setOpen((v) => !v)}
+              className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Chevron className="h-4 w-4" />
+            </button>
           )}
         </div>
 

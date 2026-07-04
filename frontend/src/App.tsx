@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
 import { Toaster } from "@/components/ui/sonner";
@@ -10,6 +11,7 @@ import { api } from "@/lib/api";
 import { clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
+import type { Task } from "@/lib/types";
 
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
@@ -225,16 +227,48 @@ export function App() {
     [inboxActive, unseenInputIds],
   );
 
+  // Opening a task keeps the current view — from the inbox the modal shows on
+  // top of it, so closing lands back where the click happened.
   const openTask = useCallback((id: string) => {
     pushDeepLink({ kind: "task", id });
     setSelectedTaskId(id);
-    setMailOpen(false);
   }, []);
 
   const closeSelectedModal = useCallback(() => {
     clearDeepLink();
     setSelectedTaskId(null);
   }, []);
+
+  const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
+  const selectedListTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, tasks],
+  );
+  const selectedTask = selectedTaskId ? selectedListTask ?? fetchedTask : null;
+
+  useEffect(() => {
+    if (!selectedTaskId || selectedListTask) {
+      setFetchedTask(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getTask(selectedTaskId)
+      .then((task) => {
+        if (!cancelled) setFetchedTask(task);
+      })
+      .catch(() => {
+        if (!cancelled) closeSelectedModal();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [closeSelectedModal, selectedListTask, selectedTaskId]);
+
+  const selectedKotxTask =
+    selectedTask && selectedTask.kotx_task_id != null
+      ? kotxTasks.get(selectedTask.kotx_task_id) ?? null
+      : null;
 
   return (
     <div className="min-h-dvh pb-[120px]">
@@ -255,6 +289,7 @@ export function App() {
             hasMore={hasMoreInputs}
             unseenInputIds={unseenInputIds}
             onInputsVisible={markInputsVisible}
+            onOpenTask={openTask}
           />
         ) : (
           <TasksPanel
@@ -262,14 +297,21 @@ export function App() {
             kotxTasks={kotxTasks}
             onChanged={refresh}
             onKotxChanged={runs.refresh}
-            selectedTaskId={selectedTaskId}
             onTaskOpen={openTask}
-            onSelectedTaskClose={closeSelectedModal}
             unseenTaskIds={unseenTaskIds}
             onTaskVisible={markTaskVisible}
           />
         )}
       </main>
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          kotxTask={selectedKotxTask}
+          onClose={closeSelectedModal}
+          onChanged={refresh}
+          onKotxChanged={runs.refresh}
+        />
+      )}
       <Composer onCreated={refresh} />
       <Toaster />
     </div>

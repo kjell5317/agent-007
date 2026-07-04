@@ -34,6 +34,7 @@ interface Props {
   onChanged: () => Promise<void> | void;
   unseenMemberIds: string[];
   onVisible: (ids: string[]) => void;
+  onOpenTask: (id: string) => void;
 }
 
 export function InboxGroup({
@@ -41,6 +42,7 @@ export function InboxGroup({
   onChanged,
   unseenMemberIds,
   onVisible,
+  onOpenTask,
 }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -135,16 +137,22 @@ export function InboxGroup({
 
   const Chevron = open ? ChevronDown : ChevronRight;
 
+  // Clicking the card opens the group's task modal; expansion lives on the
+  // chevron. Task-less groups do nothing.
+  const groupTaskId =
+    (liveTask ?? closedTask ?? members.find((m) => m.task_id))?.task_id ?? null;
+
   return (
     <Card
       ref={cardRef}
       className={cn(members.some(isKotxRun) && "border-primary/50")}
     >
       <CardContent
-        className="cursor-pointer"
+        className={cn(groupTaskId && "cursor-pointer")}
         onClick={(e) => {
+          if (!groupTaskId) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          setOpen((v) => !v);
+          onOpenTask(groupTaskId);
         }}
       >
         <div className="flex items-center gap-2">
@@ -181,7 +189,15 @@ export function InboxGroup({
             </div>
           </div>
 
-          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <button
+            type="button"
+            aria-label={open ? "Collapse thread" : "Expand thread"}
+            title={open ? "Collapse thread" : "Expand thread"}
+            onClick={() => setOpen((v) => !v)}
+            className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <Chevron className="h-4 w-4" />
+          </button>
         </div>
 
         <Collapsible open={open}>
