@@ -37,6 +37,12 @@ export function inboxBadge(data: RawInput): BadgeKind {
   return data.status as BadgeKind;
 }
 
+export function badgeKindLabel(kind: BadgeKind | string): string {
+  if (kind === "not_task") return "no task";
+  if (kind === "no_change") return "no change";
+  return kind;
+}
+
 // Human-readable sender. Gmail's `from` is "Name <email>" → the name (or the
 // address when unnamed); Slack's is already "display (workspace)"; kotx
 // transitions come from their repo. Falls back to a source label when
