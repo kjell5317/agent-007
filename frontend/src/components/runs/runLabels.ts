@@ -31,7 +31,9 @@ export function isRunActionable(task: KotxTask): boolean {
 }
 
 export function runStatusLabel(task: KotxTask): string {
-  return isPrFollowUpRun(task) ? "in review" : task.status;
+  if (isPrFollowUpRun(task)) return "in review";
+  if (task.kind === "resolve_conflict" && task.state === "running") return "resolve";
+  return task.status;
 }
 
 // The label of the modal's primary action. Run cards and grouped rows use the

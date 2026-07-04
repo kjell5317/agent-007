@@ -9,7 +9,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { ActionButton, InputBody, MetaDot } from "@/components/inbox/InboxCard";
+import {
+  ActionButton,
+  hasInputDetails,
+  InputBody,
+  MetaDot,
+} from "@/components/inbox/InboxCard";
 import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import { api } from "@/lib/api";
@@ -21,6 +26,7 @@ import {
   senderName,
   type InboxGroup as GroupData,
 } from "@/lib/inbox";
+import { cn } from "@/lib/utils";
 import type { RawInput } from "@/lib/types";
 
 interface Props {
@@ -130,7 +136,10 @@ export function InboxGroup({
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card ref={cardRef}>
+    <Card
+      ref={cardRef}
+      className={cn(members.some(isKotxRun) && "border-primary/50")}
+    >
       <CardContent
         className="cursor-pointer"
         onClick={(e) => {
@@ -194,6 +203,28 @@ export function InboxGroup({
 function GroupMember({ data }: { data: RawInput }) {
   const [open, setOpen] = useState(false);
   const MemberChevron = open ? ChevronDown : ChevronRight;
+  const header = (
+    <>
+      <span className="min-w-0 flex-1 truncate text-sm">
+        {senderName(data)}
+      </span>
+      <InputStatusBadge input={data} />
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {fmtWhen(data.received_at)}
+      </span>
+    </>
+  );
+
+  if (!hasInputDetails(data)) {
+    return (
+      <div className="rounded-md border bg-muted/30">
+        <div className="flex w-full items-center gap-2 px-2 py-1.5 text-left">
+          {header}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-md border bg-muted/30">
       <button
@@ -201,13 +232,7 @@ function GroupMember({ data }: { data: RawInput }) {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
       >
-        <span className="min-w-0 flex-1 truncate text-sm">
-          {senderName(data)}
-        </span>
-        <InputStatusBadge input={data} />
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {fmtWhen(data.received_at)}
-        </span>
+        {header}
         <MemberChevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
       <Collapsible open={open}>

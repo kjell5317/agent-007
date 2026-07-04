@@ -134,6 +134,54 @@ function byReceivedDesc(a: RawInput, b: RawInput): number {
   return new Date(b.received_at).getTime() - new Date(a.received_at).getTime();
 }
 
+// The github threads an input references: its own thread key, plus — for kotx
+// runs — the PR it works on (`pr_number`). An implement run anchors on the
+// issue thread while its resolve-conflict runs anchor on the PR thread; the
+// pr_number metadata is what ties the two together.
+function githubRefs(r: RawInput): string[] {
+  const meta = r.source_metadata ?? {};
+  const refs: string[] = [];
+  const threadId = meta.thread_id;
+  if (typeof threadId === "string" && threadId.startsWith("github:")) {
+    refs.push(threadId);
+  }
+  if (r.source === "kotx") {
+    const repo = meta.repo;
+    const pr = meta.pr_number;
+    if (typeof repo === "string" && repo && pr != null) {
+      refs.push(`github:${repo}#${pr}`);
+    }
+  }
+  return refs;
+}
+
+// Fold task-less kotx-run buckets (a resolve-conflict run on the PR, or
+// not-yet-backfilled preparation transitions) into the task bucket that
+// references the same github subject, so a run serving a task never shows up
+// as its own inbox card.
+function mergeKotxRunBuckets(buckets: Map<string, RawInput[]>) {
+  const taskBucketByRef = new Map<string, string>();
+  for (const [key, rows] of buckets) {
+    if (!key.startsWith("task:")) continue;
+    for (const row of rows) {
+      for (const ref of githubRefs(row)) {
+        if (!taskBucketByRef.has(ref)) taskBucketByRef.set(ref, key);
+      }
+    }
+  }
+
+  for (const [key, rows] of buckets) {
+    if (key.startsWith("task:") || !rows.every(isKotxRun)) continue;
+    const target = rows
+      .flatMap(githubRefs)
+      .map((ref) => taskBucketByRef.get(ref))
+      .find((k) => k != null);
+    if (!target) continue;
+    buckets.get(target)!.push(...rows);
+    buckets.delete(key);
+  }
+}
+
 export function groupInputs(inputs: RawInput[]): InboxGroup[] {
   const buckets = new Map<string, RawInput[]>();
   for (const r of inputs) {
@@ -142,6 +190,8 @@ export function groupInputs(inputs: RawInput[]): InboxGroup[] {
     if (bucket) bucket.push(r);
     else buckets.set(key, [r]);
   }
+
+  mergeKotxRunBuckets(buckets);
 
   const groups: InboxGroup[] = [];
   for (const [key, rows] of buckets) {

@@ -32,6 +32,7 @@ const STATUS_CLASS: Record<string, string> = {
   "awaiting approval": STATE_CLASS.awaiting_approval,
   queued: STATE_CLASS.queued,
   running: STATE_CLASS.running,
+  resolve: STATE_CLASS.running,
   "in review": IN_REVIEW_CLASS,
   "waiting on pr": WAITING_ON_PR_CLASS,
   "awaiting external": IN_REVIEW_CLASS,
@@ -91,7 +92,11 @@ export function InputStatusBadge({ input }: { input: RawInput }) {
     const meta = input.source_metadata ?? {};
     const state = typeof meta.kotx_state === "string" ? meta.kotx_state : "";
     const status = typeof meta.kotx_status === "string" ? meta.kotx_status : "";
-    const label = normalizeStatus(status || state);
+    const kind = typeof meta.kotx_kind === "string" ? meta.kotx_kind : "";
+    const label =
+      kind === "resolve_conflict" && state === "running"
+        ? "resolve"
+        : normalizeStatus(status || state);
     if (label) {
       const subjectType = typeof meta.subject_type === "string" ? meta.subject_type : "";
       return <Badge className={statusClass(label, state, subjectType)}>{label}</Badge>;

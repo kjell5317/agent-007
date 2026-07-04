@@ -25,7 +25,7 @@ import { LabelPicker } from "@/components/ui/label-picker";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { InputBody, MetaDot } from "@/components/inbox/InboxCard";
+import { hasInputDetails, InputBody, MetaDot } from "@/components/inbox/InboxCard";
 import { KotxRunSection } from "@/components/tasks/KotxRunSection";
 import { InputStatusBadge, RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useLabels } from "@/hooks/useLabels";
@@ -1199,9 +1199,11 @@ function LinkedInputsSection({ inputs }: { inputs: TaskRawInput[] }) {
                 <OpenLink href={input.source_url}>Open source</OpenLink>
               )}
             </div>
-            <div className="mt-3 space-y-3 border-t pt-3 text-sm">
-              <InputBody data={input} />
-            </div>
+            {hasInputDetails(input) && (
+              <div className="mt-3 space-y-3 border-t pt-3 text-sm">
+                <InputBody data={input} />
+              </div>
+            )}
           </div>
         ))}
       </div>

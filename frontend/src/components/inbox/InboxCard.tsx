@@ -115,13 +115,15 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
         ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
         : null;
 
+  const expandable = hasInputDetails(data);
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card ref={cardRef}>
+    <Card ref={cardRef} className={cn(isKotxRun(data) && "border-primary/50")}>
       <CardContent
-        className="cursor-pointer"
+        className={cn(expandable && "cursor-pointer")}
         onClick={(e) => {
+          if (!expandable) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           setOpen((v) => !v);
         }}
@@ -156,17 +158,21 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
             </div>
           </div>
 
-          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          {expandable && (
+            <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
         </div>
 
-        <Collapsible open={open}>
-          <div
-            className="mt-3 space-y-3 border-t pt-3 text-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <InputBody data={data} />
-          </div>
-        </Collapsible>
+        {expandable && (
+          <Collapsible open={open}>
+            <div
+              className="mt-3 space-y-3 border-t pt-3 text-sm"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <InputBody data={data} />
+            </div>
+          </Collapsible>
+        )}
       </CardContent>
     </Card>
   );
@@ -208,6 +214,21 @@ export function ActionButton({
   );
 }
 
+// Mirrors InputBody's render conditions — cards skip the dropdown (and the
+// modal skips the body block) when nothing would show. kotx transitions omit
+// the reason: it's deterministic boilerplate ("… nothing to do yet").
+export function hasInputDetails(data: RawInput): boolean {
+  if (data.content) return true;
+  const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
+  if (!trace) return false;
+  return (
+    Boolean(trace.reason && !isKotxRun(data)) ||
+    trace.currentTask.length > 0 ||
+    trace.evidence.length > 0 ||
+    trace.tools.length > 0
+  );
+}
+
 export function InputBody({ data }: { data: RawInput }) {
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
   const evidence = useResolvedEvidence(trace?.evidence ?? NO_EVIDENCE);
@@ -221,7 +242,7 @@ export function InputBody({ data }: { data: RawInput }) {
           </div>
         </Section>
       )}
-      {trace?.reason && (
+      {trace?.reason && !isKotxRun(data) && (
         <Section title="Reason">
           <Markdown content={trace.reason} className="text-xs" />
         </Section>
