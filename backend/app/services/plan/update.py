@@ -100,27 +100,27 @@ async def _patch_requires_reschedule(session: Session, task, current, changed: s
     if candidate_end > task.due_date:
         return True
 
-    buffer = timedelta(minutes=get_settings().commute_event_buffer_minutes)
-    return await _overlaps_other_event(
-        session,
-        task,
-        candidate_start - buffer,
-        candidate_end + buffer,
-    )
+    return await _overlaps_other_event(session, task, candidate_start, candidate_end)
 
 
 async def _overlaps_other_event(session: Session, task, start, end) -> bool:
-    from app.services.calendar import list_events_between
+    from app.services.calendar import is_commute_event, list_events_between
 
     settings = get_settings()
     ids = _busy_calendar_ids(settings)
     if not ids:
         return False
-    events = await list_events_between(session, calendar_ids=ids, time_min=start, time_max=end)
+    commute_gap = timedelta(minutes=settings.commute_event_buffer_minutes)
+    event_gap = timedelta(minutes=settings.event_buffer_minutes)
+    pad = max(commute_gap, event_gap)
+    events = await list_events_between(
+        session, calendar_ids=ids, time_min=start - pad, time_max=end + pad,
+    )
     for ev in events:
         if ev.all_day or ev.id == task.calendar_event_id:
             continue
-        if ev.start < end and start < ev.end:
+        gap = commute_gap if is_commute_event(ev) else event_gap
+        if ev.start < end + gap and start - gap < ev.end:
             return True
     return False
 

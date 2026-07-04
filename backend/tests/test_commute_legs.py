@@ -112,22 +112,71 @@ def test_rain_flips_bike_to_transit():
     assert outbound.depart == anchor.start - BUFFER - timedelta(seconds=1200)
 
 
-def test_bike_over_threshold_uses_transit_and_falls_back():
+def test_bike_over_threshold_uses_transit_and_never_bikes_back():
     far = "Farawaystrasse 9"
     durations = {
         (HOME_ADDR, far, "bicycling"): 3600,  # over 25-minute cap
         (HOME_ADDR, far, "transit"): 1800,
         (far, HOME_ADDR, "bicycling"): 3600,
-        # no inbound transit → falls back to bike with a reason
+        # No inbound transit — but the bike stayed home, so no bike fallback:
+        # the leg becomes a failed placeholder instead.
     }
     anchor = Anchor("ev1", _at(14), _at(15), far)
     legs, skipped = derive_legs([anchor], HOME_ADDR, durations, None, SETTINGS)
 
-    assert skipped == 0
+    assert skipped == 1
     outbound, inbound = legs
     assert outbound.mode == "transit"
+    assert inbound.mode == FAILED_MODE
+    assert inbound.reason == "no route found"
+
+
+def test_transit_fallback_to_bike_still_works_when_bike_is_along():
+    # Rain wants transit for the ride home, but no transit route exists.
+    # The outbound leg was ridden, so the bike is on hand to fall back to.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    rain = {to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80}
+    legs, skipped = derive_legs([anchor], HOME_ADDR, _durations(), rain, SETTINGS)
+
+    assert skipped == 0
+    outbound, inbound = legs
+    assert outbound.mode == "bicycling"
     assert inbound.mode == "bicycling"
     assert inbound.reason == "transit unavailable, fell back to bike"
+
+
+def test_no_bike_leg_after_leaving_home_by_transit():
+    # home -transit-> far -?-> nearby: the bike is at home, so the short
+    # second hop must not be ridden even though it fits the bike threshold.
+    far = "Farawaystrasse 9"
+    nearby = "Nebenstrasse 2"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 3600,  # over cap → transit out
+        (HOME_ADDR, far, "transit"): 1800,
+        (far, nearby, "bicycling"): 300,
+        (far, nearby, "transit"): 900,
+        (nearby, HOME_ADDR, "bicycling"): 600,
+        (nearby, HOME_ADDR, "transit"): 1500,
+    }
+    first = Anchor("ev1", _at(14), _at(15), far)
+    second = Anchor("ev2", _at(15, 45), _at(17), nearby)
+    legs, skipped = derive_legs([first, second], HOME_ADDR, durations, None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.key for leg in legs] == [(HOME, "ev1"), ("ev1", "ev2"), ("ev2", HOME)]
+    assert [leg.mode for leg in legs] == ["transit", "transit", "transit"]
+    assert legs[1].reason == "bike not along on this trip"
+    assert legs[2].reason == "bike not along on this trip"
+
+
+def test_bike_chain_stays_bike_and_resets_at_home():
+    # Ridden chain gym→office stays on the bike; after a via-home layover
+    # the next departure gets the bike again even if an earlier chain broke.
+    first = Anchor("ev1", _at(10), _at(11), GYM)
+    second = Anchor("ev2", _at(16), _at(17), OFFICE)
+    legs, _ = derive_legs([first, second], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert [leg.mode for leg in legs] == ["bicycling"] * 4
 
 
 def test_unroutable_legs_become_30min_placeholders():
