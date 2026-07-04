@@ -33,6 +33,7 @@ from app.events import publish_task
 from app.services.calendar.client import (
     CalendarEvent,
     CalendarSyncTokenExpired,
+    _parse_time,
     authorized_client,
     normalize,
 )
@@ -108,6 +109,7 @@ async def discover_updated_events(
     }
 
     changed_physical: list[CalendarEvent] = []
+    deleted_spans: list[tuple[datetime, datetime]] = []
     for cid in ids:
         raw_items, new_token, new_baseline = await _sync_calendar(
             client,
@@ -123,10 +125,8 @@ async def discover_updated_events(
         baselines[cid] = new_baseline.isoformat()
 
         active = _active_events(raw_items, cid)
-        cancelled_ids = [
-            it["id"]
-            for it in raw_items
-            if it.get("status") == "cancelled" and it.get("id")
+        cancelled_items = [
+            it for it in raw_items if it.get("status") == "cancelled" and it.get("id")
         ]
         summary["updated"] += len(active)
         changed_physical.extend(active)
@@ -144,13 +144,26 @@ async def discover_updated_events(
             for task_id in synced_task_ids:
                 publish_task(session, task_id)
 
-            for event_id in cancelled_ids:
+        for item in cancelled_items:
+            if cid == write_id:
                 rescheduled = await _reschedule_deleted_task_event(
-                    session, event_id, account_key=account_key,
+                    session, item["id"], account_key=account_key,
                 )
                 if rescheduled is not None:
                     summary["deleted"] += 1
                     publish_task(session, rescheduled)
+                    continue
+            # Any other deletion — online meeting, located event, even a
+            # manually-removed leg — changes what the legs around it should
+            # look like. The sync tombstone carries no times, so recover the
+            # span and replan that window.
+            span = await _cancelled_event_span(session, cid, item, account_key=account_key)
+            if span is not None:
+                log.info(
+                    "discover · event id=%s deleted on %s; replanning commutes around %s..%s",
+                    item["id"], cid, span[0].isoformat(), span[1].isoformat(),
+                )
+                deleted_spans.append(span)
 
         # Something changed in a read/busy calendar, or a manual event on the
         # write calendar. Pull the write calendar and only move events we own
@@ -192,15 +205,49 @@ async def discover_updated_events(
     )
     session.commit()
 
-    await _plan_legs_for_changed_events(session, changed_physical, account_key=account_key)
+    await _plan_legs_for_changed_events(
+        session, changed_physical, deleted_spans=deleted_spans, account_key=account_key,
+    )
 
     return summary
+
+
+async def _cancelled_event_span(
+    session: Session,
+    calendar_id: str,
+    item: dict,
+    *,
+    account_key: str | None,
+) -> tuple[datetime, datetime] | None:
+    """Time span of a deleted event, or None when it can't be recovered.
+
+    Sync tombstones are bare `{id, status}`; cancelled recurring instances
+    additionally carry `originalStartTime`. For plain deletions the owner's
+    copy is still fetchable and keeps its times."""
+    original = item.get("originalStartTime")
+    if original:
+        start, _ = _parse_time(original)
+        return start, start
+    from app.services.calendar import get_event
+
+    try:
+        event = await get_event(
+            session, calendar_id=calendar_id, event_id=item["id"], account_key=account_key,
+        )
+    except Exception as exc:  # noqa: BLE001 — tombstone may be gone or timeless
+        log.info(
+            "discover · deleted event=%s span unrecoverable (%s); daily re-baseline will heal",
+            item["id"], exc,
+        )
+        return None
+    return event.start, event.end
 
 
 async def _plan_legs_for_changed_events(
     session: Session,
     events: list[CalendarEvent],
     *,
+    deleted_spans: list[tuple[datetime, datetime]] | None = None,
     account_key: str | None,
 ) -> None:
     """Derive commute legs around every changed physical event.
@@ -211,18 +258,29 @@ async def _plan_legs_for_changed_events(
     `WINDOW_DAYS`, and the daily re-baseline re-surfaces the instances
     sliding into view — so a new endless series only ever gets legs for the
     next week's occurrences, one pair per instance, never the whole series.
-    Idempotent: unchanged legs diff to no-op patches."""
+    Idempotent: unchanged legs diff to no-op patches.
+
+    `deleted_spans` are the slots of removed events; a leg that was dodging
+    one may sit up to the dodge cap away, so those spans are widened by the
+    commute margin to catch both the stale leg and its relaxed placement."""
     if not get_settings().commute_enabled:
         return
+    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
+
+    spans: list[tuple[datetime, datetime]] = []
     span = _physical_span(events)
-    if span is None:
+    if span is not None:
+        spans.append(span)
+    if deleted_spans:
+        margin = commute_window_margin()
+        spans.extend((start - margin, end + margin) for start, end in deleted_spans)
+    if not spans:
         return
-    from app.services.plan.commute import plan_commutes_window_best_effort
 
     await plan_commutes_window_best_effort(
         session,
-        window_start=span[0],
-        window_end=span[1],
+        window_start=min(start for start, _ in spans),
+        window_end=max(end for _, end in spans),
         account_key=account_key,
     )
 

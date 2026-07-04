@@ -279,21 +279,22 @@ function PointsModal({
     setLogBusy(true);
     api
       .getPointsLog()
-      .then(async (res) => {
+      .then((res) => {
         if (cancelled) return;
         setLogEntries(res.entries);
         setLogCount(res.count);
         setLogSeenBefore(res.last_seen_at);
         setLogLoaded(true);
-        await api.markPointsLogSeen();
+        // Reset busy before the mark_seen round-trip: setLogLoaded re-runs
+        // this effect, whose cleanup flips `cancelled` — a later finally()
+        // would be skipped and the spinner would never clear.
+        setLogBusy(false);
+        return api.markPointsLogSeen();
       })
       .catch((err) => {
-        if (!cancelled) {
-          toast.error(`Failed to load log: ${(err as Error).message}`);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLogBusy(false);
+        if (cancelled) return;
+        setLogBusy(false);
+        toast.error(`Failed to load log: ${(err as Error).message}`);
       });
     return () => {
       cancelled = true;
