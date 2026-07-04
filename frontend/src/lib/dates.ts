@@ -40,6 +40,30 @@ export function isUrgent(
   return now >= threshold;
 }
 
+export function dueDateBadgeVariant(
+  iso: string | null,
+  estimationMinutes: number | null,
+): "overdue" | "urgent" | "closed" {
+  if (!iso) return "closed";
+
+  const due = new Date(iso).getTime();
+  if (Number.isNaN(due)) return "closed";
+
+  const now = Date.now();
+  if (
+    estimationMinutes != null &&
+    due - estimationMinutes * 60_000 - now < 0
+  ) {
+    return "overdue";
+  }
+
+  if (due > now && due - now < 24 * 60 * 60 * 1000) {
+    return "urgent";
+  }
+
+  return "closed";
+}
+
 export function fmtDue(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
