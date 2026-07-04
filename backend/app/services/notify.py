@@ -45,6 +45,7 @@ ACTION_RESCHEDULE_TASK = "RESCHEDULE_TASK"
 ACTION_KOTX_START = "KOTX_START"
 ACTION_KOTX_APPROVE = "KOTX_APPROVE"
 ACTION_KOTX_MERGE = "KOTX_MERGE"
+ACTION_KOTX_COMMENT = "KOTX_COMMENT"
 
 
 async def notify(
@@ -148,30 +149,45 @@ def _warning_actions() -> list[dict[str, str]]:
     ]
 
 
-async def notify_task_created(task, *, start: datetime, end: datetime) -> None:
-    """A new task was extracted and given a calendar slot."""
+async def notify_task_created(
+    task, *, start: datetime, end: datetime, primary_action: dict[str, str] | None = None
+) -> None:
+    """A new task was extracted and given a calendar slot.
+
+    `primary_action` swaps the leading "Done" button for a task-specific action
+    (kotx tasks put "Start"/"Comment"/… here) while keeping Dismiss + Reschedule
+    — so a kotx task's first notification is the normal scheduled one with only
+    that button changed."""
     parts = [f"Scheduled {_fmt_range(start, end)}"]
     if task.due_date:
         parts.append(f"Due {_fmt_when(to_user_tz(task.due_date))}")
+    actions = _task_actions()
+    if primary_action is not None:
+        actions = [primary_action, *actions[1:]]
     await notify(
         title=f"{_short_title(task)}",
         message="\n".join(parts),
         url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=_task_actions(),
+        actions=actions,
         sticky=True,
     )
 
 
+_DISMISS_BUTTON = {"action": ACTION_DISMISS_TASK, "title": "Dismiss"}
+
+
 async def notify_kotx_start(task, *, subject: str) -> None:
     """A kotx implement run drafted TASK.md and is waiting to start the write
-    phase. Replaces kotx's removed "Start implementation" prompt."""
+    phase, on a task that was already surfaced (adoption / re-draft). The first
+    notification carries this action inline via `notify_task_created`; this is
+    the standalone fallback for the already-scheduled case."""
     await notify(
         title=f"Ready to start · {subject[:80]}",
         message="kotx drafted the brief — review it, then start the implementation.",
         url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=[{"action": ACTION_KOTX_START, "title": "Start"}],
+        actions=[{"action": ACTION_KOTX_START, "title": "Start"}, _DISMISS_BUTTON],
         sticky=True,
     )
 
@@ -184,18 +200,28 @@ async def notify_kotx_open_pr(task, *, subject: str) -> None:
         message="kotx finished coding and proposed a pull request — review and open it.",
         url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=[{"action": ACTION_KOTX_APPROVE, "title": "Open PR"}],
+        actions=[{"action": ACTION_KOTX_APPROVE, "title": "Open PR"}, _DISMISS_BUTTON],
         sticky=True,
     )
 
 
-async def notify_kotx_confirm_merge(task, *, subject: str) -> None:
+async def notify_kotx_confirm_merge(
+    task, *, subject: str, approved_by: str | None = None, comment: str | None = None
+) -> None:
     """An approving PR review moved a tracked implement run back to
     awaiting_approval with a merge proposal. Replaces kotx's removed
-    "Confirm merge" prompt."""
+    "Confirm merge" prompt — names the approver and shows their (truncated)
+    approval comment. Merge is the only offered action."""
+    lines: list[str] = []
+    if approved_by:
+        lines.append(f"Approved by {approved_by}")
+    if comment and comment.strip():
+        lines.append(_clip(comment, 200))
+    if not lines:
+        lines.append("An approving review created a merge proposal.")
     await notify(
         title=f"Confirm merge · {subject[:80]}",
-        message="An approving review created a merge proposal — confirm to merge the PR.",
+        message="\n".join(lines),
         url=task_url(task.id),
         tag=task_tag(task.id),
         actions=[{"action": ACTION_KOTX_MERGE, "title": "Merge"}],
@@ -204,14 +230,16 @@ async def notify_kotx_confirm_merge(task, *, subject: str) -> None:
 
 
 async def notify_kotx_review_ready(task, *, subject: str) -> None:
-    """A kotx review run produced REVIEW.md and is waiting on a human decision.
-    Replaces kotx's removed (informational) "Comment review" prompt — no
-    one-tap action; opening the task surfaces comment vs. approve."""
+    """A kotx review run produced REVIEW.md and is waiting on a human decision,
+    on a task that was already surfaced. The first notification carries the
+    Comment action inline via `notify_task_created`; this is the standalone
+    fallback for the already-scheduled case."""
     await notify(
         title=f"Review ready · {subject[:80]}",
-        message="kotx finished a review — open it to comment or approve.",
+        message="kotx finished a review — comment it, or open the task to approve.",
         url=task_url(task.id),
         tag=task_tag(task.id),
+        actions=[{"action": ACTION_KOTX_COMMENT, "title": "Comment"}, _DISMISS_BUTTON],
         sticky=True,
     )
 
@@ -317,6 +345,11 @@ async def notify_error(title: str, exc: BaseException, *, context: str | None = 
 
 def _short_title(task) -> str:
     return (task.title or "")[:90]
+
+
+def _clip(text: str, limit: int) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _fmt_when(dt: datetime) -> str:

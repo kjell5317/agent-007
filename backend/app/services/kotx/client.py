@@ -106,6 +106,17 @@ async def fetch_pr(kotx_task_id: int) -> dict | None:
     return body if isinstance(body, dict) else None
 
 
+async def fetch_merge_context(kotx_task_id: int) -> dict | None:
+    """The merge proposal's `{prNumber, approvedBy, reviewUrl, commentMarkdown}`.
+    None on 404 (no merge proposal yet)."""
+    resp = await _get(f"tasks/{kotx_task_id}/merge/context")
+    if resp is None or resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    body = resp.json()
+    return body if isinstance(body, dict) else None
+
+
 async def _post_action(kotx_task_id: int, verb: str) -> bool:
     """Best-effort `POST …/<verb>` lifecycle action (start/approve/merge/discard).
     False when unconfigured, not applicable in the current state (409), or gone
@@ -133,6 +144,10 @@ async def approve_task(kotx_task_id: int) -> bool:
 
 async def merge_task(kotx_task_id: int) -> bool:
     return await _post_action(kotx_task_id, "merge")
+
+
+async def comment_task(kotx_task_id: int) -> bool:
+    return await _post_action(kotx_task_id, "comment")
 
 
 async def discard_task(kotx_task_id: int) -> bool:

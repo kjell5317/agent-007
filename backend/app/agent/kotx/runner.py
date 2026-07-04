@@ -29,7 +29,12 @@ from app.labels import load_labels
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
 from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_github_subject
+from app.services.kotx import client as kotx_client
 from app.services.notify import (
+    ACTION_KOTX_APPROVE,
+    ACTION_KOTX_COMMENT,
+    ACTION_KOTX_MERGE,
+    ACTION_KOTX_START,
     notify_kotx_confirm_merge,
     notify_kotx_open_pr,
     notify_kotx_review_ready,
@@ -163,11 +168,33 @@ async def _notify_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> 
         await notify_kotx_start(task, subject=subject)
     elif kind == "implement" and state == "awaiting_approval":
         if meta.get("kotx_proposes") == "merge":
-            await notify_kotx_confirm_merge(task, subject=subject)
+            ctx = await kotx_client.fetch_merge_context(int(meta["kotx_task_id"])) or {}
+            await notify_kotx_confirm_merge(
+                task,
+                subject=subject,
+                approved_by=ctx.get("approvedBy"),
+                comment=ctx.get("commentMarkdown"),
+            )
         else:
             await notify_kotx_open_pr(task, subject=subject)
     elif kind == "review" and state == "awaiting_approval":
         await notify_kotx_review_ready(task, subject=subject)
+
+
+def _kotx_primary_action(meta: dict) -> dict[str, str] | None:
+    """The action button that replaces "Done" on a kotx task's first (scheduled)
+    notification, chosen by the current transition."""
+    kind = meta.get("kotx_kind")
+    state = meta.get("kotx_state")
+    if kind == "implement" and state == "draft":
+        return {"action": ACTION_KOTX_START, "title": "Start"}
+    if kind == "implement" and state == "awaiting_approval":
+        if meta.get("kotx_proposes") == "merge":
+            return {"action": ACTION_KOTX_MERGE, "title": "Merge"}
+        return {"action": ACTION_KOTX_APPROVE, "title": "Open PR"}
+    if kind == "review" and state == "awaiting_approval":
+        return {"action": ACTION_KOTX_COMMENT, "title": "Comment"}
+    return None
 
 
 def _match_task(
@@ -245,7 +272,9 @@ async def _create_task_from_brief(
     )
     task.kotx_task_id = kotx_id
     session.flush()
-    await schedule_task(session, task)
+    # The first notification for this task is the normal "Scheduled" one, but
+    # with its "Done" button swapped for the kotx action for this state.
+    await schedule_task(session, task, primary_action=_kotx_primary_action(meta))
     return task
 
 

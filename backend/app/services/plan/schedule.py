@@ -145,6 +145,7 @@ async def schedule_task(
     block: Interval | None = None,
     account_key: str | None = None,
     notify: bool = True,
+    primary_action: dict[str, str] | None = None,
     _depth: int = 0,
 ) -> tuple[datetime, datetime] | None:
     """Plan `task` and create/update its calendar mirror (plus commute legs).
@@ -155,7 +156,8 @@ async def schedule_task(
 
     `notify=False` suppresses the per-task scheduled/no-slot notification —
     batch callers (commute reschedule of many tasks) handle their own
-    aggregated notification.
+    aggregated notification. `primary_action` is forwarded opaquely to the
+    "Scheduled" notification to swap its leading button (kotx tasks use this).
 
     Returns the placed `(start, end)` on success, `None` otherwise.
     """
@@ -172,6 +174,7 @@ async def schedule_task(
             block=block,
             account_key=account_key,
             notify=notify,
+            primary_action=primary_action,
             _depth=_depth,
         )
     else:
@@ -182,6 +185,7 @@ async def schedule_task(
                 block=block,
                 account_key=account_key,
                 notify=notify,
+                primary_action=primary_action,
                 _depth=_depth,
             )
     return (planned.start, planned.end) if planned is not None else None
@@ -194,6 +198,7 @@ async def _schedule_task_locked(
     block: Interval | None,
     account_key: str | None,
     notify: bool,
+    primary_action: dict[str, str] | None = None,
     _depth: int,
 ) -> PlannedSlot | None:
     is_fresh = task.calendar_event_id is None
@@ -268,7 +273,9 @@ async def _schedule_task_locked(
             # it also replaces any lingering "could not schedule" warning.
             from app.services.notify import notify_task_created
 
-            await notify_task_created(task, start=planned.start, end=planned.end)
+            await notify_task_created(
+                task, start=planned.start, end=planned.end, primary_action=primary_action
+            )
         else:
             # A silent reschedule of an already-mirrored task. Still clear a
             # possible warning so a recovered task doesn't keep nagging.

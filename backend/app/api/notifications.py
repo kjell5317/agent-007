@@ -31,9 +31,11 @@ from app.services.notify import (
     ACTION_CLOSE_TASK,
     ACTION_DISMISS_TASK,
     ACTION_KOTX_APPROVE,
+    ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
     ACTION_RESCHEDULE_TASK,
+    clear_task_notification,
 )
 from app.services.plan.schedule import schedule_task, scheduled_interval_for
 from app.services.task.close import close_task as close_task_svc
@@ -49,6 +51,7 @@ _KOTX_ACTIONS = {
     ACTION_KOTX_START: "start_task",
     ACTION_KOTX_APPROVE: "approve_task",
     ACTION_KOTX_MERGE: "merge_task",
+    ACTION_KOTX_COMMENT: "comment_task",
 }
 
 
@@ -125,6 +128,9 @@ async def handle_action(
         # kotx's own transition webhook mirrors the resulting state back to us,
         # so there's nothing to publish here — the run section refreshes then.
         ok = await getattr(kotx_client, kotx_fn_name)(task.kotx_task_id)
+        # The prompt proposed this action; once it's kicked off, clear it so a
+        # stale button doesn't linger until the next transition replaces it.
+        await clear_task_notification(task.id)
         log.info(
             "notify action · kotx %s task=%s kotx_id=%s ok=%s",
             payload.action, task.id, task.kotx_task_id, ok,

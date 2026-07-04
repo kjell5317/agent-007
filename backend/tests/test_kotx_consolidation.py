@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
 from app.api import notifications as notif  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
+from app.services import notify as notify_svc  # noqa: E402
 from app.services.kotx import client as kotx_client  # noqa: E402
 from app.services.kotx import discard as kotx_discard  # noqa: E402
 from app.services.input.kotx import poll as kotx_poll  # noqa: E402
@@ -207,8 +209,8 @@ def kotx_prompts(monkeypatch):
     calls: list[dict] = []
 
     def _recorder(name: str):
-        async def _fn(task, *, subject: str):
-            calls.append({"prompt": name, "task_id": task.id, "subject": subject})
+        async def _fn(task, *, subject: str, **extra):
+            calls.append({"prompt": name, "task_id": task.id, "subject": subject, **extra})
 
         return _fn
 
@@ -441,7 +443,7 @@ async def test_actionable_transition_backfills_preparing_thread_inputs(monkeypat
     def fake_create(session, payload):
         return task
 
-    async def fake_schedule(session, created_task):
+    async def fake_schedule(session, created_task, **kwargs):
         assert created_task is task
 
     def fake_finalize(session, raw_id, **kw):
@@ -564,8 +566,9 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
             id=uuid.uuid4(), title=payload.title, kotx_task_id=None, link=payload.link
         )
 
-    async def fake_schedule(session, task):
+    async def fake_schedule(session, task, *, primary_action=None, **kwargs):
         created["scheduled"] = True
+        created["primary_action"] = primary_action
 
     finalized = {}
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
@@ -595,6 +598,8 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     assert payload.estimation == 20
     assert payload.label == "SocialAI"
     assert created["scheduled"] is True
+    # The first notification for a draft implement task swaps "Done" for "Start".
+    assert created["primary_action"] == {"action": "KOTX_START", "title": "Start"}
     assert finalized["status"] == "open"
 
 
@@ -626,7 +631,7 @@ async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypat
         creates.append(task)
         return task
 
-    async def fake_schedule(session, task):
+    async def fake_schedule(session, task, **kwargs):
         await asyncio.sleep(0)
 
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
@@ -691,6 +696,12 @@ async def test_merge_proposal_transition_sends_confirm_merge_prompt(
     )
     monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
 
+    async def fake_merge_context(kotx_task_id):
+        assert kotx_task_id == 42
+        return {"approvedBy": "octocat", "commentMarkdown": "LGTM, ship it"}
+
+    monkeypatch.setattr(kotx_runner.kotx_client, "fetch_merge_context", fake_merge_context)
+
     session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
     trace = await kotx_runner.run_kotx_transition(
         session, _raw(_meta(state="awaiting_approval", proposes="merge"))
@@ -698,6 +709,9 @@ async def test_merge_proposal_transition_sends_confirm_merge_prompt(
 
     assert trace["outcome"] == "no_change"
     assert [c["prompt"] for c in kotx_prompts] == ["confirm_merge"]
+    # The reviewer + approval comment flow into the confirm-merge prompt.
+    assert kotx_prompts[0]["approved_by"] == "octocat"
+    assert kotx_prompts[0]["comment"] == "LGTM, ship it"
 
 
 @pytest.mark.asyncio
@@ -733,7 +747,10 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
     async def fake_extract(session, raw):
         return {"estimation": 20, "due_date": None, "label": None}
 
-    async def fake_schedule(session, task):
+    scheduled = {}
+
+    async def fake_schedule(session, task, *, primary_action=None, **kwargs):
+        scheduled["primary_action"] = primary_action
         return None
 
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
@@ -752,7 +769,9 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
     trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="draft")))
 
     assert trace["outcome"] == "task_created"
+    # No standalone prompt — the action rides on the scheduled notification.
     assert kotx_prompts == []
+    assert scheduled["primary_action"] == {"action": "KOTX_START", "title": "Start"}
 
 
 @pytest.mark.asyncio
@@ -802,22 +821,39 @@ async def test_kotx_post_action_returns_false_when_unconfigured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_notify_action_approve_dispatches_to_kotx(monkeypatch):
+@pytest.mark.parametrize(
+    "action,fn_name",
+    [
+        (notif.ACTION_KOTX_START, "start_task"),
+        (notif.ACTION_KOTX_APPROVE, "approve_task"),
+        (notif.ACTION_KOTX_MERGE, "merge_task"),
+        (notif.ACTION_KOTX_COMMENT, "comment_task"),
+    ],
+)
+async def test_notify_action_dispatches_to_kotx_and_clears(monkeypatch, action, fn_name):
     task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=99)
     monkeypatch.setattr(notif.tasks_store, "get", lambda s, tid: task)
     called = {}
 
-    async def fake_approve(kotx_task_id):
+    async def fake_fn(kotx_task_id):
         called["id"] = kotx_task_id
         return True
 
-    monkeypatch.setattr(notif.kotx_client, "approve_task", fake_approve)
+    cleared = []
 
-    payload = notif.ActionPayload(action=notif.ACTION_KOTX_APPROVE, tag=f"task-{task.id}")
+    async def fake_clear(task_id):
+        cleared.append(task_id)
+
+    monkeypatch.setattr(notif.kotx_client, fn_name, fake_fn)
+    monkeypatch.setattr(notif, "clear_task_notification", fake_clear)
+
+    payload = notif.ActionPayload(action=action, tag=f"task-{task.id}")
     result = await notif.handle_action(payload, request=SimpleNamespace(), session=object())
 
-    assert result == {"ok": True, "action": "KOTX_APPROVE", "task_id": str(task.id)}
+    assert result == {"ok": True, "action": action, "task_id": str(task.id)}
     assert called["id"] == 99
+    # Kicking off the proposed action clears the prompt that offered it.
+    assert cleared == [task.id]
 
 
 @pytest.mark.asyncio
@@ -830,6 +866,89 @@ async def test_notify_action_merge_requires_linked_kotx_run(monkeypatch):
         await notif.handle_action(payload, request=SimpleNamespace(), session=object())
 
     assert exc.value.status_code == 409
+
+
+# --- notification button/message composition ------------------------------------
+
+
+def _capture_notify(monkeypatch) -> dict:
+    captured: dict = {}
+
+    async def fake_notify(title, message, **kw):
+        captured.update({"title": title, "message": message, **kw})
+
+    monkeypatch.setattr(notify_svc, "notify", fake_notify)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_scheduled_notification_swaps_only_done_for_the_action(monkeypatch):
+    captured = _capture_notify(monkeypatch)
+    task = SimpleNamespace(id=uuid.uuid4(), title="#31 Add index", due_date=None)
+    start = datetime(2026, 7, 4, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
+
+    await notify_svc.notify_task_created(
+        task, start=start, end=end, primary_action={"action": "KOTX_START", "title": "Start"}
+    )
+
+    actions = captured["actions"]
+    assert actions[0] == {"action": "KOTX_START", "title": "Start"}
+    # Dismiss + Reschedule are preserved; only Done was replaced.
+    assert [a["action"] for a in actions[1:]] == [
+        notify_svc.ACTION_DISMISS_TASK,
+        notify_svc.ACTION_RESCHEDULE_TASK,
+    ]
+    assert "Scheduled" in captured["message"]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_notification_keeps_done_without_action(monkeypatch):
+    captured = _capture_notify(monkeypatch)
+    task = SimpleNamespace(id=uuid.uuid4(), title="t", due_date=None)
+    start = datetime(2026, 7, 4, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
+
+    await notify_svc.notify_task_created(task, start=start, end=end)
+
+    assert captured["actions"][0]["action"] == notify_svc.ACTION_CLOSE_TASK
+
+
+@pytest.mark.asyncio
+async def test_open_pr_notification_offers_open_pr_and_dismiss(monkeypatch):
+    captured = _capture_notify(monkeypatch)
+    await notify_svc.notify_kotx_open_pr(
+        SimpleNamespace(id=uuid.uuid4(), title="t"), subject="owner/repo#31 T"
+    )
+    assert [a["action"] for a in captured["actions"]] == [
+        notify_svc.ACTION_KOTX_APPROVE,
+        notify_svc.ACTION_DISMISS_TASK,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_confirm_merge_notification_names_reviewer_and_clips_comment(monkeypatch):
+    captured = _capture_notify(monkeypatch)
+    await notify_svc.notify_kotx_confirm_merge(
+        SimpleNamespace(id=uuid.uuid4(), title="t"),
+        subject="owner/repo#31 T",
+        approved_by="octocat",
+        comment="x" * 500,
+    )
+    # Merge is the only offered action.
+    assert captured["actions"] == [{"action": notify_svc.ACTION_KOTX_MERGE, "title": "Merge"}]
+    assert "Approved by octocat" in captured["message"]
+    assert captured["message"].endswith("…")  # comment truncated
+
+
+@pytest.mark.asyncio
+async def test_confirm_merge_notification_falls_back_without_context(monkeypatch):
+    captured = _capture_notify(monkeypatch)
+    await notify_svc.notify_kotx_confirm_merge(
+        SimpleNamespace(id=uuid.uuid4(), title="t"), subject="s"
+    )
+    assert "merge proposal" in captured["message"]
+    assert captured["actions"] == [{"action": notify_svc.ACTION_KOTX_MERGE, "title": "Merge"}]
 
 
 # --- dismiss (discard) a kotx run from the inbox --------------------------------
