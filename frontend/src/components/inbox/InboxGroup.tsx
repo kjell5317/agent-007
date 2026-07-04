@@ -68,6 +68,12 @@ export function InboxGroup({
     senders.length === 1 ? senders[0] : `${senders[0]} +${senders.length - 1}`;
 
   const unread = unseenMemberIds.length > 0;
+  const hasKotxRun = members.some(isKotxRun);
+  const cardBorderClass = hasKotxRun
+    ? "border-primary/50"
+    : unread
+      ? "border-emerald-500/70"
+      : null;
 
   useEffect(() => {
     if (!unread) return;
@@ -147,10 +153,7 @@ export function InboxGroup({
     (liveTask ?? closedTask ?? members.find((m) => m.task_id))?.task_id ?? null;
 
   return (
-    <Card
-      ref={cardRef}
-      className={cn(members.some(isKotxRun) && "border-primary/50")}
-    >
+    <Card ref={cardRef} className={cn(cardBorderClass)}>
       <CardContent
         className={cn(groupTaskId && "cursor-pointer")}
         onClick={(e) => {
@@ -168,13 +171,6 @@ export function InboxGroup({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              {unread && (
-                <span
-                  aria-label="Unread"
-                  title="Unread"
-                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                />
-              )}
               <div className="min-w-0 flex-1 truncate font-medium leading-snug">
                 {group.title}
               </div>

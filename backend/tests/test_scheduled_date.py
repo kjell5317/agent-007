@@ -70,6 +70,7 @@ def test_task_read_serializes_scheduled_date():
         link=None,
         due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
         scheduled_date=scheduled,
+        calendar_event_id="event-1",
         estimation=30,
         location=None,
         label=None,
@@ -80,7 +81,32 @@ def test_task_read_serializes_scheduled_date():
     read = TaskRead.build(row, "open", True)
 
     assert read.scheduled_date == scheduled
-    assert read.model_dump(mode="json")["scheduled_date"] == "2026-07-01T12:30:00Z"
+    dumped = read.model_dump(mode="json")
+    assert dumped["scheduled_date"] == "2026-07-01T12:30:00Z"
+    assert dumped["schedule_status"] == "scheduled"
+
+
+def test_task_read_marks_open_task_without_calendar_event_unscheduled():
+    scheduled = datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc)
+    row = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Write report",
+        description=None,
+        link=None,
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=scheduled,
+        calendar_event_id=None,
+        estimation=30,
+        location=None,
+        label=None,
+        created_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+    )
+
+    read = TaskRead.build(row, "open", True)
+
+    assert read.scheduled_date == scheduled
+    assert read.schedule_status == "unscheduled"
 
 
 def test_task_list_orders_by_scheduled_date(monkeypatch):

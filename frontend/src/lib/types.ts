@@ -1,4 +1,5 @@
 export type TaskStatus = "open" | "duplicate" | "closed" | "not_task";
+export type TaskScheduleStatus = "scheduled" | "unscheduled";
 
 export interface Task {
   id: string;
@@ -9,6 +10,7 @@ export interface Task {
   raw_inputs: TaskRawInput[];
   due_date: string | null;
   scheduled_date: string | null;
+  schedule_status: TaskScheduleStatus;
   estimation: number | null;
   location: string | null;
   label: string | null;
