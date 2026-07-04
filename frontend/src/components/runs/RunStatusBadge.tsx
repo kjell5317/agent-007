@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { runStatusLabel } from "@/components/runs/runLabels";
-import { inboxBadge } from "@/lib/inbox";
+import { badgeKindLabel, inboxBadge } from "@/lib/inbox";
 import type { KotxState, KotxTask } from "@/lib/kotx";
 import { cn } from "@/lib/utils";
 import type { RawInput } from "@/lib/types";
@@ -103,5 +103,5 @@ export function InputStatusBadge({ input }: { input: RawInput }) {
     }
   }
   const kind = inboxBadge(input);
-  return <Badge variant={kind}>{kind}</Badge>;
+  return <Badge variant={kind}>{badgeKindLabel(kind)}</Badge>;
 }
