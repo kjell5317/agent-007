@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
+from app.services.kotx import discard as kotx_discard  # noqa: E402
 from app.services.input.kotx import poll as kotx_poll  # noqa: E402
 from app.services.input.gmail.preprocess import _apply_github_identity  # noqa: E402
 from app.services.input.kotx.normalize import (  # noqa: E402
@@ -576,6 +577,37 @@ async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypat
     assert len(creates) == 1
     outcomes = sorted(t["outcome"] for t in traces)
     assert outcomes == ["no_change", "task_created"]
+
+
+# --- dismiss (discard) a kotx run from the inbox --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discard_run_for_input_discards_by_kotx_id(monkeypatch):
+    raw = _raw(_meta(state="drafting"))
+    calls = {}
+
+    async def fake_discard(kotx_task_id):
+        calls["kotx_task_id"] = kotx_task_id
+        return True
+
+    monkeypatch.setattr(kotx_discard.raw_inputs_store, "get", lambda s, i: raw)
+    monkeypatch.setattr(kotx_discard.kotx_client, "discard_task", fake_discard)
+    monkeypatch.setattr(kotx_discard, "publish_kotx", lambda: calls.setdefault("published", True))
+
+    result = await kotx_discard.discard_run_for_input(object(), raw.id)
+
+    assert result is True
+    assert calls["kotx_task_id"] == 42  # from _kotx_task fixture id
+    assert calls["published"] is True
+
+
+@pytest.mark.asyncio
+async def test_discard_run_for_input_rejects_non_kotx_input(monkeypatch):
+    raw = SimpleNamespace(id=uuid.uuid4(), source="gmail", source_metadata={})
+    monkeypatch.setattr(kotx_discard.raw_inputs_store, "get", lambda s, i: raw)
+    with pytest.raises(LookupError):
+        await kotx_discard.discard_run_for_input(object(), raw.id)
 
 
 def test_label_for_repo_prefers_config_match(monkeypatch):

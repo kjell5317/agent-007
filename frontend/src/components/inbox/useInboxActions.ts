@@ -43,6 +43,24 @@ export function useInboxActions(onChanged: () => Promise<void> | void) {
     [onChanged],
   );
 
+  // Dismiss a kotx run straight from a preparing/informational inbox card:
+  // there's no 007 task to touch, we just tell kotx to discard the run.
+  const dismissRun = useCallback(
+    async (rawInputId: string) => {
+      setBusy(true);
+      try {
+        const { discarded } = await api.discardKotxRun(rawInputId);
+        toast.success(discarded ? "Run dismissed" : "Run already ended");
+        await onChanged();
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onChanged],
+  );
+
   const promote = useCallback(
     async (anchorId: string, opts?: PromoteOpts) => {
       setBusy(true);
@@ -109,5 +127,5 @@ export function useInboxActions(onChanged: () => Promise<void> | void) {
     [onChanged],
   );
 
-  return { busy, runTaskAction, promote, reopenTask };
+  return { busy, runTaskAction, promote, reopenTask, dismissRun };
 }

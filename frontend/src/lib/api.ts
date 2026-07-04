@@ -12,7 +12,11 @@ class ApiError extends Error {
 
 // Always yields a non-empty message: `statusText` is empty over HTTP/2, and
 // FastAPI validation errors carry a list (not a string) in `detail`.
-function apiErrorMessage(status: number, statusText: string, body: unknown): string {
+function apiErrorMessage(
+  status: number,
+  statusText: string,
+  body: unknown,
+): string {
   if (body && typeof body === "object" && "detail" in body) {
     const detail = (body as { detail: unknown }).detail;
     if (typeof detail === "string" && detail) return detail;
@@ -71,7 +75,9 @@ export const api = {
   reopenTask: (id: string) =>
     request<TaskCreationAccepted>(`/tasks/${id}/reopen`, { method: "POST" }),
 
-  listInputs: (params: { limit?: number; status?: string; source?: string } = {}) => {
+  listInputs: (
+    params: { limit?: number; status?: string; source?: string } = {},
+  ) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.status) qs.set("status", params.status);
@@ -81,7 +87,11 @@ export const api = {
   getInput: (id: string) => request<RawInput>(`/inputs/${id}`),
   promoteInput: (
     id: string,
-    opts?: { title?: string; contextInputIds?: string[]; targetTaskId?: string },
+    opts?: {
+      title?: string;
+      contextInputIds?: string[];
+      targetTaskId?: string;
+    },
   ) =>
     request<TaskCreationAccepted>(`/tasks/open/${id}`, {
       method: "POST",
@@ -93,8 +103,11 @@ export const api = {
         ...(opts?.targetTaskId ? { target_task_id: opts.targetTaskId } : {}),
       }),
     }),
-  unreadInputCount: () =>
-    request<UnreadInputs>("/inputs/unread_count"),
+  discardKotxRun: (rawInputId: string) =>
+    request<{ discarded: boolean }>(`/inputs/${rawInputId}/discard_kotx`, {
+      method: "POST",
+    }),
+  unreadInputCount: () => request<UnreadInputs>("/inputs/unread_count"),
   markInputsSeen: () =>
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 

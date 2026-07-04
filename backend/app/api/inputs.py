@@ -4,6 +4,7 @@
   * GET  /inputs/{id}          — fetch one
   * GET  /inputs/unread_count  — inbox unread badge
   * POST /inputs/mark_seen     — reset the unread watermark
+  * POST /inputs/{id}/discard_kotx — dismiss the kotx run behind a preparing input
 
 Direct creation of raw_inputs goes through the ingestion sources (Gmail/Slack
 poll). Manual task entry lives at `POST /tasks`. Promoting an existing
@@ -21,6 +22,7 @@ from app import state
 from app.db import get_session
 from app.db.clients import raw_inputs
 from app.db.schemas.raw_input import RawInputRead
+from app.services.kotx.discard import discard_run_for_input
 
 router = APIRouter(prefix="/inputs", tags=["inputs"])
 
@@ -28,6 +30,10 @@ router = APIRouter(prefix="/inputs", tags=["inputs"])
 class UnreadCount(BaseModel):
     count: int
     last_seen_at: datetime
+
+
+class KotxDiscardResult(BaseModel):
+    discarded: bool
 
 
 @router.get("", response_model=list[RawInputRead])
@@ -78,3 +84,16 @@ async def get_input(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Raw input not found")
     return RawInputRead.from_row(row)
+
+
+@router.post("/{raw_input_id}/discard_kotx", response_model=KotxDiscardResult)
+async def discard_kotx_run(
+    raw_input_id: uuid.UUID, session: Session = Depends(get_session)
+) -> KotxDiscardResult:
+    """Dismiss the kotx run behind a preparing/informational kotx input — there
+    is no 007 task to close, so this just tells kotx to discard the run."""
+    try:
+        discarded = await discard_run_for_input(session, raw_input_id)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return KotxDiscardResult(discarded=discarded)

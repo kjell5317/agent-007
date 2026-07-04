@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, CirclePlus, RotateCcw, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CirclePlus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
@@ -8,7 +14,13 @@ import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { isAgentTaskFollowup, senderName, type InboxGroup as GroupData } from "@/lib/inbox";
+import {
+  isAgentTaskFollowup,
+  isDismissibleKotxRun,
+  isKotxRun,
+  senderName,
+  type InboxGroup as GroupData,
+} from "@/lib/inbox";
 import type { RawInput } from "@/lib/types";
 
 interface Props {
@@ -18,10 +30,16 @@ interface Props {
   onVisible: (ids: string[]) => void;
 }
 
-export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Props) {
+export function InboxGroup({
+  group,
+  onChanged,
+  unseenMemberIds,
+  onVisible,
+}: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-  const { busy, runTaskAction, promote, reopenTask } = useInboxActions(onChanged);
+  const { busy, runTaskAction, promote, reopenTask, dismissRun } =
+    useInboxActions(onChanged);
 
   const { members, newest, liveTask, closedTask } = group;
   const unseenMemberKey = useMemo(
@@ -35,9 +53,7 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
 
   const senders = Array.from(new Set(members.map(senderName)));
   const sendersLabel =
-    senders.length === 1
-      ? senders[0]
-      : `${senders[0]} +${senders.length - 1}`;
+    senders.length === 1 ? senders[0] : `${senders[0]} +${senders.length - 1}`;
 
   const unread = unseenMemberIds.length > 0;
 
@@ -71,8 +87,21 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
   // existing task from a follow-up (reopened / updated / closed / no_change):
   // that task is real, so promoting would duplicate it.
   const agentActed = members.some(isAgentTaskFollowup);
-  const action =
-    !liveTask && !closedTask && !agentActed
+  // A task-less thread whose members are all kotx transitions is a kotx run
+  // (or successive runs on the same issue) that hasn't produced a task yet.
+  // Offer "Dismiss run" (discard the newest run upstream) instead of "Make a
+  // task from thread"; a run already terminal gets no action. Mixed
+  // gmail+kotx github threads keep the promote path.
+  const kotxRunThread = !liveTask && !closedTask && members.every(isKotxRun);
+  const action = kotxRunThread
+    ? isDismissibleKotxRun(newest)
+      ? {
+          label: "Dismiss run",
+          Icon: Trash2,
+          run: () => dismissRun(newest.id),
+        }
+      : null
+    : !liveTask && !closedTask && !agentActed
       ? {
           label: "Make a task from thread",
           Icon: CirclePlus,
@@ -84,7 +113,11 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
             label: "Dismiss task",
             Icon: Trash2,
             run: () =>
-              runTaskAction(liveTask.task_id!, api.markNotTask, "Task dismissed"),
+              runTaskAction(
+                liveTask.task_id!,
+                api.markNotTask,
+                "Task dismissed",
+              ),
           }
         : closedTask
           ? {

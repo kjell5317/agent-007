@@ -1,3 +1,4 @@
+import { TERMINAL_STATES, type KotxState } from "@/lib/kotx";
 import type { RawInput } from "@/lib/types";
 
 export type BadgeKind =
@@ -12,7 +13,12 @@ export type BadgeKind =
 // The agent outcomes on a follow-up that mean it deliberately acted on / judged
 // an existing task (as opposed to the embedding auto-decider, which is a
 // similarity guess). Each gets its own badge and suppresses "Make a task".
-const AGENT_TASK_OUTCOMES = new Set(["reopened", "updated", "closed", "no_change"]);
+const AGENT_TASK_OUTCOMES = new Set([
+  "reopened",
+  "updated",
+  "closed",
+  "no_change",
+]);
 
 // True when the agent (not the embedding auto-decider) acted on an existing
 // task from this follow-up. `auto_decided` marks the embedding path, which we
@@ -51,6 +57,36 @@ export function senderName(data: RawInput): string {
   return data.source === "manual" ? "Manual" : data.source;
 }
 
+// A kotx transition carrying a run id. Its inbox card is a run breadcrumb, not
+// a task — informational ones (drafting/queued/running) never get a task_id.
+export function isKotxRun(r: RawInput): boolean {
+  return r.source === "kotx" && r.source_metadata?.kotx_task_id != null;
+}
+
+// A kotx run still in flight (state not terminal) — the inbox offers
+// "Dismiss run" (discard upstream) instead of "Make a task". Already-terminal
+// runs (done/cancelled/discarded/…) can't be discarded, so no action.
+export function isDismissibleKotxRun(r: RawInput): boolean {
+  if (!isKotxRun(r)) return false;
+  const state = r.source_metadata?.kotx_state;
+  return typeof state === "string" && !TERMINAL_STATES.has(state as KotxState);
+}
+
+// kotx subjects are "{repo}#{n} {title}"; drop the repo — it's shown as the
+// sender and carried by the label — so the inbox card matches the task title,
+// which the runner stores repo-stripped (see agent.kotx `_create_task_from_brief`).
+function displaySubject(data: RawInput): string {
+  const subject =
+    typeof data.source_metadata?.subject === "string"
+      ? data.source_metadata.subject
+      : "";
+  if (!subject || data.source !== "kotx") return subject;
+  const repo = data.source_metadata?.repo;
+  return typeof repo === "string" && repo && subject.startsWith(repo)
+    ? subject.slice(repo.length)
+    : subject;
+}
+
 // The card/group headline: prefer a live (open) or completed (closed) task's
 // title — that's the human-meaningful name — else the raw envelope.
 export function inputTitle(data: RawInput): string {
@@ -60,9 +96,7 @@ export function inputTitle(data: RawInput): string {
       : null;
   return (
     linked ||
-    (typeof data.source_metadata?.subject === "string"
-      ? data.source_metadata.subject
-      : "") ||
+    displaySubject(data) ||
     (data.content || "").slice(0, 80) ||
     "(no subject)"
   );
