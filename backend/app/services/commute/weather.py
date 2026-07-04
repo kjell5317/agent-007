@@ -133,6 +133,13 @@ async def geocode(session, address: str) -> tuple[float, float] | None:
 
     results = payload.get("results") or []
     if not results:
+        # REQUEST_DENIED here usually means the key lacks the Geocoding API
+        # (Distance Matrix being enabled is not enough); ZERO_RESULTS means
+        # the address itself doesn't resolve.
+        log.warning(
+            "geocode · no result for %r status=%s msg=%r",
+            address, payload.get("status"), payload.get("error_message"),
+        )
         return None
     loc = results[0].get("geometry", {}).get("location") or {}
     if "lat" not in loc or "lng" not in loc:

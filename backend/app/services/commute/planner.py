@@ -76,6 +76,11 @@ async def refresh_weather_sensitive_commutes(
     if not settings.home_address:
         summary["errors"].append({"setup": "home_address not configured"})
         return summary
+    if not settings.google_maps_api_key:
+        # Without the key `geocode` returns None before any HTTP call, which
+        # would be misreported below as an un-geocodable address.
+        summary["errors"].append({"setup": "google_maps_api_key not configured"})
+        return summary
 
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=1)
