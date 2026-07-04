@@ -362,11 +362,16 @@ function PointsModal({
             (the Adjust form is short; the Log list is tall and variable).
             Flex column + overflow-hidden so the log scrolls inside the box
             instead of overflowing it — a percentage-height chain through
-            Radix's TabsContent doesn't reliably clip. */}
+            Radix's TabsContent doesn't reliably clip.
+            `data-[state=active]:flex` (not a bare `flex`): Radix keeps the
+            inactive panel mounted with the `hidden` attribute, and a bare
+            `flex` utility would override `[hidden]{display:none}`, leaving the
+            hidden panel taking flex space. Gating the display on the active
+            state lets `hidden` win for the inactive panel. */}
         <div className="flex h-80 flex-col overflow-hidden">
           <TabsContent
             value="adjust"
-            className="mt-0 flex flex-1 flex-col justify-center"
+            className="mt-0 flex-1 flex-col justify-center data-[state=active]:flex"
           >
             {total != null && (
               <div className="mb-4 text-center">
@@ -416,7 +421,10 @@ function PointsModal({
               </Button>
             </div>
           </TabsContent>
-          <TabsContent value="log" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <TabsContent
+            value="log"
+            className="mt-0 min-h-0 flex-1 flex-col data-[state=active]:flex"
+          >
             <div
               className={cn(
                 "min-h-0 flex-1 overflow-y-auto",
