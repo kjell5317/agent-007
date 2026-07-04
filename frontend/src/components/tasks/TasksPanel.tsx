@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { TaskCard } from "@/components/tasks/TaskCard";
-import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { Collapsible } from "@/components/ui/collapsible";
-import { api } from "@/lib/api";
 import { isOverdue, isToday } from "@/lib/dates";
 import type { KotxTask } from "@/lib/kotx";
 import { compareTasksBySchedule, taskGroupDate } from "@/lib/tasks";
@@ -21,9 +19,7 @@ interface Props {
   kotxTasks: ReadonlyMap<number, KotxTask>;
   onChanged: () => Promise<void> | void;
   onKotxChanged: () => Promise<void> | void;
-  selectedTaskId: string | null;
   onTaskOpen: (id: string) => void;
-  onSelectedTaskClose: () => void;
   unseenTaskIds: ReadonlySet<string>;
   onTaskVisible: (id: string) => void;
 }
@@ -33,13 +29,10 @@ export function TasksPanel({
   kotxTasks,
   onChanged,
   onKotxChanged,
-  selectedTaskId,
   onTaskOpen,
-  onSelectedTaskClose,
   unseenTaskIds,
   onTaskVisible,
 }: Props) {
-  const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const [laterOpen, setLaterOpen] = useState(false);
   const kotxFor = (task: Task) =>
     task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
@@ -60,116 +53,70 @@ export function TasksPanel({
     }
     return [t, w, l];
   }, [tasks]);
-  const selectedListTask = useMemo(
-    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
-    [selectedTaskId, tasks],
-  );
-  const selectedTask = selectedTaskId ? selectedListTask ?? fetchedTask : null;
-
-  useEffect(() => {
-    if (!selectedTaskId || selectedListTask) {
-      setFetchedTask(null);
-      return;
-    }
-    let cancelled = false;
-    api
-      .getTask(selectedTaskId)
-      .then((task) => {
-        if (!cancelled) setFetchedTask(task);
-      })
-      .catch(() => {
-        if (!cancelled) onSelectedTaskClose();
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [onSelectedTaskClose, selectedListTask, selectedTaskId]);
 
   if (today.length === 0 && thisWeek.length === 0 && later.length === 0) {
     return (
-      <>
-        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No tasks yet. Add one below or sync a source.
-        </div>
-        {selectedTask && (
-          <TaskDetailModal
-            task={selectedTask}
-            kotxTask={kotxFor(selectedTask)}
-            onClose={onSelectedTaskClose}
-            onChanged={onChanged}
-            onKotxChanged={onKotxChanged}
-          />
-        )}
-      </>
+      <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+        No tasks yet. Add one below or sync a source.
+      </div>
     );
   }
 
   return (
-    <>
-      <div className="space-y-6">
-        {today.length > 0 && (
-          <Section title="Today">
-            {today.map((t) => (
-              <TaskCard
-                key={t.id}
-                task={t}
-                kotxTask={kotxFor(t)}
-                onChanged={onChanged}
-                onKotxChanged={onKotxChanged}
-                onOpen={onTaskOpen}
-                unseen={unseenTaskIds.has(t.id)}
-                onVisible={onTaskVisible}
-              />
-            ))}
-          </Section>
-        )}
-        {thisWeek.length > 0 && (
-          <Section title="This week">
-            {thisWeek.map((t) => (
-              <TaskCard
-                key={t.id}
-                task={t}
-                kotxTask={kotxFor(t)}
-                onChanged={onChanged}
-                onKotxChanged={onKotxChanged}
-                onOpen={onTaskOpen}
-                unseen={unseenTaskIds.has(t.id)}
-                onVisible={onTaskVisible}
-              />
-            ))}
-          </Section>
-        )}
-        {later.length > 0 && (
-          <CollapsibleSection
-            title="Later"
-            open={laterOpen}
-            onOpenChange={setLaterOpen}
-          >
-            {later.map((t) => (
-              <TaskCard
-                key={t.id}
-                task={t}
-                kotxTask={kotxFor(t)}
-                onChanged={onChanged}
-                onKotxChanged={onKotxChanged}
-                onOpen={onTaskOpen}
-                unseen={unseenTaskIds.has(t.id)}
-                onVisible={onTaskVisible}
-              />
-            ))}
-          </CollapsibleSection>
-        )}
-      </div>
-      {selectedTask && (
-        <TaskDetailModal
-          task={selectedTask}
-          kotxTask={kotxFor(selectedTask)}
-          onClose={onSelectedTaskClose}
-          onChanged={onChanged}
-          onKotxChanged={onKotxChanged}
-        />
+    <div className="space-y-6">
+      {today.length > 0 && (
+        <Section title="Today">
+          {today.map((t) => (
+            <TaskCard
+              key={t.id}
+              task={t}
+              kotxTask={kotxFor(t)}
+              onChanged={onChanged}
+              onKotxChanged={onKotxChanged}
+              onOpen={onTaskOpen}
+              unseen={unseenTaskIds.has(t.id)}
+              onVisible={onTaskVisible}
+            />
+          ))}
+        </Section>
       )}
-    </>
+      {thisWeek.length > 0 && (
+        <Section title="This week">
+          {thisWeek.map((t) => (
+            <TaskCard
+              key={t.id}
+              task={t}
+              kotxTask={kotxFor(t)}
+              onChanged={onChanged}
+              onKotxChanged={onKotxChanged}
+              onOpen={onTaskOpen}
+              unseen={unseenTaskIds.has(t.id)}
+              onVisible={onTaskVisible}
+            />
+          ))}
+        </Section>
+      )}
+      {later.length > 0 && (
+        <CollapsibleSection
+          title="Later"
+          open={laterOpen}
+          onOpenChange={setLaterOpen}
+        >
+          {later.map((t) => (
+            <TaskCard
+              key={t.id}
+              task={t}
+              kotxTask={kotxFor(t)}
+              onChanged={onChanged}
+              onKotxChanged={onKotxChanged}
+              onOpen={onTaskOpen}
+              unseen={unseenTaskIds.has(t.id)}
+              onVisible={onTaskVisible}
+            />
+          ))}
+        </CollapsibleSection>
+      )}
+    </div>
   );
 }
 
