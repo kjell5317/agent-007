@@ -39,10 +39,11 @@ def test_settings_prefers_llm_model_and_keeps_claude_model_fallback():
     assert defaulted.effective_llm_model == DEFAULT_ANTHROPIC_MODEL
 
 
-def test_settings_default_commute_event_buffer_is_5_minutes():
+def test_settings_default_buffers():
     settings = Settings(database_url="postgresql+psycopg://test:test@localhost/test")
 
     assert settings.commute_event_buffer_minutes == 5
+    assert settings.event_buffer_minutes == 15
 
 
 @pytest.mark.asyncio

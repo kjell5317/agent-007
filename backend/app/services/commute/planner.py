@@ -384,6 +384,7 @@ async def _resolve_routes(
     call per pair."""
     max_rain = max(hourly_rain.values()) if hourly_rain else None
     rain_possible = max_rain is not None and max_rain >= settings.commute_rain_threshold_pct
+    home_norm = " ".join(home.lower().split())
     durations: Durations = {}
     resolved = 0
     for (origin, destination), reference in required_routes(anchors, home).items():
@@ -394,7 +395,16 @@ async def _resolve_routes(
             )
             durations[(origin, destination, "bicycling")] = bike
             resolved += 1
-            if bike is None or bike > settings.commute_bike_max_minutes * 60 or rain_possible:
+            # Legs not starting at home may be forced onto transit by the
+            # bike-stays-home chain rule, so their transit duration must be
+            # on hand even when the bike would otherwise win.
+            mid_chain = " ".join(origin.lower().split()) != home_norm
+            if (
+                bike is None
+                or bike > settings.commute_bike_max_minutes * 60
+                or rain_possible
+                or mid_chain
+            ):
                 durations[(origin, destination, "transit")] = await resolve_duration(
                     session, origin=origin, destination=destination,
                     mode="transit", departure=reference,
