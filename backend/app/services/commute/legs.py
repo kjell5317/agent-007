@@ -5,11 +5,18 @@ scheduled located task. Legs are derived from the ordered anchor timeline
 and are never scheduled or repaired on their own: whenever an anchor moves,
 its legs are recomputed from scratch here.
 
-Chaining rules between consecutive anchors P → N:
+Overlapping anchors (double-booked calendar) are grouped into a cluster
+first: the arriving leg targets the cluster's earliest start, the departing
+leg leaves after the cluster's *latest end* — no legs inside a cluster.
+
+Chaining rules between consecutive clusters P → N:
 
   * same location            → no leg (already there)
   * gap fits a home layover  → P → home, then home → N
   * gap too small            → direct leg P → N
+
+Direct legs slide earlier (never later) to stay clear of `avoid` spans —
+online meetings the timeline doesn't route to but the user still attends.
 
 The bike lives at home: a leg may only be ridden when every previous leg
 since the last home departure was ridden too. Once a chain leaves home by
@@ -84,7 +91,7 @@ def choose_mode(
 def required_routes(anchors: list[Anchor], home: str) -> dict[tuple[str, str], datetime]:
     """Route pairs `derive_legs` may need, each with a reference departure
     time for the resolver's hour bucket."""
-    ordered = sorted(anchors, key=lambda a: a.start)
+    clusters = _overlap_clusters(_ordered_away(anchors, home))
     out: dict[tuple[str, str], datetime] = {}
 
     def _add(origin: str, destination: str, when: datetime) -> None:
@@ -92,12 +99,40 @@ def required_routes(anchors: list[Anchor], home: str) -> dict[tuple[str, str], d
             return
         out.setdefault((origin, destination), when)
 
-    for anchor in ordered:
-        _add(home, anchor.location, anchor.start)
-        _add(anchor.location, home, anchor.end)
-    for prev, nxt in zip(ordered, ordered[1:], strict=False):
-        _add(prev.location, nxt.location, prev.end)
+    for cluster in clusters:
+        entry, exit_ = _cluster_entry(cluster), _cluster_exit(cluster)
+        _add(home, entry.location, entry.start)
+        _add(exit_.location, home, exit_.end)
+    for prev, nxt in zip(clusters, clusters[1:], strict=False):
+        _add(_cluster_exit(prev).location, _cluster_entry(nxt).location, _cluster_exit(prev).end)
     return out
+
+
+def _ordered_away(anchors: list[Anchor], home: str) -> list[Anchor]:
+    return [a for a in sorted(anchors, key=lambda x: x.start) if _norm(a.location) != _norm(home)]
+
+
+def _overlap_clusters(ordered: list[Anchor]) -> list[list[Anchor]]:
+    """Group time-overlapping anchors — the user is double-booked, so no
+    travel happens between them; the cluster is entered once and left once."""
+    clusters: list[list[Anchor]] = []
+    reach: datetime | None = None
+    for anchor in ordered:
+        if reach is not None and anchor.start < reach:
+            clusters[-1].append(anchor)
+            reach = max(reach, anchor.end)
+        else:
+            clusters.append([anchor])
+            reach = anchor.end
+    return clusters
+
+
+def _cluster_entry(cluster: list[Anchor]) -> Anchor:
+    return cluster[0]
+
+
+def _cluster_exit(cluster: list[Anchor]) -> Anchor:
+    return max(cluster, key=lambda a: a.end)
 
 
 def derive_legs(
@@ -106,13 +141,16 @@ def derive_legs(
     durations: Durations,
     rain: dict[str, int] | None,
     settings,
+    avoid: list[tuple[datetime, datetime]] | None = None,
 ) -> tuple[list[PlannedLeg], int]:
     """Return `(legs, unroutable)` for the anchor timeline — `unroutable`
     counts the legs that got a `FAILED_MODE` 30-minute placeholder because
-    no mode could route them."""
-    ordered = [a for a in sorted(anchors, key=lambda x: x.start) if _norm(a.location) != _norm(home)]
+    no mode could route them. `avoid` spans (online meetings) push direct
+    legs earlier when the just-in-time placement would overlap them."""
+    clusters = _overlap_clusters(_ordered_away(anchors, home))
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
     layover = timedelta(minutes=settings.commute_home_layover_minutes)
+    avoid = sorted(avoid or [])
 
     legs: list[PlannedLeg] = []
     # The bike lives at home: it's only on hand while every leg since the
@@ -126,19 +164,23 @@ def derive_legs(
         bike_with_me = on_bike if leg.origin_anchor == HOME else (bike_with_me and on_bike)
         legs.append(leg)
 
-    bounded: list[Anchor | None] = [None, *ordered, None]
-    for prev, nxt in zip(bounded, bounded[1:], strict=False):
-        if prev is None and nxt is None:
+    bounded: list[list[Anchor] | None] = [None, *clusters, None]
+    for prev_cluster, nxt_cluster in zip(bounded, bounded[1:], strict=False):
+        if prev_cluster is None and nxt_cluster is None:
             continue
-        if prev is None:
-            _push(_arrive_leg(HOME, home, nxt, durations, rain, settings, buffer))
+        if prev_cluster is None:
+            _push(_arrive_leg(
+                HOME, home, _cluster_entry(nxt_cluster), durations, rain, settings, buffer,
+            ))
             continue
-        if nxt is None:
+        prev = _cluster_exit(prev_cluster)
+        if nxt_cluster is None:
             _push(_depart_leg(
                 prev, HOME, home, durations, rain, settings, buffer,
                 bike_available=bike_with_me,
             ))
             continue
+        nxt = _cluster_entry(nxt_cluster)
 
         if _norm(prev.location) == _norm(nxt.location):
             continue
@@ -185,6 +227,7 @@ def derive_legs(
                 prev.id, prev.location, nxt, durations, rain, settings, buffer,
                 not_before=prev.end + buffer,
                 bike_available=bike_with_me,
+                avoid=avoid,
             )
         )
     return legs, sum(1 for leg in legs if leg.mode == FAILED_MODE)
@@ -201,6 +244,7 @@ def _arrive_leg(
     *,
     not_before: datetime | None = None,
     bike_available: bool = True,
+    avoid: list[tuple[datetime, datetime]] | None = None,
 ) -> PlannedLeg:
     option = _leg_option(
         origin, anchor.location, anchor.start, durations, rain, settings,
@@ -209,6 +253,8 @@ def _arrive_leg(
     seconds, mode, reason = option if option is not None else _failed_option()
     arrive = anchor.start - buffer
     depart = arrive - timedelta(seconds=seconds)
+    if avoid:
+        depart, arrive = _dodged_earlier(depart, arrive, avoid, buffer, floor=not_before)
     if not_before is not None and depart < not_before:
         # Physically late — anchor the leg to the earliest possible departure
         # and let the overlap machinery deal with what it collides with.
@@ -276,6 +322,34 @@ def _leg_option(
             return None
         return bike, "bicycling", "transit unavailable, fell back to bike"
     return bike, "bicycling", None
+
+
+def _dodged_earlier(
+    depart: datetime,
+    arrive: datetime,
+    avoid: list[tuple[datetime, datetime]],
+    buffer: timedelta,
+    *,
+    floor: datetime | None,
+) -> tuple[datetime, datetime]:
+    """Slide `[depart, arrive]` earlier until it clears every avoid span by
+    `buffer`. Falls back to the original placement when nothing at or above
+    `floor` clears — the overlap is then at least visible on the calendar."""
+    span = arrive - depart
+    original = (depart, arrive)
+    for _ in range(len(avoid) + 1):
+        conflict = max(
+            (a for a in avoid if a[0] < arrive + buffer and depart - buffer < a[1]),
+            key=lambda a: a[0],
+            default=None,
+        )
+        if conflict is None:
+            return depart, arrive
+        arrive = conflict[0] - buffer
+        depart = arrive - span
+        if floor is not None and depart < floor:
+            return original
+    return original
 
 
 def _failed_option() -> tuple[int, str, str]:

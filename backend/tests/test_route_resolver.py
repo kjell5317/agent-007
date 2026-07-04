@@ -274,3 +274,40 @@ async def test_google_maps_short_link_uses_redirected_url(monkeypatch):
     monkeypatch.setattr("app.services.location.httpx.AsyncClient", Client)
 
     assert await resolve_google_maps_url("https://maps.app.goo.gl/abcdef") == "48.26566,11.66256"
+
+
+@pytest.mark.asyncio
+async def test_google_maps_short_link_survives_consent_interstitial(monkeypatch):
+    """EU short-link chains end on consent.google.com — the routable value
+    lives in an intermediate hop and in the consent `continue` param."""
+
+    class Hop:
+        def __init__(self, url):
+            self.url = url
+
+    class Response:
+        history = [
+            Hop("https://maps.app.goo.gl/abcdef"),
+            Hop("https://maps.google.com?q=48.2622886,11.6684591&entry=gps"),
+        ]
+        url = (
+            "https://consent.google.com/ml?continue="
+            "https://maps.google.com/maps?q%3D48.2622886,11.6684591%26entry%3Dgps"
+        )
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            return Response()
+
+    monkeypatch.setattr("app.services.location.httpx.AsyncClient", Client)
+
+    assert await resolve_google_maps_url("https://maps.app.goo.gl/abcdef") == "48.2622886,11.6684591"

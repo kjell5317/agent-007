@@ -406,7 +406,7 @@ async def test_calendar_google_maps_anchor_routes_resolved_location(monkeypatch)
         _day_at(15),
         location="https://www.google.com/maps/place/Library/@48.137154,11.576124,17z",
     )
-    anchors, existing_commutes, skipped_online = _partition([event], "primary")
+    anchors, existing_commutes, online_spans = _partition([event], "primary")
     anchors = await _resolve_routable_anchors(anchors)
     calls = []
 
@@ -436,14 +436,17 @@ async def test_calendar_google_maps_anchor_routes_resolved_location(monkeypatch)
         {"errors": []},
     )
 
-    assert skipped_online == 0
+    assert online_spans == []
     assert existing_commutes == []
     assert anchors[0].location == "48.137154,11.576124"
     assert durations[("Homestreet 1", "48.137154,11.576124", "bicycling")] == 600
     assert durations[("48.137154,11.576124", "Homestreet 1", "bicycling")] == 600
-    assert [(call["origin"], call["destination"]) for call in calls] == [
-        ("Homestreet 1", "48.137154,11.576124"),
-        ("48.137154,11.576124", "Homestreet 1"),
+    assert [(call["origin"], call["destination"], call["mode"]) for call in calls] == [
+        ("Homestreet 1", "48.137154,11.576124", "bicycling"),
+        ("48.137154,11.576124", "Homestreet 1", "bicycling"),
+        # Legs not starting at home may be forced onto transit by the
+        # bike-stays-home rule, so their transit duration is fetched up front.
+        ("48.137154,11.576124", "Homestreet 1", "transit"),
     ]
 
 

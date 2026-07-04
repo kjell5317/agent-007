@@ -204,6 +204,61 @@ def test_unroutable_middle_gap_gets_failed_direct_leg():
     assert direct.arrive - direct.depart == timedelta(seconds=FAILED_LEG_SECONDS)
 
 
+def test_return_leg_departs_after_latest_ending_overlap():
+    # Double-booked evening: a short event starts inside a longer one. The
+    # ride home leaves after the *longest* event ends — not after the
+    # later-starting short one.
+    long_ev = Anchor("ev-long", _at(18), _at(22), GYM)
+    short_ev = Anchor("ev-short", _at(18, 10), _at(18, 40), OFFICE)
+    legs, skipped = derive_legs([long_ev, short_ev], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.key for leg in legs] == [(HOME, "ev-long"), ("ev-long", HOME)]
+    inbound = legs[-1]
+    assert inbound.origin == GYM
+    assert inbound.depart == long_ev.end + BUFFER
+
+
+def test_overlap_cluster_required_routes_use_entry_and_exit():
+    long_ev = Anchor("ev-long", _at(18), _at(22), GYM)
+    short_ev = Anchor("ev-short", _at(18, 10), _at(18, 40), OFFICE)
+    routes = required_routes([long_ev, short_ev], HOME_ADDR)
+
+    assert set(routes) == {(HOME_ADDR, GYM), (GYM, HOME_ADDR)}
+
+
+def test_direct_leg_dodges_online_meeting():
+    # Physical → physical with an online meeting right before the second
+    # event: the connecting leg slides into the free gap instead of sitting
+    # on top of the call.
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(16, 30), _at(18), OFFICE)
+    online = (_at(15, 30), _at(16, 25))
+    legs, _ = derive_legs(
+        [first, second], HOME_ADDR, _durations(), None, SETTINGS, avoid=[online],
+    )
+
+    direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
+    assert direct.arrive == online[0] - BUFFER
+    assert direct.depart == direct.arrive - timedelta(seconds=300)
+    assert direct.depart >= first.end + BUFFER
+
+
+def test_direct_leg_keeps_late_placement_when_dodge_cannot_fit():
+    # The online meeting fills the whole gap — nothing earlier clears, so
+    # the leg stays just-in-time (visible overlap beats being late).
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(16, 30), _at(18), OFFICE)
+    online = (_at(15), _at(16, 30))
+    legs, _ = derive_legs(
+        [first, second], HOME_ADDR, _durations(), None, SETTINGS, avoid=[online],
+    )
+
+    direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
+    assert direct.arrive == second.start - BUFFER
+    assert direct.depart == direct.arrive - timedelta(seconds=300)
+
+
 def test_home_anchor_produces_no_legs():
     anchor = Anchor("ev1", _at(14), _at(15), HOME_ADDR.upper())
     legs, skipped = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS)

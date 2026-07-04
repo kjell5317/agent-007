@@ -174,9 +174,9 @@ async def plan_window_commutes(
         time_max=window_end + margin,
         account_key=account_key,
     )
-    anchors, existing_commutes, skipped_online = _partition(events, write_calendar_id)
+    anchors, existing_commutes, online_spans = _partition(events, write_calendar_id)
     anchors = await _resolve_routable_anchors(anchors)
-    summary["skipped_online"] = skipped_online
+    summary["skipped_online"] = len(online_spans)
 
     if hourly_rain is None:
         hourly_rain = await _home_rain(session, home, window_start, window_end + margin)
@@ -189,7 +189,9 @@ async def plan_window_commutes(
         # into a bogus "no route" placeholder. Leave the calendar untouched;
         # the next scheduled pass retries.
         return summary
-    legs, skipped_unroutable = derive_legs(anchors, home, durations, hourly_rain, settings)
+    legs, skipped_unroutable = derive_legs(
+        anchors, home, durations, hourly_rain, settings, avoid=online_spans,
+    )
     summary["skipped_unroutable"] = skipped_unroutable
 
     # Only legs touching the requested window are written or deleted — the
@@ -591,10 +593,13 @@ async def _write_legs(
 def _partition(
     events: list[CalendarEvent],
     write_calendar_id: str,
-) -> tuple[list[Anchor], list[CalendarEvent], int]:
+) -> tuple[list[Anchor], list[CalendarEvent], list[tuple[datetime, datetime]]]:
+    """Split events into routable anchors, managed commute legs, and the
+    spans of online meetings — not routed to, but legs shouldn't sit on
+    top of them either."""
     anchors: list[Anchor] = []
     commutes: list[CalendarEvent] = []
-    skipped_online = 0
+    online_spans: list[tuple[datetime, datetime]] = []
     for ev in events:
         if ev.all_day:
             continue
@@ -603,7 +608,7 @@ def _partition(
                 commutes.append(ev)
             continue
         if is_online_location(ev.location):
-            skipped_online += 1
+            online_spans.append((to_user_tz(ev.start), to_user_tz(ev.end)))
             continue
         anchors.append(
             Anchor(
@@ -614,7 +619,7 @@ def _partition(
             )
         )
     anchors.sort(key=lambda a: a.start)
-    return anchors, commutes, skipped_online
+    return anchors, commutes, online_spans
 
 
 def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:

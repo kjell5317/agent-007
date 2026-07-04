@@ -96,13 +96,30 @@ async def resolve_google_maps_url(location: str | None) -> str | None:
             follow_redirects=True,
         ) as client:
             resp = await client.get(clean)
-            final_url = str(resp.url)
+            hops = [str(r.url) for r in (*getattr(resp, "history", []), resp)]
     except Exception as exc:  # noqa: BLE001
         log.info("Google Maps short-link expansion failed for %r (%s)", clean, exc)
         return None
-    if final_url == clean:
-        return None
-    return _routable_from_google_maps_url(final_url)
+    # The chain often ends on consent.google.com (EU cookie interstitial)
+    # with the real maps URL in its `continue` param, while an intermediate
+    # hop already carried the coordinates — walk it most-resolved-first.
+    for url in reversed(hops):
+        if url == clean:
+            continue
+        routable = _routable_from_google_maps_url(_unwrap_consent_url(url))
+        if routable is not None:
+            return routable
+    log.info("Google Maps short-link %r resolved to nothing routable (%s)", clean, hops[-1])
+    return None
+
+
+def _unwrap_consent_url(url: str) -> str:
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() != "consent.google.com":
+        return url
+    for value in parse_qs(parsed.query).get("continue", []):
+        return value
+    return url
 
 
 def resolve_routable_location_sync(location: str | None) -> str | None:
