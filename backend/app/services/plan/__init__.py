@@ -24,7 +24,7 @@ delete: `close` / `dismiss` go straight to
 """
 
 from app.services.plan.commute import (
-    cleanup_past_commute_legs,
+    cleanup_stray_commute_legs,
     plan_commutes_window,
     refresh_commutes_for_weather,
 )
@@ -41,7 +41,7 @@ from app.services.plan.update import update_task_to_calendar
 __all__ = [
     "Interval",
     "PlannedSlot",
-    "cleanup_past_commute_legs",
+    "cleanup_stray_commute_legs",
     "plan_commutes_window",
     "refresh_commutes_for_weather",
     "plan_task_slot",

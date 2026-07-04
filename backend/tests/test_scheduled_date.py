@@ -394,7 +394,7 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
         fake_repair_by_displacing_task,
     )
     monkeypatch.setattr(
-        schedule_service, "_db_scheduled_busy", lambda *a, **k: []
+        schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy
     )
 
     result = await schedule_service.plan_task_slot(SimpleNamespace(), task)

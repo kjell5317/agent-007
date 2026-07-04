@@ -27,7 +27,7 @@ from app.services.calendar.discover import discover_updated_events
 from app.services.input.poll import poll_sources
 from app.services.notify import notify_points_penalty
 from app.services.plan import (
-    cleanup_past_commute_legs,
+    cleanup_stray_commute_legs,
     plan_commutes_window,
     refresh_commutes_for_weather,
     schedule_task,
@@ -267,16 +267,16 @@ async def _commute_migration() -> None:
             settings = get_settings()
             now = datetime.now(timezone.utc)
             with SessionLocal() as session:
-                removed_past = await cleanup_past_commute_legs(session)
+                removed_strays = await cleanup_stray_commute_legs(session)
                 summary = await plan_commutes_window(
                     session,
                     window_start=now,
                     window_end=now + timedelta(days=settings.commute_lookahead_days),
                 )
             log.info(
-                "commute-migration done · removed_past=%d planned=%d"
+                "commute-migration done · removed_strays=%d planned=%d"
                 " rescheduled_tasks=%d unroutable=%d errors=%d",
-                removed_past,
+                removed_strays,
                 summary["planned"],
                 summary["rescheduled_tasks"],
                 summary["skipped_unroutable"],
@@ -301,8 +301,9 @@ async def _commute_migration() -> None:
 
 
 async def _commute_cleanup() -> None:
-    """Daily sweep deleting commute legs that already ended (the startup
-    migration also runs one, so restarts don't wait a day for it)."""
+    """Daily sweep deleting commute legs outside the live window — already
+    ended or beyond the lookahead horizon (the startup migration also runs
+    one, so restarts don't wait a day for it)."""
     log.info("commute-cleanup loop started · interval=%ds", COMMUTE_CLEANUP_INTERVAL_S)
     while True:
         try:
@@ -311,7 +312,7 @@ async def _commute_cleanup() -> None:
                 log.debug("commute-cleanup skipped (disabled)")
                 continue
             with SessionLocal() as session:
-                deleted = await cleanup_past_commute_legs(session)
+                deleted = await cleanup_stray_commute_legs(session)
             log.info("commute-cleanup done · deleted=%d", deleted)
         except asyncio.CancelledError:
             log.info("commute-cleanup loop cancelled")
