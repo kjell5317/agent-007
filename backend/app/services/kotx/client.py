@@ -106,19 +106,34 @@ async def fetch_pr(kotx_task_id: int) -> dict | None:
     return body if isinstance(body, dict) else None
 
 
-async def discard_task(kotx_task_id: int) -> bool:
-    """Best-effort `POST …/discard`. False when unconfigured, already
-    terminal (409), or gone (404)."""
+async def _post_action(kotx_task_id: int, verb: str) -> bool:
+    """Best-effort `POST …/<verb>` lifecycle action (start/approve/merge/discard).
+    False when unconfigured, not applicable in the current state (409), or gone
+    (404) — the run's real state arrives on the next transition webhook."""
     cfg = _base()
     if cfg is None:
         return False
     base_url, headers = cfg
     async with httpx.AsyncClient(timeout=_TIMEOUT, headers=headers) as client:
-        resp = await client.post(f"{base_url}/api/tasks/{kotx_task_id}/discard")
+        resp = await client.post(f"{base_url}/api/tasks/{kotx_task_id}/{verb}")
     if resp.status_code in (404, 409):
-        log.info(
-            "kotx discard skipped · task=%s status=%s", kotx_task_id, resp.status_code
-        )
+        log.info("kotx %s skipped · task=%s status=%s", verb, kotx_task_id, resp.status_code)
         return False
     resp.raise_for_status()
     return True
+
+
+async def start_task(kotx_task_id: int) -> bool:
+    return await _post_action(kotx_task_id, "start")
+
+
+async def approve_task(kotx_task_id: int) -> bool:
+    return await _post_action(kotx_task_id, "approve")
+
+
+async def merge_task(kotx_task_id: int) -> bool:
+    return await _post_action(kotx_task_id, "merge")
+
+
+async def discard_task(kotx_task_id: int) -> bool:
+    return await _post_action(kotx_task_id, "discard")

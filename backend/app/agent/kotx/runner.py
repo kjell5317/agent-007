@@ -29,6 +29,12 @@ from app.labels import load_labels
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
 from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_github_subject
+from app.services.notify import (
+    notify_kotx_confirm_merge,
+    notify_kotx_open_pr,
+    notify_kotx_review_ready,
+    notify_kotx_start,
+)
 from app.services.plan import schedule_task
 from app.services.task.close import close_task
 from app.services.task.reopen import reopen_task
@@ -140,7 +146,28 @@ async def _run_transition(session: Session, raw) -> dict:
     )
     _backfill_unlinked_thread_inputs(session, meta, task, trace)
     session.commit()
+
+    # kotx no longer sends its own approval/merge/review prompts (see docs). We
+    # drive them here — but only on `no_change`. A `task_created`/`reopened`
+    # transition already scheduled the task, which fired the "Scheduled"
+    # notification; a start/review prompt on top of it would be the duplicate
+    # the handoff warns against.
+    if trace["outcome"] == "no_change":
+        await _notify_kotx_prompt(task, kind, state, meta)
     return trace
+
+
+async def _notify_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> None:
+    subject = str(meta.get("subject") or task.title or "")
+    if kind == "implement" and state == "draft":
+        await notify_kotx_start(task, subject=subject)
+    elif kind == "implement" and state == "awaiting_approval":
+        if meta.get("kotx_proposes") == "merge":
+            await notify_kotx_confirm_merge(task, subject=subject)
+        else:
+            await notify_kotx_open_pr(task, subject=subject)
+    elif kind == "review" and state == "awaiting_approval":
+        await notify_kotx_review_ready(task, subject=subject)
 
 
 def _match_task(

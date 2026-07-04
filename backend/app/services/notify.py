@@ -37,6 +37,15 @@ ACTION_CLOSE_TASK = "CLOSE_TASK"
 ACTION_DISMISS_TASK = "DISMISS_TASK"
 ACTION_RESCHEDULE_TASK = "RESCHEDULE_TASK"
 
+# kotx run actions. kotx no longer sends its own Home Assistant approval/merge
+# prompts (see docs/Home Assistant Notification Handoff) — we drive them from
+# the transition webhook and dispatch these back to the kotx API in the
+# notifications router. They map to the old kotx HA action ids: KOTX_START ↔
+# `kotx-task-<id>-start`, KOTX_APPROVE/KOTX_MERGE ↔ `kotx-task-<id>-approve`.
+ACTION_KOTX_START = "KOTX_START"
+ACTION_KOTX_APPROVE = "KOTX_APPROVE"
+ACTION_KOTX_MERGE = "KOTX_MERGE"
+
 
 async def notify(
     title: str,
@@ -150,6 +159,59 @@ async def notify_task_created(task, *, start: datetime, end: datetime) -> None:
         url=task_url(task.id),
         tag=task_tag(task.id),
         actions=_task_actions(),
+        sticky=True,
+    )
+
+
+async def notify_kotx_start(task, *, subject: str) -> None:
+    """A kotx implement run drafted TASK.md and is waiting to start the write
+    phase. Replaces kotx's removed "Start implementation" prompt."""
+    await notify(
+        title=f"Ready to start · {subject[:80]}",
+        message="kotx drafted the brief — review it, then start the implementation.",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=[{"action": ACTION_KOTX_START, "title": "Start"}],
+        sticky=True,
+    )
+
+
+async def notify_kotx_open_pr(task, *, subject: str) -> None:
+    """A kotx implement run finished coding and proposed a pull request.
+    Replaces kotx's removed "Open PR" prompt."""
+    await notify(
+        title=f"Open PR · {subject[:80]}",
+        message="kotx finished coding and proposed a pull request — review and open it.",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=[{"action": ACTION_KOTX_APPROVE, "title": "Open PR"}],
+        sticky=True,
+    )
+
+
+async def notify_kotx_confirm_merge(task, *, subject: str) -> None:
+    """An approving PR review moved a tracked implement run back to
+    awaiting_approval with a merge proposal. Replaces kotx's removed
+    "Confirm merge" prompt."""
+    await notify(
+        title=f"Confirm merge · {subject[:80]}",
+        message="An approving review created a merge proposal — confirm to merge the PR.",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=[{"action": ACTION_KOTX_MERGE, "title": "Merge"}],
+        sticky=True,
+    )
+
+
+async def notify_kotx_review_ready(task, *, subject: str) -> None:
+    """A kotx review run produced REVIEW.md and is waiting on a human decision.
+    Replaces kotx's removed (informational) "Comment review" prompt — no
+    one-tap action; opening the task surfaces comment vs. approve."""
+    await notify(
+        title=f"Review ready · {subject[:80]}",
+        message="kotx finished a review — open it to comment or approve.",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
         sticky=True,
     )
 

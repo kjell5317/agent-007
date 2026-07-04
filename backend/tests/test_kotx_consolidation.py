@@ -12,7 +12,9 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
+from app.api import notifications as notif  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
+from app.services.kotx import client as kotx_client  # noqa: E402
 from app.services.kotx import discard as kotx_discard  # noqa: E402
 from app.services.input.kotx import poll as kotx_poll  # noqa: E402
 from app.services.input.gmail.preprocess import _apply_github_identity  # noqa: E402
@@ -196,6 +198,23 @@ def _no_thread_backfill(monkeypatch):
         "link_unassigned_by_thread",
         lambda *_args, **_kwargs: 0,
     )
+
+
+@pytest.fixture(autouse=True)
+def kotx_prompts(monkeypatch):
+    """Capture the HA prompts the runner sends in place of kotx's removed ones,
+    and keep every test hermetic (no real notify() regardless of CWD/.env)."""
+    calls: list[dict] = []
+
+    def _recorder(name: str):
+        async def _fn(task, *, subject: str):
+            calls.append({"prompt": name, "task_id": task.id, "subject": subject})
+
+        return _fn
+
+    for name in ("start", "open_pr", "confirm_merge", "review_ready"):
+        monkeypatch.setattr(kotx_runner, f"notify_kotx_{name}", _recorder(name))
+    return calls
 
 
 @pytest.mark.asyncio
@@ -634,6 +653,183 @@ async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypat
     assert len(creates) == 1
     outcomes = sorted(t["outcome"] for t in traces)
     assert outcomes == ["no_change", "task_created"]
+
+
+# --- HA prompts replacing kotx's removed notifications --------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_pr_transition_sends_open_pr_prompt(monkeypatch, kotx_prompts):
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="#31 Add a metadata index", kotx_task_id=42, link=None
+    )
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(state="awaiting_approval", proposes="pr"))
+    )
+
+    assert trace["outcome"] == "no_change"
+    assert [c["prompt"] for c in kotx_prompts] == ["open_pr"]
+    assert kotx_prompts[0]["task_id"] == task.id
+    assert kotx_prompts[0]["subject"] == "owner/repo#31 Add a metadata index"
+
+
+@pytest.mark.asyncio
+async def test_merge_proposal_transition_sends_confirm_merge_prompt(
+    monkeypatch, kotx_prompts
+):
+    task = SimpleNamespace(id=uuid.uuid4(), title="t", kotx_task_id=42, link=None)
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(state="awaiting_approval", proposes="merge"))
+    )
+
+    assert trace["outcome"] == "no_change"
+    assert [c["prompt"] for c in kotx_prompts] == ["confirm_merge"]
+
+
+@pytest.mark.asyncio
+async def test_review_awaiting_approval_sends_review_ready_prompt(
+    monkeypatch, kotx_prompts
+):
+    task = SimpleNamespace(id=uuid.uuid4(), title="t", kotx_task_id=42, link=None)
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="review", state="awaiting_approval"))
+    )
+
+    assert trace["outcome"] == "no_change"
+    assert [c["prompt"] for c in kotx_prompts] == ["review_ready"]
+
+
+@pytest.mark.asyncio
+async def test_task_creation_does_not_add_prompt_over_scheduled(
+    monkeypatch, kotx_prompts
+):
+    # Creating the 007 task schedules it, which fires the "Scheduled"
+    # notification — a start/review prompt on top would be a duplicate.
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
+    monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
+
+    async def fake_extract(session, raw):
+        return {"estimation": 20, "due_date": None, "label": None}
+
+    async def fake_schedule(session, task):
+        return None
+
+    monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
+    monkeypatch.setattr(
+        kotx_runner.tasks,
+        "create",
+        lambda s, payload: SimpleNamespace(
+            id=uuid.uuid4(), title=payload.title, kotx_task_id=None, link=payload.link
+        ),
+    )
+    monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="draft")))
+
+    assert trace["outcome"] == "task_created"
+    assert kotx_prompts == []
+
+
+@pytest.mark.asyncio
+async def test_reopen_does_not_add_prompt_over_scheduled(monkeypatch, kotx_prompts):
+    task = SimpleNamespace(id=uuid.uuid4(), title="t", kotx_task_id=42, link=None)
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "closed"}
+    )
+
+    async def fake_reopen(session, task_id):
+        return None
+
+    monkeypatch.setattr(kotx_runner, "reopen_task", fake_reopen)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(state="awaiting_approval", proposes="pr"))
+    )
+
+    assert trace["outcome"] == "reopened"
+    assert kotx_prompts == []
+
+
+@pytest.mark.asyncio
+async def test_kotx_action_helpers_delegate_to_post(monkeypatch):
+    calls = []
+
+    async def fake_post(kotx_task_id, verb):
+        calls.append((kotx_task_id, verb))
+        return True
+
+    monkeypatch.setattr(kotx_client, "_post_action", fake_post)
+
+    assert await kotx_client.start_task(7) is True
+    assert await kotx_client.approve_task(7) is True
+    assert await kotx_client.merge_task(7) is True
+    assert await kotx_client.discard_task(7) is True
+    assert calls == [(7, "start"), (7, "approve"), (7, "merge"), (7, "discard")]
+
+
+@pytest.mark.asyncio
+async def test_kotx_post_action_returns_false_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(kotx_client, "_base", lambda: None)
+    assert await kotx_client._post_action(7, "approve") is False
+
+
+@pytest.mark.asyncio
+async def test_notify_action_approve_dispatches_to_kotx(monkeypatch):
+    task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=99)
+    monkeypatch.setattr(notif.tasks_store, "get", lambda s, tid: task)
+    called = {}
+
+    async def fake_approve(kotx_task_id):
+        called["id"] = kotx_task_id
+        return True
+
+    monkeypatch.setattr(notif.kotx_client, "approve_task", fake_approve)
+
+    payload = notif.ActionPayload(action=notif.ACTION_KOTX_APPROVE, tag=f"task-{task.id}")
+    result = await notif.handle_action(payload, request=SimpleNamespace(), session=object())
+
+    assert result == {"ok": True, "action": "KOTX_APPROVE", "task_id": str(task.id)}
+    assert called["id"] == 99
+
+
+@pytest.mark.asyncio
+async def test_notify_action_merge_requires_linked_kotx_run(monkeypatch):
+    task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=None)
+    monkeypatch.setattr(notif.tasks_store, "get", lambda s, tid: task)
+
+    payload = notif.ActionPayload(action=notif.ACTION_KOTX_MERGE, tag=f"task-{task.id}")
+    with pytest.raises(notif.HTTPException) as exc:
+        await notif.handle_action(payload, request=SimpleNamespace(), session=object())
+
+    assert exc.value.status_code == 409
 
 
 # --- dismiss (discard) a kotx run from the inbox --------------------------------

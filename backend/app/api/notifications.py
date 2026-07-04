@@ -26,9 +26,13 @@ from app.config import get_settings
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
 from app.events import publish_task
+from app.services.kotx import client as kotx_client
 from app.services.notify import (
     ACTION_CLOSE_TASK,
     ACTION_DISMISS_TASK,
+    ACTION_KOTX_APPROVE,
+    ACTION_KOTX_MERGE,
+    ACTION_KOTX_START,
     ACTION_RESCHEDULE_TASK,
 )
 from app.services.plan.schedule import schedule_task, scheduled_interval_for
@@ -38,6 +42,14 @@ from app.services.task.dismiss import dismiss_task
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+# HA action id → kotx client function name. Resolved via getattr at call time so
+# the actual POST is dispatched (and stays patchable in tests).
+_KOTX_ACTIONS = {
+    ACTION_KOTX_START: "start_task",
+    ACTION_KOTX_APPROVE: "approve_task",
+    ACTION_KOTX_MERGE: "merge_task",
+}
 
 
 class ActionPayload(BaseModel):
@@ -103,6 +115,21 @@ async def handle_action(
         if result is not None:
             publish_task(session, task.id)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    kotx_fn_name = _KOTX_ACTIONS.get(payload.action)
+    if kotx_fn_name is not None:
+        if task.kotx_task_id is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "task has no linked kotx run"
+            )
+        # kotx's own transition webhook mirrors the resulting state back to us,
+        # so there's nothing to publish here — the run section refreshes then.
+        ok = await getattr(kotx_client, kotx_fn_name)(task.kotx_task_id)
+        log.info(
+            "notify action · kotx %s task=%s kotx_id=%s ok=%s",
+            payload.action, task.id, task.kotx_task_id, ok,
+        )
+        return {"ok": ok, "action": payload.action, "task_id": str(task.id)}
 
     raise HTTPException(
         status.HTTP_400_BAD_REQUEST,
