@@ -48,13 +48,26 @@ def _kotx_task(**overrides) -> dict:
 
 
 def test_envelope_carries_github_thread_key_and_dedup_id():
-    env = envelope_for_transition(_kotx_task(), doc="# TASK\ndo the thing")
+    env = envelope_for_transition(
+        _kotx_task(stateReason="waiting for user approval"), doc="# TASK\ndo the thing"
+    )
     assert env is not None
     assert env.source == "kotx"
     assert env.external_id == "42:1:draft:"
     assert env.source_metadata["thread_id"] == "github:owner/repo#31"
     assert env.source_metadata["kotx_task_id"] == 42
-    assert "do the thing" in env.content
+    assert env.source_metadata["state_reason"] == "waiting for user approval"
+    assert env.content == "# TASK\ndo the thing"
+    assert "kotx implement" not in env.content
+    assert "State:" not in env.content
+    assert "Reason:" not in env.content
+
+
+def test_envelope_truncates_document_content_without_header():
+    env = envelope_for_transition(_kotx_task(), doc="x" * 6001)
+
+    assert env is not None
+    assert env.content == "x" * 6000
 
 
 def test_envelope_distinguishes_pr_and_merge_proposals():
@@ -83,7 +96,7 @@ def test_resolve_conflict_runs_are_ingested_with_thread_metadata_and_dedup_id():
     assert env.source_metadata["kotx_task_id"] == 42
     assert env.source_metadata["kotx_kind"] == "resolve_conflict"
     assert env.source_metadata["github_url"] == "https://github.com/owner/repo/issues/31"
-    assert "State: resolving conflicts" in env.content
+    assert env.content == ""
 
 
 def test_parse_github_subject_rejects_number_prefix_match():
