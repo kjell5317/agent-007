@@ -15,16 +15,20 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 from app.db.models.route_cache import RouteCache  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar.discover import _physical_span  # noqa: E402
+from app.services.commute import planner as commute_planner  # noqa: E402
 from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
 from app.services.commute.planner import (  # noqa: E402
     _description_for,
+    _partition,
     _navigation_url,
+    _resolve_routable_anchors,
     _reschedule_candidates,
 )
 from app.services.commute.reschedule import _first_overlap  # noqa: E402
 from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.plan.schedule import (  # noqa: E402
     BusyEvent,
+    Gaps,
     Interval,
     _block_total,
     _chain_insert_slot,
@@ -40,6 +44,8 @@ OFFICE = "Officeplatz 2, Munich"
 LIBRARY = "Bookweg 3, Munich"
 
 BUFFER = timedelta(minutes=5)
+EVENT_BUFFER = timedelta(minutes=15)
+GAPS = Gaps(commute=BUFFER, event=EVENT_BUFFER)
 
 
 def _route_session():
@@ -165,7 +171,7 @@ def test_piggyback_after_anchor_ignores_its_replaced_leg():
         busy,
         location=GYM.upper(),
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         out_s=600,
         in_s=600,
         window_start=_day_at(8),
@@ -173,8 +179,9 @@ def test_piggyback_after_anchor_ignores_its_replaced_leg():
     )
 
     assert planned is not None
-    assert planned.start == _day_at(15, 5)
-    assert planned.end == _day_at(15, 35)
+    # Task↔anchor is an event↔event boundary — the wider gap applies.
+    assert planned.start == _day_at(15, 15)
+    assert planned.end == _day_at(15, 45)
     assert planned.out_s == 0  # arrives with the anchor's trip
     assert planned.in_s == 600
     assert planned.block_end == planned.end + BUFFER + timedelta(seconds=600)
@@ -191,7 +198,7 @@ def test_piggyback_respects_real_conflicts():
         busy,
         location=GYM,
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         out_s=600,
         in_s=600,
         window_start=_day_at(8),
@@ -220,7 +227,7 @@ async def test_chain_insert_picks_min_added_travel(monkeypatch):
         [prev, nxt],
         location=LIBRARY,
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         window_start=_day_at(8),
         window_end=_day_at(20),
     )
@@ -247,7 +254,7 @@ async def test_chain_insert_skips_unroutable_and_tight_gaps(monkeypatch):
         [prev, nxt],
         location=LIBRARY,
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         window_start=_day_at(8),
         window_end=_day_at(20),
     )
@@ -286,6 +293,7 @@ async def test_plan_task_slot_reserves_whole_trip_block(monkeypatch):
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -329,6 +337,7 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -352,6 +361,90 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
     # 30-minute failed placeholders reserved on both sides.
     assert planned.start - planned.block_start == timedelta(minutes=30) + BUFFER
     assert planned.block_end - planned.end == timedelta(minutes=30) + BUFFER
+
+
+@pytest.mark.asyncio
+async def test_estimate_trip_legs_routes_google_maps_task_location(monkeypatch):
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        location="https://www.google.com/maps/place/Library/@48.137154,11.576124,17z",
+    )
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_enabled=True,
+            google_maps_api_key="key",
+            home_address="Homestreet 1",
+        ),
+    )
+    calls = []
+
+    async def fake_one_way(_session, origin, destination, reference):
+        calls.append((origin, destination, reference))
+        return 600
+
+    monkeypatch.setattr(schedule_service, "_one_way_seconds", fake_one_way)
+
+    reference = _day_at(12)
+    out_s, in_s, unroutable = await schedule_service._estimate_trip_legs(
+        SimpleNamespace(), task, reference=reference
+    )
+
+    assert (out_s, in_s, unroutable) == (600, 600, False)
+    assert calls == [
+        ("Homestreet 1", "48.137154,11.576124", reference),
+        ("48.137154,11.576124", "Homestreet 1", reference),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_google_maps_anchor_routes_resolved_location(monkeypatch):
+    event = _calendar_event(
+        "event-1",
+        _day_at(14),
+        _day_at(15),
+        location="https://www.google.com/maps/place/Library/@48.137154,11.576124,17z",
+    )
+    anchors, existing_commutes, online_spans = _partition([event], "primary")
+    anchors = await _resolve_routable_anchors(anchors)
+    calls = []
+
+    async def fake_resolve_duration(_session, *, origin, destination, mode, departure):
+        calls.append(
+            {
+                "origin": origin,
+                "destination": destination,
+                "mode": mode,
+                "departure": departure,
+            }
+        )
+        return 600
+
+    monkeypatch.setattr(commute_planner, "resolve_duration", fake_resolve_duration)
+    settings = SimpleNamespace(
+        commute_bike_max_minutes=25,
+        commute_rain_threshold_pct=30,
+    )
+
+    durations = await commute_planner._resolve_routes(
+        SimpleNamespace(),
+        anchors,
+        "Homestreet 1",
+        None,
+        settings,
+        {"errors": []},
+    )
+
+    assert online_spans == []
+    assert existing_commutes == []
+    assert anchors[0].location == "48.137154,11.576124"
+    assert durations[("Homestreet 1", "48.137154,11.576124", "bicycling")] == 600
+    assert durations[("48.137154,11.576124", "Homestreet 1", "bicycling")] == 600
+    assert [(call["origin"], call["destination"], call["mode"]) for call in calls] == [
+        ("Homestreet 1", "48.137154,11.576124", "bicycling"),
+        ("48.137154,11.576124", "Homestreet 1", "bicycling"),
+    ]
 
 
 def test_colliding_task_anchor_is_replaced_not_overlapped():
@@ -378,7 +471,9 @@ def test_colliding_task_anchor_is_replaced_not_overlapped():
     assert _reschedule_candidates([clear_leg], [meeting, task], {"ev-task"}) == set()
 
 
-def _calendar_event(event_id, start, end, *, location=None, all_day=False, props=None):
+def _calendar_event(
+    event_id, start, end, *, location=None, all_day=False, props=None, transparency=None,
+):
     return CalendarEvent(
         id=event_id,
         calendar_id="primary",
@@ -390,7 +485,7 @@ def _calendar_event(event_id, start, end, *, location=None, all_day=False, props
         location=location,
         html_link=None,
         private_properties=props or {},
-        raw={},
+        raw={"transparency": transparency} if transparency else {},
     )
 
 
@@ -407,6 +502,58 @@ def test_physical_span_covers_only_routable_events():
     assert span == (_day_at(9), _day_at(15))
 
     assert _physical_span([events[2], events[3], events[4]]) is None
+
+
+def test_all_day_busy_event_triggers_overlap_with_task():
+    from app.services.calendar.discover import _first_managed_overlap
+
+    task_props = {"managed_by": "plan_service", "kind": "task"}
+    all_day = _calendar_event(
+        "vacation", _day_at(0), _day_at(0, 0, day_offset=4), all_day=True,
+    )
+    task = _calendar_event("task-ev", _day_at(15), _day_at(16), props=task_props)
+
+    assert _first_managed_overlap(all_day, [task]) is task
+
+
+@pytest.mark.asyncio
+async def test_busy_view_blocks_all_day_busy_and_skips_free(monkeypatch):
+    vacation = _calendar_event(
+        "vacation", _day_at(0), _day_at(0, 0, day_offset=4), all_day=True,
+    )
+    birthday = _calendar_event(
+        "birthday", _day_at(0), _day_at(0, 0, day_offset=4),
+        all_day=True, transparency="transparent",
+    )
+    maybe_lunch = _calendar_event(
+        "maybe-lunch", _day_at(12), _day_at(13), transparency="transparent",
+    )
+    meeting = _calendar_event("meeting", _day_at(9), _day_at(10))
+
+    async def fake_list_events(session, *, calendar_ids, time_min, time_max, account_key=None):
+        return [vacation, birthday, maybe_lunch, meeting]
+
+    async def fake_resolve(_location):
+        return None
+
+    monkeypatch.setattr("app.services.calendar.list_events_between", fake_list_events)
+    monkeypatch.setattr(schedule_service, "resolve_routable_location", fake_resolve)
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(google_calendar_id="primary", google_busy_calendar_ids=[]),
+    )
+
+    busy = await schedule_service._fetch_busy_events(
+        None, _day_at(8), _day_at(20), exclude_event_id=None, account_key=None,
+    )
+
+    by_id = {ev.id: ev for ev in busy}
+    # Free events (all-day or timed) never block; busy all-day blocks the
+    # whole day, midnight to midnight.
+    assert set(by_id) == {"vacation", "meeting"}
+    assert by_id["vacation"].start == _day_at(0)
+    assert by_id["vacation"].end == _day_at(0, 0, day_offset=4)
 
 
 def test_reschedule_overlap_skips_tasks_own_legs():
@@ -449,4 +596,4 @@ async def test_slot_keeps_buffer_before_event_starting_at_due(monkeypatch):
         calendar_event_id=None,
     )
     planned = await schedule_service.plan_task_slot(None, task)
-    assert planned.end <= meeting.start - BUFFER
+    assert planned.end <= meeting.start - EVENT_BUFFER

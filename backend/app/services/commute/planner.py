@@ -52,7 +52,7 @@ from app.services.commute.weather import geocode, precipitation_probabilities_be
 from app.services.location import (
     is_online_location,
     resolve_location_alias,
-    resolve_tum_room,
+    resolve_routable_location,
 )
 from app.timezones import to_user_tz
 
@@ -75,6 +75,11 @@ async def refresh_weather_sensitive_commutes(
         return summary
     if not settings.home_address:
         summary["errors"].append({"setup": "home_address not configured"})
+        return summary
+    if not settings.google_maps_api_key:
+        # Without the key `geocode` returns None before any HTTP call, which
+        # would be misreported below as an un-geocodable address.
+        summary["errors"].append({"setup": "google_maps_api_key not configured"})
         return summary
 
     now = datetime.now(timezone.utc)
@@ -169,9 +174,9 @@ async def plan_window_commutes(
         time_max=window_end + margin,
         account_key=account_key,
     )
-    anchors, existing_commutes, skipped_online = _partition(events, write_calendar_id)
-    anchors = await _resolve_tum_anchors(anchors)
-    summary["skipped_online"] = skipped_online
+    anchors, existing_commutes, online_spans = _partition(events, write_calendar_id)
+    anchors = await _resolve_routable_anchors(anchors)
+    summary["skipped_online"] = len(online_spans)
 
     if hourly_rain is None:
         hourly_rain = await _home_rain(session, home, window_start, window_end + margin)
@@ -184,7 +189,21 @@ async def plan_window_commutes(
         # into a bogus "no route" placeholder. Leave the calendar untouched;
         # the next scheduled pass retries.
         return summary
-    legs, skipped_unroutable = derive_legs(anchors, home, durations, hourly_rain, settings)
+    missing_transit: set[tuple[str, str]] = set()
+    legs, skipped_unroutable = derive_legs(
+        anchors, home, durations, hourly_rain, settings,
+        avoid=online_spans, missing_transit=missing_transit,
+    )
+    if missing_transit:
+        # The bike-stays-home rule forced transit onto pairs the optimistic
+        # first pass didn't fetch — resolve just those and re-derive.
+        if not await _resolve_missing_transit(
+            session, missing_transit, anchors, home, durations, summary,
+        ):
+            return summary
+        legs, skipped_unroutable = derive_legs(
+            anchors, home, durations, hourly_rain, settings, avoid=online_spans,
+        )
     summary["skipped_unroutable"] = skipped_unroutable
 
     # Only legs touching the requested window are written or deleted — the
@@ -416,6 +435,38 @@ async def _resolve_routes(
     return durations
 
 
+async def _resolve_missing_transit(
+    session: Session,
+    pairs: set[tuple[str, str]],
+    anchors: list[Anchor],
+    home: str,
+    durations: Durations,
+    summary: dict,
+) -> bool:
+    """Second-pass transit lookups for pairs the chain rule forced onto
+    transit after the optimistic first resolution — fetched lazily so the
+    common all-bike day costs no extra Distance Matrix elements."""
+    references = required_routes(anchors, home)
+    for origin, destination in pairs:
+        try:
+            durations[(origin, destination, "transit")] = await resolve_duration(
+                session, origin=origin, destination=destination,
+                mode="transit", departure=references.get((origin, destination)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "commute · transit resolution aborted at %s -> %s err=%s",
+                origin, destination, exc,
+            )
+            summary["errors"].append({
+                "route": f"{origin} -> {destination}",
+                "error": str(exc),
+                "transient": True,
+            })
+            return False
+    return True
+
+
 async def _home_rain(
     session: Session, home: str, start: datetime, end: datetime,
 ) -> dict[str, int] | None:
@@ -464,11 +515,11 @@ async def delete_past_commute_legs(
     return deleted
 
 
-async def _resolve_tum_anchors(anchors: list[Anchor]) -> list[Anchor]:
+async def _resolve_routable_anchors(anchors: list[Anchor]) -> list[Anchor]:
     out: list[Anchor] = []
     for anchor in anchors:
-        address = await resolve_tum_room(anchor.location)
-        out.append(replace(anchor, location=address) if address else anchor)
+        location = await resolve_routable_location(anchor.location)
+        out.append(replace(anchor, location=location) if location else anchor)
     return out
 
 
@@ -576,10 +627,13 @@ async def _write_legs(
 def _partition(
     events: list[CalendarEvent],
     write_calendar_id: str,
-) -> tuple[list[Anchor], list[CalendarEvent], int]:
+) -> tuple[list[Anchor], list[CalendarEvent], list[tuple[datetime, datetime]]]:
+    """Split events into routable anchors, managed commute legs, and the
+    spans of online meetings — not routed to, but legs shouldn't sit on
+    top of them either."""
     anchors: list[Anchor] = []
     commutes: list[CalendarEvent] = []
-    skipped_online = 0
+    online_spans: list[tuple[datetime, datetime]] = []
     for ev in events:
         if ev.all_day:
             continue
@@ -588,7 +642,7 @@ def _partition(
                 commutes.append(ev)
             continue
         if is_online_location(ev.location):
-            skipped_online += 1
+            online_spans.append((to_user_tz(ev.start), to_user_tz(ev.end)))
             continue
         anchors.append(
             Anchor(
@@ -599,7 +653,7 @@ def _partition(
             )
         )
     anchors.sort(key=lambda a: a.start)
-    return anchors, commutes, skipped_online
+    return anchors, commutes, online_spans
 
 
 def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:

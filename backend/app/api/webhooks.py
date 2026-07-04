@@ -64,7 +64,7 @@ async def kotx_webhook(request: Request) -> dict:
         session.close()
 
     # Nudge connected browsers to refetch /kotx/tasks — every delivery means a
-    # run changed upstream, including kinds the drain skips (resolve_conflict).
+    # run changed upstream, whether or not it became an actionable inbox item.
     publish_kotx()
 
     log.info(

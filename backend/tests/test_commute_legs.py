@@ -112,22 +112,71 @@ def test_rain_flips_bike_to_transit():
     assert outbound.depart == anchor.start - BUFFER - timedelta(seconds=1200)
 
 
-def test_bike_over_threshold_uses_transit_and_falls_back():
+def test_bike_over_threshold_uses_transit_and_never_bikes_back():
     far = "Farawaystrasse 9"
     durations = {
         (HOME_ADDR, far, "bicycling"): 3600,  # over 25-minute cap
         (HOME_ADDR, far, "transit"): 1800,
         (far, HOME_ADDR, "bicycling"): 3600,
-        # no inbound transit → falls back to bike with a reason
+        # No inbound transit — but the bike stayed home, so no bike fallback:
+        # the leg becomes a failed placeholder instead.
     }
     anchor = Anchor("ev1", _at(14), _at(15), far)
     legs, skipped = derive_legs([anchor], HOME_ADDR, durations, None, SETTINGS)
 
-    assert skipped == 0
+    assert skipped == 1
     outbound, inbound = legs
     assert outbound.mode == "transit"
+    assert inbound.mode == FAILED_MODE
+    assert inbound.reason == "no route found"
+
+
+def test_transit_fallback_to_bike_still_works_when_bike_is_along():
+    # Rain wants transit for the ride home, but no transit route exists.
+    # The outbound leg was ridden, so the bike is on hand to fall back to.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    rain = {to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80}
+    legs, skipped = derive_legs([anchor], HOME_ADDR, _durations(), rain, SETTINGS)
+
+    assert skipped == 0
+    outbound, inbound = legs
+    assert outbound.mode == "bicycling"
     assert inbound.mode == "bicycling"
     assert inbound.reason == "transit unavailable, fell back to bike"
+
+
+def test_no_bike_leg_after_leaving_home_by_transit():
+    # home -transit-> far -?-> nearby: the bike is at home, so the short
+    # second hop must not be ridden even though it fits the bike threshold.
+    far = "Farawaystrasse 9"
+    nearby = "Nebenstrasse 2"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 3600,  # over cap → transit out
+        (HOME_ADDR, far, "transit"): 1800,
+        (far, nearby, "bicycling"): 300,
+        (far, nearby, "transit"): 900,
+        (nearby, HOME_ADDR, "bicycling"): 600,
+        (nearby, HOME_ADDR, "transit"): 1500,
+    }
+    first = Anchor("ev1", _at(14), _at(15), far)
+    second = Anchor("ev2", _at(15, 45), _at(17), nearby)
+    legs, skipped = derive_legs([first, second], HOME_ADDR, durations, None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.key for leg in legs] == [(HOME, "ev1"), ("ev1", "ev2"), ("ev2", HOME)]
+    assert [leg.mode for leg in legs] == ["transit", "transit", "transit"]
+    assert legs[1].reason == "bike not along on this trip"
+    assert legs[2].reason == "bike not along on this trip"
+
+
+def test_bike_chain_stays_bike_and_resets_at_home():
+    # Ridden chain gym→office stays on the bike; after a via-home layover
+    # the next departure gets the bike again even if an earlier chain broke.
+    first = Anchor("ev1", _at(10), _at(11), GYM)
+    second = Anchor("ev2", _at(16), _at(17), OFFICE)
+    legs, _ = derive_legs([first, second], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert [leg.mode for leg in legs] == ["bicycling"] * 4
 
 
 def test_unroutable_legs_become_30min_placeholders():
@@ -153,6 +202,115 @@ def test_unroutable_middle_gap_gets_failed_direct_leg():
     direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
     assert direct.mode == FAILED_MODE
     assert direct.arrive - direct.depart == timedelta(seconds=FAILED_LEG_SECONDS)
+
+
+def test_return_leg_departs_after_latest_ending_overlap():
+    # Double-booked evening: a short event starts inside a longer one. The
+    # ride home leaves after the *longest* event ends — not after the
+    # later-starting short one.
+    long_ev = Anchor("ev-long", _at(18), _at(22), GYM)
+    short_ev = Anchor("ev-short", _at(18, 10), _at(18, 40), OFFICE)
+    legs, skipped = derive_legs([long_ev, short_ev], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.key for leg in legs] == [(HOME, "ev-long"), ("ev-long", HOME)]
+    inbound = legs[-1]
+    assert inbound.origin == GYM
+    assert inbound.depart == long_ev.end + BUFFER
+
+
+def test_overlap_cluster_required_routes_use_entry_and_exit():
+    long_ev = Anchor("ev-long", _at(18), _at(22), GYM)
+    short_ev = Anchor("ev-short", _at(18, 10), _at(18, 40), OFFICE)
+    routes = required_routes([long_ev, short_ev], HOME_ADDR)
+
+    assert set(routes) == {(HOME_ADDR, GYM), (GYM, HOME_ADDR)}
+
+
+def test_direct_leg_dodges_online_meeting():
+    # Physical → physical with an online meeting right before the second
+    # event: the connecting leg slides into the free gap instead of sitting
+    # on top of the call.
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(16, 30), _at(18), OFFICE)
+    online = (_at(15, 30), _at(16, 25))
+    legs, _ = derive_legs(
+        [first, second], HOME_ADDR, _durations(), None, SETTINGS, avoid=[online],
+    )
+
+    direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
+    assert direct.arrive == online[0] - BUFFER
+    assert direct.depart == direct.arrive - timedelta(seconds=300)
+    assert direct.depart >= first.end + BUFFER
+
+
+def test_home_leg_dodges_busy_event_before_anchor():
+    # A location-less busy event sits where the just-in-time ride would go —
+    # the leg leaves home earlier and waits at the destination instead.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    avoid = [(_at(13, 30), _at(13, 50))]
+    legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
+
+    outbound = legs[0]
+    assert outbound.arrive == avoid[0][0] - BUFFER
+    assert outbound.depart == outbound.arrive - timedelta(seconds=600)
+
+
+def test_home_leg_dodge_is_capped():
+    # Clearing the span would mean leaving hours early — beyond the cap the
+    # leg stays just-in-time and the overlap stays visible.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    avoid = [(_at(10), _at(13, 50))]
+    legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
+
+    outbound = legs[0]
+    assert outbound.arrive == anchor.start - BUFFER
+
+
+def test_direct_leg_keeps_late_placement_when_dodge_cannot_fit():
+    # The online meeting fills the whole gap — nothing earlier clears, so
+    # the leg stays just-in-time (visible overlap beats being late).
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(16, 30), _at(18), OFFICE)
+    online = (_at(15), _at(16, 30))
+    legs, _ = derive_legs(
+        [first, second], HOME_ADDR, _durations(), None, SETTINGS, avoid=[online],
+    )
+
+    direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
+    assert direct.arrive == second.start - BUFFER
+    assert direct.depart == direct.arrive - timedelta(seconds=300)
+
+
+def test_missing_transit_pairs_are_reported_for_lazy_fetch():
+    # Chain-forced transit on pairs the optimistic resolver never fetched:
+    # the first derive reports them, and a re-derive with the fetched
+    # durations rides transit throughout.
+    far = "Farawaystrasse 9"
+    nearby = "Nebenstrasse 2"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 3600,  # over cap → transit out
+        (HOME_ADDR, far, "transit"): 1800,
+        (HOME_ADDR, nearby, "bicycling"): 600,
+        (far, nearby, "bicycling"): 300,
+        (nearby, HOME_ADDR, "bicycling"): 600,
+    }
+    first = Anchor("ev1", _at(14), _at(15), far)
+    second = Anchor("ev2", _at(15, 45), _at(17), nearby)
+
+    missing: set[tuple[str, str]] = set()
+    derive_legs(
+        [first, second], HOME_ADDR, durations, None, SETTINGS, missing_transit=missing,
+    )
+    assert missing == {(far, HOME_ADDR), (far, nearby), (nearby, HOME_ADDR)}
+
+    durations[(far, HOME_ADDR, "transit")] = 2000
+    durations[(far, nearby, "transit")] = 900
+    durations[(nearby, HOME_ADDR, "transit")] = 1500
+    legs, skipped = derive_legs([first, second], HOME_ADDR, durations, None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.mode for leg in legs] == ["transit", "transit", "transit"]
 
 
 def test_home_anchor_produces_no_legs():

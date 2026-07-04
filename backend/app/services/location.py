@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -27,6 +28,13 @@ _ONLINE_WORDS = re.compile(
     r"microsoft teams|video ?call|phone ?call)\b",
     re.IGNORECASE,
 )
+_COORD_RE = re.compile(
+    r"(?<![\d.-])(?P<lat>-?\d+(?:\.\d+)?),(?P<lng>-?\d+(?:\.\d+)?)(?![\d.-])"
+)
+_MAPS_AT_COORD_RE = re.compile(
+    r"/@(?P<lat>-?\d+(?:\.\d+)?),(?P<lng>-?\d+(?:\.\d+)?)(?:[,/]|$)"
+)
+_GOOGLE_MAPS_REDIRECT_TIMEOUT = 3.0
 
 
 def resolve_location_alias(location: str | None) -> str | None:
@@ -40,6 +48,174 @@ def resolve_location_alias(location: str | None) -> str | None:
         home = (get_settings().home_address or "").strip()
         return home or clean
     return clean
+
+
+def is_google_maps_url(location: str | None) -> bool:
+    clean = (location or "").strip()
+    if not clean.lower().startswith(("http://", "https://")):
+        return False
+    parsed = urlparse(clean)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if host == "maps.app.goo.gl":
+        return True
+    if host == "goo.gl" and path.startswith("/maps"):
+        return True
+    if host.startswith("maps.google."):
+        return True
+    if _is_google_host(host) and path.startswith("/maps"):
+        return True
+    return False
+
+
+def resolve_google_maps_url_sync(location: str | None) -> str | None:
+    """Parse a direct Google Maps URL into a Distance Matrix-friendly value.
+
+    This intentionally does not follow redirects, so callers that must stay
+    cache-only can use it without hidden network I/O.
+    """
+    clean = (location or "").strip()
+    if not is_google_maps_url(clean):
+        return None
+    return _routable_from_google_maps_url(clean)
+
+
+async def resolve_google_maps_url(location: str | None) -> str | None:
+    """Resolve a Google Maps URL into an address/search string or lat,lng."""
+    clean = (location or "").strip()
+    if not is_google_maps_url(clean):
+        return None
+    direct = _routable_from_google_maps_url(clean)
+    if direct is not None:
+        return direct
+    if not _is_short_google_maps_url(clean):
+        return None
+    try:
+        async with httpx.AsyncClient(
+            timeout=_GOOGLE_MAPS_REDIRECT_TIMEOUT,
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(clean)
+            hops = [str(r.url) for r in (*getattr(resp, "history", []), resp)]
+    except Exception as exc:  # noqa: BLE001
+        log.info("Google Maps short-link expansion failed for %r (%s)", clean, exc)
+        return None
+    # The chain often ends on consent.google.com (EU cookie interstitial)
+    # with the real maps URL in its `continue` param, while an intermediate
+    # hop already carried the coordinates — walk it most-resolved-first.
+    for url in reversed(hops):
+        if url == clean:
+            continue
+        routable = _routable_from_google_maps_url(_unwrap_consent_url(url))
+        if routable is not None:
+            return routable
+    log.info("Google Maps short-link %r resolved to nothing routable (%s)", clean, hops[-1])
+    return None
+
+
+def _unwrap_consent_url(url: str) -> str:
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() != "consent.google.com":
+        return url
+    for value in parse_qs(parsed.query).get("continue", []):
+        return value
+    return url
+
+
+def resolve_routable_location_sync(location: str | None) -> str | None:
+    """Cache-only physical-location normalization.
+
+    Google Maps URLs are used only when their routable value is available
+    without redirects; short links return None instead of blocking on I/O.
+    """
+    clean = resolve_location_alias(location)
+    if not clean or is_online_location(clean):
+        return None
+    if is_google_maps_url(clean):
+        return resolve_google_maps_url_sync(clean)
+    if tum_room_id(clean):
+        return None
+    return clean
+
+
+async def resolve_routable_location(location: str | None) -> str | None:
+    """Normalize a user/calendar location into a routable physical target."""
+    clean = resolve_location_alias(location)
+    if not clean or is_online_location(clean):
+        return None
+    if is_google_maps_url(clean):
+        resolved = await resolve_google_maps_url(clean)
+        return resolved or clean
+    resolved_tum = await resolve_tum_room(clean)
+    return resolved_tum or clean
+
+
+def _is_google_host(host: str) -> bool:
+    return bool(re.fullmatch(r"(?:www\.)?google\.[a-z.]+", host))
+
+
+def _is_short_google_maps_url(location: str) -> bool:
+    parsed = urlparse(location)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    return host == "maps.app.goo.gl" or (host == "goo.gl" and path.startswith("/maps"))
+
+
+def _routable_from_google_maps_url(location: str) -> str | None:
+    parsed = urlparse(location)
+    path = unquote(parsed.path or "")
+    at_coords = _MAPS_AT_COORD_RE.search(path)
+    if at_coords and _valid_lat_lng(at_coords.group("lat"), at_coords.group("lng")):
+        return f"{at_coords.group('lat')},{at_coords.group('lng')}"
+
+    query = parse_qs(parsed.query)
+    for key in ("q", "query", "destination"):
+        for value in query.get(key, []):
+            clean = _clean_maps_value(value)
+            coords = _coordinates_from_text(clean)
+            if coords is not None:
+                return coords
+    for key in ("q", "query", "destination"):
+        for value in query.get(key, []):
+            clean = _clean_maps_value(value)
+            if clean:
+                return clean
+
+    place = _place_from_path(path)
+    if place:
+        return place
+    return None
+
+
+def _coordinates_from_text(text: str) -> str | None:
+    match = _COORD_RE.search(text)
+    if not match:
+        return None
+    lat, lng = match.group("lat"), match.group("lng")
+    if not _valid_lat_lng(lat, lng):
+        return None
+    return f"{lat},{lng}"
+
+
+def _valid_lat_lng(lat: str, lng: str) -> bool:
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except ValueError:
+        return False
+    return -90 <= lat_f <= 90 and -180 <= lng_f <= 180
+
+
+def _place_from_path(path: str) -> str | None:
+    parts = [part for part in path.split("/") if part]
+    for idx, part in enumerate(parts):
+        if part == "place" and idx + 1 < len(parts):
+            return _clean_maps_value(parts[idx + 1])
+    return None
+
+
+def _clean_maps_value(value: str) -> str:
+    return " ".join(unquote(value).replace("+", " ").split())
 
 
 # TUMonline room key as it appears (parenthesized) in calendar locations,
@@ -103,7 +279,7 @@ def is_online_location(location: str | None) -> bool:
         return True
     lowered = clean.lower()
     if lowered.startswith(("http://", "https://")):
-        return True
+        return not is_google_maps_url(clean)
     if any(domain in lowered for domain in _ONLINE_DOMAINS):
         return True
     return _ONLINE_WORDS.search(clean) is not None

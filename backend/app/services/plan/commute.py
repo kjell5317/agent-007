@@ -113,7 +113,7 @@ async def plan_commutes_window_best_effort(
     if not get_settings().commute_enabled:
         return
     try:
-        await plan_commutes_window(
+        summary = await plan_commutes_window(
             session,
             window_start=window_start,
             window_end=window_end,
@@ -122,3 +122,14 @@ async def plan_commutes_window_best_effort(
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("plan.commute · window planning failed err=%s", exc)
+        return
+    # Best-effort means don't propagate — not don't tell anyone. A setup
+    # error here (missing Maps key, no home address) is the only trace of
+    # why an edited event never received its legs.
+    if summary["errors"]:
+        log.warning("plan.commute · window planning errors · %s", summary["errors"])
+    log.info(
+        "plan.commute · window %s..%s · legs=%d rescheduled_tasks=%d unroutable=%d",
+        window_start.isoformat(), window_end.isoformat(),
+        summary["planned"], summary["rescheduled_tasks"], summary["skipped_unroutable"],
+    )

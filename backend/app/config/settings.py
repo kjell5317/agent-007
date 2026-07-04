@@ -113,7 +113,10 @@ class Settings(BaseSettings):
     commute_transit_ttl_days: int = 30
     commute_lookahead_days: int = 7
     commute_home_layover_minutes: int = 60
+    # Minimum gap between a commute leg and the event/task it serves.
     commute_event_buffer_minutes: int = 5
+    # Minimum gap between two events/tasks with no commute at the boundary.
+    event_buffer_minutes: int = 15
 
     # Home Assistant
     home_assistant_url: str = ""

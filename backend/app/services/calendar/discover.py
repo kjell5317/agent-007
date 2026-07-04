@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -165,16 +165,16 @@ async def discover_updated_events(
             overlapping = _first_managed_overlap(ev, write_events)
             if overlapping is not None:
                 summary["overlapping"] += 1
-                log.info(
-                    "discover · read event=%s overlaps write event=%s",
-                    ev.id,
-                    overlapping.id,
+                kind = (
+                    "commute" if is_commute_event(overlapping)
+                    else "task" if is_task_event(overlapping)
+                    else "event"
                 )
-                if is_commute_event(overlapping):
-                    log.info(
-                        "discover · read event overlaps commute=%s; refreshing commute plan",
-                        overlapping.id,
-                    )
+                log.info(
+                    "discover · %r (%s, id=%s) overlaps %s %r (%s); rescheduling",
+                    ev.summary, ev.start.isoformat(), ev.id,
+                    kind, overlapping.summary, overlapping.start.isoformat(),
+                )
                 await reschedule_event(
                     session,
                     overlapping.id,
@@ -376,17 +376,29 @@ def _first_managed_overlap(
 ) -> CalendarEvent | None:
     """Return the first managed write event overlapping `event`.
 
-    Skips all-day events and skips comparing the event against itself. Two
-    intervals [a, b) overlap iff `a.start < b.end and b.start < a.end`.
+    All-day events only reach this marked busy (`_active_events` drops
+    show-as-free ones) and block their whole days. Two intervals [a, b)
+    overlap iff `a.start < b.end and b.start < a.end`.
     """
-    if event.all_day:
-        return None
+    start, end = _effective_span(event)
     for other in others:
         if other.id == event.id or other.all_day or not is_managed_event(other):
             continue
-        if event.start < other.end and other.start < event.end:
+        if start < other.end and other.start < end:
             return other
     return None
+
+
+def _effective_span(event: CalendarEvent) -> tuple[datetime, datetime]:
+    if not event.all_day:
+        return event.start, event.end
+    from app.timezones import user_tz
+
+    tz = user_tz()
+    return (
+        datetime.combine(event.start.date(), dt_time.min, tzinfo=tz),
+        datetime.combine(event.end.date(), dt_time.min, tzinfo=tz),
+    )
 
 
 def _task_for_event(session: Session, event: CalendarEvent) -> Task | None:

@@ -11,16 +11,18 @@ from typing import Any
 
 from app.db.schemas.raw_input import RawInputCreate
 
-# resolve_conflict runs are fully automatic — they never surface in 007.
-INGESTED_KINDS = frozenset({"implement", "review"})
+# All kotx run kinds should surface in the inbox. Automatic resolve-conflict
+# runs stay informational unless a terminal transition matches an existing task.
+INGESTED_KINDS = frozenset({"implement", "review", "resolve_conflict"})
 
 # States where the user must act — these carry the brief and may create a task.
 ACTIONABLE = frozenset(
     {("implement", "draft"), ("implement", "awaiting_approval"), ("review", "awaiting_approval")}
 )
 
-# States that complete the 007 task: merged/terminal for implement, and a
-# sent review (awaiting_external) for review tasks.
+# States that complete the linked 007 task: merged/terminal for implement,
+# a sent review (awaiting_external) for review tasks, and finished automatic
+# conflict-resolution runs.
 DONE_STATES = frozenset(
     {
         ("implement", "done"),
@@ -28,6 +30,8 @@ DONE_STATES = frozenset(
         ("review", "awaiting_external"),
         ("review", "done"),
         ("review", "cancelled"),
+        ("resolve_conflict", "done"),
+        ("resolve_conflict", "cancelled"),
     }
 )
 
@@ -76,21 +80,10 @@ def envelope_for_transition(task: dict, doc: str | None = None) -> RawInputCreat
     title = str(task.get("title") or f"{repo}#{number}")
     kind = str(task.get("kind") or "")
 
-    lines = [
-        f"kotx {kind} · {repo}#{number} — {title}",
-        f"State: {task.get('status') or state}"
-        + (f" (proposes {proposes})" if proposes else ""),
-    ]
-    if task.get("stateReason"):
-        lines.append(f"Reason: {task['stateReason']}")
-    if doc:
-        lines.append("")
-        lines.append(doc[:6000])
-
     return RawInputCreate(
         source="kotx",
         external_id=f"{kotx_id}:{task.get('attempt') or 1}:{state}:{proposes}",
-        content="\n".join(lines),
+        content=doc[:6000] if doc else "",
         source_metadata={
             "thread_id": github_thread_key(repo, number),
             "kotx_task_id": kotx_id,

@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, CirclePlus, Gauge, RotateCcw, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CirclePlus,
+  Gauge,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
@@ -7,7 +14,13 @@ import { Markdown } from "@/components/ui/markdown";
 import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { inputTitle, isAgentTaskFollowup, senderName } from "@/lib/inbox";
+import {
+  inputTitle,
+  isAgentTaskFollowup,
+  isDismissibleKotxRun,
+  isKotxRun,
+  senderName,
+} from "@/lib/inbox";
 import {
   projectAgentTrace,
   type EvidenceRow,
@@ -37,7 +50,8 @@ interface Props {
 export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-  const { busy, runTaskAction, promote, reopenTask } = useInboxActions(onChanged);
+  const { busy, runTaskAction, promote, reopenTask, dismissRun } =
+    useInboxActions(onChanged);
 
   const data = item.data;
   const title = inputTitle(data);
@@ -67,7 +81,8 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
   }, [item.id, onVisible, unseen]);
 
   const dismiss = () => {
-    if (data.task_id) runTaskAction(data.task_id, api.markNotTask, "Task dismissed");
+    if (data.task_id)
+      runTaskAction(data.task_id, api.markNotTask, "Task dismissed");
   };
   const reopen = () => {
     if (data.task_id) reopenTask(data.task_id);
@@ -84,21 +99,31 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
     (!data.task_id ||
       data.status === "duplicate" ||
       data.status === "not_task");
+  // A promotable kotx card is a run that hasn't produced a task yet (preparing/
+  // queued/running). Don't offer "Make a task" — kotx makes the task itself
+  // when the run reaches an actionable state. Instead let the user dismiss the
+  // run (discard it upstream); an already-terminal run gets no action.
   const action = promotable
-    ? { label: "Make a task", Icon: CirclePlus, run: () => promote(item.id) }
+    ? isKotxRun(data)
+      ? isDismissibleKotxRun(data)
+        ? { label: "Dismiss run", Icon: Trash2, run: () => dismissRun(data.id) }
+        : null
+      : { label: "Make a task", Icon: CirclePlus, run: () => promote(item.id) }
     : data.status === "open"
       ? { label: "Dismiss task", Icon: Trash2, run: dismiss }
       : data.status === "closed"
         ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
         : null;
 
+  const expandable = hasInputDetails(data);
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card ref={cardRef}>
+    <Card ref={cardRef} className={cn(isKotxRun(data) && "border-primary/50")}>
       <CardContent
-        className="cursor-pointer"
+        className={cn(expandable && "cursor-pointer")}
         onClick={(e) => {
+          if (!expandable) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           setOpen((v) => !v);
         }}
@@ -133,17 +158,21 @@ export function InboxCard({ item, onChanged, unseen, onVisible }: Props) {
             </div>
           </div>
 
-          <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          {expandable && (
+            <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
         </div>
 
-        <Collapsible open={open}>
-          <div
-            className="mt-3 space-y-3 border-t pt-3 text-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <InputBody data={data} />
-          </div>
-        </Collapsible>
+        {expandable && (
+          <Collapsible open={open}>
+            <div
+              className="mt-3 space-y-3 border-t pt-3 text-sm"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <InputBody data={data} />
+            </div>
+          </Collapsible>
+        )}
       </CardContent>
     </Card>
   );
@@ -185,6 +214,21 @@ export function ActionButton({
   );
 }
 
+// Mirrors InputBody's render conditions — cards skip the dropdown (and the
+// modal skips the body block) when nothing would show. kotx transitions omit
+// the reason: it's deterministic boilerplate ("… nothing to do yet").
+export function hasInputDetails(data: RawInput): boolean {
+  if (data.content) return true;
+  const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
+  if (!trace) return false;
+  return (
+    Boolean(trace.reason && !isKotxRun(data)) ||
+    trace.currentTask.length > 0 ||
+    trace.evidence.length > 0 ||
+    trace.tools.length > 0
+  );
+}
+
 export function InputBody({ data }: { data: RawInput }) {
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
   const evidence = useResolvedEvidence(trace?.evidence ?? NO_EVIDENCE);
@@ -198,7 +242,7 @@ export function InputBody({ data }: { data: RawInput }) {
           </div>
         </Section>
       )}
-      {trace?.reason && (
+      {trace?.reason && !isKotxRun(data) && (
         <Section title="Reason">
           <Markdown content={trace.reason} className="text-xs" />
         </Section>
@@ -207,32 +251,32 @@ export function InputBody({ data }: { data: RawInput }) {
         (trace.currentTask.length > 0 ||
           evidence.length > 0 ||
           trace.tools.length > 0) && (
-        <CollapsibleSection title="Agent trace">
-          {trace.currentTask.length > 0 && (
-            <Section title="Current task">
-              <FieldGrid fields={trace.currentTask} />
-            </Section>
-          )}
-          {evidence.length > 0 && (
-            <Section title="Precedents">
-              <div className="space-y-1">
-                {evidence.map((row) => (
-                  <EvidenceItem key={row.id} row={row} />
-                ))}
-              </div>
-            </Section>
-          )}
-          {trace.tools.length > 0 && (
-            <Section title="Tool calls">
-              <div className="space-y-1">
-                {trace.tools.map((row) => (
-                  <ToolItem key={row.id} row={row} />
-                ))}
-              </div>
-            </Section>
-          )}
-        </CollapsibleSection>
-      )}
+          <CollapsibleSection title="Agent trace">
+            {trace.currentTask.length > 0 && (
+              <Section title="Current task">
+                <FieldGrid fields={trace.currentTask} />
+              </Section>
+            )}
+            {evidence.length > 0 && (
+              <Section title="Precedents">
+                <div className="space-y-1">
+                  {evidence.map((row) => (
+                    <EvidenceItem key={row.id} row={row} />
+                  ))}
+                </div>
+              </Section>
+            )}
+            {trace.tools.length > 0 && (
+              <Section title="Tool calls">
+                <div className="space-y-1">
+                  {trace.tools.map((row) => (
+                    <ToolItem key={row.id} row={row} />
+                  ))}
+                </div>
+              </Section>
+            )}
+          </CollapsibleSection>
+        )}
     </>
   );
 }
@@ -254,7 +298,13 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+function CollapsibleSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const Chevron = open ? ChevronDown : ChevronRight;
 
@@ -283,7 +333,9 @@ function FieldGrid({ fields }: { fields: ProjectionField[] }) {
       {fields.map((field) => (
         <div key={`${field.label}:${field.value}`} className="min-w-0">
           <span className="text-muted-foreground">{field.label}: </span>
-          <span className="whitespace-pre-wrap break-words font-medium">{field.value}</span>
+          <span className="whitespace-pre-wrap break-words font-medium">
+            {field.value}
+          </span>
         </div>
       ))}
     </div>
@@ -310,14 +362,19 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
         )}
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-        {row.sender && <span className="truncate font-medium">{row.sender}</span>}
+        {row.sender && (
+          <span className="truncate font-medium">{row.sender}</span>
+        )}
         {row.sender && when && <MetaDot />}
         {when && <span className="font-medium">{when}</span>}
         {(row.sender || when) && row.source && <MetaDot />}
         {row.source && <span className="font-medium">{row.source}</span>}
         {row.similarity && (row.sender || when || row.source) && <MetaDot />}
         {row.similarity && (
-          <span className="inline-flex items-center gap-1 font-medium" title="Similarity">
+          <span
+            className="inline-flex items-center gap-1 font-medium"
+            title="Similarity"
+          >
             <Gauge className="h-3 w-3" aria-hidden />
             {row.similarity}
           </span>
@@ -337,11 +394,16 @@ function ToolItem({ row }: { row: ToolRow }) {
   const header = (
     <>
       <span
-        className={cn("h-2 w-2 shrink-0 rounded-full", toolStatusClass(row.status))}
+        className={cn(
+          "h-2 w-2 shrink-0 rounded-full",
+          toolStatusClass(row.status),
+        )}
       />
       <span className="min-w-0 flex-1 truncate font-medium">{row.purpose}</span>
       {row.confidence && (
-        <span className="shrink-0 tabular-nums text-muted-foreground">{row.confidence}</span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">
+          {row.confidence}
+        </span>
       )}
       {row.status !== "success" && (
         <span className="shrink-0 text-muted-foreground">

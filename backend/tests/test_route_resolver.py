@@ -11,7 +11,10 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.db.models.route_cache import RouteCache  # noqa: E402
 from app.services.commute import resolver  # noqa: E402
-from app.services.location import is_online_location  # noqa: E402
+from app.services.location import (  # noqa: E402
+    is_online_location,
+    resolve_google_maps_url,
+)
 
 
 def _session():
@@ -204,6 +207,10 @@ def test_online_location_detection():
     ]
     physical = [
         "Gymstreet 5, Munich",
+        "https://www.google.com/maps/place/TUM+Campus/@48.26566,11.66256,17z",
+        "https://maps.google.com/?q=Marienplatz+8,+Munich",
+        "https://maps.app.goo.gl/abcdef",
+        "https://goo.gl/maps/abcdef",
         "Onlinerstrasse 2",  # word boundary — no false positive
         "Cafe Remoteweg 3",
         "Marienplatz 8",
@@ -212,3 +219,95 @@ def test_online_location_detection():
         assert is_online_location(loc), loc
     for loc in physical:
         assert not is_online_location(loc), loc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://www.google.com/maps/place/TUM+Campus/@48.26566,11.66256,17z",
+            "48.26566,11.66256",
+        ),
+        (
+            "https://maps.google.com/?q=Marienplatz+8,+Munich",
+            "Marienplatz 8, Munich",
+        ),
+        (
+            "https://www.google.com/maps/search/?api=1&query=48.137154,11.576124",
+            "48.137154,11.576124",
+        ),
+        (
+            "https://www.google.com/maps/dir/?api=1&destination=Olympiapark+Munich",
+            "Olympiapark Munich",
+        ),
+        (
+            "https://www.google.com/maps/place/English+Garden",
+            "English Garden",
+        ),
+    ],
+)
+async def test_google_maps_url_resolves_direct_shapes(url, expected):
+    assert await resolve_google_maps_url(url) == expected
+
+
+@pytest.mark.asyncio
+async def test_google_maps_short_link_uses_redirected_url(monkeypatch):
+    class Response:
+        url = "https://www.google.com/maps/place/TUM+Campus/@48.26566,11.66256,17z"
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            assert url == "https://maps.app.goo.gl/abcdef"
+            assert self.kwargs["follow_redirects"] is True
+            return Response()
+
+    monkeypatch.setattr("app.services.location.httpx.AsyncClient", Client)
+
+    assert await resolve_google_maps_url("https://maps.app.goo.gl/abcdef") == "48.26566,11.66256"
+
+
+@pytest.mark.asyncio
+async def test_google_maps_short_link_survives_consent_interstitial(monkeypatch):
+    """EU short-link chains end on consent.google.com — the routable value
+    lives in an intermediate hop and in the consent `continue` param."""
+
+    class Hop:
+        def __init__(self, url):
+            self.url = url
+
+    class Response:
+        history = [
+            Hop("https://maps.app.goo.gl/abcdef"),
+            Hop("https://maps.google.com?q=48.2622886,11.6684591&entry=gps"),
+        ]
+        url = (
+            "https://consent.google.com/ml?continue="
+            "https://maps.google.com/maps?q%3D48.2622886,11.6684591%26entry%3Dgps"
+        )
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            return Response()
+
+    monkeypatch.setattr("app.services.location.httpx.AsyncClient", Client)
+
+    assert await resolve_google_maps_url("https://maps.app.goo.gl/abcdef") == "48.2622886,11.6684591"

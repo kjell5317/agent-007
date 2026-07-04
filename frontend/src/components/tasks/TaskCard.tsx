@@ -8,7 +8,9 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { actionHint } from "@/components/runs/runLabels";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
@@ -60,6 +62,7 @@ export function TaskCard({
   const lastProbeKeyRef = useRef<string | null>(null);
   const labels = useLabels();
 
+  const kotxAction = kotxTask ? actionHint(kotxTask) : null;
   const displayDate = task.scheduled_date ?? task.due_date;
   const displayOverdue = isOverdue(displayDate);
   const displayUrgent = isUrgent(displayDate, task.estimation);
@@ -182,6 +185,7 @@ export function TaskCard({
       ref={cardRef}
       className={cn(
         "transition-opacity duration-300",
+        task.kotx_task_id != null && "border-primary/50",
         crossing && "pointer-events-none opacity-40",
       )}
     >
@@ -193,18 +197,38 @@ export function TaskCard({
         }}
       >
         <div className="flex items-center gap-2">
-          <IconButton
-            label="Mark done"
-            disabled={busy || crossing}
-            onClick={crossOff}
-            className="text-muted-foreground hover:text-primary"
-          >
-            {crossing ? (
-              <CircleCheckBig className="h-5 w-5 text-primary" />
-            ) : (
-              <Circle className="h-5 w-5" />
-            )}
-          </IconButton>
+          {kotxTask ? (
+            // Done is handled through kotx — the leading slot dismisses instead.
+            <IconButton
+              label={kotxTask.canDiscard ? "Dismiss run" : "Mark not a task"}
+              disabled={busy || crossing}
+              onClick={() =>
+                kotxTask.canDiscard
+                  ? withBusy(
+                      () => kotx.discard(kotxTask.id),
+                      "Run discarded",
+                      onKotxChanged,
+                    )
+                  : withBusy(() => api.markNotTask(task.id), "Marked not a task")
+              }
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-5 w-5" />
+            </IconButton>
+          ) : (
+            <IconButton
+              label="Mark done"
+              disabled={busy || crossing}
+              onClick={crossOff}
+              className="text-muted-foreground hover:text-primary"
+            >
+              {crossing ? (
+                <CircleCheckBig className="h-5 w-5 text-primary" />
+              ) : (
+                <Circle className="h-5 w-5" />
+              )}
+            </IconButton>
+          )}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
               {unseen && (
@@ -267,21 +291,18 @@ export function TaskCard({
           </div>
 
           {kotxTask ? (
-            kotxTask.canDiscard && (
-              <IconButton
-                label="Discard run"
+            // The pending run action opens the modal (where the doc + action
+            // buttons live) rather than acting directly — a one-tap merge is
+            // too risky.
+            kotxAction && (
+              <Button
+                size="sm"
+                className="shrink-0"
                 disabled={busy || crossing}
-                onClick={() =>
-                  withBusy(
-                    () => kotx.discard(kotxTask.id),
-                    "Run discarded",
-                    onKotxChanged,
-                  )
-                }
-                className="text-muted-foreground hover:text-destructive"
+                onClick={() => onOpen(task.id)}
               >
-                <Trash2 className="h-4 w-4" />
-              </IconButton>
+                {kotxAction}
+              </Button>
             )
           ) : (
             <IconButton

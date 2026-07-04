@@ -468,6 +468,12 @@ def is_commute_event(event: CalendarEvent) -> bool:
     return props.get(PROP_MANAGED_BY) == MANAGED_BY and props.get(PROP_KIND) == KIND_COMMUTE
 
 
+def is_free_event(event: CalendarEvent) -> bool:
+    """Google's show-as-Free flag. All-day events default to free; timed
+    events default to busy."""
+    return event.raw.get("transparency") == "transparent"
+
+
 def _clean_private_properties(props: dict[str, str]) -> dict[str, str]:
     return {
         str(key): str(value)

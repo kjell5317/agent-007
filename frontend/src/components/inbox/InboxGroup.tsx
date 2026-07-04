@@ -1,14 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, CirclePlus, RotateCcw, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CirclePlus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
-import { ActionButton, InputBody, MetaDot } from "@/components/inbox/InboxCard";
+import {
+  ActionButton,
+  hasInputDetails,
+  InputBody,
+  MetaDot,
+} from "@/components/inbox/InboxCard";
 import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
-import { isAgentTaskFollowup, senderName, type InboxGroup as GroupData } from "@/lib/inbox";
+import {
+  isAgentTaskFollowup,
+  isDismissibleKotxRun,
+  isKotxRun,
+  senderName,
+  type InboxGroup as GroupData,
+} from "@/lib/inbox";
+import { cn } from "@/lib/utils";
 import type { RawInput } from "@/lib/types";
 
 interface Props {
@@ -18,10 +36,16 @@ interface Props {
   onVisible: (ids: string[]) => void;
 }
 
-export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Props) {
+export function InboxGroup({
+  group,
+  onChanged,
+  unseenMemberIds,
+  onVisible,
+}: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-  const { busy, runTaskAction, promote, reopenTask } = useInboxActions(onChanged);
+  const { busy, runTaskAction, promote, reopenTask, dismissRun } =
+    useInboxActions(onChanged);
 
   const { members, newest, liveTask, closedTask } = group;
   const unseenMemberKey = useMemo(
@@ -35,9 +59,7 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
 
   const senders = Array.from(new Set(members.map(senderName)));
   const sendersLabel =
-    senders.length === 1
-      ? senders[0]
-      : `${senders[0]} +${senders.length - 1}`;
+    senders.length === 1 ? senders[0] : `${senders[0]} +${senders.length - 1}`;
 
   const unread = unseenMemberIds.length > 0;
 
@@ -71,8 +93,21 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
   // existing task from a follow-up (reopened / updated / closed / no_change):
   // that task is real, so promoting would duplicate it.
   const agentActed = members.some(isAgentTaskFollowup);
-  const action =
-    !liveTask && !closedTask && !agentActed
+  // A task-less thread whose members are all kotx transitions is a kotx run
+  // (or successive runs on the same issue) that hasn't produced a task yet.
+  // Offer "Dismiss run" (discard the newest run upstream) instead of "Make a
+  // task from thread"; a run already terminal gets no action. Mixed
+  // gmail+kotx github threads keep the promote path.
+  const kotxRunThread = !liveTask && !closedTask && members.every(isKotxRun);
+  const action = kotxRunThread
+    ? isDismissibleKotxRun(newest)
+      ? {
+          label: "Dismiss run",
+          Icon: Trash2,
+          run: () => dismissRun(newest.id),
+        }
+      : null
+    : !liveTask && !closedTask && !agentActed
       ? {
           label: "Make a task from thread",
           Icon: CirclePlus,
@@ -84,7 +119,11 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
             label: "Dismiss task",
             Icon: Trash2,
             run: () =>
-              runTaskAction(liveTask.task_id!, api.markNotTask, "Task dismissed"),
+              runTaskAction(
+                liveTask.task_id!,
+                api.markNotTask,
+                "Task dismissed",
+              ),
           }
         : closedTask
           ? {
@@ -97,7 +136,10 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card ref={cardRef}>
+    <Card
+      ref={cardRef}
+      className={cn(members.some(isKotxRun) && "border-primary/50")}
+    >
       <CardContent
         className="cursor-pointer"
         onClick={(e) => {
@@ -161,6 +203,28 @@ export function InboxGroup({ group, onChanged, unseenMemberIds, onVisible }: Pro
 function GroupMember({ data }: { data: RawInput }) {
   const [open, setOpen] = useState(false);
   const MemberChevron = open ? ChevronDown : ChevronRight;
+  const header = (
+    <>
+      <span className="min-w-0 flex-1 truncate text-sm">
+        {senderName(data)}
+      </span>
+      <InputStatusBadge input={data} />
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {fmtWhen(data.received_at)}
+      </span>
+    </>
+  );
+
+  if (!hasInputDetails(data)) {
+    return (
+      <div className="rounded-md border bg-muted/30">
+        <div className="flex w-full items-center gap-2 px-2 py-1.5 text-left">
+          {header}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-md border bg-muted/30">
       <button
@@ -168,13 +232,7 @@ function GroupMember({ data }: { data: RawInput }) {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
       >
-        <span className="min-w-0 flex-1 truncate text-sm">
-          {senderName(data)}
-        </span>
-        <InputStatusBadge input={data} />
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {fmtWhen(data.received_at)}
-        </span>
+        {header}
         <MemberChevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
       <Collapsible open={open}>

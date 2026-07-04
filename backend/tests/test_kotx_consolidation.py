@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
+from app.services.kotx import discard as kotx_discard  # noqa: E402
 from app.services.input.kotx import poll as kotx_poll  # noqa: E402
 from app.services.input.gmail.preprocess import _apply_github_identity  # noqa: E402
 from app.services.input.kotx.normalize import (  # noqa: E402
@@ -47,13 +48,26 @@ def _kotx_task(**overrides) -> dict:
 
 
 def test_envelope_carries_github_thread_key_and_dedup_id():
-    env = envelope_for_transition(_kotx_task(), doc="# TASK\ndo the thing")
+    env = envelope_for_transition(
+        _kotx_task(stateReason="waiting for user approval"), doc="# TASK\ndo the thing"
+    )
     assert env is not None
     assert env.source == "kotx"
     assert env.external_id == "42:1:draft:"
     assert env.source_metadata["thread_id"] == "github:owner/repo#31"
     assert env.source_metadata["kotx_task_id"] == 42
-    assert "do the thing" in env.content
+    assert env.source_metadata["state_reason"] == "waiting for user approval"
+    assert env.content == "# TASK\ndo the thing"
+    assert "kotx implement" not in env.content
+    assert "State:" not in env.content
+    assert "Reason:" not in env.content
+
+
+def test_envelope_truncates_document_content_without_header():
+    env = envelope_for_transition(_kotx_task(), doc="x" * 6001)
+
+    assert env is not None
+    assert env.content == "x" * 6000
 
 
 def test_envelope_distinguishes_pr_and_merge_proposals():
@@ -65,8 +79,24 @@ def test_envelope_distinguishes_pr_and_merge_proposals():
     assert pr.external_id != merge.external_id
 
 
-def test_resolve_conflict_runs_are_skipped():
-    assert envelope_for_transition(_kotx_task(kind="resolve_conflict")) is None
+def test_resolve_conflict_runs_are_ingested_with_thread_metadata_and_dedup_id():
+    env = envelope_for_transition(
+        _kotx_task(
+            kind="resolve_conflict",
+            state="running",
+            status="resolving conflicts",
+            attempt=2,
+        )
+    )
+
+    assert env is not None
+    assert env.source == "kotx"
+    assert env.external_id == "42:2:running:"
+    assert env.source_metadata["thread_id"] == "github:owner/repo#31"
+    assert env.source_metadata["kotx_task_id"] == 42
+    assert env.source_metadata["kotx_kind"] == "resolve_conflict"
+    assert env.source_metadata["github_url"] == "https://github.com/owner/repo/issues/31"
+    assert env.content == ""
 
 
 def test_parse_github_subject_rejects_number_prefix_match():
@@ -200,6 +230,40 @@ async def test_done_transition_closes_linked_task_without_discard(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["done", "cancelled"])
+async def test_resolve_conflict_terminal_transition_closes_linked_task(monkeypatch, state):
+    task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
+    closed = {}
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+
+    async def fake_close(session, task_id, *, discard_kotx=True):
+        closed["task_id"] = task_id
+        closed["discard_kotx"] = discard_kotx
+
+    finalized = {}
+
+    def fake_finalize(session, raw_id, **kw):
+        finalized.update(kw)
+
+    monkeypatch.setattr(kotx_runner, "close_task", fake_close)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", fake_finalize)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="resolve_conflict", state=state, status=state))
+    )
+
+    assert trace["outcome"] == "closed"
+    assert closed == {"task_id": task.id, "discard_kotx": False}
+    assert finalized["status"] == "duplicate"
+    assert finalized["task_id"] == task.id
+
+
+@pytest.mark.asyncio
 async def test_review_sent_marks_task_done(monkeypatch):
     task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
@@ -243,6 +307,32 @@ async def test_informational_transition_without_task_is_not_task(monkeypatch):
         session, _raw(_meta(state="running"))
     )
     assert trace["outcome"] == "not_task"
+    assert finalized["status"] == "not_task"
+
+
+@pytest.mark.asyncio
+async def test_unmatched_resolve_conflict_transition_is_visible_as_not_task(monkeypatch):
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None
+    )
+    monkeypatch.setattr(
+        kotx_runner.tasks, "github_link_candidates", lambda s, r, n: []
+    )
+    finalized = {}
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "finalize",
+        lambda session, raw_id, **kw: finalized.update(kw),
+    )
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="resolve_conflict", state="running"))
+    )
+
+    assert trace["outcome"] == "not_task"
+    assert trace["reason"] == "kotx resolve_conflict is running; nothing to do yet"
     assert finalized["status"] == "not_task"
 
 
@@ -443,6 +533,94 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     assert payload.label == "SocialAI"
     assert created["scheduled"] is True
     assert finalized["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypatch):
+    # Two transitions for the same kotx task arrive at once (overlapping webhook
+    # deliveries, or a webhook racing the poll). Before the per-id lock, both
+    # passed the get_by_kotx_id check while the first awaited its LLM call, and
+    # each created a task — tripping uq_tasks_kotx_task_id. The lock must
+    # serialize them so exactly one task is created.
+    import asyncio
+
+    store: dict[int, SimpleNamespace] = {}  # visible only after commit
+    creates: list[SimpleNamespace] = []
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: store.get(i))
+    monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
+    monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
+    monkeypatch.setattr(kotx_runner.tasks, "latest_status_for", lambda s, ids: {})
+    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    async def fake_extract(session, raw):
+        await asyncio.sleep(0)  # the yield point that opened the race
+        return {"title": "t", "estimation": 20, "due_date": None, "label": None}
+
+    def fake_create(session, payload):
+        task = SimpleNamespace(id=uuid.uuid4(), title=payload.title, kotx_task_id=None)
+        creates.append(task)
+        return task
+
+    async def fake_schedule(session, task):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner.tasks, "create", fake_create)
+    monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
+
+    def _session() -> SimpleNamespace:
+        def commit():
+            for task in creates:
+                if task.kotx_task_id is not None:
+                    store[task.kotx_task_id] = task
+
+        return SimpleNamespace(commit=commit, flush=lambda: None)
+
+    traces = await asyncio.gather(
+        kotx_runner.run_kotx_transition(
+            _session(), _raw(_meta(state="draft"), raw_id=uuid.uuid4())
+        ),
+        kotx_runner.run_kotx_transition(
+            _session(), _raw(_meta(state="draft"), raw_id=uuid.uuid4())
+        ),
+    )
+
+    assert len(creates) == 1
+    outcomes = sorted(t["outcome"] for t in traces)
+    assert outcomes == ["no_change", "task_created"]
+
+
+# --- dismiss (discard) a kotx run from the inbox --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discard_run_for_input_discards_by_kotx_id(monkeypatch):
+    raw = _raw(_meta(state="drafting"))
+    calls = {}
+
+    async def fake_discard(kotx_task_id):
+        calls["kotx_task_id"] = kotx_task_id
+        return True
+
+    monkeypatch.setattr(kotx_discard.raw_inputs_store, "get", lambda s, i: raw)
+    monkeypatch.setattr(kotx_discard.kotx_client, "discard_task", fake_discard)
+    monkeypatch.setattr(kotx_discard, "publish_kotx", lambda: calls.setdefault("published", True))
+
+    result = await kotx_discard.discard_run_for_input(object(), raw.id)
+
+    assert result is True
+    assert calls["kotx_task_id"] == 42  # from _kotx_task fixture id
+    assert calls["published"] is True
+
+
+@pytest.mark.asyncio
+async def test_discard_run_for_input_rejects_non_kotx_input(monkeypatch):
+    raw = SimpleNamespace(id=uuid.uuid4(), source="gmail", source_metadata={})
+    monkeypatch.setattr(kotx_discard.raw_inputs_store, "get", lambda s, i: raw)
+    with pytest.raises(LookupError):
+        await kotx_discard.discard_run_for_input(object(), raw.id)
 
 
 def test_label_for_repo_prefers_config_match(monkeypatch):
