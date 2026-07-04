@@ -272,8 +272,14 @@ function PointsModal({
     onClose();
   };
 
+  // Load the log (entries + unseen count + watermark) as soon as the modal
+  // opens, so the Log tab's unseen badge is populated before that tab is
+  // opened — the same way the inbox fills its unread badge before you enter
+  // the mail view. Don't rely on finally() to clear busy: setLogLoaded
+  // re-runs this effect and its cleanup flips `cancelled`, so a deferred
+  // reset would be skipped and the spinner would hang.
   useEffect(() => {
-    if (!open || tab !== "log" || logLoaded) return;
+    if (!open || logLoaded) return;
     let cancelled = false;
     setLogBusy(true);
     api
@@ -284,11 +290,7 @@ function PointsModal({
         setLogCount(res.count);
         setLogSeenBefore(res.last_seen_at);
         setLogLoaded(true);
-        // Reset busy before the mark_seen round-trip: setLogLoaded re-runs
-        // this effect, whose cleanup flips `cancelled` — a later finally()
-        // would be skipped and the spinner would never clear.
         setLogBusy(false);
-        return api.markPointsLogSeen();
       })
       .catch((err) => {
         if (cancelled) return;
@@ -298,7 +300,17 @@ function PointsModal({
     return () => {
       cancelled = true;
     };
-  }, [logLoaded, open, tab]);
+  }, [logLoaded, open]);
+
+  // Switching to the Log tab counts as viewing it: clear the unseen badge and
+  // advance the server watermark, mirroring how opening the inbox resets its
+  // unread count. The green per-entry dots stay (they key off the watermark
+  // fetched on open) so you can still see what's new for this viewing.
+  useEffect(() => {
+    if (!open || tab !== "log" || logCount === 0) return;
+    setLogCount(0);
+    void api.markPointsLogSeen();
+  }, [logCount, open, tab]);
 
   const apply = async (sign: 1 | -1) => {
     const magnitude = Math.abs(Number(amount));
@@ -346,106 +358,121 @@ function PointsModal({
             )}
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="adjust">
-          {total != null && (
-            <div className="mb-4 text-center">
-              <span className="text-4xl font-bold tabular-nums">
-                {formatPoints(total)}
-              </span>
-              <span className="ml-1 text-sm text-muted-foreground">points</span>
-            </div>
-          )}
-          <Input
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="any"
-            autoFocus
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="Amount"
-            aria-label="Amount"
-            className="mb-3"
-          />
-          <Input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            maxLength={128}
-            placeholder="Reason"
-            aria-label="Reason"
-            className="mb-3"
-          />
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              disabled={busy}
-              onClick={() => apply(-1)}
-            >
-              − Subtract
-            </Button>
-            <Button className="flex-1" disabled={busy} onClick={() => apply(1)}>
-              + Add
-            </Button>
-          </div>
-        </TabsContent>
-        <TabsContent value="log">
-          <div className="max-h-[22rem] overflow-y-auto pr-1">
-            {logBusy ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                Loading...
-              </div>
-            ) : logEntries.length === 0 ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No point changes yet.
-              </div>
-            ) : (
-              <div className="divide-y">
-                {logEntries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {logSeenBefore != null &&
-                          new Date(entry.created_at).getTime() >
-                            new Date(logSeenBefore).getTime() && (
-                            <span
-                              aria-label="Unseen"
-                              title="Unseen"
-                              className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                            />
-                          )}
-                        <div className="min-w-0 flex-1 truncate text-sm font-medium">
-                          {entry.reason}
-                        </div>
-                      </div>
-                      <div className="mt-0.5 flex min-w-0 gap-2 text-xs text-muted-foreground">
-                        <span className="shrink-0">
-                          {formatLogTime(entry.created_at)}
-                        </span>
-                        {entry.caller && (
-                          <span className="min-w-0 truncate">{entry.caller}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div
-                      className={cn(
-                        "self-center text-sm font-semibold tabular-nums",
-                        entry.amount >= 0
-                          ? "text-emerald-500"
-                          : "text-destructive",
-                      )}
-                    >
-                      {formatSignedPoints(entry.amount)}
-                    </div>
-                  </div>
-                ))}
+        {/* Fixed-height body so switching tabs keeps the modal the same size
+            (the Adjust form is short; the Log list is tall and variable). */}
+        <div className="h-80">
+          <TabsContent
+            value="adjust"
+            className="mt-0 flex h-full flex-col justify-center"
+          >
+            {total != null && (
+              <div className="mb-4 text-center">
+                <span className="text-4xl font-bold tabular-nums">
+                  {formatPoints(total)}
+                </span>
+                <span className="ml-1 text-sm text-muted-foreground">
+                  points
+                </span>
               </div>
             )}
-          </div>
-        </TabsContent>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              autoFocus
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="Amount"
+              aria-label="Amount"
+              className="mb-3"
+            />
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              maxLength={128}
+              placeholder="Reason"
+              aria-label="Reason"
+              className="mb-3"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                disabled={busy}
+                onClick={() => apply(-1)}
+              >
+                − Subtract
+              </Button>
+              <Button
+                className="flex-1"
+                disabled={busy}
+                onClick={() => apply(1)}
+              >
+                + Add
+              </Button>
+            </div>
+          </TabsContent>
+          <TabsContent value="log" className="mt-0 h-full">
+            <div className="h-full overflow-y-auto pr-1">
+              {logBusy ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  Loading...
+                </div>
+              ) : logEntries.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No point changes yet.
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {logEntries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          {logSeenBefore != null &&
+                            new Date(entry.created_at).getTime() >
+                              new Date(logSeenBefore).getTime() && (
+                              <span
+                                aria-label="Unseen"
+                                title="Unseen"
+                                className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                              />
+                            )}
+                          <div className="min-w-0 flex-1 truncate text-sm font-medium">
+                            {entry.reason}
+                          </div>
+                        </div>
+                        <div className="mt-0.5 flex min-w-0 gap-2 text-xs text-muted-foreground">
+                          <span className="shrink-0">
+                            {formatLogTime(entry.created_at)}
+                          </span>
+                          {entry.caller && (
+                            <span className="min-w-0 truncate">
+                              {entry.caller}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        className={cn(
+                          "self-center text-sm font-semibold tabular-nums",
+                          entry.amount >= 0
+                            ? "text-emerald-500"
+                            : "text-destructive",
+                        )}
+                      >
+                        {formatSignedPoints(entry.amount)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </TabsContent>
+        </div>
       </Tabs>
     </Modal>
   );
