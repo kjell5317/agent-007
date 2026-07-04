@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,7 @@ export function Modal({
   leftAction,
 }: Props) {
   const accessibleTitle = typeof title === "string" ? title : titleLabel;
+  const pressedOnBackdrop = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -48,7 +49,18 @@ export function Modal({
       role="dialog"
       aria-modal="true"
       aria-label={accessibleTitle}
-      onClick={onClose}
+      // Dismiss only when the press both starts and ends on the backdrop.
+      // A press that starts on a control inside the modal must not close it,
+      // even if the layout shifts the release point onto the backdrop (e.g.
+      // switching to a shorter tab re-centers and shrinks the dialog under
+      // the cursor between mousedown and mouseup).
+      onMouseDown={(e) => {
+        pressedOnBackdrop.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (pressedOnBackdrop.current && e.target === e.currentTarget) onClose();
+        pressedOnBackdrop.current = false;
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
     >
       <div
