@@ -20,6 +20,7 @@ import { useInboxActions } from "@/components/inbox/useInboxActions";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import {
+  activeKotxRun,
   isAgentTaskFollowup,
   isDismissibleKotxRun,
   isKotxRun,
@@ -55,8 +56,11 @@ export function InboxGroup({
     [unseenMemberIds],
   );
   // Header shows the task's *status* (a no_change / duplicate follow-up on a
-  // closed task is still a closed task); each member below shows its own
-  // outcome badge. Groups with no task fall back to the newest member's badge.
+  // closed task is still a closed task) — but while a kotx run is in flight
+  // (e.g. a resolve-conflict run on the task's PR) its live state takes over,
+  // so the group adapts instead of sitting on "open". Each member below shows
+  // its own outcome badge; groups with no task fall back to the newest member.
+  const activeRun = activeKotxRun(members);
   const taskBadge = liveTask ? "open" : closedTask ? "closed" : null;
 
   const senders = Array.from(new Set(members.map(senderName)));
@@ -176,7 +180,9 @@ export function InboxGroup({
               </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              {taskBadge ? (
+              {activeRun ? (
+                <InputStatusBadge input={activeRun} />
+              ) : taskBadge ? (
                 <Badge variant={taskBadge}>{taskBadge}</Badge>
               ) : (
                 <InputStatusBadge input={newest} />

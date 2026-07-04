@@ -72,6 +72,23 @@ export function isDismissibleKotxRun(r: RawInput): boolean {
   return typeof state === "string" && !TERMINAL_STATES.has(state as KotxState);
 }
 
+// The transition to badge a group with while kotx is working: each run's
+// current state is its newest transition (earlier drafting/queued/running
+// members are stale history), and the most recently active in-flight run
+// wins. Null when no run is in flight. Expects members newest-first.
+export function activeKotxRun(members: RawInput[]): RawInput | null {
+  const latestPerRun = new Map<unknown, RawInput>();
+  for (const m of members) {
+    if (!isKotxRun(m)) continue;
+    const runId = m.source_metadata?.kotx_task_id;
+    if (!latestPerRun.has(runId)) latestPerRun.set(runId, m);
+  }
+  for (const input of latestPerRun.values()) {
+    if (isDismissibleKotxRun(input)) return input;
+  }
+  return null;
+}
+
 // kotx subjects are "{repo}#{n} {title}"; drop the repo — it's shown as the
 // sender and carried by the label — so the inbox card matches the task title,
 // which the runner stores repo-stripped (see agent.kotx `_create_task_from_brief`).
