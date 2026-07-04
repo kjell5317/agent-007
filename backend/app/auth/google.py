@@ -1,9 +1,9 @@
 """Google OAuth 2.0 provider.
 
 Implements the generic `OAuthProvider` contract against Google's endpoints.
-Used by every Google-backed source (Gmail today; Calendar / Drive later if we
-want them) — the same access token can be reused across Google APIs as long
-as the requested scopes cover them.
+Used by every Google-backed integration (Gmail, Calendar, health/sleep) — the
+same access token can be reused across Google APIs as long as the requested
+scopes cover them.
 """
 
 from __future__ import annotations
@@ -19,15 +19,17 @@ _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
-# Least-privilege default. Gmail read-only covers the ingestion path; the
-# calendar.events scope covers the Calendar service in app.services. Existing
-# users must re-authorize once after this list changes — Google's consent
-# screen handles that because we pass prompt=consent below.
+# Least-privilege default. Gmail read-only covers the ingestion path;
+# calendar.events covers the Calendar service; fitness.sleep.read covers the
+# isolated Google Fit sleep handler. Existing users must re-authorize once
+# after this list changes — Google's consent screen handles that because we
+# pass prompt=consent below.
 DEFAULT_SCOPES = [
     "openid",
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/fitness.sleep.read",
 ]
 
 
