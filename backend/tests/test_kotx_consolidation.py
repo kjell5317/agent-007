@@ -208,9 +208,10 @@ async def test_done_transition_closes_linked_task_without_discard(monkeypatch):
         kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
     )
 
-    async def fake_close(session, task_id, *, discard_kotx=True):
+    async def fake_close(session, task_id, *, discard_kotx=True, award_points=True):
         closed["task_id"] = task_id
         closed["discard_kotx"] = discard_kotx
+        closed["award_points"] = award_points
 
     finalized = {}
 
@@ -224,32 +225,32 @@ async def test_done_transition_closes_linked_task_without_discard(monkeypatch):
     trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="done")))
 
     assert trace["outcome"] == "closed"
-    assert closed == {"task_id": task.id, "discard_kotx": False}
+    assert closed == {"task_id": task.id, "discard_kotx": False, "award_points": True}
     assert finalized["status"] == "duplicate"
     assert finalized["task_id"] == task.id
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["done", "cancelled"])
-async def test_resolve_conflict_terminal_transition_closes_linked_task(monkeypatch, state):
+async def test_resolve_conflict_terminal_transition_never_closes_or_awards(
+    monkeypatch, state
+):
     task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
-    closed = {}
 
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
     monkeypatch.setattr(
         kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
     )
 
-    async def fake_close(session, task_id, *, discard_kotx=True):
-        closed["task_id"] = task_id
-        closed["discard_kotx"] = discard_kotx
+    async def fail_close(*_args, **_kwargs):
+        raise AssertionError("a resolve run finishing must not close the task")
 
     finalized = {}
 
     def fake_finalize(session, raw_id, **kw):
         finalized.update(kw)
 
-    monkeypatch.setattr(kotx_runner, "close_task", fake_close)
+    monkeypatch.setattr(kotx_runner, "close_task", fail_close)
     monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", fake_finalize)
 
     session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
@@ -257,8 +258,7 @@ async def test_resolve_conflict_terminal_transition_closes_linked_task(monkeypat
         session, _raw(_meta(kind="resolve_conflict", state=state, status=state))
     )
 
-    assert trace["outcome"] == "closed"
-    assert closed == {"task_id": task.id, "discard_kotx": False}
+    assert trace["outcome"] == "no_change"
     assert finalized["status"] == "duplicate"
     assert finalized["task_id"] == task.id
 
@@ -272,7 +272,7 @@ async def test_review_sent_marks_task_done(monkeypatch):
     )
     called = {}
 
-    async def fake_close(session, task_id, *, discard_kotx=True):
+    async def fake_close(session, task_id, *, discard_kotx=True, award_points=True):
         called["closed"] = True
 
     monkeypatch.setattr(kotx_runner, "close_task", fake_close)
@@ -284,6 +284,50 @@ async def test_review_sent_marks_task_done(monkeypatch):
     )
     assert trace["outcome"] == "closed"
     assert called.get("closed")
+
+
+@pytest.mark.asyncio
+async def test_pr_follow_up_run_reopens_task_instead_of_creating_a_second(monkeypatch):
+    task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
+    prior = SimpleNamespace(task_id=task.id)
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None
+    )
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "find_kotx_by_pr", lambda s, repo, n: prior
+    )
+    monkeypatch.setattr(kotx_runner.tasks, "get", lambda s, tid: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "closed"}
+    )
+
+    reopened = {}
+
+    async def fake_reopen(session, task_id):
+        reopened["task_id"] = task_id
+
+    finalized = {}
+    monkeypatch.setattr(kotx_runner, "reopen_task", fake_reopen)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "finalize",
+        lambda session, raw_id, **kw: finalized.update(kw),
+    )
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session,
+        _raw(_meta(id=77, subjectType="pull_request", subjectNumber=7, state="draft")),
+    )
+
+    assert trace["matched_by"] == "github_pr"
+    assert trace["outcome"] == "reopened"
+    assert reopened == {"task_id": task.id}
+    assert finalized["status"] == "duplicate"
+    assert finalized["task_id"] == task.id
+    assert task.kotx_task_id == 77
 
 
 @pytest.mark.asyncio

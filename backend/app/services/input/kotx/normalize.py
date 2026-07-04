@@ -20,9 +20,11 @@ ACTIONABLE = frozenset(
     {("implement", "draft"), ("implement", "awaiting_approval"), ("review", "awaiting_approval")}
 )
 
-# States that complete the linked 007 task: merged/terminal for implement,
-# a sent review (awaiting_external) for review tasks, and finished automatic
-# conflict-resolution runs.
+# States that complete the linked 007 task: merged/terminal for implement and
+# a sent review (awaiting_external) for review tasks. resolve_conflict runs
+# are auxiliary — resolving conflicts never completes the tracked work, so
+# their terminal transitions stay informational (no close, no points); the
+# task closes when its own implement/review run ends.
 DONE_STATES = frozenset(
     {
         ("implement", "done"),
@@ -30,8 +32,6 @@ DONE_STATES = frozenset(
         ("review", "awaiting_external"),
         ("review", "done"),
         ("review", "cancelled"),
-        ("resolve_conflict", "done"),
-        ("resolve_conflict", "cancelled"),
     }
 )
 

@@ -255,6 +255,26 @@ def find_by_thread(
     return session.execute(stmt).scalar_one_or_none()
 
 
+def find_kotx_by_pr(session: Session, repo: str, pr_number: int) -> RawInput | None:
+    """Most-recent task-linked kotx input referencing this repo's PR. Ties a
+    run anchored on the PR (a follow-up or resolve-conflict run) to the task
+    whose issue-anchored run opened that PR — those transitions carry
+    `pr_number` once the PR exists."""
+    stmt = (
+        select(RawInput)
+        .where(
+            RawInput.task_id.is_not(None),
+            RawInput.source == "kotx",
+            text("source_metadata->>'repo' = :repo"),
+            text("source_metadata->>'pr_number' = :pr_number"),
+        )
+        .order_by(RawInput.received_at.desc())
+        .limit(1)
+        .params(repo=repo, pr_number=str(pr_number))
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
 # --- Similarity search --------------------------------------------------------
 
 

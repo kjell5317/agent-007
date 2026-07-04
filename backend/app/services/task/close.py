@@ -24,11 +24,16 @@ log = logging.getLogger(__name__)
 
 
 async def close_task(
-    session: Session, task_id: uuid.UUID, *, discard_kotx: bool = True
+    session: Session,
+    task_id: uuid.UUID,
+    *,
+    discard_kotx: bool = True,
+    award_points: bool = True,
 ) -> None:
     """`discard_kotx=False` is passed when the close originates from a kotx
     transition — the run is already terminal there, don't bounce a discard
-    back."""
+    back. `award_points=False` skips the completion bonus when the close
+    isn't an actual completion (a cancelled kotx run)."""
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
@@ -38,7 +43,7 @@ async def close_task(
     # still have the task's estimation in hand. Idempotent per task and
     # best-effort — never let points bookkeeping block closing a task.
     try:
-        if award_for_task(session, task):
+        if award_points and award_for_task(session, task):
             publish_points(session)
     except Exception:  # noqa: BLE001
         log.exception("points award failed · task=%s", task_id)

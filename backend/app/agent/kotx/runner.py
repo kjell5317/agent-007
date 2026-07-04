@@ -124,7 +124,13 @@ async def _run_transition(session: Session, raw) -> dict:
             trace["outcome"] = "no_change"
     elif done and status == "open":
         # The kotx side already ended this run — never bounce a discard back.
-        await close_task(session, task.id, discard_kotx=False)
+        # A cancelled run isn't a completion, so it closes without the bonus.
+        await close_task(
+            session,
+            task.id,
+            discard_kotx=False,
+            award_points=state != "cancelled",
+        )
         trace["outcome"] = "closed"
     else:
         trace["outcome"] = "no_change"
@@ -151,6 +157,20 @@ def _match_task(
             linked = tasks.get(session, prior.task_id)
             if linked is not None:
                 return linked, "github_thread"
+
+    # A run anchored on the PR (a follow-up or resolve-conflict run) belongs
+    # to the task whose issue-anchored run opened that PR. Without this, a
+    # follow-up creates a second task for the same work — and awards a second
+    # completion bonus when it closes.
+    pr_number = meta.get("pr_number")
+    if pr_number is None and meta.get("subject_type") == "pull_request":
+        pr_number = meta.get("subject_number")
+    if repo and pr_number is not None:
+        prior = raw_inputs.find_kotx_by_pr(session, repo, int(pr_number))
+        if prior is not None and prior.task_id is not None:
+            linked = tasks.get(session, prior.task_id)
+            if linked is not None:
+                return linked, "github_pr"
 
     if repo and number:
         for candidate in tasks.github_link_candidates(session, repo, number):
