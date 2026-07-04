@@ -13,7 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { actionHint } from "@/components/runs/runLabels";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
-import { fmtDue, isOverdue, isUrgent } from "@/lib/dates";
+import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
 import { cn } from "@/lib/utils";
@@ -63,9 +63,8 @@ export function TaskCard({
   const labels = useLabels();
 
   const kotxAction = kotxTask ? actionHint(kotxTask) : null;
-  const displayDate = task.scheduled_date ?? task.due_date;
-  const displayOverdue = isOverdue(displayDate);
-  const displayUrgent = isUrgent(displayDate, task.estimation);
+  const displayDate = task.due_date;
+  const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
   const locationProbeKey = [
@@ -252,9 +251,7 @@ export function TaskCard({
               className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
             >
               {displayDate && (
-                <Badge
-                  variant={displayOverdue ? "overdue" : displayUrgent ? "urgent" : "open"}
-                >
+                <Badge variant={displayDateVariant}>
                   {fmtDue(displayDate)}
                 </Badge>
               )}
