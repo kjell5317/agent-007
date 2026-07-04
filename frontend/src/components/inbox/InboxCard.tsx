@@ -20,6 +20,7 @@ import {
   isDismissibleKotxRun,
   isKotxRun,
   senderName,
+  badgeKindLabel,
 } from "@/lib/inbox";
 import {
   projectAgentTrace,
@@ -374,7 +375,7 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
         <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
         {row.status && (
           <Badge variant={statusBadgeVariant(row.status)} className="shrink-0">
-            {row.status}
+            {badgeKindLabel(row.status)}
           </Badge>
         )}
       </div>
