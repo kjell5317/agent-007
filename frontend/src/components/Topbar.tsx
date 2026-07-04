@@ -359,11 +359,14 @@ function PointsModal({
           </TabsTrigger>
         </TabsList>
         {/* Fixed-height body so switching tabs keeps the modal the same size
-            (the Adjust form is short; the Log list is tall and variable). */}
-        <div className="h-80">
+            (the Adjust form is short; the Log list is tall and variable).
+            Flex column + overflow-hidden so the log scrolls inside the box
+            instead of overflowing it — a percentage-height chain through
+            Radix's TabsContent doesn't reliably clip. */}
+        <div className="flex h-80 flex-col overflow-hidden">
           <TabsContent
             value="adjust"
-            className="mt-0 flex h-full flex-col justify-center"
+            className="mt-0 flex flex-1 flex-col justify-center"
           >
             {total != null && (
               <div className="mb-4 text-center">
@@ -413,10 +416,10 @@ function PointsModal({
               </Button>
             </div>
           </TabsContent>
-          <TabsContent value="log" className="mt-0 h-full">
+          <TabsContent value="log" className="mt-0 flex min-h-0 flex-1 flex-col">
             <div
               className={cn(
-                "h-full overflow-y-auto",
+                "min-h-0 flex-1 overflow-y-auto",
                 logEntries.length > 0 && "[scrollbar-gutter:stable]",
               )}
             >
