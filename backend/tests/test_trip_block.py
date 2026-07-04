@@ -556,6 +556,66 @@ async def test_busy_view_blocks_all_day_busy_and_skips_free(monkeypatch):
     assert by_id["vacation"].end == _day_at(0, 0, day_offset=4)
 
 
+@pytest.mark.asyncio
+async def test_deleted_event_span_widens_replan_window(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+
+    captured = {}
+
+    async def fake_plan(session, *, window_start, window_end, account_key=None):
+        captured["window"] = (window_start, window_end)
+
+    monkeypatch.setattr(
+        "app.services.plan.commute.plan_commutes_window_best_effort", fake_plan,
+    )
+    monkeypatch.setattr(
+        "app.services.plan.commute.commute_window_margin", lambda: timedelta(hours=2),
+    )
+    monkeypatch.setattr(
+        discover_mod, "get_settings", lambda: SimpleNamespace(commute_enabled=True),
+    )
+
+    deleted = (_day_at(12), _day_at(13))
+    await discover_mod._plan_legs_for_changed_events(
+        None, [], deleted_spans=[deleted], account_key=None,
+    )
+
+    assert captured["window"] == (
+        deleted[0] - timedelta(hours=2),
+        deleted[1] + timedelta(hours=2),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_event_span_recovery(monkeypatch):
+    from app.services.calendar.discover import _cancelled_event_span
+
+    # Recurring instance: the tombstone itself carries originalStartTime.
+    span = await _cancelled_event_span(
+        None, "cal", {"id": "x", "originalStartTime": {"dateTime": "2026-07-08T12:45:00+02:00"}},
+        account_key=None,
+    )
+    assert span is not None
+    assert span[0].isoformat() == "2026-07-08T12:45:00+02:00"
+
+    # Plain deletion: the owner's cancelled copy is fetched and keeps times.
+    tombstone = _calendar_event("gone", _day_at(12, 45), _day_at(13, 45))
+
+    async def fake_get_event(session, *, calendar_id, event_id, account_key=None):
+        return tombstone
+
+    monkeypatch.setattr("app.services.calendar.get_event", fake_get_event)
+    span = await _cancelled_event_span(None, "cal", {"id": "gone"}, account_key=None)
+    assert span == (tombstone.start, tombstone.end)
+
+    # Unrecoverable tombstone → None, the daily re-baseline heals instead.
+    async def broken_get_event(session, *, calendar_id, event_id, account_key=None):
+        raise KeyError("date")
+
+    monkeypatch.setattr("app.services.calendar.get_event", broken_get_event)
+    assert await _cancelled_event_span(None, "cal", {"id": "gone"}, account_key=None) is None
+
+
 def test_reschedule_overlap_skips_tasks_own_legs():
     slot = Interval(_day_at(12), _day_at(13), "ev-1")
     own = PlannedLeg(
