@@ -128,3 +128,8 @@ async def plan_commutes_window_best_effort(
     # why an edited event never received its legs.
     if summary["errors"]:
         log.warning("plan.commute · window planning errors · %s", summary["errors"])
+    log.info(
+        "plan.commute · window %s..%s · legs=%d rescheduled_tasks=%d unroutable=%d",
+        window_start.isoformat(), window_end.isoformat(),
+        summary["planned"], summary["rescheduled_tasks"], summary["skipped_unroutable"],
+    )

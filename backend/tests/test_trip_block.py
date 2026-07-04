@@ -444,9 +444,6 @@ async def test_calendar_google_maps_anchor_routes_resolved_location(monkeypatch)
     assert [(call["origin"], call["destination"], call["mode"]) for call in calls] == [
         ("Homestreet 1", "48.137154,11.576124", "bicycling"),
         ("48.137154,11.576124", "Homestreet 1", "bicycling"),
-        # Legs not starting at home may be forced onto transit by the
-        # bike-stays-home rule, so their transit duration is fetched up front.
-        ("48.137154,11.576124", "Homestreet 1", "transit"),
     ]
 
 
@@ -474,7 +471,9 @@ def test_colliding_task_anchor_is_replaced_not_overlapped():
     assert _reschedule_candidates([clear_leg], [meeting, task], {"ev-task"}) == set()
 
 
-def _calendar_event(event_id, start, end, *, location=None, all_day=False, props=None):
+def _calendar_event(
+    event_id, start, end, *, location=None, all_day=False, props=None, transparency=None,
+):
     return CalendarEvent(
         id=event_id,
         calendar_id="primary",
@@ -486,7 +485,7 @@ def _calendar_event(event_id, start, end, *, location=None, all_day=False, props
         location=location,
         html_link=None,
         private_properties=props or {},
-        raw={},
+        raw={"transparency": transparency} if transparency else {},
     )
 
 
@@ -503,6 +502,58 @@ def test_physical_span_covers_only_routable_events():
     assert span == (_day_at(9), _day_at(15))
 
     assert _physical_span([events[2], events[3], events[4]]) is None
+
+
+def test_all_day_busy_event_triggers_overlap_with_task():
+    from app.services.calendar.discover import _first_managed_overlap
+
+    task_props = {"managed_by": "plan_service", "kind": "task"}
+    all_day = _calendar_event(
+        "vacation", _day_at(0), _day_at(0, 0, day_offset=4), all_day=True,
+    )
+    task = _calendar_event("task-ev", _day_at(15), _day_at(16), props=task_props)
+
+    assert _first_managed_overlap(all_day, [task]) is task
+
+
+@pytest.mark.asyncio
+async def test_busy_view_blocks_all_day_busy_and_skips_free(monkeypatch):
+    vacation = _calendar_event(
+        "vacation", _day_at(0), _day_at(0, 0, day_offset=4), all_day=True,
+    )
+    birthday = _calendar_event(
+        "birthday", _day_at(0), _day_at(0, 0, day_offset=4),
+        all_day=True, transparency="transparent",
+    )
+    maybe_lunch = _calendar_event(
+        "maybe-lunch", _day_at(12), _day_at(13), transparency="transparent",
+    )
+    meeting = _calendar_event("meeting", _day_at(9), _day_at(10))
+
+    async def fake_list_events(session, *, calendar_ids, time_min, time_max, account_key=None):
+        return [vacation, birthday, maybe_lunch, meeting]
+
+    async def fake_resolve(_location):
+        return None
+
+    monkeypatch.setattr("app.services.calendar.list_events_between", fake_list_events)
+    monkeypatch.setattr(schedule_service, "resolve_routable_location", fake_resolve)
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(google_calendar_id="primary", google_busy_calendar_ids=[]),
+    )
+
+    busy = await schedule_service._fetch_busy_events(
+        None, _day_at(8), _day_at(20), exclude_event_id=None, account_key=None,
+    )
+
+    by_id = {ev.id: ev for ev in busy}
+    # Free events (all-day or timed) never block; busy all-day blocks the
+    # whole day, midnight to midnight.
+    assert set(by_id) == {"vacation", "meeting"}
+    assert by_id["vacation"].start == _day_at(0)
+    assert by_id["vacation"].end == _day_at(0, 0, day_offset=4)
 
 
 def test_reschedule_overlap_skips_tasks_own_legs():

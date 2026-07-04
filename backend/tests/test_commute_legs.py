@@ -244,6 +244,29 @@ def test_direct_leg_dodges_online_meeting():
     assert direct.depart >= first.end + BUFFER
 
 
+def test_home_leg_dodges_busy_event_before_anchor():
+    # A location-less busy event sits where the just-in-time ride would go —
+    # the leg leaves home earlier and waits at the destination instead.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    avoid = [(_at(13, 30), _at(13, 50))]
+    legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
+
+    outbound = legs[0]
+    assert outbound.arrive == avoid[0][0] - BUFFER
+    assert outbound.depart == outbound.arrive - timedelta(seconds=600)
+
+
+def test_home_leg_dodge_is_capped():
+    # Clearing the span would mean leaving hours early — beyond the cap the
+    # leg stays just-in-time and the overlap stays visible.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    avoid = [(_at(10), _at(13, 50))]
+    legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
+
+    outbound = legs[0]
+    assert outbound.arrive == anchor.start - BUFFER
+
+
 def test_direct_leg_keeps_late_placement_when_dodge_cannot_fit():
     # The online meeting fills the whole gap — nothing earlier clears, so
     # the leg stays just-in-time (visible overlap beats being late).
@@ -257,6 +280,37 @@ def test_direct_leg_keeps_late_placement_when_dodge_cannot_fit():
     direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
     assert direct.arrive == second.start - BUFFER
     assert direct.depart == direct.arrive - timedelta(seconds=300)
+
+
+def test_missing_transit_pairs_are_reported_for_lazy_fetch():
+    # Chain-forced transit on pairs the optimistic resolver never fetched:
+    # the first derive reports them, and a re-derive with the fetched
+    # durations rides transit throughout.
+    far = "Farawaystrasse 9"
+    nearby = "Nebenstrasse 2"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 3600,  # over cap → transit out
+        (HOME_ADDR, far, "transit"): 1800,
+        (HOME_ADDR, nearby, "bicycling"): 600,
+        (far, nearby, "bicycling"): 300,
+        (nearby, HOME_ADDR, "bicycling"): 600,
+    }
+    first = Anchor("ev1", _at(14), _at(15), far)
+    second = Anchor("ev2", _at(15, 45), _at(17), nearby)
+
+    missing: set[tuple[str, str]] = set()
+    derive_legs(
+        [first, second], HOME_ADDR, durations, None, SETTINGS, missing_transit=missing,
+    )
+    assert missing == {(far, HOME_ADDR), (far, nearby), (nearby, HOME_ADDR)}
+
+    durations[(far, HOME_ADDR, "transit")] = 2000
+    durations[(far, nearby, "transit")] = 900
+    durations[(nearby, HOME_ADDR, "transit")] = 1500
+    legs, skipped = derive_legs([first, second], HOME_ADDR, durations, None, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.mode for leg in legs] == ["transit", "transit", "transit"]
 
 
 def test_home_anchor_produces_no_legs():

@@ -189,9 +189,21 @@ async def plan_window_commutes(
         # into a bogus "no route" placeholder. Leave the calendar untouched;
         # the next scheduled pass retries.
         return summary
+    missing_transit: set[tuple[str, str]] = set()
     legs, skipped_unroutable = derive_legs(
-        anchors, home, durations, hourly_rain, settings, avoid=online_spans,
+        anchors, home, durations, hourly_rain, settings,
+        avoid=online_spans, missing_transit=missing_transit,
     )
+    if missing_transit:
+        # The bike-stays-home rule forced transit onto pairs the optimistic
+        # first pass didn't fetch — resolve just those and re-derive.
+        if not await _resolve_missing_transit(
+            session, missing_transit, anchors, home, durations, summary,
+        ):
+            return summary
+        legs, skipped_unroutable = derive_legs(
+            anchors, home, durations, hourly_rain, settings, avoid=online_spans,
+        )
     summary["skipped_unroutable"] = skipped_unroutable
 
     # Only legs touching the requested window are written or deleted — the
@@ -391,7 +403,6 @@ async def _resolve_routes(
     call per pair."""
     max_rain = max(hourly_rain.values()) if hourly_rain else None
     rain_possible = max_rain is not None and max_rain >= settings.commute_rain_threshold_pct
-    home_norm = " ".join(home.lower().split())
     durations: Durations = {}
     resolved = 0
     for (origin, destination), reference in required_routes(anchors, home).items():
@@ -402,16 +413,7 @@ async def _resolve_routes(
             )
             durations[(origin, destination, "bicycling")] = bike
             resolved += 1
-            # Legs not starting at home may be forced onto transit by the
-            # bike-stays-home chain rule, so their transit duration must be
-            # on hand even when the bike would otherwise win.
-            mid_chain = " ".join(origin.lower().split()) != home_norm
-            if (
-                bike is None
-                or bike > settings.commute_bike_max_minutes * 60
-                or rain_possible
-                or mid_chain
-            ):
+            if bike is None or bike > settings.commute_bike_max_minutes * 60 or rain_possible:
                 durations[(origin, destination, "transit")] = await resolve_duration(
                     session, origin=origin, destination=destination,
                     mode="transit", departure=reference,
@@ -431,6 +433,38 @@ async def _resolve_routes(
     if resolved:
         log.info("commute · resolved %d route durations for %d anchors", resolved, len(anchors))
     return durations
+
+
+async def _resolve_missing_transit(
+    session: Session,
+    pairs: set[tuple[str, str]],
+    anchors: list[Anchor],
+    home: str,
+    durations: Durations,
+    summary: dict,
+) -> bool:
+    """Second-pass transit lookups for pairs the chain rule forced onto
+    transit after the optimistic first resolution — fetched lazily so the
+    common all-bike day costs no extra Distance Matrix elements."""
+    references = required_routes(anchors, home)
+    for origin, destination in pairs:
+        try:
+            durations[(origin, destination, "transit")] = await resolve_duration(
+                session, origin=origin, destination=destination,
+                mode="transit", departure=references.get((origin, destination)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "commute · transit resolution aborted at %s -> %s err=%s",
+                origin, destination, exc,
+            )
+            summary["errors"].append({
+                "route": f"{origin} -> {destination}",
+                "error": str(exc),
+                "transient": True,
+            })
+            return False
+    return True
 
 
 async def _home_rain(

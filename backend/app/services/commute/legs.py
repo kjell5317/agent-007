@@ -15,8 +15,11 @@ Chaining rules between consecutive clusters P → N:
   * gap fits a home layover  → P → home, then home → N
   * gap too small            → direct leg P → N
 
-Direct legs slide earlier (never later) to stay clear of `avoid` spans —
-online meetings the timeline doesn't route to but the user still attends.
+Arriving legs slide earlier (never later — later means missing the anchor)
+to stay clear of `avoid` spans: online or location-less events the timeline
+doesn't route to but the user still attends. Legs from home cap the slide
+at `MAX_EARLY_DODGE`; a bounded wait at the destination beats riding
+through a meeting, an unbounded one doesn't.
 
 The bike lives at home: a leg may only be ridden when every previous leg
 since the last home departure was ridden too. Once a chain leaves home by
@@ -42,6 +45,12 @@ HOME = "home"
 # "no route" block and still gets time to travel somehow.
 FAILED_MODE = "failed"
 FAILED_LEG_SECONDS = 30 * 60
+
+# How much earlier a leg may depart to clear an avoid span. Beyond this the
+# wait at the destination costs more than the visible overlap it prevents,
+# so the leg stays just-in-time. Legs between anchors are additionally
+# bounded by the previous anchor's end.
+MAX_EARLY_DODGE = timedelta(hours=2)
 
 Durations = dict[tuple[str, str, str], int | None]
 
@@ -142,11 +151,14 @@ def derive_legs(
     rain: dict[str, int] | None,
     settings,
     avoid: list[tuple[datetime, datetime]] | None = None,
+    missing_transit: set[tuple[str, str]] | None = None,
 ) -> tuple[list[PlannedLeg], int]:
     """Return `(legs, unroutable)` for the anchor timeline — `unroutable`
     counts the legs that got a `FAILED_MODE` 30-minute placeholder because
     no mode could route them. `avoid` spans (online meetings) push direct
-    legs earlier when the just-in-time placement would overlap them."""
+    legs earlier when the just-in-time placement would overlap them.
+    `missing_transit` collects pairs whose transit duration the derivation
+    wanted but was never resolved (see `_leg_option`)."""
     clusters = _overlap_clusters(_ordered_away(anchors, home))
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
     layover = timedelta(minutes=settings.commute_home_layover_minutes)
@@ -171,13 +183,14 @@ def derive_legs(
         if prev_cluster is None:
             _push(_arrive_leg(
                 HOME, home, _cluster_entry(nxt_cluster), durations, rain, settings, buffer,
+                avoid=avoid, missing_transit=missing_transit,
             ))
             continue
         prev = _cluster_exit(prev_cluster)
         if nxt_cluster is None:
             _push(_depart_leg(
                 prev, HOME, home, durations, rain, settings, buffer,
-                bike_available=bike_with_me,
+                bike_available=bike_with_me, missing_transit=missing_transit,
             ))
             continue
         nxt = _cluster_entry(nxt_cluster)
@@ -190,9 +203,12 @@ def derive_legs(
 
         inbound = _leg_option(
             prev.location, home, prev.end, durations, rain, settings,
-            bike_available=bike_with_me,
+            bike_available=bike_with_me, missing_transit=missing_transit,
         )
-        outbound = _leg_option(home, nxt.location, nxt.start, durations, rain, settings)
+        outbound = _leg_option(
+            home, nxt.location, nxt.start, durations, rain, settings,
+            missing_transit=missing_transit,
+        )
         if inbound is not None and outbound is not None:
             via_home_span = (
                 buffer
@@ -202,24 +218,32 @@ def derive_legs(
                 + buffer
             )
             if gap >= via_home_span:
-                _push(_depart_leg(
+                home_leg = _depart_leg(
                     prev, HOME, home, durations, rain, settings, buffer,
-                    bike_available=bike_with_me,
+                    bike_available=bike_with_me, missing_transit=missing_transit,
+                )
+                _push(home_leg)
+                _push(_arrive_leg(
+                    HOME, home, nxt, durations, rain, settings, buffer,
+                    not_before=home_leg.arrive,
+                    avoid=avoid, missing_transit=missing_transit,
                 ))
-                _push(_arrive_leg(HOME, home, nxt, durations, rain, settings, buffer))
                 continue
 
         direct = _leg_option(
             prev.location, nxt.location, nxt.start, durations, rain, settings,
-            bike_available=bike_with_me,
+            bike_available=bike_with_me, missing_transit=missing_transit,
         )
         if direct is None and inbound is not None and outbound is not None:
             # No direct route; go via home even though the layover is tight.
             _push(_depart_leg(
                 prev, HOME, home, durations, rain, settings, buffer,
-                bike_available=bike_with_me,
+                bike_available=bike_with_me, missing_transit=missing_transit,
             ))
-            _push(_arrive_leg(HOME, home, nxt, durations, rain, settings, buffer))
+            _push(_arrive_leg(
+                HOME, home, nxt, durations, rain, settings, buffer,
+                missing_transit=missing_transit,
+            ))
             continue
         # Routable → real direct leg; unroutable → 30-min failed placeholder.
         _push(
@@ -228,6 +252,7 @@ def derive_legs(
                 not_before=prev.end + buffer,
                 bike_available=bike_with_me,
                 avoid=avoid,
+                missing_transit=missing_transit,
             )
         )
     return legs, sum(1 for leg in legs if leg.mode == FAILED_MODE)
@@ -245,10 +270,11 @@ def _arrive_leg(
     not_before: datetime | None = None,
     bike_available: bool = True,
     avoid: list[tuple[datetime, datetime]] | None = None,
+    missing_transit: set[tuple[str, str]] | None = None,
 ) -> PlannedLeg:
     option = _leg_option(
         origin, anchor.location, anchor.start, durations, rain, settings,
-        bike_available=bike_available,
+        bike_available=bike_available, missing_transit=missing_transit,
     )
     seconds, mode, reason = option if option is not None else _failed_option()
     arrive = anchor.start - buffer
@@ -282,10 +308,11 @@ def _depart_leg(
     buffer: timedelta,
     *,
     bike_available: bool = True,
+    missing_transit: set[tuple[str, str]] | None = None,
 ) -> PlannedLeg:
     option = _leg_option(
         anchor.location, destination, anchor.end, durations, rain, settings,
-        bike_available=bike_available,
+        bike_available=bike_available, missing_transit=missing_transit,
     )
     seconds, mode, reason = option if option is not None else _failed_option()
     depart = anchor.end + buffer
@@ -310,14 +337,23 @@ def _leg_option(
     settings,
     *,
     bike_available: bool = True,
+    missing_transit: set[tuple[str, str]] | None = None,
 ) -> tuple[int, str, str | None] | None:
-    """Chosen `(seconds, mode, reason)` for a leg, or None if unroutable."""
+    """Chosen `(seconds, mode, reason)` for a leg, or None if unroutable.
+
+    A transit duration that was never resolved (key absent, as opposed to a
+    definitive no-route None) is recorded in `missing_transit` so the caller
+    can fetch it and re-derive — this only happens when the bike-stays-home
+    rule forces transit on a pair the resolver had no reason to fetch."""
     bike = durations.get((origin, destination, "bicycling"))
     mode, reason = choose_mode(bike, _rain_at(rain, when), settings, bike_available=bike_available)
     if mode == "transit":
-        transit = durations.get((origin, destination, "transit"))
+        key = (origin, destination, "transit")
+        transit = durations.get(key)
         if transit is not None:
             return transit, "transit", reason
+        if key not in durations and missing_transit is not None:
+            missing_transit.add((origin, destination))
         if bike is None or not bike_available:
             return None
         return bike, "bicycling", "transit unavailable, fell back to bike"
@@ -334,9 +370,12 @@ def _dodged_earlier(
 ) -> tuple[datetime, datetime]:
     """Slide `[depart, arrive]` earlier until it clears every avoid span by
     `buffer`. Falls back to the original placement when nothing at or above
-    `floor` clears — the overlap is then at least visible on the calendar."""
+    `floor` (or the `MAX_EARLY_DODGE` cap) clears — the overlap is then at
+    least visible on the calendar."""
     span = arrive - depart
     original = (depart, arrive)
+    cap = depart - MAX_EARLY_DODGE
+    floor = max(floor, cap) if floor is not None else cap
     for _ in range(len(avoid) + 1):
         conflict = max(
             (a for a in avoid if a[0] < arrive + buffer and depart - buffer < a[1]),
@@ -347,7 +386,7 @@ def _dodged_earlier(
             return depart, arrive
         arrive = conflict[0] - buffer
         depart = arrive - span
-        if floor is not None and depart < floor:
+        if depart < floor:
             return original
     return original
 

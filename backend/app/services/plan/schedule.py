@@ -1124,6 +1124,7 @@ async def _fetch_busy_events(
     from app.services.calendar import (
         commute_leg_key,
         is_commute_event,
+        is_free_event,
         is_task_event,
         list_events_between,
     )
@@ -1141,7 +1142,12 @@ async def _fetch_busy_events(
     )
     out: list[BusyEvent] = []
     for ev in events:
-        if ev.id == exclude_event_id or ev.all_day:
+        if ev.id == exclude_event_id or is_free_event(ev):
+            continue
+        if ev.all_day:
+            # Marked busy despite being all-day (those default to free): the
+            # whole day is blocked, midnight to midnight in the user's tz.
+            out.append(BusyEvent(ev.id, *_all_day_span(ev), "busy"))
             continue
         kind = "commute" if is_commute_event(ev) else "task" if is_task_event(ev) else "busy"
         location = await resolve_routable_location(ev.location)
@@ -1156,6 +1162,16 @@ async def _fetch_busy_events(
             )
         )
     return out
+
+
+def _all_day_span(ev) -> tuple[datetime, datetime]:
+    """All-day events carry bare dates (parsed as UTC midnights); the blocked
+    range is those dates in the user's timezone, end date exclusive."""
+    tz = user_tz()
+    return (
+        datetime.combine(ev.start.date(), time.min, tzinfo=tz),
+        datetime.combine(ev.end.date(), time.min, tzinfo=tz),
+    )
 
 
 # --- Commute replans --------------------------------------------------------
