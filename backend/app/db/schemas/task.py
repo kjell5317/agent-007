@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+TaskScheduleStatus = Literal["scheduled", "unscheduled"]
 
 
 class TaskBase(BaseModel):
@@ -105,6 +108,7 @@ class TaskRawInputRead(BaseModel):
 class TaskRead(TaskBase):
     id: uuid.UUID
     scheduled_date: datetime | None = None
+    schedule_status: TaskScheduleStatus
     source_url: str | None = None
     raw_inputs: list[TaskRawInputRead] = Field(default_factory=list)
     status: str  # derived from latest linked raw_input
@@ -128,6 +132,11 @@ class TaskRead(TaskBase):
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
         `tasks.latest_status_for` / `tasks.is_manual_for`)."""
+        schedule_status = (
+            "unscheduled"
+            if status_ == "open" and not getattr(task, "calendar_event_id", None)
+            else "scheduled"
+        )
         return cls.model_validate(
             {
                 "id": task.id,
@@ -136,6 +145,7 @@ class TaskRead(TaskBase):
                 "link": task.link,
                 "due_date": task.due_date,
                 "scheduled_date": task.scheduled_date,
+                "schedule_status": schedule_status,
                 "source_url": source_url,
                 "raw_inputs": raw_inputs or [],
                 "estimation": task.estimation,

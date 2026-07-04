@@ -67,6 +67,14 @@ export function TaskCard({
   const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
+  const cardBorderClass =
+    task.schedule_status === "unscheduled"
+      ? "border-red-500/70"
+      : task.kotx_task_id != null
+        ? "border-primary/50"
+        : unseen
+          ? "border-emerald-500/70"
+          : null;
   const locationProbeKey = [
     displayDate ?? "",
     task.estimation ?? "",
@@ -198,7 +206,7 @@ export function TaskCard({
       ref={cardRef}
       className={cn(
         "transition-opacity duration-300",
-        task.kotx_task_id != null && "border-primary/50",
+        cardBorderClass,
         crossing && "pointer-events-none opacity-40",
       )}
     >
@@ -230,13 +238,6 @@ export function TaskCard({
           </IconButton>
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
-              {unseen && (
-                <span
-                  aria-label="Unread"
-                  title="Unread"
-                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                />
-              )}
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate font-medium leading-snug transition-all duration-300",

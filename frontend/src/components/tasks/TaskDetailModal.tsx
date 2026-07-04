@@ -69,6 +69,8 @@ const TASK_SUMMARY_OVERDUE_BADGE_CLASS =
   "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
 const TASK_SUMMARY_SCHEDULED_BADGE_CLASS =
   "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200";
+const TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS =
+  "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
 
 export function TaskDetailModal({
   task,
@@ -549,6 +551,18 @@ function TaskSummary({
     : dueUrgent
       ? TASK_SUMMARY_URGENT_BADGE_CLASS
       : TASK_SUMMARY_OPEN_BADGE_CLASS;
+  const scheduledBadgeText =
+    task.schedule_status === "unscheduled"
+      ? "Not scheduled"
+      : task.scheduled_date
+        ? fmtDue(task.scheduled_date)
+        : "Reschedule";
+  const scheduledBadgeLabel =
+    task.schedule_status === "unscheduled"
+      ? "Not scheduled"
+      : task.scheduled_date
+        ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}`
+        : "Reschedule task";
 
   return (
     <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
@@ -700,26 +714,20 @@ function TaskSummary({
             type="button"
             onClick={onReschedule}
             disabled={busy}
-            title={
-              task.scheduled_date
-                ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}`
-                : "Reschedule task"
-            }
-            aria-label={
-              task.scheduled_date
-                ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}`
-                : "Reschedule task"
-            }
+            title={scheduledBadgeLabel}
+            aria-label={scheduledBadgeLabel}
             className={cn(
               TASK_SUMMARY_BADGE_BUTTON_CLASS,
-              task.scheduled_date
+              task.schedule_status === "unscheduled"
+                ? TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS
+                : task.scheduled_date
                 ? TASK_SUMMARY_SCHEDULED_BADGE_CLASS
                 : TASK_SUMMARY_MUTED_BADGE_CLASS,
             )}
           >
             <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
               <CalendarClock className="h-3 w-3" />
-              {task.scheduled_date ? fmtDue(task.scheduled_date) : "Reschedule"}
+              {scheduledBadgeText}
               <RefreshCw className="h-3 w-3 opacity-70" />
             </span>
           </button>
