@@ -61,6 +61,16 @@ def test_single_anchor_round_trip():
     assert inbound.arrive == inbound.depart + timedelta(seconds=600)
 
 
+def test_commute_legs_keep_five_minute_buffer_offsets():
+    anchor = Anchor("ev1", _at(14, 15), _at(15, 15), GYM)
+    legs, skipped = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS)
+
+    assert skipped == 0
+    outbound, inbound = legs
+    assert outbound.arrive == _at(14, 10)
+    assert inbound.depart == _at(15, 20)
+
+
 def test_same_location_anchors_share_one_trip():
     first = Anchor("ev1", _at(14), _at(15), GYM)
     second = Anchor("ev2", _at(15, 30), _at(16), GYM)

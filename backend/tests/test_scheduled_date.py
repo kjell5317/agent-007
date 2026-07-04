@@ -26,6 +26,7 @@ from app.services.calendar import discover  # noqa: E402
 from app.services.calendar import events as calendar_events  # noqa: E402
 from app.services import notify as notify_service  # noqa: E402
 from app.services.plan import schedule as schedule_service  # noqa: E402
+from app.services.plan import update as update_service  # noqa: E402
 from app.services.plan.schedule import Interval  # noqa: E402
 
 
@@ -357,7 +358,7 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
     searches: list[bool] = []
     repairs: list[bool] = []
 
-    def fake_find_free_slot(*_args, extended_window: bool = False):
+    def fake_find_free_slot(*_args, extended_window: bool = False, **_kwargs):
         searches.append(extended_window)
         return extended_slot if extended_window else None
 
@@ -394,6 +395,65 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
     assert (result.block_start, result.block_end) == extended_slot
     assert searches == [False, True]
     assert repairs == [False]
+
+
+@pytest.mark.asyncio
+async def test_update_resize_aligns_existing_five_minute_start(monkeypatch):
+    task_id = uuid.uuid4()
+    current_start = datetime(2026, 7, 1, 12, 5, tzinfo=timezone.utc)
+    task = SimpleNamespace(
+        id=task_id,
+        title="Write report",
+        due_date=datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc),
+        estimation=45,
+        location="Office A",
+        calendar_event_id="event-1",
+    )
+    current = _event(
+        "event-1",
+        current_start,
+        current_start + timedelta(minutes=30),
+        task_id,
+    )
+    patches: list[tuple[datetime, datetime, set[str] | None]] = []
+    replans: list[tuple[datetime, datetime]] = []
+
+    async def fake_get_event(*_args, **_kwargs):
+        return current
+
+    async def fake_update_task_event(_session, _task, *, start, end, changed_fields=None):
+        patches.append((start, end, changed_fields))
+
+    async def fake_overlaps_other_event(*_args, **_kwargs):
+        return False
+
+    async def fake_replan_window(_session, start, end):
+        replans.append((start, end))
+
+    monkeypatch.setattr(
+        update_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            google_calendar_id="primary",
+            google_busy_calendar_ids=[],
+            commute_event_buffer_minutes=5,
+            google_calendar_default_event_minutes=30,
+        ),
+    )
+    monkeypatch.setattr("app.services.calendar.get_event", fake_get_event)
+    monkeypatch.setattr("app.services.calendar.update_task_event", fake_update_task_event)
+    monkeypatch.setattr(update_service, "_overlaps_other_event", fake_overlaps_other_event)
+    monkeypatch.setattr(update_service, "_replan_window", fake_replan_window)
+
+    await update_service.update_task_to_calendar(
+        SimpleNamespace(),
+        task,
+        changed_fields={"estimation"},
+    )
+
+    aligned_start = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    assert patches == [(aligned_start, aligned_start + timedelta(minutes=45), {"estimation"})]
+    assert replans == [(aligned_start, aligned_start + timedelta(minutes=45))]
 
 
 @pytest.mark.asyncio

@@ -173,8 +173,8 @@ def test_piggyback_after_anchor_ignores_its_replaced_leg():
     )
 
     assert planned is not None
-    assert planned.start == _day_at(15, 5)
-    assert planned.end == _day_at(15, 35)
+    assert planned.start == _day_at(15, 15)
+    assert planned.end == _day_at(15, 45)
     assert planned.out_s == 0  # arrives with the anchor's trip
     assert planned.in_s == 600
     assert planned.block_end == planned.end + BUFFER + timedelta(seconds=600)
@@ -227,8 +227,9 @@ async def test_chain_insert_picks_min_added_travel(monkeypatch):
 
     assert planned is not None
     # Packed late against the next anchor: leg + buffers walk back from it.
-    assert planned.end == nxt.start - 2 * BUFFER - timedelta(seconds=600)
-    assert planned.start == planned.end - timedelta(minutes=30)
+    latest_start = nxt.start - 2 * BUFFER - timedelta(seconds=600) - timedelta(minutes=30)
+    assert planned.start == latest_start.replace(minute=0)
+    assert planned.end == planned.start + timedelta(minutes=30)
     assert planned.out_s == 600 and planned.in_s == 600
     assert planned.block_start == planned.start - BUFFER - timedelta(seconds=600)
     assert planned.block_end == planned.end + BUFFER + timedelta(seconds=600)
@@ -310,6 +311,102 @@ async def test_plan_task_slot_reserves_whole_trip_block(monkeypatch):
     assert planned.block_end - planned.end == timedelta(seconds=900) + BUFFER
     # Packed against the day target, block inside the working window.
     assert planned.block_end.time() <= schedule_service.DAY_TARGET
+
+
+@pytest.mark.asyncio
+async def test_task_slot_from_five_minute_window_starts_on_quarter_hour(monkeypatch):
+    due = _day_at(14, 5, day_offset=2)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = _day_at(11, 5, day_offset=2)
+            return current.astimezone(tz) if tz else current
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Write report",
+        due_date=due,
+        scheduled_date=None,
+        calendar_event_id=None,
+        estimation=30,
+        location=None,
+    )
+
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=0,
+            google_calendar_default_event_minutes=30,
+            google_calendar_id="",
+            google_busy_calendar_ids=[],
+            slot_min_lead_minutes=0,
+            commute_enabled=False,
+            google_maps_api_key="",
+        ),
+    )
+    monkeypatch.setattr(schedule_service, "datetime", FixedDateTime)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+
+    planned = await schedule_service.plan_task_slot(SimpleNamespace(), task)
+
+    assert planned.start.minute % schedule_service.TASK_EVENT_STEP_MINUTES == 0
+    assert planned.start == _day_at(13, 30, day_offset=2)
+    assert planned.end == _day_at(14, 0, day_offset=2)
+    assert planned.end <= due
+
+
+@pytest.mark.asyncio
+async def test_located_slot_rounds_task_start_but_keeps_five_minute_trip_block(monkeypatch):
+    due = _day_at(14, 5, day_offset=2)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = _day_at(11, 5, day_offset=2)
+            return current.astimezone(tz) if tz else current
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Return library books",
+        due_date=due,
+        scheduled_date=None,
+        calendar_event_id=None,
+        estimation=30,
+        location=LIBRARY,
+    )
+
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=5,
+            google_calendar_default_event_minutes=30,
+            google_calendar_id="",
+            google_busy_calendar_ids=[],
+            slot_min_lead_minutes=0,
+            commute_enabled=True,
+            google_maps_api_key="key",
+            home_address="Homestreet 1",
+        ),
+    )
+    monkeypatch.setattr(schedule_service, "datetime", FixedDateTime)
+
+    async def fake_estimate(_session, _task, *, reference):
+        return 600, 900, False
+
+    monkeypatch.setattr(schedule_service, "_estimate_trip_legs", fake_estimate)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+    monkeypatch.setattr(schedule_service, "resolve_location_alias", lambda loc: loc)
+
+    planned = await schedule_service.plan_task_slot(SimpleNamespace(), task)
+
+    assert planned.start.minute % schedule_service.TASK_EVENT_STEP_MINUTES == 0
+    assert planned.start == _day_at(13, 15, day_offset=2)
+    assert planned.start - planned.block_start == timedelta(minutes=15)
+    assert planned.block_end - planned.end == timedelta(minutes=20)
+    assert planned.block_end == due
 
 
 @pytest.mark.asyncio

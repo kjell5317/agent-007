@@ -56,23 +56,28 @@ async def update_task_to_calendar(
 
     from app.services.calendar import update_task_event
 
-    end = current.end
+    duration = current.end - current.start
     if "estimation" in changed:
-        end = current.start + timedelta(
-            minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
-        )
+        duration = _duration_for(task)
+    from app.services.plan.schedule import task_event_span_on_grid
+
+    start, end = task_event_span_on_grid(current.start, duration)
     await update_task_event(
         session,
         task,
-        start=current.start,
+        start=start,
         end=end,
         changed_fields=changed or None,
     )
 
-    # An in-place resize of a located task leaves its legs anchored to the
-    # old span — re-derive them around the new one.
-    if "estimation" in changed and resolve_location_alias(task.location):
-        await _replan_window(session, current.start, end)
+    # Moving or resizing a located task leaves its legs anchored to the old
+    # span — re-derive them around the touched window.
+    if resolve_location_alias(task.location) and (start != current.start or end != current.end):
+        await _replan_window(
+            session,
+            min(current.start, start),
+            max(current.end, end),
+        )
 
 
 async def _replan_window(session: Session, start, end) -> None:
@@ -87,16 +92,18 @@ async def _replan_window(session: Session, start, end) -> None:
 
 
 async def _patch_requires_reschedule(session: Session, task, current, changed: set[str]) -> bool:
-    if current.end > task.due_date:
-        return True
     if "estimation" not in changed and "due_date" not in changed:
         return False
 
-    duration = timedelta(
-        minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
-    )
-    candidate_start = current.start
-    candidate_end = candidate_start + duration
+    if task.due_date is None:
+        return True
+
+    duration = current.end - current.start
+    if "estimation" in changed:
+        duration = _duration_for(task)
+    from app.services.plan.schedule import task_event_span_on_grid
+
+    candidate_start, candidate_end = task_event_span_on_grid(current.start, duration)
     if candidate_end > task.due_date:
         return True
 
@@ -123,6 +130,12 @@ async def _overlaps_other_event(session: Session, task, start, end) -> bool:
         if ev.start < end and start < ev.end:
             return True
     return False
+
+
+def _duration_for(task) -> timedelta:
+    return timedelta(
+        minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
+    )
 
 
 async def _current_event(session: Session, task):

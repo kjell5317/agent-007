@@ -68,6 +68,7 @@ END_OF_DAY = time(23, 59, 59)
 MAX_REPAIR_DEPTH = 8
 # Chain-insert evaluates at most this many gaps (each costs Maps lookups).
 MAX_CHAIN_GAPS = 8
+TASK_EVENT_STEP_MINUTES = 15
 
 # Process-wide scheduling lock. Held across the entire plan→write section so no
 # two placements ever race on the same stale calendar snapshot. See module docs.
@@ -427,6 +428,55 @@ def _block_total(duration: timedelta, buffer: timedelta, out_s: int, in_s: int) 
     return total
 
 
+def _floor_datetime_to_minute_step(
+    value: datetime,
+    *,
+    minutes: int = TASK_EVENT_STEP_MINUTES,
+) -> datetime:
+    if minutes <= 0:
+        raise ValueError("minutes must be positive")
+    elapsed = timedelta(
+        minutes=value.minute % minutes,
+        seconds=value.second,
+        microseconds=value.microsecond,
+    )
+    return (value - elapsed).replace(second=0, microsecond=0)
+
+
+def _ceil_datetime_to_minute_step(
+    value: datetime,
+    *,
+    minutes: int = TASK_EVENT_STEP_MINUTES,
+) -> datetime:
+    floored = _floor_datetime_to_minute_step(value, minutes=minutes)
+    if floored == value:
+        return floored
+    return floored + timedelta(minutes=minutes)
+
+
+def task_event_span_on_grid(start: datetime, duration: timedelta) -> tuple[datetime, datetime]:
+    """Task event start aligned to the scheduler grid; duration is preserved."""
+    aligned = _floor_datetime_to_minute_step(start)
+    return aligned, aligned + duration
+
+
+def _task_block_offset(buffer: timedelta, out_s: int) -> timedelta:
+    return timedelta(seconds=out_s) + buffer if out_s else timedelta(0)
+
+
+def _planned_from_task_start(
+    start: datetime,
+    duration: timedelta,
+    buffer: timedelta,
+    out_s: int,
+    in_s: int,
+) -> PlannedSlot:
+    end = start + duration
+    block_start = start - _task_block_offset(buffer, out_s)
+    block_end = end + (timedelta(seconds=in_s) + buffer if in_s else timedelta(0))
+    return PlannedSlot(start, end, block_start, block_end, out_s, in_s)
+
+
 def _planned_from_block(
     slot: tuple[datetime, datetime],
     duration: timedelta,
@@ -435,8 +485,9 @@ def _planned_from_block(
     in_s: int,
 ) -> PlannedSlot:
     block_start, block_end = slot
-    start = block_start + (timedelta(seconds=out_s) + buffer if out_s else timedelta(0))
-    return PlannedSlot(start, start + duration, block_start, block_end, out_s, in_s)
+    start = block_start + _task_block_offset(buffer, out_s)
+    end = start + duration
+    return PlannedSlot(start, end, block_start, block_end, out_s, in_s)
 
 
 async def _swept_block(
@@ -457,7 +508,13 @@ async def _swept_block(
     for _ in range(2):
         total = _block_total(duration, buffer, out_s, in_s)
         slot = _find_free_slot(
-            busy, total, window_start, window_end, buffer, extended_window=extended_window,
+            busy,
+            total,
+            window_start,
+            window_end,
+            buffer,
+            task_offset=_task_block_offset(buffer, out_s),
+            extended_window=extended_window,
         )
         if slot is None:
             return None
@@ -491,27 +548,29 @@ def _piggyback_slot(
         if ev.kind != "commute" and ev.location and _norm_loc(ev.location) == target
     ]
     for anchor in sorted(anchors, key=lambda ev: ev.start, reverse=True):
-        start = anchor.end + buffer
-        end = start + duration
-        block_end = end + buffer + timedelta(seconds=in_s) if in_s else end
+        start = _ceil_datetime_to_minute_step(anchor.end + buffer)
+        planned = _planned_from_task_start(start, duration, buffer, 0, in_s)
         if (
-            start >= window_start
-            and end <= window_end
-            and _within_day_window(start, end, extended=False)
-            and _conflict_free(busy, start, block_end, ignore_anchor_leg=(anchor.id, 0))
+            planned.start >= window_start
+            and planned.end <= window_end
+            and _within_day_window(planned.start, planned.end, extended=False)
+            and _conflict_free(
+                busy, planned.block_start, planned.block_end, ignore_anchor_leg=(anchor.id, 0)
+            )
         ):
-            return PlannedSlot(start, end, start, block_end, 0, in_s)
+            return planned
 
-        end = anchor.start - buffer
-        start = end - duration
-        block_start = start - buffer - timedelta(seconds=out_s) if out_s else start
+        start = _floor_datetime_to_minute_step(anchor.start - buffer - duration)
+        planned = _planned_from_task_start(start, duration, buffer, out_s, 0)
         if (
-            start >= window_start
-            and end <= window_end
-            and _within_day_window(start, end, extended=False)
-            and _conflict_free(busy, block_start, end, ignore_anchor_leg=(anchor.id, 1))
+            planned.start >= window_start
+            and planned.end <= window_end
+            and _within_day_window(planned.start, planned.end, extended=False)
+            and _conflict_free(
+                busy, planned.block_start, planned.block_end, ignore_anchor_leg=(anchor.id, 1)
+            )
         ):
-            return PlannedSlot(start, end, block_start, end, out_s, 0)
+            return planned
     return None
 
 
@@ -553,20 +612,18 @@ async def _chain_insert_slot(
         need = timedelta(seconds=t_pt + t_tn) + duration + 4 * buffer
         if nxt.start - prev.end < need:
             continue
-        end = min(nxt.start - 2 * buffer - timedelta(seconds=t_tn), window_end)
-        start = end - duration
+        latest_start = min(nxt.start - 2 * buffer - timedelta(seconds=t_tn), window_end) - duration
+        start = _floor_datetime_to_minute_step(latest_start)
         if start - 2 * buffer - timedelta(seconds=t_pt) < prev.end or start < window_start:
             continue
-        block_start = start - buffer - timedelta(seconds=t_pt)
-        block_end = end + buffer + timedelta(seconds=t_tn)
+        planned = _planned_from_task_start(start, duration, buffer, t_pt, t_tn)
         if not _conflict_free(
-            busy, block_start, block_end,
+            busy, planned.block_start, planned.block_end,
             ignore_anchor_leg=(prev.id, 0), ignore_anchor_leg2=(nxt.id, 1),
         ):
             continue
         t_pn = await _one_way_seconds(session, prev.location, nxt.location, prev.end) or 0
         added = t_pt + t_tn - t_pn
-        planned = PlannedSlot(start, end, block_start, block_end, t_pt, t_tn)
         if best is None or added < best[0]:
             best = (added, planned)
     return best[1] if best else None
@@ -713,6 +770,7 @@ def _find_free_slot(
     window_end: datetime,
     buffer: timedelta,
     *,
+    task_offset: timedelta = timedelta(0),
     extended_window: bool = False,
 ) -> tuple[datetime, datetime] | None:
     ordered = sorted(busy, key=lambda ev: ev.start)
@@ -724,17 +782,17 @@ def _find_free_slot(
         if extended_window:
             # Phase 1: late evening forward sweep, 20:00 → 24:00.
             lower, upper = _day_bounds(day, DAY_TARGET, END_OF_DAY, tz, window_start, window_end)
-            slot = _sweep_forward(ordered, duration, buffer, lower, upper)
+            slot = _sweep_forward(ordered, duration, buffer, lower, upper, task_offset)
             if slot is not None:
                 return slot
             # Phase 2: early morning backward sweep, 10:00 → 08:00.
             lower, upper = _day_bounds(day, EARLY_MORNING, DAY_START, tz, window_start, window_end)
-            slot = _sweep_backward(ordered, duration, buffer, lower, upper)
+            slot = _sweep_backward(ordered, duration, buffer, lower, upper, task_offset)
             if slot is not None:
                 return slot
         else:
             lower, upper = _day_bounds(day, DAY_START, DAY_TARGET, tz, window_start, window_end)
-            slot = _sweep_backward(ordered, duration, buffer, lower, upper)
+            slot = _sweep_backward(ordered, duration, buffer, lower, upper, task_offset)
             if slot is not None:
                 return slot
 
@@ -762,13 +820,17 @@ def _sweep_backward(
     buffer: timedelta,
     lower: datetime,
     upper: datetime,
+    task_offset: timedelta = timedelta(0),
 ) -> tuple[datetime, datetime] | None:
     """Walk the cursor from `upper` down toward `lower`, looking for a
-    `(cursor - duration, cursor)` slot that doesn't collide with `busy`."""
+    latest-fitting slot whose task start falls on the scheduler grid."""
     cursor = upper
     while cursor - duration >= lower:
-        start = cursor - duration
-        end = cursor
+        task_start = _floor_datetime_to_minute_step(cursor - duration + task_offset)
+        start = task_start - task_offset
+        end = start + duration
+        if start < lower:
+            return None
         conflict = _latest_conflict(busy, start - buffer, end + buffer)
         if conflict is None:
             return start, end
@@ -782,13 +844,17 @@ def _sweep_forward(
     buffer: timedelta,
     lower: datetime,
     upper: datetime,
+    task_offset: timedelta = timedelta(0),
 ) -> tuple[datetime, datetime] | None:
     """Walk the cursor from `lower` up toward `upper`, looking for a
-    `(cursor, cursor + duration)` slot that doesn't collide with `busy`."""
+    earliest-fitting slot whose task start falls on the scheduler grid."""
     cursor = lower
     while cursor + duration <= upper:
-        start = cursor
-        end = cursor + duration
+        task_start = _ceil_datetime_to_minute_step(cursor + task_offset)
+        start = task_start - task_offset
+        end = start + duration
+        if end > upper:
+            return None
         conflict = _earliest_conflict(busy, start - buffer, end + buffer)
         if conflict is None:
             return start, end
@@ -861,6 +927,7 @@ async def _repair_by_displacing_task(
             total,
             buffer,
             freed_range,
+            task_offset=_task_block_offset(buffer, out_s),
             extended_window=extended_window,
         )
         if slot is not None:
@@ -875,6 +942,7 @@ def _slot_in_range(
     buffer: timedelta,
     freed_range: Interval,
     *,
+    task_offset: timedelta = timedelta(0),
     extended_window: bool,
 ) -> tuple[datetime, datetime] | None:
     """Latest-fitting slot inside `freed_range`, clamped to the per-day
@@ -887,20 +955,20 @@ def _slot_in_range(
             lower, upper = _day_bounds(
                 day, DAY_TARGET, END_OF_DAY, tz, freed_range.start, freed_range.end,
             )
-            slot = _sweep_forward(busy, duration, buffer, lower, upper)
+            slot = _sweep_forward(busy, duration, buffer, lower, upper, task_offset)
             if slot is not None:
                 return slot
             lower, upper = _day_bounds(
                 day, EARLY_MORNING, DAY_START, tz, freed_range.start, freed_range.end,
             )
-            slot = _sweep_backward(busy, duration, buffer, lower, upper)
+            slot = _sweep_backward(busy, duration, buffer, lower, upper, task_offset)
             if slot is not None:
                 return slot
         else:
             lower, upper = _day_bounds(
                 day, DAY_START, DAY_TARGET, tz, freed_range.start, freed_range.end,
             )
-            slot = _sweep_backward(busy, duration, buffer, lower, upper)
+            slot = _sweep_backward(busy, duration, buffer, lower, upper, task_offset)
             if slot is not None:
                 return slot
         day += timedelta(days=1)
