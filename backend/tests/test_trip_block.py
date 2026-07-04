@@ -25,6 +25,7 @@ from app.services.commute.reschedule import _first_overlap  # noqa: E402
 from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.plan.schedule import (  # noqa: E402
     BusyEvent,
+    Gaps,
     Interval,
     _block_total,
     _chain_insert_slot,
@@ -40,6 +41,8 @@ OFFICE = "Officeplatz 2, Munich"
 LIBRARY = "Bookweg 3, Munich"
 
 BUFFER = timedelta(minutes=5)
+EVENT_BUFFER = timedelta(minutes=15)
+GAPS = Gaps(commute=BUFFER, event=EVENT_BUFFER)
 
 
 def _route_session():
@@ -165,7 +168,7 @@ def test_piggyback_after_anchor_ignores_its_replaced_leg():
         busy,
         location=GYM.upper(),
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         out_s=600,
         in_s=600,
         window_start=_day_at(8),
@@ -173,6 +176,7 @@ def test_piggyback_after_anchor_ignores_its_replaced_leg():
     )
 
     assert planned is not None
+    # Task↔anchor is an event↔event boundary — the wider gap applies.
     assert planned.start == _day_at(15, 15)
     assert planned.end == _day_at(15, 45)
     assert planned.out_s == 0  # arrives with the anchor's trip
@@ -191,7 +195,7 @@ def test_piggyback_respects_real_conflicts():
         busy,
         location=GYM,
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         out_s=600,
         in_s=600,
         window_start=_day_at(8),
@@ -220,7 +224,7 @@ async def test_chain_insert_picks_min_added_travel(monkeypatch):
         [prev, nxt],
         location=LIBRARY,
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         window_start=_day_at(8),
         window_end=_day_at(20),
     )
@@ -248,7 +252,7 @@ async def test_chain_insert_skips_unroutable_and_tight_gaps(monkeypatch):
         [prev, nxt],
         location=LIBRARY,
         duration=timedelta(minutes=30),
-        buffer=BUFFER,
+        gaps=GAPS,
         window_start=_day_at(8),
         window_end=_day_at(20),
     )
@@ -287,6 +291,7 @@ async def test_plan_task_slot_reserves_whole_trip_block(monkeypatch):
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -338,6 +343,7 @@ async def test_task_slot_from_five_minute_window_starts_on_quarter_hour(monkeypa
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=0,
+            event_buffer_minutes=0,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -382,6 +388,7 @@ async def test_located_slot_rounds_task_start_but_keeps_five_minute_trip_block(m
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -426,6 +433,7 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
@@ -546,4 +554,4 @@ async def test_slot_keeps_buffer_before_event_starting_at_due(monkeypatch):
         calendar_event_id=None,
     )
     planned = await schedule_service.plan_task_slot(None, task)
-    assert planned.end <= meeting.start - BUFFER
+    assert planned.end <= meeting.start - EVENT_BUFFER

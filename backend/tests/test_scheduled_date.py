@@ -371,6 +371,7 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
         "get_settings",
         lambda: SimpleNamespace(
             commute_event_buffer_minutes=0,
+            event_buffer_minutes=0,
             google_calendar_default_event_minutes=30,
             google_calendar_id="",
             google_busy_calendar_ids=[],
