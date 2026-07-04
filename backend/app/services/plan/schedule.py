@@ -60,12 +60,12 @@ log = logging.getLogger(__name__)
 
 LEAD_DAYS = 7
 DAY_START = time(10, 0)
-DAY_TARGET = time(20, 0)
+DAY_TARGET = time(21, 0)
 # Extended-mode bounds. The normal `[DAY_START, DAY_TARGET]` range is
 # skipped in extended mode (it was already exhausted on the first attempt
 # that triggered the "no slot" notification). Instead, each day is
 # scanned in two phases:
-#   1. late evening — forward from DAY_TARGET to END_OF_DAY (20→24)
+#   1. late evening — forward from DAY_TARGET to END_OF_DAY (21→24)
 #   2. early morning — backward from DAY_START to EARLY_MORNING (10→8)
 # then the next day, same procedure.
 EARLY_MORNING = time(8, 0)
@@ -98,28 +98,26 @@ class BusyEvent:
 
 @dataclass(frozen=True)
 class Gaps:
-    """Minimum gaps a placement keeps to its neighbours: `commute` when
-    either side of a boundary is a commute leg, `event` between two plain
-    events/tasks. `lead_is_commute`/`trail_is_commute` describe the block's
-    own edges (outbound/inbound leg present)."""
+    """Minimum gaps a placement keeps: `commute` only between a leg and its
+    own anchor (the trip's inner boundaries), `event` everywhere else — a
+    leg keeps the full event gap to any event it doesn't serve, so
+    `task -15-> leg -5-> task -5-> leg -15-> task` holds."""
 
     commute: timedelta
     event: timedelta
-    lead_is_commute: bool = False
-    trail_is_commute: bool = False
 
-    def with_edges(self, out_s: int, in_s: int) -> "Gaps":
-        return replace(self, lead_is_commute=bool(out_s), trail_is_commute=bool(in_s))
+    def neighbor_gap(
+        self, ev: BusyEvent, inner_ids: set[str] = frozenset(),
+    ) -> timedelta:
+        """Gap required between a candidate placement and `ev`.
 
-    def before(self, ev: BusyEvent) -> timedelta:
-        """Gap required between `ev` and a block starting after it."""
-        if self.lead_is_commute or ev.kind == "commute":
-            return self.commute
-        return self.event
-
-    def after(self, ev: BusyEvent) -> timedelta:
-        """Gap required between a block and `ev` starting after it."""
-        if self.trail_is_commute or ev.kind == "commute":
+        A "block" marker is the task's own vacated slot, not a real event —
+        only actual overlap is forbidden, so a task may land flush against
+        where it just was. Anchors the candidate chains with (`inner_ids`)
+        get the inner commute gap; everything else the event gap."""
+        if ev.kind == "block":
+            return timedelta(0)
+        if ev.id in inner_ids:
             return self.commute
         return self.event
 
@@ -151,7 +149,7 @@ async def schedule_task(
 ) -> tuple[datetime, datetime] | None:
     """Plan `task` and create/update its calendar mirror (plus commute legs).
 
-    The planner searches the normal 10:00–20:00 window first. If that
+    The planner searches the normal 10:00–21:00 window first. If that
     cannot place the task, it automatically tries the extended 08:00–24:00
     fallback before reporting no slot.
 
@@ -328,7 +326,7 @@ async def plan_task_slot(
     standalone sweep for the whole trip block. The free search scans days
     forward from `max(now, due - 7d)`; within each day it starts at the
     target time and moves backward toward the start time. If the normal
-    10:00–20:00 window cannot place the block, the planner automatically
+    10:00–21:00 window cannot place the block, the planner automatically
     tries the extended 08:00–24:00 fallback before raising.
     """
     if task.due_date is None:
@@ -496,8 +494,7 @@ async def _swept_block(
     for _ in range(2):
         total = _block_total(duration, gaps.commute, out_s, in_s)
         slot = _find_free_slot(
-            busy, total, window_start, window_end, gaps.with_edges(out_s, in_s),
-            extended_window=extended_window,
+            busy, total, window_start, window_end, gaps, extended_window=extended_window,
         )
         if slot is None:
             return None
@@ -540,7 +537,7 @@ def _piggyback_slot(
             and _within_day_window(start, end, extended=False)
             and _conflict_free(
                 busy, start, block_end,
-                gaps=gaps.with_edges(0, in_s), ignore_anchor_leg=(anchor.id, 0),
+                gaps=gaps, ignore_anchor_leg=(anchor.id, 0),
             )
         ):
             return PlannedSlot(start, end, start, block_end, 0, in_s)
@@ -554,7 +551,7 @@ def _piggyback_slot(
             and _within_day_window(start, end, extended=False)
             and _conflict_free(
                 busy, block_start, end,
-                gaps=gaps.with_edges(out_s, 0), ignore_anchor_leg=(anchor.id, 1),
+                gaps=gaps, ignore_anchor_leg=(anchor.id, 1),
             )
         ):
             return PlannedSlot(start, end, block_start, end, out_s, 0)
@@ -608,7 +605,7 @@ async def _chain_insert_slot(
         block_start = start - buffer - timedelta(seconds=t_pt)
         block_end = end + buffer + timedelta(seconds=t_tn)
         if not _conflict_free(
-            busy, block_start, block_end, gaps=gaps.with_edges(t_pt, t_tn),
+            busy, block_start, block_end, gaps=gaps, inner_ids={prev.id, nxt.id},
             ignore_anchor_leg=(prev.id, 0), ignore_anchor_leg2=(nxt.id, 1),
         ):
             continue
@@ -626,20 +623,23 @@ def _conflict_free(
     end: datetime,
     *,
     gaps: Gaps,
+    inner_ids: set[str] = frozenset(),
     ignore_anchor_leg: tuple[str, int] | None = None,
     ignore_anchor_leg2: tuple[str, int] | None = None,
 ) -> bool:
     """No busy event overlaps `[start, end)` or sits closer than its required
-    gap. `ignore_anchor_leg=(anchor_id, side)` skips the commute leg leaving
-    (side 0) or entering (side 1) that anchor — it will be re-derived around
-    the candidate."""
+    gap. `inner_ids` are anchors the candidate block chains with directly —
+    a leg edge faces them, so the inner commute gap applies. `ignore_anchor_leg
+    =(anchor_id, side)` skips the commute leg leaving (side 0) or entering
+    (side 1) that anchor — it will be re-derived around the candidate."""
     for ev in busy:
         if ev.leg_key is not None:
             if ignore_anchor_leg and ev.leg_key[ignore_anchor_leg[1]] == ignore_anchor_leg[0]:
                 continue
             if ignore_anchor_leg2 and ev.leg_key[ignore_anchor_leg2[1]] == ignore_anchor_leg2[0]:
                 continue
-        if ev.start < end + gaps.after(ev) and start - gaps.before(ev) < ev.end:
+        gap = gaps.neighbor_gap(ev, inner_ids)
+        if ev.start < end + gap and start - gap < ev.end:
             return False
     return True
 
@@ -785,7 +785,7 @@ def _find_free_slot(
 
     while day <= last_day:
         if extended_window:
-            # Phase 1: late evening forward sweep, 20:00 → 24:00.
+            # Phase 1: late evening forward sweep, 21:00 → 24:00.
             lower, upper = _day_bounds(day, DAY_TARGET, END_OF_DAY, tz, window_start, window_end)
             slot = _sweep_forward(ordered, duration, gaps, lower, upper)
             if slot is not None:
@@ -835,7 +835,7 @@ def _sweep_backward(
         conflict = _latest_conflict(busy, start, end, gaps)
         if conflict is None:
             return start, end
-        cursor = min(cursor, conflict.start - gaps.after(conflict))
+        cursor = min(cursor, conflict.start - gaps.neighbor_gap(conflict))
     return None
 
 
@@ -855,7 +855,7 @@ def _sweep_forward(
         conflict = _earliest_conflict(busy, start, end, gaps)
         if conflict is None:
             return start, end
-        cursor = max(cursor, conflict.end + gaps.before(conflict))
+        cursor = max(cursor, conflict.end + gaps.neighbor_gap(conflict))
     return None
 
 
@@ -922,7 +922,7 @@ async def _repair_by_displacing_task(
         slot = _slot_in_range(
             new_busy,
             total,
-            gaps.with_edges(out_s, in_s),
+            gaps,
             freed_range,
             extended_window=extended_window,
         )
@@ -983,9 +983,12 @@ def _movable_victims(
     enough for the new task. The freed range counts adjacent gaps — a 30min
     victim sitting in a 1h hole between busy neighbours is still a candidate
     for a 1h task because moving it consolidates the surrounding free time.
-    Prefilters with the smallest possible edge gap; the sweep enforces the
-    real per-neighbour gaps."""
-    min_span = duration + 2 * min(gaps.commute, gaps.event)
+
+    The prefilter only requires the bare block to fit: the freed range may
+    be bounded by window edges or the task's own vacated slot, which demand
+    no gap at all — `_slot_in_range` enforces the real per-neighbour gaps.
+    """
+    min_span = duration
     candidates: list[tuple[BusyEvent, Interval]] = []
     for ev in busy:
         if ev.kind != "task":
@@ -1048,9 +1051,10 @@ def _effective_freed_range(
 def _gap_conflicts(
     events: list[BusyEvent], start: datetime, end: datetime, gaps: Gaps,
 ) -> list[BusyEvent]:
+    # Swept blocks chain with nothing — neighbour gaps only vary by kind.
     return [
         ev for ev in events
-        if ev.start < end + gaps.after(ev) and start - gaps.before(ev) < ev.end
+        if ev.start < end + gaps.neighbor_gap(ev) and start - gaps.neighbor_gap(ev) < ev.end
     ]
 
 

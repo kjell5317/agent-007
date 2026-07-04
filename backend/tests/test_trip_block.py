@@ -632,6 +632,38 @@ def test_reschedule_overlap_skips_tasks_own_legs():
 
 
 @pytest.mark.asyncio
+async def test_reschedule_lands_flush_after_own_vacated_slot(monkeypatch):
+    # Overdue task, due 20:00, its old 18:00–19:00 slot blocked so it isn't
+    # re-placed there. The vacated slot is not a real event: the task may
+    # start flush at 19:00 and still make its deadline.
+    tz = user_tz()
+    day = (datetime.now(tz) + timedelta(days=1)).replace(second=0, microsecond=0)
+    due = day.replace(hour=20, minute=0)
+    prior = Interval(day.replace(hour=18, minute=0), day.replace(hour=19, minute=0), "ev-1")
+    wall = BusyEvent(
+        "wall", datetime.now(tz) - timedelta(hours=1), day.replace(hour=18, minute=0), "busy",
+    )
+
+    async def fake_fetch(session, time_min, time_max, **kwargs):
+        return [wall]
+
+    monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        due_date=due,
+        location=None,
+        estimation=60,
+        calendar_event_id="ev-1",
+    )
+    planned = await schedule_service.plan_task_slot(None, task, block=prior)
+
+    assert planned.start == prior.end
+    assert planned.end == due
+
+
+@pytest.mark.asyncio
 async def test_slot_keeps_buffer_before_event_starting_at_due(monkeypatch):
     tz = user_tz()
     due = (datetime.now(tz) + timedelta(days=1)).replace(

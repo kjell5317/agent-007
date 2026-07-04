@@ -280,7 +280,10 @@ def _arrive_leg(
     arrive = anchor.start - buffer
     depart = arrive - timedelta(seconds=seconds)
     if avoid:
-        depart, arrive = _dodged_earlier(depart, arrive, avoid, buffer, floor=not_before)
+        # The avoided events aren't this leg's anchors, so the full event
+        # gap applies — not the inner leg↔anchor buffer.
+        clearance = timedelta(minutes=settings.event_buffer_minutes)
+        depart, arrive = _dodged_earlier(depart, arrive, avoid, clearance, floor=not_before)
     if not_before is not None and depart < not_before:
         # Physically late — anchor the leg to the earliest possible departure
         # and let the overlap machinery deal with what it collides with.
@@ -364,27 +367,27 @@ def _dodged_earlier(
     depart: datetime,
     arrive: datetime,
     avoid: list[tuple[datetime, datetime]],
-    buffer: timedelta,
+    clearance: timedelta,
     *,
     floor: datetime | None,
 ) -> tuple[datetime, datetime]:
     """Slide `[depart, arrive]` earlier until it clears every avoid span by
-    `buffer`. Falls back to the original placement when nothing at or above
-    `floor` (or the `MAX_EARLY_DODGE` cap) clears — the overlap is then at
-    least visible on the calendar."""
+    `clearance`. Falls back to the original placement when nothing at or
+    above `floor` (or the `MAX_EARLY_DODGE` cap) clears — the overlap is
+    then at least visible on the calendar."""
     span = arrive - depart
     original = (depart, arrive)
     cap = depart - MAX_EARLY_DODGE
     floor = max(floor, cap) if floor is not None else cap
     for _ in range(len(avoid) + 1):
         conflict = max(
-            (a for a in avoid if a[0] < arrive + buffer and depart - buffer < a[1]),
+            (a for a in avoid if a[0] < arrive + clearance and depart - clearance < a[1]),
             key=lambda a: a[0],
             default=None,
         )
         if conflict is None:
             return depart, arrive
-        arrive = conflict[0] - buffer
+        arrive = conflict[0] - clearance
         depart = arrive - span
         if depart < floor:
             return original

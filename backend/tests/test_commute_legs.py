@@ -25,9 +25,11 @@ SETTINGS = SimpleNamespace(
     commute_rain_threshold_pct=30,
     commute_home_layover_minutes=60,
     commute_event_buffer_minutes=5,
+    event_buffer_minutes=15,
 )
 
 BUFFER = timedelta(minutes=5)
+EVENT_BUFFER = timedelta(minutes=15)
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -239,7 +241,8 @@ def test_direct_leg_dodges_online_meeting():
     )
 
     direct = next(leg for leg in legs if leg.key == ("ev1", "ev2"))
-    assert direct.arrive == online[0] - BUFFER
+    # The online meeting is not the leg's anchor — the full event gap applies.
+    assert direct.arrive == online[0] - EVENT_BUFFER
     assert direct.depart == direct.arrive - timedelta(seconds=300)
     assert direct.depart >= first.end + BUFFER
 
@@ -252,7 +255,7 @@ def test_home_leg_dodges_busy_event_before_anchor():
     legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
 
     outbound = legs[0]
-    assert outbound.arrive == avoid[0][0] - BUFFER
+    assert outbound.arrive == avoid[0][0] - EVENT_BUFFER
     assert outbound.depart == outbound.arrive - timedelta(seconds=600)
 
 

@@ -104,22 +104,24 @@ async def _patch_requires_reschedule(session: Session, task, current, changed: s
 
 
 async def _overlaps_other_event(session: Session, task, start, end) -> bool:
-    from app.services.calendar import is_commute_event, list_events_between
+    from app.services.calendar import commute_leg_key, list_events_between
 
     settings = get_settings()
     ids = _busy_calendar_ids(settings)
     if not ids:
         return False
-    commute_gap = timedelta(minutes=settings.commute_event_buffer_minutes)
-    event_gap = timedelta(minutes=settings.event_buffer_minutes)
-    pad = max(commute_gap, event_gap)
+    gap = timedelta(minutes=settings.event_buffer_minutes)
     events = await list_events_between(
-        session, calendar_ids=ids, time_min=start - pad, time_max=end + pad,
+        session, calendar_ids=ids, time_min=start - gap, time_max=end + gap,
     )
     for ev in events:
         if ev.all_day or ev.id == task.calendar_event_id:
             continue
-        gap = commute_gap if is_commute_event(ev) else event_gap
+        # The task's own legs sit at the inner commute gap by design and get
+        # re-derived around the new span — only foreign events count.
+        leg_key = commute_leg_key(ev)
+        if leg_key is not None and task.calendar_event_id in leg_key:
+            continue
         if ev.start < end + gap and start - gap < ev.end:
             return True
     return False
