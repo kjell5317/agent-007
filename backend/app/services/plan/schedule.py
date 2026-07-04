@@ -48,7 +48,12 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.models.task import Task
 from app.services.commute.legs import FAILED_LEG_SECONDS
-from app.services.location import is_online_location, resolve_location_alias
+from app.services.location import (
+    is_online_location,
+    resolve_location_alias,
+    resolve_routable_location,
+    resolve_routable_location_sync,
+)
 from app.timezones import to_user_tz, user_tz
 
 log = logging.getLogger(__name__)
@@ -338,7 +343,9 @@ async def plan_task_slot(
         return replace(ps, unroutable=True) if unroutable else ps
 
     if out_s or in_s:
-        location = resolve_location_alias(task.location)
+        location = await _routable_trip_candidate_location(task, settings)
+        if location is None:
+            location = resolve_location_alias(task.location)
         planned = _piggyback_slot(
             busy,
             location=location,
@@ -616,7 +623,7 @@ async def _estimate_trip_legs(
     `unroutable`. Rain is deliberately ignored here — the reservation is
     mode-optimistic and the hourly weather refresh reconciles flips."""
     settings = get_settings()
-    location = _trip_candidate_location(task, settings)
+    location = await _routable_trip_candidate_location(task, settings)
     if location is None:
         return 0, 0, False
     home = settings.home_address.strip()
@@ -636,8 +643,21 @@ def _trip_candidate_location(task, settings) -> str | None:
     if not settings.commute_enabled or not settings.google_maps_api_key:
         return None
     home = (settings.home_address or "").strip()
-    location = resolve_location_alias(task.location)
+    location = resolve_routable_location_sync(task.location)
     if not home or not location or is_online_location(location):
+        return None
+    if _norm_loc(location) == _norm_loc(home):
+        return None
+    return location
+
+
+async def _routable_trip_candidate_location(task, settings) -> str | None:
+    """Async trip target normalization for paths allowed to perform I/O."""
+    if not settings.commute_enabled or not settings.google_maps_api_key:
+        return None
+    home = (settings.home_address or "").strip()
+    location = await resolve_routable_location(task.location)
+    if not home or not location:
         return None
     if _norm_loc(location) == _norm_loc(home):
         return None
@@ -1067,14 +1087,14 @@ async def _fetch_busy_events(
         if ev.id == exclude_event_id or ev.all_day:
             continue
         kind = "commute" if is_commute_event(ev) else "task" if is_task_event(ev) else "busy"
-        location = resolve_location_alias(ev.location)
+        location = await resolve_routable_location(ev.location)
         out.append(
             BusyEvent(
                 ev.id,
                 to_user_tz(ev.start),
                 to_user_tz(ev.end),
                 kind,
-                location=location if location and not is_online_location(location) else None,
+                location=location,
                 leg_key=commute_leg_key(ev),
             )
         )

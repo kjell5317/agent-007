@@ -52,7 +52,7 @@ from app.services.commute.weather import geocode, precipitation_probabilities_be
 from app.services.location import (
     is_online_location,
     resolve_location_alias,
-    resolve_tum_room,
+    resolve_routable_location,
 )
 from app.timezones import to_user_tz
 
@@ -170,7 +170,7 @@ async def plan_window_commutes(
         account_key=account_key,
     )
     anchors, existing_commutes, skipped_online = _partition(events, write_calendar_id)
-    anchors = await _resolve_tum_anchors(anchors)
+    anchors = await _resolve_routable_anchors(anchors)
     summary["skipped_online"] = skipped_online
 
     if hourly_rain is None:
@@ -464,11 +464,11 @@ async def delete_past_commute_legs(
     return deleted
 
 
-async def _resolve_tum_anchors(anchors: list[Anchor]) -> list[Anchor]:
+async def _resolve_routable_anchors(anchors: list[Anchor]) -> list[Anchor]:
     out: list[Anchor] = []
     for anchor in anchors:
-        address = await resolve_tum_room(anchor.location)
-        out.append(replace(anchor, location=address) if address else anchor)
+        location = await resolve_routable_location(anchor.location)
+        out.append(replace(anchor, location=location) if location else anchor)
     return out
 
 
