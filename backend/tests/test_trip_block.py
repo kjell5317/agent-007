@@ -308,7 +308,7 @@ async def test_plan_task_slot_reserves_whole_trip_block(monkeypatch):
         return 600, 900, False
 
     monkeypatch.setattr(schedule_service, "_estimate_trip_legs", fake_estimate)
-    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
     monkeypatch.setattr(schedule_service, "resolve_location_alias", lambda loc: loc)
 
     planned = await schedule_service.plan_task_slot(SimpleNamespace(), task)
@@ -352,7 +352,7 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
         return None  # Maps can't route anything here
 
     monkeypatch.setattr(schedule_service, "_one_way_seconds", fake_one_way)
-    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
     monkeypatch.setattr(schedule_service, "resolve_location_alias", lambda loc: loc)
 
     planned = await schedule_service.plan_task_slot(SimpleNamespace(), task)
@@ -445,6 +445,136 @@ async def test_calendar_google_maps_anchor_routes_resolved_location(monkeypatch)
         ("Homestreet 1", "48.137154,11.576124", "bicycling"),
         ("48.137154,11.576124", "Homestreet 1", "bicycling"),
     ]
+
+
+def test_legs_of_in_window_anchor_are_written_despite_sitting_outside():
+    from app.services.commute.planner import _legs_to_write
+
+    # A created/edited event replans exactly its own span — but its legs live
+    # just outside that span (arrive ends before the event starts). They must
+    # be written anyway.
+    anchor = Anchor("ev1", _day_at(20, 30), _day_at(23), GYM)
+    legs = [
+        PlannedLeg(
+            origin_anchor="home", dest_anchor="ev1", origin="Home", destination=GYM,
+            mode="transit", depart=_day_at(19, 40), arrive=_day_at(20, 25),
+        ),
+        PlannedLeg(
+            origin_anchor="ev1", dest_anchor="home", origin=GYM, destination="Home",
+            mode="transit", depart=_day_at(23, 5), arrive=_day_at(23, 50),
+        ),
+    ]
+
+    assert _legs_to_write(legs, [anchor], _day_at(20, 30), _day_at(23)) == legs
+    # An anchor outside the window keeps the old span-overlap rule.
+    far_anchor = Anchor("ev2", _day_at(9), _day_at(10), OFFICE)
+    assert _legs_to_write(legs, [far_anchor], _day_at(20, 30), _day_at(23)) == []
+
+
+def test_db_slot_overrides_stale_calendar_span(monkeypatch):
+    # Mid-cascade, events.list can return a just-patched task at its old
+    # position; the DB row written under the lock is the truth.
+    row = SimpleNamespace(
+        id=uuid.uuid4(),
+        calendar_event_id="ev-9",
+        scheduled_date=_day_at(15),
+        estimation=60,
+        location=None,
+    )
+    monkeypatch.setattr(
+        "app.db.clients.tasks.open_scheduled_between",
+        lambda session, *, time_min, time_max, exclude_task_id: [row],
+    )
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
+            google_calendar_default_event_minutes=30,
+            commute_enabled=False,
+            google_maps_api_key="",
+        ),
+    )
+
+    stale = BusyEvent("ev-9", _day_at(12), _day_at(13), "task")
+    merged = schedule_service._db_scheduled_busy(
+        None, SimpleNamespace(id=uuid.uuid4()), _day_at(8), _day_at(20), [stale],
+    )
+
+    assert len(merged) == 1
+    assert (merged[0].start, merged[0].end) == (_day_at(15), _day_at(16))
+    assert merged[0].kind == "task"
+
+
+@pytest.mark.asyncio
+async def test_plan_window_never_reaches_beyond_lookahead(monkeypatch):
+    # A task placed at `due - lead` can sit weeks out; its leg replan must
+    # not write anything beyond now + lookahead — the daily re-baseline
+    # derives the legs once the anchor slides into the window.
+    monkeypatch.setattr(
+        commute_planner,
+        "get_settings",
+        lambda: SimpleNamespace(
+            google_calendar_id="primary",
+            home_address="Homestreet 1",
+            google_maps_api_key="key",
+            commute_lookahead_days=7,
+        ),
+    )
+
+    async def boom(*_args, **_kwargs):
+        raise AssertionError("must not touch the calendar beyond the horizon")
+
+    monkeypatch.setattr(commute_planner, "list_events_between", boom)
+
+    start = datetime.now(timezone.utc) + timedelta(days=21)
+    summary = await commute_planner.plan_window_commutes(
+        None, window_start=start, window_end=start + timedelta(hours=5),
+    )
+
+    assert summary["planned"] == 0
+    assert summary["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
+    from app.services.commute.planner import delete_stray_commute_legs
+
+    now = datetime.now(timezone.utc)
+    commute_props = {"managed_by": "plan_service", "kind": "commute"}
+
+    def leg(event_id, start, end):
+        return _calendar_event(event_id, start, end, props=commute_props)
+
+    past_leg = leg("past", now - timedelta(days=2), now - timedelta(days=2) + timedelta(minutes=30))
+    live_leg = leg("live", now + timedelta(days=1), now + timedelta(days=1, minutes=30))
+    stray_leg = leg("stray", now + timedelta(days=21), now + timedelta(days=21, minutes=30))
+    far_task = _calendar_event("far-task", now + timedelta(days=21), now + timedelta(days=22))
+
+    async def fake_list(session, *, calendar_ids, time_min, time_max, account_key=None):
+        return [
+            ev for ev in (past_leg, live_leg, stray_leg, far_task)
+            if ev.start < time_max and ev.end > time_min
+        ]
+
+    deleted_ids = []
+
+    async def fake_delete(session, *, calendar_id, event_id, account_key=None):
+        deleted_ids.append(event_id)
+
+    monkeypatch.setattr(commute_planner, "list_events_between", fake_list)
+    monkeypatch.setattr(commute_planner, "delete_event", fake_delete)
+    monkeypatch.setattr(
+        commute_planner,
+        "get_settings",
+        lambda: SimpleNamespace(google_calendar_id="primary", commute_lookahead_days=7),
+    )
+
+    deleted = await delete_stray_commute_legs(None)
+
+    assert deleted == 2
+    assert sorted(deleted_ids) == ["past", "stray"]
 
 
 def test_colliding_task_anchor_is_replaced_not_overlapped():
@@ -648,7 +778,7 @@ async def test_reschedule_lands_flush_after_own_vacated_slot(monkeypatch):
         return [wall]
 
     monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
-    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
 
     task = SimpleNamespace(
         id=uuid.uuid4(),
@@ -678,7 +808,7 @@ async def test_slot_keeps_buffer_before_event_starting_at_due(monkeypatch):
         return [ev for ev in (wall, meeting) if ev.start < time_max and ev.end > time_min]
 
     monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
-    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda *a, **k: [])
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
 
     task = SimpleNamespace(
         id=uuid.uuid4(),

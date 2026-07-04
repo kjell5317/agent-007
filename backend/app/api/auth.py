@@ -1,16 +1,16 @@
-"""Login flow — Google SSO that also captures Gmail + Calendar tokens.
+"""Login flow — Google SSO that also captures Google integration tokens.
 
 One Google consent screen, two outcomes:
 
   1. A signed session cookie keyed by email (used by `AuthMiddleware`).
   2. A persisted token bundle in `oauth_tokens` for the same account, so the
-     Gmail ingestion source and the Calendar service can call Google APIs
-     without a separate authorization step.
+     Gmail ingestion source, Calendar service, and isolated health/sleep
+     handler can call Google APIs without a separate authorization step.
 
 Reuses `GoogleOAuthProvider`, which already requests the full scope set
-(openid email · gmail.readonly · calendar.events) with offline access. The
-allowlist is enforced before the bundle is persisted — denied emails leave
-no trace in the database.
+(openid email · gmail.readonly · calendar.events · fitness.sleep.read) with
+offline access. The allowlist is enforced before the bundle is persisted —
+denied emails leave no trace in the database.
 
 The provider-agnostic `/oauth/google/*` routes still work for re-authorizing
 after a scope change; this flow just removes the need to visit them.
@@ -96,9 +96,10 @@ async def callback(
         log.warning("login denied · email=%r not in allowlist", email)
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Access denied for {email!r}")
 
-    # Persist the full token bundle so the same consent covers Gmail ingestion
-    # and the Calendar service. extra_merge preserves any per-source state
-    # already stored under this account (e.g. Gmail's history_id watermark).
+    # Persist the full token bundle so the same consent covers Gmail ingestion,
+    # the Calendar service, and health/sleep reads. extra_merge preserves any
+    # per-source state already stored under this account (e.g. Gmail's
+    # history_id watermark).
     existing = oauth_tokens.get_decrypted(session, provider="google", account_key=email)
     oauth_tokens.upsert(
         session,

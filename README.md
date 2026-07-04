@@ -105,7 +105,7 @@ essentials:
 | `ANTHROPIC_API_KEY` | Anthropic API access when `LLM_PROVIDER=anthropic` |
 | `GEMINI_API_KEY` | Gemini embeddings for de-duplication and note retrieval |
 | `TOKEN_ENCRYPTION_KEY` | Fernet key — OAuth tokens are stored encrypted at rest |
-| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Gmail access + Google SSO login |
+| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Google OAuth for SSO, Gmail, Calendar, and Google Fit sleep access |
 | `SLACK_APPS` | Per-workspace Slack OAuth apps (JSON) |
 | `HOME_ADDRESS` | Origin/destination for commute planning |
 | `HOME_ASSISTANT_URL` / `_TOKEN` | Push notifications (optional) |
@@ -126,6 +126,7 @@ backend/app/
   services/
     input/        ingestion: source contract + Gmail/Slack subpackages
     calendar/     Google Calendar sync
+    health/       isolated Google Fit sleep read handler
     commute/      travel-time + weather planning
     plan/         scheduling
   db/             SQLAlchemy models, clients (CRUD + vector search), schemas

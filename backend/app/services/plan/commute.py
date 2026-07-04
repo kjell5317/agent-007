@@ -88,18 +88,18 @@ async def refresh_commutes_for_weather(
         return await refresh_weather_sensitive_commutes(session, account_key=account_key, _depth=1)
 
 
-async def cleanup_past_commute_legs(
+async def cleanup_stray_commute_legs(
     session: Session,
     *,
     account_key: str | None = None,
 ) -> int:
     if not get_settings().commute_enabled:
         return 0
-    from app.services.commute.planner import delete_past_commute_legs
+    from app.services.commute.planner import delete_stray_commute_legs
     from app.services.plan.schedule import _schedule_lock
 
     async with _schedule_lock:
-        return await delete_past_commute_legs(session, account_key=account_key)
+        return await delete_stray_commute_legs(session, account_key=account_key)
 
 
 async def plan_commutes_window_best_effort(

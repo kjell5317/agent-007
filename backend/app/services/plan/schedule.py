@@ -200,6 +200,7 @@ async def _schedule_task_locked(
     notify: bool,
     primary_action: dict[str, str] | None = None,
     _depth: int,
+    _displaced: frozenset = frozenset(),
 ) -> PlannedSlot | None:
     is_fresh = task.calendar_event_id is None
     prior = scheduled_interval_for(task)
@@ -211,6 +212,7 @@ async def _schedule_task_locked(
             block=block,
             account_key=account_key,
             _depth=_depth,
+            _displaced=_displaced,
         )
     except ValueError:
         log.warning(
@@ -326,6 +328,7 @@ async def plan_task_slot(
     block: Interval | None = None,
     account_key: str | None = None,
     _depth: int = 0,
+    _displaced: frozenset = frozenset(),
 ) -> PlannedSlot:
     """Return a `PlannedSlot` for `task` (task span + reserved trip block).
 
@@ -363,11 +366,7 @@ async def plan_task_slot(
         exclude_event_id=task.calendar_event_id,
         account_key=account_key,
     )
-    busy.extend(
-        _db_scheduled_busy(
-            session, task, window_start - pad, window_end + pad, {ev.id for ev in busy}
-        )
-    )
+    busy = _db_scheduled_busy(session, task, window_start - pad, window_end + pad, busy)
     for itv in extra_busy or []:
         busy.append(BusyEvent(itv.event_id or "extra", itv.start, itv.end, "extra"))
     if block is not None:
@@ -427,6 +426,7 @@ async def plan_task_slot(
             window_end=window_end,
             account_key=account_key,
             depth=_depth,
+            displaced=_displaced,
             extended_window=False,
         ))
     except ValueError:
@@ -455,6 +455,7 @@ async def plan_task_slot(
         window_end=window_end,
         account_key=account_key,
         depth=_depth,
+        displaced=_displaced,
         extended_window=True,
     ))
 
@@ -882,6 +883,7 @@ async def _repair_by_displacing_task(
     window_end: datetime,
     account_key: str | None,
     depth: int,
+    displaced: frozenset,
     extended_window: bool,
 ) -> PlannedSlot:
     if depth >= MAX_REPAIR_DEPTH:
@@ -889,18 +891,22 @@ async def _repair_by_displacing_task(
 
     total = _block_total(duration, gaps.commute, out_s, in_s)
     victims = _movable_victims(
-        session, task, busy, total, gaps, window_start, window_end,
+        session, task, busy, total, gaps, window_start, window_end, displaced=displaced,
     )
     for victim, victim_event, freed_range in victims:
         block = Interval(victim_event.start, victim_event.end, victim_event.id)
         try:
+            # notify=False: a failed victim move keeps its old slot, so a
+            # "could not schedule" for it would lie and get cleared moments
+            # later by the next attempt.
             victim_planned = await _schedule_task_locked(
                 session,
                 victim,
                 block=block,
                 account_key=account_key,
-                notify=True,
+                notify=False,
                 _depth=depth + 1,
+                _displaced=displaced | {task.id},
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("plan.schedule · victim move failed task=%s err=%s", victim.id, exc)
@@ -908,6 +914,9 @@ async def _repair_by_displacing_task(
         if victim_planned is None:
             # Victim couldn't be rescheduled — its old slot still holds.
             continue
+        from app.services.notify import clear_task_notification
+
+        await clear_task_notification(victim.id)
 
         # Rebuild the busy view: the victim (and its legs — they move with
         # it) vacated, and its new trip block is occupied. Then sweep the
@@ -985,6 +994,8 @@ def _movable_victims(
     gaps: Gaps,
     window_start: datetime,
     window_end: datetime,
+    *,
+    displaced: frozenset = frozenset(),
 ) -> list[tuple[Task, BusyEvent, Interval]]:
     """Task events whose displacement would free a contiguous range large
     enough for the new task. The freed range counts adjacent gaps — a 30min
@@ -1014,6 +1025,11 @@ def _movable_victims(
         .where(Task.id != task.id)
         .where(Task.due_date.is_not(None))
     )
+    if displaced:
+        # A task already moved in this displacement chain won't be moved
+        # again — mutual A↔B displacement otherwise ping-pongs to the depth
+        # limit, patching the same events over and over.
+        stmt = stmt.where(Task.id.not_in(list(displaced)))
     rows = list(session.execute(stmt).scalars())
     # Location-less victims first (moving a located task breaks its trip
     # chain and forces leg rework), then least-urgent (latest due) first.
@@ -1091,30 +1107,42 @@ def _db_scheduled_busy(
     task: Task,
     window_start: datetime,
     window_end: datetime,
-    calendar_event_ids: set[str],
+    busy: list[BusyEvent],
 ) -> list[BusyEvent]:
-    """Backstop for the live calendar read: open tasks whose stored slot the
-    calendar may not reflect yet — Google's events.list lags a just-created
-    event, or the event was deleted out from under us. Located tasks are
-    inflated by their cached leg durations so the backstop reserves the trip,
-    not just the task. Skip any whose event already appeared in the calendar
-    busy set. Marked immovable ("busy"): we won't try to displace a task we
-    can only see in the DB."""
+    """Reconcile the live calendar read against the DB, which is written
+    under the scheduling lock right after every calendar patch and is
+    therefore fresher than a lagging events.list.
+
+    Tasks missing from the calendar view (just created, or deleted out from
+    under us) are added, inflated by their cached leg durations so the
+    backstop reserves the trip. Tasks *present* at a stale position — the
+    events.list lag during a displacement cascade — get their span overridden
+    with the DB truth; without this, two tasks can be written into the same
+    slot. Added entries are marked immovable ("busy"): we won't displace a
+    task we can only see in the DB."""
     from app.db.clients import tasks as tasks_store
 
     settings = get_settings()
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
-    out: list[BusyEvent] = []
+    out = list(busy)
+    index = {ev.id: i for i, ev in enumerate(out)}
     for row in tasks_store.open_scheduled_between(
         session,
         time_min=window_start,
         time_max=window_end,
         exclude_task_id=task.id,
     ):
-        if row.calendar_event_id and row.calendar_event_id in calendar_event_ids:
-            continue
         start = to_user_tz(row.scheduled_date)
         end = start + timedelta(minutes=_duration_minutes(row, settings))
+        i = index.get(row.calendar_event_id) if row.calendar_event_id else None
+        if i is not None:
+            if (out[i].start, out[i].end) != (start, end):
+                log.info(
+                    "plan.schedule · stale calendar span for task=%s event=%s; using DB slot %s",
+                    row.id, row.calendar_event_id, start.isoformat(),
+                )
+                out[i] = replace(out[i], start=start, end=end)
+            continue
         out_s, in_s = _cached_trip_legs(session, row, settings)
         if out_s:
             start -= buffer + timedelta(seconds=out_s)

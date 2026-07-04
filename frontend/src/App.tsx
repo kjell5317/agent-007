@@ -41,6 +41,14 @@ export function App() {
     pendingClearTaskIdsRef.current = new Set();
   }, []);
 
+  const clearPendingInputIds = useCallback(() => {
+    const pending = pendingClearInputIdsRef.current;
+    if (pending.size === 0) return;
+
+    setUnseenInputIds((prev) => removeAll(prev, pending));
+    pendingClearInputIdsRef.current = new Set();
+  }, []);
+
   const kotxTasks = useMemo(() => {
     const map = new Map<number, KotxTask>();
     for (const run of runs.tasks) map.set(run.id, run);
@@ -163,7 +171,7 @@ export function App() {
     const previousIds = knownInputIdsRef.current;
     const previousNewest = newestInputReceivedAtRef.current;
 
-    if (previousIds && !inboxActive) {
+    if (previousIds) {
       const arrived = inputs.filter((input) => {
         if (input.source === "manual" || previousIds.has(input.id)) return false;
         const receivedAt = Date.parse(input.received_at);
@@ -179,7 +187,7 @@ export function App() {
 
     knownInputIdsRef.current = currentIds;
     newestInputReceivedAtRef.current = newestReceivedAt;
-  }, [inboxActive, inputs, loading]);
+  }, [inputs, loading]);
 
   useEffect(() => {
     const currentIds = new Set(tasks.map((task) => task.id));
@@ -205,25 +213,25 @@ export function App() {
   }, [clearPendingTaskIds, tasksActive]);
 
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState !== "visible") clearPendingTaskIds();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("blur", clearPendingTaskIds);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("blur", clearPendingTaskIds);
-    };
-  }, [clearPendingTaskIds]);
+    if (inboxActive) return;
+    clearPendingInputIds();
+  }, [clearPendingInputIds, inboxActive]);
 
   useEffect(() => {
-    if (inboxActive) return;
-    const pending = pendingClearInputIdsRef.current;
-    if (pending.size === 0) return;
-
-    setUnseenInputIds((prev) => removeAll(prev, pending));
-    pendingClearInputIdsRef.current = new Set();
-  }, [inboxActive]);
+    const clearPendingVisibleIds = () => {
+      clearPendingTaskIds();
+      clearPendingInputIds();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") clearPendingVisibleIds();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", clearPendingVisibleIds);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", clearPendingVisibleIds);
+    };
+  }, [clearPendingInputIds, clearPendingTaskIds]);
 
   const markTaskVisible = useCallback(
     (id: string) => {

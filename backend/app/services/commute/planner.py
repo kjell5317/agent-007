@@ -147,20 +147,21 @@ async def plan_window_commutes(
         summary["errors"].append({"setup": "google_maps_api_key not configured"})
         return summary
 
-    # Legs in the past can't be ridden, and every anchor pair in the window
-    # costs routing quota — so a stale caller window (e.g. re-placing a
-    # long-overdue task whose prior slot is months back) must not fan out
-    # over historical events. Clamp to now and cap the width at the
-    # configured lookahead.
+    # Legs only exist inside [now, now + lookahead]: past legs can't be
+    # ridden, and legs further out than the horizon are never written — a
+    # task placed weeks ahead (due date minus lead) gets its legs once the
+    # daily re-baseline slides it into the window. This also keeps stale
+    # caller windows (e.g. re-placing a long-overdue task whose prior slot
+    # is months back) from fanning out over historical events.
     now = datetime.now(timezone.utc)
+    horizon = now + timedelta(days=settings.commute_lookahead_days)
     window_start = max(window_start, now)
-    max_end = window_start + timedelta(days=settings.commute_lookahead_days)
-    if window_end > max_end:
-        log.warning(
-            "commute · window capped at %d days (requested until %s)",
-            settings.commute_lookahead_days, window_end.isoformat(),
+    if window_end > horizon:
+        log.info(
+            "commute · window capped at lookahead horizon %s (requested until %s)",
+            horizon.isoformat(), window_end.isoformat(),
         )
-        window_end = max_end
+        window_end = horizon
     if window_end <= window_start:
         return summary
 
@@ -206,12 +207,7 @@ async def plan_window_commutes(
         )
     summary["skipped_unroutable"] = skipped_unroutable
 
-    # Only legs touching the requested window are written or deleted — the
-    # margin exists so edge anchors see their real neighbours, not to widen
-    # the replan zone.
-    to_write = [
-        leg for leg in legs if _overlaps(leg.depart, leg.arrive, window_start, window_end)
-    ]
+    to_write = _legs_to_write(legs, anchors, window_start, window_end)
 
     # A task anchor whose legs collide with another anchor has a slot with
     # no room for its trip (typically placed before trip-block planning
@@ -342,6 +338,31 @@ async def _sync_anchor_reminders(
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("commute · reminder sync failed event=%s err=%s", ev.id, exc)
+
+
+def _legs_to_write(
+    legs: list[PlannedLeg],
+    anchors: list[Anchor],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[PlannedLeg]:
+    """Legs the replan may write or delete.
+
+    Legs of any anchor inside the window are included even though they sit
+    just *outside* it (an arrival ends `buffer` before its anchor starts) —
+    filtering by leg-span alone dropped every leg of a bare created/edited
+    event span. Legs merely poking into the window from edge anchors are
+    still written; the fetch margin only exists so those anchors see their
+    real neighbours."""
+    in_window = {
+        anchor.id for anchor in anchors
+        if _overlaps(anchor.start, anchor.end, window_start, window_end)
+    }
+    return [
+        leg for leg in legs
+        if _overlaps(leg.depart, leg.arrive, window_start, window_end)
+        or in_window & set(leg.key)
+    ]
 
 
 def _reschedule_candidates(
@@ -481,37 +502,53 @@ async def _home_rain(
 # How far back the past-leg sweep looks. Wide enough to also catch strays
 # that pre-window-clamp replans wrote next to years-old events.
 _PAST_LEG_LOOKBACK = timedelta(days=1825)
+# How far beyond the lookahead horizon the stray sweep looks — far-future
+# legs come from task placements at `due - lead`, so a year covers any
+# realistic due date.
+_STRAY_LEG_LOOKAHEAD = timedelta(days=365)
 
 
-async def delete_past_commute_legs(
+async def delete_stray_commute_legs(
     session: Session,
     *,
     account_key: str | None = None,
 ) -> int:
-    """Delete managed commute events that already ended — a ride in the past
-    is dead weight on the calendar."""
-    write_calendar_id = (get_settings().google_calendar_id or "").strip()
+    """Delete managed commute events outside `[now, now + lookahead]` — a
+    ride in the past is dead weight, and legs written beyond the horizon
+    (strays from before the horizon cap) get re-derived once their anchor
+    slides into the window."""
+    settings = get_settings()
+    write_calendar_id = (settings.google_calendar_id or "").strip()
     if not write_calendar_id:
         return 0
     now = datetime.now(timezone.utc)
-    events = await list_events_between(
-        session,
-        calendar_ids=[write_calendar_id],
-        time_min=now - _PAST_LEG_LOOKBACK,
-        time_max=now,
-        account_key=account_key,
-    )
+    horizon = now + timedelta(days=settings.commute_lookahead_days)
     deleted = 0
-    for ev in events:
-        if ev.all_day or not is_commute_event(ev) or ev.end > now:
-            continue
-        try:
-            await delete_event(
-                session, calendar_id=write_calendar_id, event_id=ev.id, account_key=account_key,
-            )
-            deleted += 1
-        except Exception as exc:  # noqa: BLE001
-            log.warning("commute · past leg delete failed event=%s err=%s", ev.id, exc)
+    for time_min, time_max in (
+        (now - _PAST_LEG_LOOKBACK, now),
+        (horizon, horizon + _STRAY_LEG_LOOKAHEAD),
+    ):
+        events = await list_events_between(
+            session,
+            calendar_ids=[write_calendar_id],
+            time_min=time_min,
+            time_max=time_max,
+            account_key=account_key,
+        )
+        for ev in events:
+            if ev.all_day or not is_commute_event(ev):
+                continue
+            if ev.end > now and ev.start < horizon:
+                # Running or boundary-straddling leg — still live.
+                continue
+            try:
+                await delete_event(
+                    session, calendar_id=write_calendar_id, event_id=ev.id,
+                    account_key=account_key,
+                )
+                deleted += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("commute · stray leg delete failed event=%s err=%s", ev.id, exc)
     return deleted
 
 
