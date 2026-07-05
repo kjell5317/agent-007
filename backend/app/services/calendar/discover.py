@@ -158,12 +158,23 @@ async def discover_updated_events(
             # look like. The sync tombstone carries no times, so recover the
             # span and replan that window.
             span = await _cancelled_event_span(session, cid, item, account_key=account_key)
-            if span is not None:
+            if span is None:
+                continue
+            # Incremental sync is unbounded in time: deleting a long recurring
+            # series streams back tombstones for instances years outside the
+            # look-ahead window. Only deletions that touch the window can move
+            # commutes we actually plan, so drop the rest.
+            if not _span_touches_window(span, window_start, window_end):
                 log.info(
-                    "discover · event id=%s deleted on %s; replanning commutes around %s..%s",
+                    "discover · event id=%s deleted on %s outside window %s..%s; skipping",
                     item["id"], cid, span[0].isoformat(), span[1].isoformat(),
                 )
-                deleted_spans.append(span)
+                continue
+            log.info(
+                "discover · event id=%s deleted on %s; replanning commutes around %s..%s",
+                item["id"], cid, span[0].isoformat(), span[1].isoformat(),
+            )
+            deleted_spans.append(span)
 
         # Something changed in a read/busy calendar, or a manual event on the
         # write calendar. Pull the write calendar and only move events we own
@@ -214,6 +225,14 @@ async def discover_updated_events(
     return summary
 
 
+def _span_touches_window(
+    span: tuple[datetime, datetime],
+    window_start: datetime,
+    window_end: datetime,
+) -> bool:
+    return span[1] >= window_start and span[0] <= window_end
+
+
 async def _cancelled_event_span(
     session: Session,
     calendar_id: str,
@@ -240,6 +259,17 @@ async def _cancelled_event_span(
         log.info(
             "discover · deleted event=%s span unrecoverable (%s); daily re-baseline will heal",
             item["id"], exc,
+        )
+        return None
+    # GET on a cancelled recurring instance (`{master}_{ts}`) can resolve to the
+    # recurring master, whose start is the series origin — years off from the
+    # deleted instance. Its times would drive a replan around the wrong window,
+    # so trust the fetched event only when it's the one we asked for.
+    if event.id != item["id"]:
+        log.info(
+            "discover · deleted event=%s resolved to master id=%s; span unrecoverable, "
+            "daily re-baseline will heal",
+            item["id"], event.id,
         )
         return None
     return event.start, event.end

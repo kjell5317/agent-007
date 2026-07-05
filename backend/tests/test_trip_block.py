@@ -743,6 +743,23 @@ def _calendar_event(
     )
 
 
+def test_span_touches_window_drops_out_of_window_deletions():
+    from app.services.calendar.discover import _span_touches_window
+
+    window = (_day_at(8), _day_at(20))
+
+    # A deletion inside the window drives a replan.
+    assert _span_touches_window((_day_at(12), _day_at(13)), *window)
+    # A zero-width span (recurring-instance tombstone) inside the window counts.
+    assert _span_touches_window((_day_at(9), _day_at(9)), *window)
+    # A far-future recurring instance (years past the look-ahead) is dropped.
+    future = datetime(2031, 2, 6, 12, tzinfo=timezone.utc)
+    assert not _span_touches_window((future, future), *window)
+    # A garbage year-2000 span never touches the window either.
+    past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    assert not _span_touches_window((past, past + timedelta(days=1)), *window)
+
+
 def test_replan_span_covers_timed_events_including_online():
     commute_props = {"managed_by": "plan_service", "kind": "commute"}
     events = [
@@ -892,6 +909,23 @@ async def test_cancelled_event_span_recovery(monkeypatch):
 
     monkeypatch.setattr("app.services.calendar.get_event", broken_get_event)
     assert await _cancelled_event_span(None, "cal", {"id": "gone"}, account_key=None) is None
+
+    # GET on a cancelled recurring instance can resolve to the recurring master
+    # (a different id, dated at the series origin). Its times are years off from
+    # the deleted instance, so the span is treated as unrecoverable.
+    master = _calendar_event(
+        "series", datetime(2000, 1, 1, tzinfo=timezone.utc),
+        datetime(2000, 1, 2, tzinfo=timezone.utc),
+    )
+
+    async def master_get_event(session, *, calendar_id, event_id, account_key=None):
+        return master
+
+    monkeypatch.setattr("app.services.calendar.get_event", master_get_event)
+    span = await _cancelled_event_span(
+        None, "cal", {"id": "series_20310206T120000Z"}, account_key=None,
+    )
+    assert span is None
 
 
 def test_reschedule_overlap_skips_tasks_own_legs():
