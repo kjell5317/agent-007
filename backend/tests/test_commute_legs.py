@@ -322,6 +322,28 @@ def test_home_leg_dodge_is_capped():
     assert outbound.arrive == anchor.start - BUFFER
 
 
+def test_home_leg_departs_after_online_meeting():
+    # An online meeting sits right after the event: attend it there and ride
+    # home afterwards (with the full event gap) instead of riding through it.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    avoid = [(_at(15, 10), _at(16))]
+    legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
+
+    inbound = legs[1]
+    assert inbound.depart == avoid[0][1] + EVENT_BUFFER
+    assert inbound.arrive == inbound.depart + timedelta(seconds=600)
+
+
+def test_home_leg_stays_put_when_later_dodge_exceeds_cap():
+    # Waiting three hours to leave costs more than the visible overlap.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    avoid = [(_at(15, 10), _at(18))]
+    legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
+
+    inbound = legs[1]
+    assert inbound.depart == anchor.end + BUFFER
+
+
 def test_direct_leg_keeps_late_placement_when_dodge_cannot_fit():
     # The online meeting fills the whole gap — nothing earlier clears, so
     # the leg stays just-in-time (visible overlap beats being late).

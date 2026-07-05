@@ -15,11 +15,11 @@ Chaining rules between consecutive clusters P → N:
   * gap fits a home layover  → P → home, then home → N
   * gap too small            → direct leg P → N
 
-Arriving legs slide earlier (never later — later means missing the anchor)
-to stay clear of `avoid` spans: online or location-less events the timeline
-doesn't route to but the user still attends. Legs from home cap the slide
-at `MAX_EARLY_DODGE`; a bounded wait at the destination beats riding
-through a meeting, an unbounded one doesn't.
+Legs slide to stay clear of `avoid` spans — online or location-less
+events the timeline doesn't route to but the user still attends. Arriving
+legs slide earlier (later means missing the anchor); departing legs slide
+later (earlier means leaving mid-event). Both cap the shift at `MAX_DODGE`;
+a bounded wait beats riding through a meeting, an unbounded one doesn't.
 
 The bike lives at home and must come back home: a trip (home → … → home)
 rides one mode. A leg may only be ridden when every previous leg since the
@@ -47,11 +47,11 @@ HOME = "home"
 FAILED_MODE = "failed"
 FAILED_LEG_SECONDS = 30 * 60
 
-# How much earlier a leg may depart to clear an avoid span. Beyond this the
-# wait at the destination costs more than the visible overlap it prevents,
-# so the leg stays just-in-time. Legs between anchors are additionally
+# How far a leg may shift (arrivals earlier, departures later) to clear an
+# avoid span. Beyond this the waiting costs more than the visible overlap
+# it prevents, so the leg stays put. Legs between anchors are additionally
 # bounded by the previous anchor's end.
-MAX_EARLY_DODGE = timedelta(hours=2)
+MAX_DODGE = timedelta(hours=2)
 
 Durations = dict[tuple[str, str, str], int | None]
 
@@ -156,10 +156,10 @@ def derive_legs(
 ) -> tuple[list[PlannedLeg], int]:
     """Return `(legs, unroutable)` for the anchor timeline — `unroutable`
     counts the legs that got a `FAILED_MODE` 30-minute placeholder because
-    no mode could route them. `avoid` spans (online meetings) push direct
-    legs earlier when the just-in-time placement would overlap them.
-    `missing_transit` collects pairs whose transit duration the derivation
-    wanted but was never resolved (see `_leg_option`)."""
+    no mode could route them. `avoid` spans (online meetings) push arriving
+    legs earlier and departing legs later when the default placement would
+    overlap them. `missing_transit` collects pairs whose transit duration
+    the derivation wanted but was never resolved (see `_leg_option`)."""
     clusters = _overlap_clusters(_ordered_away(anchors, home))
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
     layover = timedelta(minutes=settings.commute_home_layover_minutes)
@@ -192,6 +192,7 @@ def derive_legs(
             _push(_depart_leg(
                 prev, HOME, home, durations, rain, settings, buffer,
                 bike_available=bike_with_me, missing_transit=missing_transit,
+                avoid=avoid,
             ))
             continue
         nxt = _cluster_entry(nxt_cluster)
@@ -222,6 +223,7 @@ def derive_legs(
                 home_leg = _depart_leg(
                     prev, HOME, home, durations, rain, settings, buffer,
                     bike_available=bike_with_me, missing_transit=missing_transit,
+                    avoid=avoid,
                 )
                 _push(home_leg)
                 _push(_arrive_leg(
@@ -240,6 +242,7 @@ def derive_legs(
             _push(_depart_leg(
                 prev, HOME, home, durations, rain, settings, buffer,
                 bike_available=bike_with_me, missing_transit=missing_transit,
+                avoid=avoid,
             ))
             _push(_arrive_leg(
                 HOME, home, nxt, durations, rain, settings, buffer,
@@ -407,6 +410,7 @@ def _depart_leg(
     *,
     bike_available: bool = True,
     missing_transit: set[tuple[str, str]] | None = None,
+    avoid: list[tuple[datetime, datetime]] | None = None,
 ) -> PlannedLeg:
     option = _leg_option(
         anchor.location, destination, anchor.end, durations, rain, settings,
@@ -414,6 +418,14 @@ def _depart_leg(
     )
     seconds, mode, reason = option if option is not None else _failed_option()
     depart = anchor.end + buffer
+    arrive = depart + timedelta(seconds=seconds)
+    if avoid:
+        # E.g. an online meeting right after the anchor: attend it there and
+        # ride afterwards, keeping the full event gap — it isn't this leg's
+        # anchor. Departing earlier would mean leaving mid-event, so the
+        # only direction is later.
+        clearance = timedelta(minutes=settings.event_buffer_minutes)
+        depart, arrive = _dodged_later(depart, arrive, avoid, clearance)
     return PlannedLeg(
         origin_anchor=anchor.id,
         dest_anchor=dest_anchor,
@@ -421,7 +433,7 @@ def _depart_leg(
         destination=destination,
         mode=mode,
         depart=depart,
-        arrive=depart + timedelta(seconds=seconds),
+        arrive=arrive,
         reason=reason,
     )
 
@@ -468,11 +480,11 @@ def _dodged_earlier(
 ) -> tuple[datetime, datetime]:
     """Slide `[depart, arrive]` earlier until it clears every avoid span by
     `clearance`. Falls back to the original placement when nothing at or
-    above `floor` (or the `MAX_EARLY_DODGE` cap) clears — the overlap is
+    above `floor` (or the `MAX_DODGE` cap) clears — the overlap is
     then at least visible on the calendar."""
     span = arrive - depart
     original = (depart, arrive)
-    cap = depart - MAX_EARLY_DODGE
+    cap = depart - MAX_DODGE
     floor = max(floor, cap) if floor is not None else cap
     for _ in range(len(avoid) + 1):
         conflict = max(
@@ -485,6 +497,33 @@ def _dodged_earlier(
         arrive = conflict[0] - clearance
         depart = arrive - span
         if depart < floor:
+            return original
+    return original
+
+
+def _dodged_later(
+    depart: datetime,
+    arrive: datetime,
+    avoid: list[tuple[datetime, datetime]],
+    clearance: timedelta,
+) -> tuple[datetime, datetime]:
+    """Slide `[depart, arrive]` later until it clears every avoid span by
+    `clearance`. Falls back to the original placement when the shift would
+    exceed `MAX_DODGE` — the overlap then stays visible on the calendar."""
+    span = arrive - depart
+    original = (depart, arrive)
+    ceiling = depart + MAX_DODGE
+    for _ in range(len(avoid) + 1):
+        conflict = min(
+            (a for a in avoid if a[0] < arrive + clearance and depart - clearance < a[1]),
+            key=lambda a: a[1],
+            default=None,
+        )
+        if conflict is None:
+            return depart, arrive
+        depart = conflict[1] + clearance
+        arrive = depart + span
+        if depart > ceiling:
             return original
     return original
 
