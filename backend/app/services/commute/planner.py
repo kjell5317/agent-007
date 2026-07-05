@@ -113,7 +113,9 @@ async def refresh_weather_sensitive_commutes(
     if not any(is_commute_event(ev) and _commute_mode(ev) == flippable for ev in events):
         log.info(
             "commute weather refresh skipped · rain=%s threshold=%s flippable=%s",
-            rain_pct, settings.commute_rain_threshold_pct, flippable,
+            rain_pct,
+            settings.commute_rain_threshold_pct,
+            flippable,
         )
         return summary
 
@@ -162,7 +164,8 @@ async def plan_window_commutes(
     if window_end > horizon:
         log.info(
             "commute · window capped at lookahead horizon %s (requested until %s)",
-            horizon.isoformat(), window_end.isoformat(),
+            horizon.isoformat(),
+            window_end.isoformat(),
         )
         window_end = horizon
     if window_end <= window_start:
@@ -193,7 +196,8 @@ async def plan_window_commutes(
         if need_lo < window_start - margin or need_hi > window_end + margin:
             log.info(
                 "commute · widening fetch to %s..%s for edge anchors",
-                need_lo.isoformat(), need_hi.isoformat(),
+                need_lo.isoformat(),
+                need_hi.isoformat(),
             )
             events = await list_events_between(
                 session,
@@ -212,7 +216,12 @@ async def plan_window_commutes(
         hourly_rain = await _home_rain(session, home, window_start, window_end + margin)
 
     durations = await _resolve_routes(
-        session, anchors, home, hourly_rain, settings, summary,
+        session,
+        anchors,
+        home,
+        hourly_rain,
+        settings,
+        summary,
     )
     if durations is None:
         # Transient Maps failure — anything derived now would turn every leg
@@ -228,13 +237,23 @@ async def plan_window_commutes(
     for _ in range(3):
         missing_transit: set[tuple[str, str]] = set()
         legs, skipped_unroutable = derive_legs(
-            anchors, home, durations, hourly_rain, settings,
-            avoid=online_spans, missing_transit=missing_transit,
+            anchors,
+            home,
+            durations,
+            hourly_rain,
+            settings,
+            avoid=online_spans,
+            missing_transit=missing_transit,
         )
         if not missing_transit:
             break
         if not await _resolve_missing_transit(
-            session, missing_transit, anchors, home, durations, summary,
+            session,
+            missing_transit,
+            anchors,
+            home,
+            durations,
+            summary,
         ):
             return summary
     summary["skipped_unroutable"] = skipped_unroutable
@@ -255,14 +274,17 @@ async def plan_window_commutes(
     # stays visible on the calendar, and the user gets one alert (tracked
     # via a marker on the leg so replans don't re-alert).
     summaries = {ev.id: ev.summary for ev in events}
-    obstacles = [
-        (a.id, summaries.get(a.id) or a.location, a.start, a.end) for a in anchors
-    ] + [(ev.id, ev.summary, to_user_tz(ev.start), to_user_tz(ev.end)) for ev in online]
+    obstacles = [(a.id, summaries.get(a.id) or a.location, a.start, a.end) for a in anchors] + [
+        (ev.id, ev.summary, to_user_tz(ev.start), to_user_tz(ev.end)) for ev in online
+    ]
     conflicts = _immovable_conflicts(to_write, obstacles)
     for key, (blocker_id, blocker_label) in conflicts.items():
         log.warning(
             "commute · leg %s -> %s overlaps immovable %r (id=%s); leaving the conflict visible",
-            key[0], key[1], blocker_label, blocker_id,
+            key[0],
+            key[1],
+            blocker_label,
+            blocker_id,
         )
 
     summary["planned"], new_failures, new_conflicts = await _write_legs(
@@ -334,7 +356,11 @@ def _desired_anchor_reminders(
     marked so the calendar default comes back when the leg disappears —
     and never touched if the user silenced them independently."""
     if is_task_event(ev):
-        desired = SILENT_REMINDERS if has_arriving_leg else popup_reminders(settings.reminder_lead_minutes)
+        desired = (
+            SILENT_REMINDERS
+            if has_arriving_leg
+            else popup_reminders(settings.reminder_lead_minutes)
+        )
         return desired, None
 
     managed = private_properties(ev).get(_REMINDERS_MANAGED_PROP) == "true"
@@ -404,13 +430,14 @@ def _legs_to_write(
     still written; the fetch margin only exists so those anchors see their
     real neighbours."""
     in_window = {
-        anchor.id for anchor in anchors
+        anchor.id
+        for anchor in anchors
         if _overlaps(anchor.start, anchor.end, window_start, window_end)
     }
     return [
-        leg for leg in legs
-        if _overlaps(leg.depart, leg.arrive, window_start, window_end)
-        or in_window & set(leg.key)
+        leg
+        for leg in legs
+        if _overlaps(leg.depart, leg.arrive, window_start, window_end) or in_window & set(leg.key)
     ]
 
 
@@ -478,27 +505,37 @@ async def _resolve_routes(
     for (origin, destination), reference in required_routes(anchors, home).items():
         try:
             bike = await resolve_duration(
-                session, origin=origin, destination=destination,
-                mode="bicycling", departure=reference,
+                session,
+                origin=origin,
+                destination=destination,
+                mode="bicycling",
+                departure=reference,
             )
             durations[(origin, destination, "bicycling")] = bike
             resolved += 1
             if bike is None or bike > settings.commute_bike_max_minutes * 60 or rain_possible:
                 durations[(origin, destination, "transit")] = await resolve_duration(
-                    session, origin=origin, destination=destination,
-                    mode="transit", departure=reference,
+                    session,
+                    origin=origin,
+                    destination=destination,
+                    mode="transit",
+                    departure=reference,
                 )
                 resolved += 1
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "commute · route resolution aborted at %s -> %s err=%s",
-                origin, destination, exc,
+                origin,
+                destination,
+                exc,
             )
-            summary["errors"].append({
-                "route": f"{origin} -> {destination}",
-                "error": str(exc),
-                "transient": True,
-            })
+            summary["errors"].append(
+                {
+                    "route": f"{origin} -> {destination}",
+                    "error": str(exc),
+                    "transient": True,
+                }
+            )
             return None
     if resolved:
         log.info("commute · resolved %d route durations for %d anchors", resolved, len(anchors))
@@ -520,25 +557,35 @@ async def _resolve_missing_transit(
     for origin, destination in pairs:
         try:
             durations[(origin, destination, "transit")] = await resolve_duration(
-                session, origin=origin, destination=destination,
-                mode="transit", departure=references.get((origin, destination)),
+                session,
+                origin=origin,
+                destination=destination,
+                mode="transit",
+                departure=references.get((origin, destination)),
             )
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "commute · transit resolution aborted at %s -> %s err=%s",
-                origin, destination, exc,
+                origin,
+                destination,
+                exc,
             )
-            summary["errors"].append({
-                "route": f"{origin} -> {destination}",
-                "error": str(exc),
-                "transient": True,
-            })
+            summary["errors"].append(
+                {
+                    "route": f"{origin} -> {destination}",
+                    "error": str(exc),
+                    "transient": True,
+                }
+            )
             return False
     return True
 
 
 async def _home_rain(
-    session: Session, home: str, start: datetime, end: datetime,
+    session: Session,
+    home: str,
+    start: datetime,
+    end: datetime,
 ) -> dict[str, int] | None:
     # One forecast at home stands in for every leg endpoint — city-scale
     # commutes don't cross weather systems.
@@ -592,7 +639,9 @@ async def delete_stray_commute_legs(
                 continue
             try:
                 await delete_event(
-                    session, calendar_id=write_calendar_id, event_id=ev.id,
+                    session,
+                    calendar_id=write_calendar_id,
+                    event_id=ev.id,
                     account_key=account_key,
                 )
                 deleted += 1
@@ -683,10 +732,14 @@ async def _write_legs(
 
     for ev in duplicates:
         log.warning(
-            "commute · duplicate leg %s (%s) — deleting", commute_leg_key(ev), ev.id,
+            "commute · duplicate leg %s (%s) — deleting",
+            commute_leg_key(ev),
+            ev.id,
         )
         try:
-            await delete_event(session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key)
+            await delete_event(
+                session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("commute · duplicate delete failed event=%s err=%s", ev.id, exc)
 
@@ -694,7 +747,9 @@ async def _write_legs(
         if not _overlaps(ev.start, ev.end, window[0], window[1]):
             continue
         try:
-            await delete_event(session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key)
+            await delete_event(
+                session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("commute · legacy delete failed event=%s err=%s", ev.id, exc)
 
@@ -704,7 +759,9 @@ async def _write_legs(
         if not _overlaps(ev.start, ev.end, window[0], window[1]):
             continue
         try:
-            await delete_event(session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key)
+            await delete_event(
+                session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("commute · stale delete failed event=%s err=%s", ev.id, exc)
 
@@ -716,7 +773,9 @@ async def _write_legs(
         description = _description_for(leg)
         blocker = conflicts.get(key)
         props = commute_private_properties(
-            origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor, mode=leg.mode,
+            origin_anchor=leg.origin_anchor,
+            dest_anchor=leg.dest_anchor,
+            mode=leg.mode,
         )
         # Conflict marker: persisted on the leg so replans that re-derive the
         # same collision don't re-alert; cleared (empty) when it resolves.
@@ -770,7 +829,9 @@ async def _write_legs(
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "commute · upsert failed origin=%s dest=%s err=%s",
-                leg.origin_anchor, leg.dest_anchor, exc,
+                leg.origin_anchor,
+                leg.dest_anchor,
+                exc,
             )
     return written, new_failures, new_conflicts
 
@@ -853,9 +914,7 @@ def _needs_patch(
 
 
 def _without_updated_line(description: str) -> str:
-    return "\n".join(
-        line for line in description.splitlines() if not line.startswith("Updated:")
-    )
+    return "\n".join(line for line in description.splitlines() if not line.startswith("Updated:"))
 
 
 def _epoch(dt: datetime) -> int:
@@ -866,7 +925,7 @@ def _summary_for(leg: PlannedLeg) -> str:
     # The destination already lives in the event's location field.
     if leg.mode == FAILED_MODE:
         return "⚠️ No route"
-    return "🚲" if leg.mode == "bicycling" else "🚆"
+    return "🚲 Travel" if leg.mode == "bicycling" else "🚆 Travel"
 
 
 def _description_for(leg: PlannedLeg) -> str:

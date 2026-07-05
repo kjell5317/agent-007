@@ -80,9 +80,9 @@ def test_leg_event_format():
 
     from app.services.commute.planner import _summary_for
 
-    # Title is just the mode emoji — destination lives in the location field.
-    assert _summary_for(leg) == "🚆"
-    assert _summary_for(replace_leg(leg, mode="bicycling")) == "🚲"
+    # Title is the mode emoji — destination lives in the location field.
+    assert _summary_for(leg) == "🚆 Travel"
+    assert _summary_for(replace_leg(leg, mode="bicycling")) == "🚲 Travel"
     assert _summary_for(replace_leg(leg, mode=FAILED_MODE)) == "⚠️ No route"
 
     # The Maps deep link ignores departure_time — never send it.
@@ -762,7 +762,7 @@ def test_replan_span_covers_timed_events_including_online():
 
 
 def test_all_day_busy_event_triggers_overlap_with_task():
-    from app.services.calendar.discover import _managed_overlaps
+    from app.services.calendar.discover import _managed_conflicts
 
     task_props = {"managed_by": "plan_service", "kind": "task"}
     all_day = _calendar_event(
@@ -770,7 +770,27 @@ def test_all_day_busy_event_triggers_overlap_with_task():
     )
     task = _calendar_event("task-ev", _day_at(15), _day_at(16), props=task_props)
 
-    assert _managed_overlaps(all_day, [task]) == [task]
+    assert _managed_conflicts(all_day, [task], EVENT_BUFFER) == [task]
+
+
+def test_managed_conflicts_catches_event_within_gap_not_overlapping():
+    from app.services.calendar.discover import _managed_conflicts
+
+    task_props = {"managed_by": "plan_service", "kind": "task"}
+    task = _calendar_event("task-ev", _day_at(15), _day_at(16), props=task_props)
+
+    # Dragged to end 10 min before the task starts — no overlap, but inside
+    # the 15-min event gap, so it must trigger a reschedule.
+    close = _calendar_event("meeting", _day_at(14), _day_at(14, 50))
+    assert _managed_conflicts(close, [task], EVENT_BUFFER) == [task]
+
+    # A full gap away → left alone.
+    clear = _calendar_event("meeting", _day_at(14), _day_at(14, 45))
+    assert _managed_conflicts(clear, [task], EVENT_BUFFER) == []
+
+    # A non-managed neighbour is never our concern.
+    foreign = _calendar_event("foreign", _day_at(14), _day_at(14, 50))
+    assert _managed_conflicts(close, [foreign], EVENT_BUFFER) == []
 
 
 @pytest.mark.asyncio

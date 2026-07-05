@@ -172,12 +172,13 @@ async def discover_updated_events(
         write_events = _active_events(items, write_id)
         summary["checked"] += len(write_events)
 
+        event_gap = timedelta(minutes=settings.event_buffer_minutes)
         for ev in active:
             if cid == write_id and is_managed_event(ev):
                 continue
             # A single changed event can collide with several tasks and legs
-            # at once — every one of them needs its own reschedule.
-            for overlapping in _managed_overlaps(ev, write_events):
+            # at once — every one within the event gap needs its own reschedule.
+            for overlapping in _managed_conflicts(ev, write_events, event_gap):
                 summary["overlapping"] += 1
                 kind = (
                     "commute" if is_commute_event(overlapping)
@@ -185,7 +186,7 @@ async def discover_updated_events(
                     else "event"
                 )
                 log.info(
-                    "discover · %r (%s, id=%s) overlaps %s %r (%s); rescheduling",
+                    "discover · %r (%s, id=%s) conflicts with %s %r (%s); rescheduling",
                     ev.summary, ev.start.isoformat(), ev.id,
                     kind, overlapping.summary, overlapping.start.isoformat(),
                 )
@@ -432,15 +433,17 @@ async def _reschedule_deleted_task_event(
     return row.id if result is not None else None
 
 
-def _managed_overlaps(
+def _managed_conflicts(
     event: CalendarEvent,
     others: Iterable[CalendarEvent],
+    gap: timedelta,
 ) -> list[CalendarEvent]:
-    """Every managed write event overlapping `event`.
+    """Every managed write event overlapping `event` or sitting closer than
+    `gap` to it — a task dragged to within the event buffer of a managed
+    slot must move even without a literal overlap.
 
     All-day events only reach this marked busy (`_active_events` drops
-    show-as-free ones) and block their whole days. Two intervals [a, b)
-    overlap iff `a.start < b.end and b.start < a.end`.
+    show-as-free ones) and block their whole days.
     """
     start, end = _effective_span(event)
     return [
@@ -448,8 +451,8 @@ def _managed_overlaps(
         if other.id != event.id
         and not other.all_day
         and is_managed_event(other)
-        and start < other.end
-        and other.start < end
+        and start - gap < other.end
+        and other.start < end + gap
     ]
 
 
