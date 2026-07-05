@@ -33,6 +33,22 @@ export function App() {
   const tasksActive = !mailOpen;
   const inboxActive = mailOpen;
 
+  const clearPendingTaskIds = useCallback(() => {
+    const pending = pendingClearTaskIdsRef.current;
+    if (pending.size === 0) return;
+
+    setUnseenTaskIds((prev) => removeAll(prev, pending));
+    pendingClearTaskIdsRef.current = new Set();
+  }, []);
+
+  const clearPendingInputIds = useCallback(() => {
+    const pending = pendingClearInputIdsRef.current;
+    if (pending.size === 0) return;
+
+    setUnseenInputIds((prev) => removeAll(prev, pending));
+    pendingClearInputIdsRef.current = new Set();
+  }, []);
+
   const kotxTasks = useMemo(() => {
     const map = new Map<number, KotxTask>();
     for (const run of runs.tasks) map.set(run.id, run);
@@ -137,7 +153,7 @@ export function App() {
     const currentIds = new Set(tasks.map((task) => task.id));
     const previousIds = knownTaskIdsRef.current;
 
-    if (previousIds && !tasksActive) {
+    if (previousIds) {
       const arrived = tasks.filter((task) => !previousIds.has(task.id));
       if (arrived.length > 0) {
         setUnseenTaskIds((prev) => addAll(prev, arrived.map((task) => task.id)));
@@ -145,7 +161,7 @@ export function App() {
     }
 
     knownTaskIdsRef.current = currentIds;
-  }, [loading, tasks, tasksActive]);
+  }, [loading, tasks]);
 
   useEffect(() => {
     if (loading) return;
@@ -155,7 +171,7 @@ export function App() {
     const previousIds = knownInputIdsRef.current;
     const previousNewest = newestInputReceivedAtRef.current;
 
-    if (previousIds && !inboxActive) {
+    if (previousIds) {
       const arrived = inputs.filter((input) => {
         if (input.source === "manual" || previousIds.has(input.id)) return false;
         const receivedAt = Date.parse(input.received_at);
@@ -171,7 +187,7 @@ export function App() {
 
     knownInputIdsRef.current = currentIds;
     newestInputReceivedAtRef.current = newestReceivedAt;
-  }, [inboxActive, inputs, loading]);
+  }, [inputs, loading]);
 
   useEffect(() => {
     const currentIds = new Set(tasks.map((task) => task.id));
@@ -193,21 +209,29 @@ export function App() {
 
   useEffect(() => {
     if (tasksActive) return;
-    const pending = pendingClearTaskIdsRef.current;
-    if (pending.size === 0) return;
-
-    setUnseenTaskIds((prev) => removeAll(prev, pending));
-    pendingClearTaskIdsRef.current = new Set();
-  }, [tasksActive]);
+    clearPendingTaskIds();
+  }, [clearPendingTaskIds, tasksActive]);
 
   useEffect(() => {
     if (inboxActive) return;
-    const pending = pendingClearInputIdsRef.current;
-    if (pending.size === 0) return;
+    clearPendingInputIds();
+  }, [clearPendingInputIds, inboxActive]);
 
-    setUnseenInputIds((prev) => removeAll(prev, pending));
-    pendingClearInputIdsRef.current = new Set();
-  }, [inboxActive]);
+  useEffect(() => {
+    const clearPendingVisibleIds = () => {
+      clearPendingTaskIds();
+      clearPendingInputIds();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") clearPendingVisibleIds();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", clearPendingVisibleIds);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", clearPendingVisibleIds);
+    };
+  }, [clearPendingInputIds, clearPendingTaskIds]);
 
   const markTaskVisible = useCallback(
     (id: string) => {

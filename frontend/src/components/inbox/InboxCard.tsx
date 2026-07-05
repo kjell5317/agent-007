@@ -64,6 +64,12 @@ export function InboxCard({
   const data = item.data;
   const title = inputTitle(data);
   const when = fmtWhen(data.received_at);
+  const kotxRun = isKotxRun(data);
+  const cardBorderClass = kotxRun
+    ? "border-primary/50"
+    : unseen
+      ? "border-emerald-500/70"
+      : null;
 
   useEffect(() => {
     if (!unseen) return;
@@ -129,7 +135,7 @@ export function InboxCard({
   // Clicking the card opens the linked task's modal; expansion lives on the
   // chevron. Inputs without a task do nothing.
   return (
-    <Card ref={cardRef} className={cn(isKotxRun(data) && "border-primary/50")}>
+    <Card ref={cardRef} className={cn(cardBorderClass)}>
       <CardContent
         className={cn(data.task_id && "cursor-pointer")}
         onClick={(e) => {
@@ -149,13 +155,6 @@ export function InboxCard({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              {unseen && (
-                <span
-                  aria-label="Unread"
-                  title="Unread"
-                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                />
-              )}
               <div className="min-w-0 flex-1 truncate font-medium leading-snug">
                 {title}
               </div>
