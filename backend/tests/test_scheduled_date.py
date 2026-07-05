@@ -109,6 +109,31 @@ def test_task_read_marks_open_task_without_calendar_event_unscheduled():
     assert read.schedule_status == "unscheduled"
 
 
+def test_task_read_marks_open_task_without_slot_unscheduled_despite_stale_mirror():
+    # #166 repro: the slot was cleared (scheduled_date=None) but a stale
+    # calendar_event_id lingers. The task is genuinely unscheduled and must
+    # read red, not grey.
+    row = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Write report",
+        description=None,
+        link=None,
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=None,
+        calendar_event_id="event-stale",
+        estimation=30,
+        location=None,
+        label=None,
+        created_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+    )
+
+    read = TaskRead.build(row, "open", True)
+
+    assert read.scheduled_date is None
+    assert read.schedule_status == "unscheduled"
+
+
 def test_task_list_orders_by_scheduled_date(monkeypatch):
     session = _sqlite_session()
     created = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)

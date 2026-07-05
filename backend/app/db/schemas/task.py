@@ -132,11 +132,14 @@ class TaskRead(TaskBase):
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
         `tasks.latest_status_for` / `tasks.is_manual_for`)."""
-        schedule_status = (
-            "unscheduled"
-            if status_ == "open" and not getattr(task, "calendar_event_id", None)
-            else "scheduled"
+        # An open task is "scheduled" only with BOTH a real slot
+        # (`scheduled_date`) and a live calendar mirror. Missing either reads
+        # as unscheduled (red): no slot yet, or a stale mirror id left behind
+        # after the slot was cleared (the latter kept #166 grey).
+        scheduled = task.scheduled_date is not None and bool(
+            getattr(task, "calendar_event_id", None)
         )
+        schedule_status = "unscheduled" if status_ == "open" and not scheduled else "scheduled"
         return cls.model_validate(
             {
                 "id": task.id,

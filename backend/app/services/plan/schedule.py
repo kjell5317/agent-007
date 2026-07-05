@@ -61,13 +61,19 @@ log = logging.getLogger(__name__)
 LEAD_DAYS = 7
 DAY_START = time(10, 0)
 DAY_TARGET = time(21, 0)
-# Extended-mode bounds. The normal `[DAY_START, DAY_TARGET]` range is
-# skipped in extended mode (it was already exhausted on the first attempt
-# that triggered the "no slot" notification). Instead, each day is
-# scanned in two phases:
-#   1. late evening — forward from DAY_TARGET to END_OF_DAY (21→24)
-#   2. early morning — backward from DAY_START to EARLY_MORNING (10→8)
-# then the next day, same procedure.
+# Extended-mode bounds. The normal `[DAY_START, DAY_TARGET]` range was
+# already exhausted on the first attempt that triggered the "no slot"
+# notification, so extended mode reaches past it — but a block forced into
+# the extension should sit in it as little as possible. Each day is scanned
+# in two phases, both allowed to straddle back across the normal-window edge:
+#   1. late evening — forward from DAY_START to END_OF_DAY (10→24): the
+#      earliest fit crosses DAY_TARGET with only its tail past 21:00.
+#   2. early morning — backward from DAY_TARGET to EARLY_MORNING (21→8): the
+#      latest fit crosses DAY_START with only its head before 10:00
+#      (an 8-10 block becomes 9-11 when 10-11 is free).
+# Sweeping from the far edge is what minimises the overlap; a normal-only
+# slot never surfaces here — it would have been placed on the first attempt.
+# Then the next day, same procedure.
 EARLY_MORNING = time(8, 0)
 END_OF_DAY = time(23, 59, 59)
 MAX_REPAIR_DEPTH = 8
@@ -880,13 +886,17 @@ def _find_free_slot(
 
     while day <= last_day:
         if extended_window:
-            # Phase 1: late evening forward sweep, 21:00 → 24:00.
-            lower, upper = _day_bounds(day, DAY_TARGET, END_OF_DAY, tz, window_start, window_end)
+            # Phase 1: late evening. Sweep up from DAY_START so the earliest
+            # fit straddles down into the normal window, sitting past 21:00
+            # only by its tail.
+            lower, upper = _day_bounds(day, DAY_START, END_OF_DAY, tz, window_start, window_end)
             slot = _sweep_forward(ordered, duration, gaps, lower, upper)
             if slot is not None:
                 return slot
-            # Phase 2: early morning backward sweep, 10:00 → 08:00.
-            lower, upper = _day_bounds(day, EARLY_MORNING, DAY_START, tz, window_start, window_end)
+            # Phase 2: early morning. Sweep down from DAY_TARGET so the latest
+            # fit straddles up into the normal window, sitting before 10:00
+            # only by its head.
+            lower, upper = _day_bounds(day, EARLY_MORNING, DAY_TARGET, tz, window_start, window_end)
             slot = _sweep_backward(ordered, duration, gaps, lower, upper)
             if slot is not None:
                 return slot
@@ -1070,9 +1080,13 @@ def _slot_in_range(
     last_day = freed_range.end.date()
     while day <= last_day:
         if extended_window:
+            # Both extension phases straddle back into the normal window so a
+            # forced block sits in the extension as little as possible — sweep
+            # from the far edge (DAY_START up / DAY_TARGET down). See the
+            # extended-mode bounds note and `_find_free_slot`.
             lower, upper = _day_bounds(
                 day,
-                DAY_TARGET,
+                DAY_START,
                 END_OF_DAY,
                 tz,
                 freed_range.start,
@@ -1084,7 +1098,7 @@ def _slot_in_range(
             lower, upper = _day_bounds(
                 day,
                 EARLY_MORNING,
-                DAY_START,
+                DAY_TARGET,
                 tz,
                 freed_range.start,
                 freed_range.end,

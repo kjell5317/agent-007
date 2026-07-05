@@ -82,6 +82,17 @@ export function useAppData(): AppData {
         case "input":
           setInputs((prev) => upsertInput(prev, event.data));
           break;
+        case "kotx":
+          // A kotx transition changes a linked task as well as the run, but
+          // the per-task push can be skipped when the transition errors after
+          // committing (e.g. reopen's schedule_task throws). Resync the task
+          // list on the nudge — like useRuns does for runs — so a dropped task
+          // self-heals instead of staying gone until a focus/visibility refetch.
+          api
+            .listTasks("open")
+            .then((open) => setTasks([...open]))
+            .catch(() => {});
+          break;
       }
     });
     return unsubscribe;

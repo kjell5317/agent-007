@@ -35,6 +35,7 @@ from app.services.plan.schedule import (  # noqa: E402
     _chain_insert_slot,
     _cached_trip_legs,
     _effective_freed_range,
+    _find_free_slot,
     _piggyback_slot,
     _planned_from_block,
 )
@@ -1208,3 +1209,44 @@ async def test_slot_keeps_buffer_before_event_starting_at_due(monkeypatch):
     )
     planned = await schedule_service.plan_task_slot(None, task)
     assert planned.end <= meeting.start - EVENT_BUFFER
+
+
+def test_extended_early_morning_block_straddles_into_normal_window():
+    # Screenshot repro: a 2h task can't fit the booked day and falls to the
+    # early-morning extension. It must sit in the extension as little as
+    # possible — 09:00-11:00 (one hour before DAY_START), not 08:00-10:00.
+    window_start = _day_at(8, 0)
+    window_end = _day_at(23, 59)
+    # 11:15 onward is booked (the "Test aflatoun" block and a full day after).
+    busy = [BusyEvent("aflatoun", _day_at(11, 15), _day_at(23, 59), "task")]
+
+    slot = _find_free_slot(
+        busy,
+        timedelta(hours=2),
+        window_start,
+        window_end,
+        GAPS,
+        extended_window=True,
+    )
+
+    assert slot == (_day_at(9, 0), _day_at(11, 0))
+
+
+def test_extended_late_evening_block_straddles_into_normal_window():
+    # Symmetric to the morning case: the day is booked until 19:45 so no 2h
+    # fit lands before DAY_TARGET (21:00). The block falls to the late-evening
+    # extension and must straddle down — 20:00-22:00, not 21:00-23:00.
+    window_start = _day_at(8, 0)
+    window_end = _day_at(23, 59)
+    busy = [BusyEvent("wall", _day_at(8, 0), _day_at(19, 45), "task")]
+
+    slot = _find_free_slot(
+        busy,
+        timedelta(hours=2),
+        window_start,
+        window_end,
+        GAPS,
+        extended_window=True,
+    )
+
+    assert slot == (_day_at(20, 0), _day_at(22, 0))
