@@ -421,11 +421,11 @@ def _depart_leg(
     arrive = depart + timedelta(seconds=seconds)
     if avoid:
         # E.g. an online meeting right after the anchor: attend it there and
-        # ride afterwards, keeping the full event gap — it isn't this leg's
-        # anchor. Departing earlier would mean leaving mid-event, so the
-        # only direction is later.
-        clearance = timedelta(minutes=settings.event_buffer_minutes)
-        depart, arrive = _dodged_later(depart, arrive, avoid, clearance)
+        # ride afterwards. Leaving is immediate — the meeting effectively
+        # becomes the trip's last stop, so only the inner commute gap
+        # applies, not the full event gap. Departing earlier would mean
+        # leaving mid-event, so the only direction is later.
+        depart, arrive = _dodged_later(depart, arrive, avoid, buffer)
     return PlannedLeg(
         origin_anchor=anchor.id,
         dest_anchor=dest_anchor,

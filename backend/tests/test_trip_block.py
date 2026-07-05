@@ -221,6 +221,81 @@ def test_piggyback_respects_real_conflicts():
     assert planned is None
 
 
+def test_piggyback_slides_past_online_meeting_after_anchor():
+    # The user is already at the location; an online meeting right after the
+    # anchor is attended in place, so the task starts after it (full event
+    # gap) and still needs no outbound commute.
+    anchor_id = "gym-class"
+    busy = [
+        BusyEvent(anchor_id, _day_at(14), _day_at(15), "busy", location=GYM),
+        BusyEvent("weekly", _day_at(15), _day_at(15, 30), "busy"),
+        BusyEvent(
+            "leg-home", _day_at(15, 35), _day_at(15, 45), "commute",
+            leg_key=(anchor_id, "home"),
+        ),
+    ]
+    planned = _piggyback_slot(
+        busy,
+        location=GYM,
+        duration=timedelta(minutes=30),
+        gaps=GAPS,
+        out_s=600,
+        in_s=600,
+        window_start=_day_at(8),
+        window_end=_day_at(20),
+    )
+
+    assert planned is not None
+    assert planned.start == _day_at(15, 45)
+    assert planned.out_s == 0
+    assert planned.in_s == 600
+    assert planned.block_end == planned.end + BUFFER + timedelta(seconds=600)
+
+
+def test_piggyback_sweep_gives_up_beyond_home_layover():
+    # Waiting longer than the home-layover threshold means a round trip home
+    # wins — that placement belongs to the standalone sweep, not piggyback.
+    busy = [
+        BusyEvent("gym-class", _day_at(14), _day_at(15), "busy", location=GYM),
+        BusyEvent("call", _day_at(15), _day_at(16, 10), "busy"),
+        BusyEvent("before", _day_at(12), _day_at(14), "busy"),
+    ]
+    planned = _piggyback_slot(
+        busy,
+        location=GYM,
+        duration=timedelta(minutes=30),
+        gaps=GAPS,
+        out_s=600,
+        in_s=600,
+        window_start=_day_at(8),
+        window_end=_day_at(20),
+    )
+    assert planned is None
+
+
+def test_piggyback_sweep_stops_when_user_leaves_for_elsewhere():
+    # A differently-located anchor bounds the sweep — a same-location slot
+    # after it would fake a zero outbound commute the user no longer has.
+    busy = [
+        BusyEvent("gym-class", _day_at(12), _day_at(13), "busy", location=GYM),
+        BusyEvent("before", _day_at(10), _day_at(12), "busy"),
+        BusyEvent("call", _day_at(13), _day_at(13, 40), "busy"),
+        BusyEvent("office", _day_at(14, 15), _day_at(15), "busy", location=OFFICE),
+    ]
+    planned = _piggyback_slot(
+        busy,
+        location=GYM,
+        duration=timedelta(minutes=30),
+        gaps=GAPS,
+        out_s=600,
+        in_s=600,
+        window_start=_day_at(8),
+        window_end=_day_at(20),
+        max_wait=timedelta(hours=3),
+    )
+    assert planned is None
+
+
 @pytest.mark.asyncio
 async def test_chain_insert_picks_min_added_travel(monkeypatch):
     travel = {
@@ -315,6 +390,7 @@ async def test_plan_task_slot_reserves_whole_trip_block(monkeypatch):
             commute_enabled=True,
             google_maps_api_key="key",
             home_address="Homestreet 1",
+            commute_home_layover_minutes=60,
         ),
     )
 
@@ -359,6 +435,7 @@ async def test_plan_task_slot_reserves_placeholders_for_unroutable(monkeypatch):
             commute_enabled=True,
             google_maps_api_key="key",
             home_address="Homestreet 1",
+            commute_home_layover_minutes=60,
         ),
     )
 
@@ -1127,10 +1204,12 @@ async def test_victim_may_shift_within_its_old_slot(monkeypatch):
         None,
         SimpleNamespace(id=uuid.uuid4()),
         [krcmar, victim_ev, ebay],
+        location=None,
         duration=timedelta(minutes=15),
         gaps=GAPS,
         out_s=0,
         in_s=0,
+        unroutable=False,
         window_start=_day_at(10),
         window_end=_day_at(23, 45),
         account_key=None,
@@ -1192,7 +1271,14 @@ async def test_cascading_victim_shifts_compact_the_day(monkeypatch):
             if freed.end - freed.start < duration:
                 continue
             out.append((victim, ev, freed))
-        out.sort(key=lambda entry: entry[0].estimation)  # mirrors shortest-first
+        # Mirrors the real ordering: least urgent, location-less, shortest.
+        out.sort(
+            key=lambda entry: (
+                -entry[0].due_date.timestamp(),
+                1 if (entry[0].location or "").strip() else 0,
+                entry[0].estimation,
+            )
+        )
         return out
 
     async def fake_update(session, task, *, start, end, changed_fields=None):
@@ -1218,6 +1304,7 @@ async def test_cascading_victim_shifts_compact_the_day(monkeypatch):
             slot_min_lead_minutes=0,
             commute_enabled=False,
             google_maps_api_key="",
+            commute_home_layover_minutes=60,
         ),
     )
 
@@ -1226,6 +1313,143 @@ async def test_cascading_victim_shifts_compact_the_day(monkeypatch):
     assert result == (_day_at(15, 15), _day_at(16, 15))
     assert (events["putzen"].start, events["putzen"].end) == (_day_at(12, 30), _day_at(12, 45))
     assert (events["unter"].start, events["unter"].end) == (_day_at(11, 30), _day_at(12, 15))
+
+
+@pytest.mark.asyncio
+async def test_repair_retries_piggyback_against_thinned_calendar(monkeypatch):
+    # A located task whose standalone trip block (60m + 2×25m legs + buffers)
+    # doesn't fit the freed corridor — but with the victim gone it piggybacks
+    # onto the same-location anchor, sharing its arrival. This is the "Send
+    # Dealroom right after the afternoon at CSEE" shape.
+    anchor = BusyEvent("gym-class", _day_at(14), _day_at(15), "busy", location=GYM)
+    victim_ev = BusyEvent("victim", _day_at(15, 30), _day_at(16, 30), "task")
+    wall = BusyEvent("wall", _day_at(17), _day_at(23), "busy")
+    victim_task = SimpleNamespace(
+        id=uuid.uuid4(), due_date=_day_at(23, 45, day_offset=5), location=None,
+        estimation=60, calendar_event_id="victim",
+    )
+    freed = Interval(_day_at(15), _day_at(17), "victim")
+
+    def fake_victims(session, task, busy, duration, gaps, ws, we, *, displaced=frozenset()):
+        return [(victim_task, victim_ev, freed)]
+
+    moved = {}
+
+    async def fake_locked(session, task, *, block, **kwargs):
+        moved["victim"] = task
+        moved["block"] = block
+        return PlannedSlot(block.start, block.end, block.start, block.end)
+
+    async def fake_clear(task_id):
+        return None
+
+    monkeypatch.setattr(schedule_service, "_movable_victims", fake_victims)
+    monkeypatch.setattr(schedule_service, "_schedule_task_locked", fake_locked)
+    monkeypatch.setattr("app.services.notify.clear_task_notification", fake_clear)
+
+    # The standalone block alone cannot use the freed corridor …
+    assert schedule_service._slot_in_range(
+        [anchor, wall], timedelta(hours=2), GAPS, freed, extended_window=False,
+    ) is None
+
+    displaced = set()
+    planned = await schedule_service._repair_by_displacing_task(
+        None,
+        SimpleNamespace(id=uuid.uuid4()),
+        [anchor, victim_ev, wall],
+        location=GYM,
+        duration=timedelta(minutes=60),
+        gaps=GAPS,
+        out_s=1500,
+        in_s=1500,
+        unroutable=False,
+        window_start=_day_at(10),
+        window_end=_day_at(23, 45),
+        account_key=None,
+        depth=0,
+        displaced=displaced,
+        extended_window=False,
+    )
+
+    # … but the piggyback retry can: no outbound leg, inbound still reserved.
+    assert (planned.start, planned.end) == (_day_at(15, 15), _day_at(16, 15))
+    assert planned.out_s == 0 and planned.in_s == 1500
+    assert planned.block_end == planned.end + BUFFER + timedelta(seconds=1500)
+    assert moved["victim"] is victim_task
+    assert victim_task.id in displaced
+
+
+@pytest.mark.asyncio
+async def test_skipped_victim_stays_out_of_the_ledger(monkeypatch):
+    # A victim whose removal still yields no placement is not charged to the
+    # displacement ledger — the extended-window pass may yet use it.
+    victim_ev = BusyEvent("victim", _day_at(11), _day_at(11, 30), "task")
+    wall_a = BusyEvent("a", _day_at(8), _day_at(10, 45), "busy")
+    wall_b = BusyEvent("b", _day_at(11, 45), _day_at(23, 45), "busy")
+    victim_task = SimpleNamespace(
+        id=uuid.uuid4(), due_date=_day_at(23, 45), location=None,
+        estimation=30, calendar_event_id="victim",
+    )
+    freed = Interval(_day_at(10, 45), _day_at(11, 45), "victim")
+
+    def fake_victims(session, task, busy, duration, gaps, ws, we, *, displaced=frozenset()):
+        return [(victim_task, victim_ev, freed)]
+
+    monkeypatch.setattr(schedule_service, "_movable_victims", fake_victims)
+
+    displaced = set()
+    with pytest.raises(ValueError):
+        await schedule_service._repair_by_displacing_task(
+            None,
+            SimpleNamespace(id=uuid.uuid4()),
+            [wall_a, victim_ev, wall_b],
+            location=None,
+            duration=timedelta(minutes=60),
+            gaps=GAPS,
+            out_s=0,
+            in_s=0,
+            unroutable=False,
+            window_start=_day_at(10),
+            window_end=_day_at(23, 45),
+            account_key=None,
+            depth=0,
+            displaced=displaced,
+            extended_window=False,
+        )
+
+    assert victim_task.id not in displaced
+
+
+def test_movable_victims_orders_least_urgent_first():
+    # The victim with the latest due date has the most room to be re-placed,
+    # so it moves first.
+    busy = [
+        BusyEvent("ev-a", _day_at(10), _day_at(11), "task"),
+        BusyEvent("ev-b", _day_at(12), _day_at(13), "task"),
+        BusyEvent("ev-c", _day_at(14), _day_at(15), "task"),
+    ]
+    rows = [
+        SimpleNamespace(
+            id=uuid.uuid4(), due_date=_day_at(20, 0, day_offset=3 + n),
+            location=None, estimation=30, calendar_event_id=f"ev-{suffix}",
+        )
+        for n, suffix in ((1, "a"), (3, "b"), (2, "c"))
+    ]
+    session = SimpleNamespace(
+        execute=lambda stmt: SimpleNamespace(scalars=lambda: iter(rows))
+    )
+
+    victims = schedule_service._movable_victims(
+        session,
+        SimpleNamespace(id=uuid.uuid4(), calendar_event_id=None),
+        busy,
+        timedelta(minutes=30),
+        GAPS,
+        _day_at(8),
+        _day_at(23, 45, day_offset=7),
+    )
+
+    assert [ev.id for _, ev, _ in victims] == ["ev-b", "ev-c", "ev-a"]
 
 
 @pytest.mark.asyncio

@@ -15,8 +15,11 @@ Placement preference for located tasks:
 2. *Chain-insert* — into a gap between two anchors when the detour fits.
 3. *Standalone trip* — sweep for the full home↔location block:
    a. a clean free slot without moving anything,
-   b. only if none exists before the deadline, move one less-urgent
-      managed task out of the way and take the freed range.
+   b. only if none exists before the deadline, move a managed task out of
+      the way — least urgent (latest due date) first — and retry the
+      placements above against the thinned calendar. A victim that has no
+      free slot itself displaces the next victim recursively, bounded by
+      `MAX_REPAIR_DEPTH` and the shared displacement ledger.
 
 Two entry points:
 
@@ -426,7 +429,9 @@ async def plan_task_slot(
     def _finalize(ps: PlannedSlot) -> PlannedSlot:
         return replace(ps, unroutable=True) if unroutable else ps
 
+    location: str | None = None
     if out_s or in_s:
+        max_wait = timedelta(minutes=settings.commute_home_layover_minutes)
         location = await _routable_trip_candidate_location(task, settings)
         if location is None:
             location = resolve_location_alias(task.location)
@@ -439,6 +444,7 @@ async def plan_task_slot(
             in_s=in_s,
             window_start=window_start,
             window_end=window_end,
+            max_wait=max_wait,
         )
         if planned is None and not unroutable:
             planned = await _chain_insert_slot(
@@ -474,10 +480,12 @@ async def plan_task_slot(
                 session,
                 task,
                 busy,
+                location=location,
                 duration=duration,
                 gaps=gaps,
                 out_s=out_s,
                 in_s=in_s,
+                unroutable=unroutable,
                 window_start=window_start,
                 window_end=window_end,
                 account_key=account_key,
@@ -492,6 +500,22 @@ async def plan_task_slot(
             task.id,
             task.due_date.isoformat() if task.due_date else None,
         )
+
+    if out_s or in_s:
+        planned = _piggyback_slot(
+            busy,
+            location=location,
+            duration=duration,
+            gaps=gaps,
+            out_s=out_s,
+            in_s=in_s,
+            window_start=window_start,
+            window_end=window_end,
+            extended=True,
+            max_wait=timedelta(minutes=settings.commute_home_layover_minutes),
+        )
+        if planned is not None:
+            return _finalize(planned)
 
     planned = await _swept_block(
         session,
@@ -513,10 +537,12 @@ async def plan_task_slot(
             session,
             task,
             busy,
+            location=location,
             duration=duration,
             gaps=gaps,
             out_s=out_s,
             in_s=in_s,
+            unroutable=unroutable,
             window_start=window_start,
             window_end=window_end,
             account_key=account_key,
@@ -598,50 +624,116 @@ def _piggyback_slot(
     in_s: int,
     window_start: datetime,
     window_end: datetime,
+    extended: bool = False,
+    max_wait: timedelta = timedelta(minutes=60),
 ) -> PlannedSlot | None:
-    """Slot touching an anchor at the task's own location — zero marginal
-    commute. The anchor's own leg on the shared side is ignored during the
-    conflict check: it gets re-derived around the task."""
+    """Slot next to an anchor at the task's own location — zero marginal
+    commute on the shared side. The candidate slides away from the anchor
+    past conflicts (e.g. an online meeting attended in place) as long as
+    the wait stays under `max_wait` (beyond the home-layover threshold a
+    round trip home wins, which the standalone sweep covers) and no
+    differently-located anchor implies having left. The anchor's own leg
+    on the shared side is ignored during the conflict check: it gets
+    re-derived around the task."""
     target = _norm_loc(location)
-    anchors = [
-        ev
-        for ev in busy
-        if ev.kind != "commute" and ev.location and _norm_loc(ev.location) == target
-    ]
+    located = [ev for ev in busy if ev.kind != "commute" and ev.location]
+    anchors = [ev for ev in located if _norm_loc(ev.location) == target]
+    elsewhere = [ev for ev in located if _norm_loc(ev.location) != target]
     for anchor in sorted(anchors, key=lambda ev: ev.start, reverse=True):
-        start = anchor.end + gaps.event
-        end = start + duration
-        block_end = end + gaps.commute + timedelta(seconds=in_s) if in_s else end
-        if (
-            start >= window_start
-            and end <= window_end
-            and _within_day_window(start, end, extended=False)
-            and _conflict_free(
-                busy,
-                start,
-                block_end,
-                gaps=gaps,
-                ignore_anchor_leg=(anchor.id, 0),
-            )
-        ):
-            return PlannedSlot(start, end, start, block_end, 0, in_s)
+        planned = _piggyback_after(
+            anchor, busy, elsewhere,
+            duration=duration, gaps=gaps, in_s=in_s,
+            window_start=window_start, window_end=window_end,
+            extended=extended, max_wait=max_wait,
+        )
+        if planned is not None:
+            return planned
+        planned = _piggyback_before(
+            anchor, busy, elsewhere,
+            duration=duration, gaps=gaps, out_s=out_s,
+            window_start=window_start, window_end=window_end,
+            extended=extended, max_wait=max_wait,
+        )
+        if planned is not None:
+            return planned
+    return None
 
-        end = anchor.start - gaps.event
-        start = end - duration
+
+def _piggyback_after(
+    anchor: BusyEvent,
+    busy: list[BusyEvent],
+    elsewhere: list[BusyEvent],
+    *,
+    duration: timedelta,
+    gaps: Gaps,
+    in_s: int,
+    window_start: datetime,
+    window_end: datetime,
+    extended: bool,
+    max_wait: timedelta,
+) -> PlannedSlot | None:
+    # The user leaves for the next differently-located anchor — the
+    # zero-outbound assumption only holds until then.
+    leave = min((ev.start for ev in elsewhere if ev.start >= anchor.end), default=None)
+    latest_start = anchor.end + max_wait
+    cursor = max(anchor.end + gaps.event, window_start)
+    while cursor <= latest_start:
+        start, end = cursor, cursor + duration
+        if end > window_end or (leave is not None and end > leave):
+            return None
+        block_end = end + gaps.commute + timedelta(seconds=in_s) if in_s else end
+        conflicts = _gap_conflicts(
+            busy, start, block_end, gaps, ignore_anchor_leg=(anchor.id, 0),
+        )
+        if not conflicts:
+            if _within_day_window(start, end, extended=extended):
+                return PlannedSlot(start, end, start, block_end, 0, in_s)
+            lower = EARLY_MORNING if extended else DAY_START
+            if start.time() < lower and start.date() == end.date():
+                cursor = datetime.combine(start.date(), lower, tzinfo=start.tzinfo)
+                continue
+            # Free but past the day's upper bound — later only gets worse.
+            return None
+        cursor = max(ev.end + gaps.neighbor_gap(ev) for ev in conflicts)
+    return None
+
+
+def _piggyback_before(
+    anchor: BusyEvent,
+    busy: list[BusyEvent],
+    elsewhere: list[BusyEvent],
+    *,
+    duration: timedelta,
+    gaps: Gaps,
+    out_s: int,
+    window_start: datetime,
+    window_end: datetime,
+    extended: bool,
+    max_wait: timedelta,
+) -> PlannedSlot | None:
+    # The user arrives from the previous differently-located anchor — the
+    # stays-until-the-anchor assumption only holds back to there.
+    came_from = max((ev.end for ev in elsewhere if ev.end <= anchor.start), default=None)
+    earliest_end = anchor.start - max_wait
+    cursor = min(anchor.start - gaps.event, window_end)
+    while cursor >= earliest_end:
+        end, start = cursor, cursor - duration
+        if start < window_start or (came_from is not None and end < came_from):
+            return None
         block_start = start - gaps.commute - timedelta(seconds=out_s) if out_s else start
-        if (
-            start >= window_start
-            and end <= window_end
-            and _within_day_window(start, end, extended=False)
-            and _conflict_free(
-                busy,
-                block_start,
-                end,
-                gaps=gaps,
-                ignore_anchor_leg=(anchor.id, 1),
-            )
-        ):
-            return PlannedSlot(start, end, block_start, end, out_s, 0)
+        conflicts = _gap_conflicts(
+            busy, block_start, end, gaps, ignore_anchor_leg=(anchor.id, 1),
+        )
+        if not conflicts:
+            if _within_day_window(start, end, extended=extended):
+                return PlannedSlot(start, end, block_start, end, out_s, 0)
+            upper = END_OF_DAY if extended else DAY_TARGET
+            if end.time() > upper and start.date() == end.date():
+                cursor = datetime.combine(end.date(), upper, tzinfo=end.tzinfo)
+                continue
+            # Free but before the day's lower bound — earlier only gets worse.
+            return None
+        cursor = min(ev.start - gaps.neighbor_gap(ev) for ev in conflicts)
     return None
 
 
@@ -724,16 +816,15 @@ def _conflict_free(
     a leg edge faces them, so the inner commute gap applies. `ignore_anchor_leg
     =(anchor_id, side)` skips the commute leg leaving (side 0) or entering
     (side 1) that anchor — it will be re-derived around the candidate."""
-    for ev in busy:
-        if ev.leg_key is not None:
-            if ignore_anchor_leg and ev.leg_key[ignore_anchor_leg[1]] == ignore_anchor_leg[0]:
-                continue
-            if ignore_anchor_leg2 and ev.leg_key[ignore_anchor_leg2[1]] == ignore_anchor_leg2[0]:
-                continue
-        gap = gaps.neighbor_gap(ev, inner_ids)
-        if ev.start < end + gap and start - gap < ev.end:
-            return False
-    return True
+    return not _gap_conflicts(
+        busy,
+        start,
+        end,
+        gaps,
+        inner_ids=inner_ids,
+        ignore_anchor_leg=ignore_anchor_leg,
+        ignore_anchor_leg2=ignore_anchor_leg2,
+    )
 
 
 def _within_day_window(start: datetime, end: datetime, *, extended: bool) -> bool:
@@ -972,10 +1063,12 @@ async def _repair_by_displacing_task(
     task: Task,
     busy: list[BusyEvent],
     *,
+    location: str | None,
     duration: timedelta,
     gaps: Gaps,
     out_s: int,
     in_s: int,
+    unroutable: bool,
     window_start: datetime,
     window_end: datetime,
     account_key: str | None,
@@ -988,11 +1081,17 @@ async def _repair_by_displacing_task(
 
     displaced.add(task.id)
     total = _block_total(duration, gaps.commute, out_s, in_s)
+    with_trip = (out_s or in_s) and location is not None
+    max_wait = (
+        timedelta(minutes=get_settings().commute_home_layover_minutes)
+        if with_trip
+        else timedelta(0)
+    )
     victims = _movable_victims(
         session,
         task,
         busy,
-        total,
+        duration,
         gaps,
         window_start,
         window_end,
@@ -1007,29 +1106,60 @@ async def _repair_by_displacing_task(
         )
         victims = victims[:MAX_VICTIM_ATTEMPTS]
     for victim, victim_event, freed_range in victims:
-        displaced.add(victim.id)
         # Place the new task first, as if the victim had vacated (its legs
         # move with it), then reschedule the victim around that placement.
         # Blocking only the new slot — not the victim's old span — lets the
         # victim shift by minutes within its own former slot, e.g. sliding
         # 15 minutes to open a small hole. It also means a victim is only
-        # ever moved once the task's spot is actually secured.
+        # ever moved once the task's spot is actually secured. The thinned
+        # calendar gets the full placement repertoire again: a piggyback or
+        # chain-insert can land a located task in a hole far smaller than
+        # its standalone trip block.
         new_busy = [
             ev
             for ev in busy
             if ev.id != victim_event.id
             and not (ev.leg_key is not None and victim_event.id in ev.leg_key)
         ]
-        slot = _slot_in_range(
-            new_busy,
-            total,
-            gaps,
-            freed_range,
-            extended_window=extended_window,
-        )
-        if slot is None:
+        planned: PlannedSlot | None = None
+        if with_trip:
+            planned = _piggyback_slot(
+                new_busy,
+                location=location,
+                duration=duration,
+                gaps=gaps,
+                out_s=out_s,
+                in_s=in_s,
+                window_start=window_start,
+                window_end=window_end,
+                extended=extended_window,
+                max_wait=max_wait,
+            )
+            if planned is None and not unroutable:
+                planned = await _chain_insert_slot(
+                    session,
+                    new_busy,
+                    location=location,
+                    duration=duration,
+                    gaps=gaps,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+        if planned is None:
+            slot = _slot_in_range(
+                new_busy,
+                total,
+                gaps,
+                freed_range,
+                extended_window=extended_window,
+            )
+            if slot is not None:
+                planned = _planned_from_block(slot, duration, gaps.commute, out_s, in_s)
+        if planned is None:
             continue
-        planned = _planned_from_block(slot, duration, gaps.commute, out_s, in_s)
+        # Only an attempted victim enters the ledger — one skipped for lack
+        # of a slot here may still open a placement in the extended pass.
+        displaced.add(victim.id)
         # Pad by the event gap: the task isn't on the calendar yet, so the
         # victim's replan can only see it through this blocked range.
         block = Interval(
@@ -1138,9 +1268,11 @@ def _movable_victims(
     victim sitting in a 1h hole between busy neighbours is still a candidate
     for a 1h task because moving it consolidates the surrounding free time.
 
-    The prefilter only requires the bare block to fit: the freed range may
-    be bounded by window edges or the task's own vacated slot, which demand
-    no gap at all — `_slot_in_range` enforces the real per-neighbour gaps.
+    The prefilter only requires the bare task duration to fit — not the
+    standalone trip block: a piggyback or chain-insert against the thinned
+    calendar can shrink the legs to nothing, and the freed range may be
+    bounded by window edges or the task's own vacated slot, which demand
+    no gap at all. The placement retry enforces the real geometry.
     """
     min_span = duration
     candidates: list[tuple[BusyEvent, Interval]] = []
@@ -1167,17 +1299,19 @@ def _movable_victims(
         # limit, patching the same events over and over.
         stmt = stmt.where(Task.id.not_in(list(displaced)))
     rows = list(session.execute(stmt).scalars())
-    # Location-less victims first (moving a located task breaks its trip
-    # chain and forces leg rework), then shortest first (a 15-minute task
+    # Least urgent first: the victim with the latest due date has the most
+    # room to be re-placed, so it should move before anything tighter.
+    # Ties break toward location-less (moving a located task breaks its
+    # trip chain and forces leg rework), then shortest (a 15-minute task
     # re-places far more easily than an hour-long one — and a failed victim
-    # branch consumes its nested probes from the shared displacement ledger,
-    # so the most promising candidate should go first), then least urgent.
+    # branch consumes its nested probes from the shared displacement
+    # ledger, so the most promising candidate should go first).
     settings = get_settings()
     rows.sort(
         key=lambda row: (
+            -row.due_date.timestamp(),
             1 if (row.location or "").strip() else 0,
             _duration_minutes(row, settings),
-            -(row.due_date.timestamp() if row.due_date else 0),
         )
     )
     return [
@@ -1218,13 +1352,22 @@ def _gap_conflicts(
     start: datetime,
     end: datetime,
     gaps: Gaps,
+    *,
+    inner_ids: set[str] = frozenset(),
+    ignore_anchor_leg: tuple[str, int] | None = None,
+    ignore_anchor_leg2: tuple[str, int] | None = None,
 ) -> list[BusyEvent]:
-    # Swept blocks chain with nothing — neighbour gaps only vary by kind.
-    return [
-        ev
-        for ev in events
-        if ev.start < end + gaps.neighbor_gap(ev) and start - gaps.neighbor_gap(ev) < ev.end
-    ]
+    out: list[BusyEvent] = []
+    for ev in events:
+        if ev.leg_key is not None:
+            if ignore_anchor_leg and ev.leg_key[ignore_anchor_leg[1]] == ignore_anchor_leg[0]:
+                continue
+            if ignore_anchor_leg2 and ev.leg_key[ignore_anchor_leg2[1]] == ignore_anchor_leg2[0]:
+                continue
+        gap = gaps.neighbor_gap(ev, inner_ids)
+        if ev.start < end + gap and start - gap < ev.end:
+            out.append(ev)
+    return out
 
 
 def _latest_conflict(
