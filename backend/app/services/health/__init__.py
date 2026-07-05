@@ -1,10 +1,20 @@
 """Google health integrations.
 
-This package is intentionally isolated for now: it exposes helpers that can be
-called directly by tests or future workflows, but nothing imports it from
-routers, cron, agent tools, scheduling, or the frontend.
+`request_awake_minutes` is consumed by the notifications router (the HA morning
+`DAY` action). The rest stays standalone — nothing else in cron, agent tools,
+scheduling, or the frontend reaches in here.
 """
 
-from app.services.health.sleep import SleepInterval, SleepSegment, request_todays_sleep_interval
+from app.services.health.sleep import (
+    SleepInterval,
+    SleepSegment,
+    request_awake_minutes,
+    request_todays_sleep_interval,
+)
 
-__all__ = ["SleepInterval", "SleepSegment", "request_todays_sleep_interval"]
+__all__ = [
+    "SleepInterval",
+    "SleepSegment",
+    "request_awake_minutes",
+    "request_todays_sleep_interval",
+]

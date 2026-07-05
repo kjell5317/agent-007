@@ -7,14 +7,19 @@ calendar/task loops when HA is disabled or temporarily unavailable.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from app.config import get_settings
+from app.timezones import user_tz
 
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 5.0
+
+# Lead time before the next event that the NIGHT action counts down to.
+NEXT_EVENT_PREP_LEAD = timedelta(minutes=45)
 
 
 def next_event_datetime_configured() -> bool:
@@ -55,3 +60,53 @@ async def set_next_event_datetime(value: str) -> None:
         log.info("home assistant input_datetime · set %s=%s", entity_id, value)
     except Exception as exc:  # noqa: BLE001 — HA is best-effort
         log.warning("home assistant input_datetime failed: %s", exc)
+
+
+async def get_next_event_datetime() -> datetime | None:
+    """Read the configured HA input_datetime entity as an aware datetime.
+
+    Returns None when HA isn't configured or the entity holds no usable value.
+    The stored value is user-local wall time (see `set_next_event_datetime`),
+    so we reattach the user timezone on the way back.
+    """
+    s = get_settings()
+    entity_id = (s.home_assistant_next_event_entity_id or "").strip()
+    if not s.home_assistant_url or not s.home_assistant_token or not entity_id:
+        return None
+
+    endpoint = s.home_assistant_url.rstrip("/") + f"/api/states/{entity_id}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                endpoint,
+                headers={"Authorization": f"Bearer {s.home_assistant_token}"},
+            )
+            resp.raise_for_status()
+            state = resp.json().get("state")
+    except Exception as exc:  # noqa: BLE001 — HA is best-effort
+        log.warning("home assistant input_datetime read failed: %s", exc)
+        return None
+
+    return _parse_home_assistant_datetime(state)
+
+
+async def minutes_until_next_event_prep(now: datetime | None = None) -> int:
+    """Minutes from `now` until `NEXT_EVENT_PREP_LEAD` before the next event.
+
+    0 when HA isn't configured or the entity holds no usable datetime.
+    """
+    target = await get_next_event_datetime()
+    if target is None:
+        return 0
+    reference = now if now is not None else datetime.now(timezone.utc)
+    return round((target - NEXT_EVENT_PREP_LEAD - reference).total_seconds() / 60)
+
+
+def _parse_home_assistant_datetime(state: str | None) -> datetime | None:
+    if not state or state in ("unknown", "unavailable"):
+        return None
+    try:
+        naive = datetime.strptime(state, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=user_tz())

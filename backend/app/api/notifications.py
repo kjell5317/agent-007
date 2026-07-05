@@ -26,18 +26,23 @@ from app.config import get_settings
 from app.db import get_session
 from app.db.clients import tasks as tasks_store
 from app.events import publish_task
+from app.services.health import request_awake_minutes
+from app.services.home_assistant import minutes_until_next_event_prep
 from app.services.kotx import client as kotx_client
 from app.services.notify import (
     ACTION_CLOSE_TASK,
+    ACTION_DAY,
     ACTION_DISMISS_TASK,
     ACTION_KOTX_APPROVE,
     ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
+    ACTION_NIGHT,
     ACTION_RESCHEDULE_TASK,
     clear_task_notification,
 )
 from app.services.plan.schedule import schedule_task, scheduled_interval_for
+from app.services.points import adjust_points
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.dismiss import dismiss_task
 
@@ -97,6 +102,44 @@ async def handle_action(
     session: Session = Depends(get_session),
 ) -> dict:
     _check_secret(request)
+
+    if payload.action == ACTION_DAY:
+        awake_minutes = await request_awake_minutes(session)
+        penalty = max(0, awake_minutes * 2)
+        if penalty:
+            adjust_points(
+                session, -penalty, caller="day", reason=f"awake {awake_minutes} min"
+            )
+        log.info(
+            "notify action · day awake_minutes=%s points_deducted=%s",
+            awake_minutes, penalty,
+        )
+        return {
+            "ok": True,
+            "action": payload.action,
+            "awake_minutes": awake_minutes,
+            "points_deducted": penalty,
+        }
+
+    if payload.action == ACTION_NIGHT:
+        minutes = await minutes_until_next_event_prep()
+        # timedelta rounded to the nearest 10 min, then divided by 10.
+        penalty = max(0, round(minutes / 10))
+        if penalty:
+            adjust_points(
+                session, -penalty, caller="night", reason=f"{minutes} min to next event"
+            )
+        log.info(
+            "notify action · night minutes_until_prep=%s points_deducted=%s",
+            minutes, penalty,
+        )
+        return {
+            "ok": True,
+            "action": payload.action,
+            "minutes_until_prep": minutes,
+            "points_deducted": penalty,
+        }
+
     task_id = _resolve_task_id(payload)
     task = tasks_store.get(session, task_id)
     if task is None:

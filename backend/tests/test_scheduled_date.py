@@ -497,6 +497,150 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_day_action_deducts_double_awake_minutes_from_points(monkeypatch):
+    session = SimpleNamespace()
+    adjustments: list[tuple] = []
+
+    async def fake_request_awake_minutes(session_arg):
+        assert session_arg is session
+        return 92
+
+    monkeypatch.setattr(notifications, "request_awake_minutes", fake_request_awake_minutes)
+    monkeypatch.setattr(
+        notifications,
+        "adjust_points",
+        lambda _session, amount, *, caller, reason: adjustments.append((amount, caller, reason)),
+    )
+    monkeypatch.setattr(
+        notifications.tasks_store,
+        "get",
+        lambda *_args: pytest.fail("DAY action must not resolve a task"),
+    )
+    monkeypatch.setattr(
+        notifications,
+        "get_settings",
+        lambda: SimpleNamespace(home_assistant_action_secret=""),
+    )
+
+    request = SimpleNamespace(headers={}, query_params={})
+    payload = notifications.ActionPayload(action=notifications.ACTION_DAY)
+
+    result = await notifications.handle_action(payload, request, session=session)
+
+    assert result == {
+        "ok": True,
+        "action": "DAY",
+        "awake_minutes": 92,
+        "points_deducted": 184,
+    }
+    assert adjustments == [(-184, "day", "awake 92 min")]
+
+
+@pytest.mark.asyncio
+async def test_day_action_without_sleep_deducts_nothing(monkeypatch):
+    async def fake_request_awake_minutes(_session):
+        return 0
+
+    monkeypatch.setattr(notifications, "request_awake_minutes", fake_request_awake_minutes)
+    monkeypatch.setattr(
+        notifications,
+        "adjust_points",
+        lambda *_a, **_k: pytest.fail("no sleep must not touch points"),
+    )
+    monkeypatch.setattr(
+        notifications,
+        "get_settings",
+        lambda: SimpleNamespace(home_assistant_action_secret=""),
+    )
+
+    request = SimpleNamespace(headers={}, query_params={})
+    payload = notifications.ActionPayload(action=notifications.ACTION_DAY)
+
+    result = await notifications.handle_action(payload, request, session=SimpleNamespace())
+
+    assert result == {
+        "ok": True,
+        "action": "DAY",
+        "awake_minutes": 0,
+        "points_deducted": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_night_action_deducts_rounded_tenth_of_minutes_from_points(monkeypatch):
+    session = SimpleNamespace()
+    adjustments: list[tuple] = []
+
+    async def fake_minutes_until_next_event_prep():
+        return 437
+
+    monkeypatch.setattr(
+        notifications, "minutes_until_next_event_prep", fake_minutes_until_next_event_prep
+    )
+    monkeypatch.setattr(
+        notifications,
+        "adjust_points",
+        lambda _session, amount, *, caller, reason: adjustments.append((amount, caller, reason)),
+    )
+    monkeypatch.setattr(
+        notifications.tasks_store,
+        "get",
+        lambda *_args: pytest.fail("NIGHT action must not resolve a task"),
+    )
+    monkeypatch.setattr(
+        notifications,
+        "get_settings",
+        lambda: SimpleNamespace(home_assistant_action_secret=""),
+    )
+
+    request = SimpleNamespace(headers={}, query_params={})
+    payload = notifications.ActionPayload(action=notifications.ACTION_NIGHT)
+
+    result = await notifications.handle_action(payload, request, session=session)
+
+    # 437 min → rounded to 440 → / 10 = 44 points deducted.
+    assert result == {
+        "ok": True,
+        "action": "NIGHT",
+        "minutes_until_prep": 437,
+        "points_deducted": 44,
+    }
+    assert adjustments == [(-44, "night", "437 min to next event")]
+
+
+@pytest.mark.asyncio
+async def test_night_action_deducts_nothing_when_no_time_remains(monkeypatch):
+    async def fake_minutes_until_next_event_prep():
+        return 0
+
+    monkeypatch.setattr(
+        notifications, "minutes_until_next_event_prep", fake_minutes_until_next_event_prep
+    )
+    monkeypatch.setattr(
+        notifications,
+        "adjust_points",
+        lambda *_a, **_k: pytest.fail("zero timedelta must not touch points"),
+    )
+    monkeypatch.setattr(
+        notifications,
+        "get_settings",
+        lambda: SimpleNamespace(home_assistant_action_secret=""),
+    )
+
+    request = SimpleNamespace(headers={}, query_params={})
+    payload = notifications.ActionPayload(action=notifications.ACTION_NIGHT)
+
+    result = await notifications.handle_action(payload, request, session=SimpleNamespace())
+
+    assert result == {
+        "ok": True,
+        "action": "NIGHT",
+        "minutes_until_prep": 0,
+        "points_deducted": 0,
+    }
+
+
+@pytest.mark.asyncio
 async def test_task_notifications_deep_link_and_actions(monkeypatch):
     task_id = uuid.uuid4()
     task = SimpleNamespace(

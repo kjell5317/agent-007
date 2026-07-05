@@ -41,6 +41,22 @@ async def request_todays_sleep_interval(
     return normalize_sleep_interval(payload)
 
 
+async def request_awake_minutes(
+    session: Session,
+    *,
+    account_key: str | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Minutes elapsed since last night's sleep ended; 0 when nothing is recorded."""
+    reference = now if now is not None else datetime.now(timezone.utc)
+    interval = await request_todays_sleep_interval(
+        session, account_key=account_key, now=reference
+    )
+    if interval is None:
+        return 0
+    return round((reference - interval.end).total_seconds() / 60)
+
+
 def normalize_sleep_interval(payload: dict[str, Any]) -> SleepInterval | None:
     segments: list[SleepSegment] = []
     for point in _sleep_points(payload):

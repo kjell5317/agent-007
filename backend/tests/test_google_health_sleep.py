@@ -168,6 +168,36 @@ async def test_todays_sleep_interval_returns_none_when_google_has_no_data(monkey
     assert interval is None
 
 
+@pytest.mark.asyncio
+async def test_request_awake_minutes_diffs_now_from_sleep_end(monkeypatch):
+    tz = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 7, 4, 9, 0, tzinfo=tz)
+    sleep_end = datetime(2026, 7, 4, 7, 30, tzinfo=tz)
+
+    async def fake_interval(session, *, account_key, now):
+        return SimpleNamespace(end=sleep_end.astimezone(timezone.utc))
+
+    monkeypatch.setattr(sleep_service, "request_todays_sleep_interval", fake_interval)
+
+    minutes = await sleep_service.request_awake_minutes(SimpleNamespace(), now=now)
+
+    assert minutes == 90
+
+
+@pytest.mark.asyncio
+async def test_request_awake_minutes_is_zero_without_sleep(monkeypatch):
+    async def fake_interval(session, *, account_key, now):
+        return None
+
+    monkeypatch.setattr(sleep_service, "request_todays_sleep_interval", fake_interval)
+
+    minutes = await sleep_service.request_awake_minutes(
+        SimpleNamespace(), now=datetime(2026, 7, 4, 9, 0, tzinfo=timezone.utc)
+    )
+
+    assert minutes == 0
+
+
 def test_normalize_sleep_interval_ignores_non_sleep_and_malformed_points():
     tz = ZoneInfo("Europe/Berlin")
     start = datetime(2026, 7, 4, 1, tzinfo=tz)

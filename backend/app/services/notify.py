@@ -37,6 +37,12 @@ ACTION_CLOSE_TASK = "CLOSE_TASK"
 ACTION_DISMISS_TASK = "DISMISS_TASK"
 ACTION_RESCHEDULE_TASK = "RESCHEDULE_TASK"
 
+# Fired by the HA morning/evening routines — not tied to a task. DAY answers
+# with how long the user has been awake (now − last night's sleep end); NIGHT
+# with the minutes until 45 min before the next event. See the router.
+ACTION_DAY = "DAY"
+ACTION_NIGHT = "NIGHT"
+
 # kotx run actions. kotx no longer sends its own Home Assistant approval/merge
 # prompts (see docs/Home Assistant Notification Handoff) — we drive them from
 # the transition webhook and dispatch these back to the kotx API in the

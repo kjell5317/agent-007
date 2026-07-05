@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -183,6 +183,100 @@ async def test_discovery_does_not_fail_when_ha_call_errors(monkeypatch):
         expected_value=None,
         patch_setter=False,
     )
+
+
+def test_parse_home_assistant_datetime_reattaches_user_tz(monkeypatch):
+    monkeypatch.setattr(ha, "user_tz", lambda: BERLIN)
+
+    parsed = ha._parse_home_assistant_datetime("2026-07-06 23:30:00")
+
+    assert parsed == datetime(2026, 7, 6, 23, 30, tzinfo=BERLIN)
+
+
+@pytest.mark.parametrize("state", [None, "", "unknown", "unavailable", "garbage"])
+def test_parse_home_assistant_datetime_returns_none_for_unusable_state(monkeypatch, state):
+    monkeypatch.setattr(ha, "user_tz", lambda: BERLIN)
+
+    assert ha._parse_home_assistant_datetime(state) is None
+
+
+@pytest.mark.asyncio
+async def test_get_next_event_datetime_reads_state_via_get(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"entity_id": "input_datetime.007", "state": "2026-07-06 23:30:00"}
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, headers):
+            calls.append({"url": url, "headers": headers, "timeout": self.timeout})
+            return FakeResponse()
+
+    monkeypatch.setattr(ha.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(ha, "user_tz", lambda: BERLIN)
+    monkeypatch.setattr(
+        ha,
+        "get_settings",
+        lambda: SimpleNamespace(
+            home_assistant_url="http://ha/",
+            home_assistant_token="token",
+            home_assistant_next_event_entity_id="input_datetime.007",
+        ),
+    )
+
+    value = await ha.get_next_event_datetime()
+
+    assert value == datetime(2026, 7, 6, 23, 30, tzinfo=BERLIN)
+    assert calls == [
+        {
+            "url": "http://ha/api/states/input_datetime.007",
+            "headers": {"Authorization": "Bearer token"},
+            "timeout": ha._TIMEOUT,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_minutes_until_next_event_prep_counts_down_to_lead(monkeypatch):
+    target = datetime(2026, 7, 7, 7, 0, tzinfo=BERLIN)
+
+    async def fake_get():
+        return target
+
+    monkeypatch.setattr(ha, "get_next_event_datetime", fake_get)
+
+    now = datetime(2026, 7, 6, 23, 0, tzinfo=BERLIN)
+    minutes = await ha.minutes_until_next_event_prep(now=now)
+
+    # 07:00 − 45min = 06:15; from 23:00 that's 7h15m = 435 minutes.
+    assert minutes == 435
+
+
+@pytest.mark.asyncio
+async def test_minutes_until_next_event_prep_zero_when_unavailable(monkeypatch):
+    async def fake_get():
+        return None
+
+    monkeypatch.setattr(ha, "get_next_event_datetime", fake_get)
+
+    minutes = await ha.minutes_until_next_event_prep(
+        now=datetime(2026, 7, 6, 23, 0, tzinfo=timezone.utc)
+    )
+
+    assert minutes == 0
 
 
 async def _run_discovery_with_events(
