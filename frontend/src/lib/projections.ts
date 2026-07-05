@@ -13,6 +13,7 @@ export interface EvidenceRow {
   source?: string;
   similarity?: string;
   taskId?: string;
+  label?: string;
   sender?: string;
   receivedAt?: string;
   selected?: boolean;
@@ -286,6 +287,7 @@ function evidenceFromRecord(
     source: stringValue(record.source),
     similarity: similarityValue(record.similarity ?? record.sim),
     taskId: stringValue(record.task_id),
+    label: stringValue(record.label),
     sender: senderDisplayName(stringValue(record.sender) ?? stringValue(record.from)),
     receivedAt: stringValue(record.received_at),
     selected: Boolean(record.selected),
@@ -698,6 +700,7 @@ export function aggregateUntitledEvidence(rows: EvidenceRow[]): EvidenceRow[] {
       title: count === 1 ? "1 similar input" : `${count} similar inputs`,
       status: group[0]?.status,
       source: sameString(group.map((row) => row.source)),
+      label: sameString(group.map((row) => row.label)),
       similarity: avg === null ? undefined : avg.toFixed(2),
       selected: group.some((row) => row.selected),
       aggregate: true,
