@@ -324,13 +324,14 @@ def test_home_leg_dodge_is_capped():
 
 def test_home_leg_departs_after_online_meeting():
     # An online meeting sits right after the event: attend it there and ride
-    # home afterwards (with the full event gap) instead of riding through it.
+    # home afterwards instead of riding through it. The meeting is the
+    # trip's effective last stop, so only the inner commute gap applies.
     anchor = Anchor("ev1", _at(14), _at(15), GYM)
     avoid = [(_at(15, 10), _at(16))]
     legs, _ = derive_legs([anchor], HOME_ADDR, _durations(), None, SETTINGS, avoid=avoid)
 
     inbound = legs[1]
-    assert inbound.depart == avoid[0][1] + EVENT_BUFFER
+    assert inbound.depart == avoid[0][1] + BUFFER
     assert inbound.arrive == inbound.depart + timedelta(seconds=600)
 
 
