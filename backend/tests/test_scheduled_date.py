@@ -657,11 +657,11 @@ async def test_overdue_scheduled_cron_reschedules_with_previous_slot_blocked(mon
 
     summary = await cron.reschedule_overdue_scheduled_tasks_once()
 
-    assert summary == {"attempted": 1, "rescheduled": 1, "points_subtracted": 5}
+    assert summary == {"attempted": 1, "rescheduled": 1, "points_subtracted": 10}
     assert calls == [Interval(scheduled, scheduled + timedelta(minutes=30), "event-1")]
-    assert points_store.total(session) == -5
-    assert published_points == [-5]
-    assert notified == [(task_id, 5, "scheduled date was overdue")]
+    assert points_store.total(session) == -10
+    assert published_points == [-10]
+    assert notified == [(task_id, 10, "scheduled date was overdue")]
     assert published_tasks == [task_id]
 
 
@@ -749,10 +749,10 @@ async def test_overdue_scheduled_cron_penalizes_even_failed_reschedule(monkeypat
     assert summary == {
         "attempted": 1,
         "rescheduled": 0,
-        "points_subtracted": cron.PENALTY_POINTS,
+        "points_subtracted": 10,
     }
-    assert points_store.total(session) == -cron.PENALTY_POINTS
-    assert published_points == [-cron.PENALTY_POINTS]
+    assert points_store.total(session) == -10
+    assert published_points == [-10]
     assert notified == [1]
 
 
@@ -779,11 +779,11 @@ async def test_overdue_due_cron_subtracts_full_hours_idempotently(monkeypatch):
     first = await cron.penalize_overdue_due_tasks_once()
     second = await cron.penalize_overdue_due_tasks_once()
 
-    assert first == {"checked": 1, "penalized": 1, "points_subtracted": 15}
+    assert first == {"checked": 1, "penalized": 1, "points_subtracted": 30}
     assert second == {"checked": 1, "penalized": 0, "points_subtracted": 0}
-    assert points_store.total(session) == -15
-    assert published_points == [-15]
-    assert notified == [(task.id, 15, "task is past due")]
+    assert points_store.total(session) == -30
+    assert published_points == [-30]
+    assert notified == [(task.id, 30, "task is past due")]
 
 
 def test_discover_syncs_edited_fields_from_event():

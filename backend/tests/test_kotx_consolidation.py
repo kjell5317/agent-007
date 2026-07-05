@@ -235,7 +235,10 @@ def kotx_prompts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_done_transition_closes_linked_task_without_discard(monkeypatch):
+@pytest.mark.parametrize(("state", "award_points"), [("done", True), ("cancelled", False)])
+async def test_terminal_transition_closes_linked_task_without_discard(
+    monkeypatch, state, award_points
+):
     task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=42, link=None)
     closed = {}
 
@@ -258,10 +261,14 @@ async def test_done_transition_closes_linked_task_without_discard(monkeypatch):
     monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", fake_finalize)
 
     session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
-    trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="done")))
+    trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state=state)))
 
     assert trace["outcome"] == "closed"
-    assert closed == {"task_id": task.id, "discard_kotx": False, "award_points": True}
+    assert closed == {
+        "task_id": task.id,
+        "discard_kotx": False,
+        "award_points": award_points,
+    }
     assert finalized["status"] == "duplicate"
     assert finalized["task_id"] == task.id
 
@@ -309,7 +316,9 @@ async def test_review_sent_marks_task_done(monkeypatch):
     called = {}
 
     async def fake_close(session, task_id, *, discard_kotx=True, award_points=True):
-        called["closed"] = True
+        called["task_id"] = task_id
+        called["discard_kotx"] = discard_kotx
+        called["award_points"] = award_points
 
     monkeypatch.setattr(kotx_runner, "close_task", fake_close)
     monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
@@ -319,7 +328,7 @@ async def test_review_sent_marks_task_done(monkeypatch):
         session, _raw(_meta(kind="review", state="awaiting_external"))
     )
     assert trace["outcome"] == "closed"
-    assert called.get("closed")
+    assert called == {"task_id": task.id, "discard_kotx": False, "award_points": True}
 
 
 @pytest.mark.asyncio

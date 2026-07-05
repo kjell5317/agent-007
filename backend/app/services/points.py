@@ -1,7 +1,8 @@
 """Points awarding — manual adjustments and task-completion bonuses.
 
 The running total and per-event ledger live in the `points_entries` table.
-Task completion awards `points_task_done_factor × estimated minutes`; manual
+Task completion awards `points_task_done_factor × estimated minutes` for
+normal tasks and `0.1 × estimated minutes` for kotx-linked tasks; manual
 adjustments (from the topbar modal or Home Assistant) add a signed amount
 directly.
 """
@@ -19,7 +20,8 @@ from app.events import publish_points
 
 log = logging.getLogger(__name__)
 
-PENALTY_POINTS = 5
+PENALTY_POINTS = 10
+KOTX_TASK_DONE_FACTOR = 0.1
 SCHEDULED_OVERDUE_ACTION = "scheduled_overdue_reschedule"
 DUE_OVERDUE_ACTION = "due_overdue_hour"
 
@@ -54,14 +56,18 @@ def _clean_manual_field(value: str | None, *, limit: int) -> str | None:
 
 
 def award_for_task(session: Session, task) -> bool:
-    """Award `points_task_done_factor × estimated minutes` for a completed task.
+    """Award completion points for a completed task.
 
     Returns whether a ledger entry was inserted. No-op when the factor is 0
     (disabled), the task has no estimation, or the task was already awarded
     (so a reopen→close cycle doesn't double-count). A negative factor is
     allowed and subtracts points on completion.
     """
-    factor = get_settings().points_task_done_factor
+    factor = (
+        KOTX_TASK_DONE_FACTOR
+        if getattr(task, "kotx_task_id", None) is not None
+        else get_settings().points_task_done_factor
+    )
     minutes = task.estimation or 0
     if factor == 0 or minutes <= 0:
         return False
