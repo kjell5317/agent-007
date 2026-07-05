@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone, tzinfo
 
 from sqlalchemy.orm import Session
 
@@ -45,12 +45,17 @@ from app.services.calendar.events import (
     is_task_event,
 )
 from app.services.location import resolve_location_alias
+from app.services.home_assistant import (
+    next_event_datetime_configured,
+    set_next_event_datetime,
+)
 from app.services.plan.schedule import (
     _duration_minutes,
     reschedule_event,
     schedule_task,
     scheduled_interval_for,
 )
+from app.timezones import user_tz
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +104,7 @@ async def discover_updated_events(
     baselines = dict(extra.get(_BASELINES_KEY) or {})
 
     client = await authorized_client(session, account_key)
+    await _sync_home_assistant_next_event(client, ids, now=now)
 
     summary: dict = {
         "checked": 0,
@@ -243,6 +249,67 @@ def _span_touches_window(
     window_end: datetime,
 ) -> bool:
     return span[1] >= window_start and span[0] <= window_end
+
+
+async def _sync_home_assistant_next_event(
+    client,
+    calendar_ids: Iterable[str],
+    *,
+    now: datetime,
+) -> None:
+    """Keep HA's input_datetime pointed at the next relevant timed event."""
+    if not next_event_datetime_configured():
+        return
+
+    tz = user_tz()
+    today_start = datetime.combine(now.astimezone(tz).date(), dt_time.min, tzinfo=tz)
+    window_end = today_start + timedelta(days=WINDOW_DAYS + 1)
+
+    events: list[CalendarEvent] = []
+    for cid in calendar_ids:
+        items = await client.list_events(cid, time_min=today_start, time_max=window_end)
+        events.extend(_active_events(items, cid))
+
+    selected = _select_home_assistant_next_event(events, now=now, tz=tz)
+    if selected is None:
+        return
+    await set_next_event_datetime(_home_assistant_datetime(selected, tz=tz))
+
+
+def _select_home_assistant_next_event(
+    events: Iterable[CalendarEvent],
+    *,
+    now: datetime,
+    tz: tzinfo,
+) -> datetime | None:
+    """Choose the event datetime HA should receive.
+
+    Today's first timed event remains selected until its start arrives. At or
+    after that start, the value jumps to the first timed event on a later local
+    day, skipping over any remaining events today. If no event exists tomorrow,
+    this returns the next later event in the lookahead window.
+    """
+    now_local = now.astimezone(tz)
+    today = now_local.date()
+    starts = [
+        ev.start.astimezone(tz)
+        for ev in events
+        if not ev.all_day and ev.raw.get("transparency") != "transparent"
+    ]
+    starts.sort()
+
+    todays_starts = [start for start in starts if start.date() == today]
+    if todays_starts and now_local < todays_starts[0]:
+        return todays_starts[0]
+
+    for start in starts:
+        if start.date() > today:
+            return start
+    return None
+
+
+def _home_assistant_datetime(value: datetime, *, tz: tzinfo) -> str:
+    return value.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
 
 
 async def _cancelled_event_span(

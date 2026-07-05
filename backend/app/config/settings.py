@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     home_assistant_url: str = ""
     home_assistant_token: str = ""
     home_assistant_notify_service: str = "notify"
+    home_assistant_next_event_entity_id: str = "input_datetime.007"
     # Shared secret HA must send on action-callback POSTs. Empty disables the check.
     home_assistant_action_secret: str = ""
 
