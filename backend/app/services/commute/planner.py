@@ -65,8 +65,10 @@ async def refresh_weather_sensitive_commutes(
     account_key: str | None = None,
     _depth: int = 0,
 ) -> dict:
-    """Re-derive commute legs for the next day when rain would flip a
-    bike leg to transit."""
+    """Re-derive commute legs for the next day when the forecast would flip
+    modes: rain flips bike trips to transit, and a cleared forecast flips
+    rain-forced transit trips back to bike (re-derivation decides from
+    scratch, so threshold- or route-forced transit stays transit)."""
     settings = get_settings()
     summary = _empty_summary()
     write_calendar_id = (settings.google_calendar_id or "").strip()
@@ -96,13 +98,7 @@ async def refresh_weather_sensitive_commutes(
         window_end,
     )
     rain_pct = max(hourly_rain.values()) if hourly_rain else None
-    if rain_pct is None or rain_pct < settings.commute_rain_threshold_pct:
-        log.info(
-            "commute weather refresh skipped · rain=%s threshold=%s",
-            rain_pct,
-            settings.commute_rain_threshold_pct,
-        )
-        return summary
+    rainy = rain_pct is not None and rain_pct >= settings.commute_rain_threshold_pct
 
     events = await list_events_between(
         session,
@@ -111,7 +107,14 @@ async def refresh_weather_sensitive_commutes(
         time_max=window_end,
         account_key=account_key,
     )
-    if not any(is_commute_event(ev) and _commute_mode(ev) == "bicycling" for ev in events):
+    # Rain can only flip bike legs; a dry forecast can only flip transit
+    # legs back. No candidate legs → nothing the weather could change.
+    flippable = "bicycling" if rainy else "transit"
+    if not any(is_commute_event(ev) and _commute_mode(ev) == flippable for ev in events):
+        log.info(
+            "commute weather refresh skipped · rain=%s threshold=%s flippable=%s",
+            rain_pct, settings.commute_rain_threshold_pct, flippable,
+        )
         return summary
 
     return await plan_window_commutes(
@@ -175,9 +178,35 @@ async def plan_window_commutes(
         time_max=window_end + margin,
         account_key=account_key,
     )
-    anchors, existing_commutes, online_spans = _partition(events, write_calendar_id)
+    anchors, existing_commutes, online = _partition(events, write_calendar_id)
     anchors = await _resolve_routable_anchors(anchors)
-    summary["skipped_online"] = len(online_spans)
+    summary["skipped_online"] = len(online)
+
+    # An anchor straddling the window edge gets ALL its legs written (see
+    # `_legs_to_write`) — but if the anchor extends past the fetched range,
+    # its existing legs out there are invisible to the diff, which would
+    # duplicate instead of patch them. Refetch with the full extent.
+    touching = [a for a in anchors if _overlaps(a.start, a.end, window_start, window_end)]
+    if touching:
+        need_lo = min(min(a.start for a in touching) - margin, window_start - margin)
+        need_hi = max(max(a.end for a in touching) + margin, window_end + margin)
+        if need_lo < window_start - margin or need_hi > window_end + margin:
+            log.info(
+                "commute · widening fetch to %s..%s for edge anchors",
+                need_lo.isoformat(), need_hi.isoformat(),
+            )
+            events = await list_events_between(
+                session,
+                calendar_ids=_read_calendar_ids(settings, write_calendar_id),
+                time_min=need_lo,
+                time_max=need_hi,
+                account_key=account_key,
+            )
+            anchors, existing_commutes, online = _partition(events, write_calendar_id)
+            anchors = await _resolve_routable_anchors(anchors)
+            summary["skipped_online"] = len(online)
+
+    online_spans = [(to_user_tz(ev.start), to_user_tz(ev.end)) for ev in online]
 
     if hourly_rain is None:
         hourly_rain = await _home_rain(session, home, window_start, window_end + margin)
@@ -225,11 +254,15 @@ async def plan_window_commutes(
     # events — nothing can move, so the leg is written anyway, the conflict
     # stays visible on the calendar, and the user gets one alert (tracked
     # via a marker on the leg so replans don't re-alert).
-    conflicts = _immovable_conflicts(to_write, anchors)
-    for key, blocker in conflicts.items():
+    summaries = {ev.id: ev.summary for ev in events}
+    obstacles = [
+        (a.id, summaries.get(a.id) or a.location, a.start, a.end) for a in anchors
+    ] + [(ev.id, ev.summary, to_user_tz(ev.start), to_user_tz(ev.end)) for ev in online]
+    conflicts = _immovable_conflicts(to_write, obstacles)
+    for key, (blocker_id, blocker_label) in conflicts.items():
         log.warning(
-            "commute · leg %s -> %s overlaps immovable event id=%s; leaving the conflict visible",
-            key[0], key[1], blocker.id,
+            "commute · leg %s -> %s overlaps immovable %r (id=%s); leaving the conflict visible",
+            key[0], key[1], blocker_label, blocker_id,
         )
 
     summary["planned"], new_failures, new_conflicts = await _write_legs(
@@ -242,7 +275,7 @@ async def plan_window_commutes(
         conflicts=conflicts,
     )
     await _notify_new_failures(new_failures)
-    await _notify_new_conflicts(new_conflicts, {ev.id: ev.summary for ev in events})
+    await _notify_new_conflicts(new_conflicts)
 
     # Arrival truth comes from the full derived set — an anchor at the window
     # edge may keep a leg that was written by an earlier replan.
@@ -590,17 +623,18 @@ async def _notify_new_failures(legs: list[PlannedLeg]) -> None:
 
 def _immovable_conflicts(
     legs: list[PlannedLeg],
-    anchors: list[Anchor],
-) -> dict[tuple[str, str], Anchor]:
-    """Legs still colliding with an anchor after task re-placement — only
-    immovable events remain in their way."""
-    out: dict[tuple[str, str], Anchor] = {}
+    obstacles: list[tuple[str, str, datetime, datetime]],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    """Legs still colliding with an `(id, label, start, end)` obstacle after
+    task re-placement — located anchors and online/location-less events the
+    dodge couldn't clear. Only immovable things remain in their way."""
+    out: dict[tuple[str, str], tuple[str, str]] = {}
     for leg in legs:
-        for anchor in anchors:
-            if anchor.id in leg.key:
+        for oid, label, start, end in obstacles:
+            if oid in leg.key:
                 continue
-            if leg.depart < anchor.end and anchor.start < leg.arrive:
-                out[leg.key] = anchor
+            if leg.depart < end and start < leg.arrive:
+                out[leg.key] = (oid, label)
                 break
     return out
 
@@ -609,16 +643,13 @@ def _conflict_tag(key: tuple[str, str]) -> str:
     return f"conflict-{key[0]}-{key[1]}"
 
 
-async def _notify_new_conflicts(
-    conflicts: list[tuple[PlannedLeg, Anchor]],
-    summaries: dict[str, str],
-) -> None:
+async def _notify_new_conflicts(conflicts: list[tuple[PlannedLeg, str]]) -> None:
     from app.services.notify import notify_leg_conflict
 
-    for leg, blocker in conflicts:
+    for leg, blocker_label in conflicts:
         await notify_leg_conflict(
             destination=leg.destination,
-            blocker=summaries.get(blocker.id) or blocker.location,
+            blocker=blocker_label,
             depart=leg.depart,
             tag=_conflict_tag(leg.key),
         )
@@ -632,18 +663,32 @@ async def _write_legs(
     existing: list[CalendarEvent],
     window: tuple[datetime, datetime],
     account_key: str | None,
-    conflicts: dict[tuple[str, str], Anchor] | None = None,
-) -> tuple[int, list[PlannedLeg], list[tuple[PlannedLeg, Anchor]]]:
+    conflicts: dict[tuple[str, str], tuple[str, str]] | None = None,
+) -> tuple[int, list[PlannedLeg], list[tuple[PlannedLeg, str]]]:
     conflicts = conflicts or {}
     desired = {leg.key: leg for leg in legs}
     existing_by_key: dict[tuple[str, str], CalendarEvent] = {}
     legacy: list[CalendarEvent] = []
+    duplicates: list[CalendarEvent] = []
     for ev in existing:
         key = commute_leg_key(ev)
         if key is None:
             legacy.append(ev)
+        elif key in existing_by_key:
+            # Same leg identity written twice (a diff that couldn't see the
+            # first copy) — redundant by construction, delete on sight.
+            duplicates.append(ev)
         else:
             existing_by_key[key] = ev
+
+    for ev in duplicates:
+        log.warning(
+            "commute · duplicate leg %s (%s) — deleting", commute_leg_key(ev), ev.id,
+        )
+        try:
+            await delete_event(session, calendar_id=calendar_id, event_id=ev.id, account_key=account_key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("commute · duplicate delete failed event=%s err=%s", ev.id, exc)
 
     for ev in legacy:
         if not _overlaps(ev.start, ev.end, window[0], window[1]):
@@ -665,7 +710,7 @@ async def _write_legs(
 
     written = 0
     new_failures: list[PlannedLeg] = []
-    new_conflicts: list[tuple[PlannedLeg, Anchor]] = []
+    new_conflicts: list[tuple[PlannedLeg, str]] = []
     for key, leg in desired.items():
         summary = _summary_for(leg)
         description = _description_for(leg)
@@ -675,7 +720,7 @@ async def _write_legs(
         )
         # Conflict marker: persisted on the leg so replans that re-derive the
         # same collision don't re-alert; cleared (empty) when it resolves.
-        props["conflict"] = blocker.id if blocker is not None else ""
+        props["conflict"] = blocker[0] if blocker is not None else ""
         reminders = _reminders_for_leg(leg)
         current = existing_by_key.get(key)
         was_conflicting = bool(private_properties(current).get("conflict")) if current else False
@@ -717,7 +762,7 @@ async def _write_legs(
             if newly_failed:
                 new_failures.append(leg)
             if newly_conflicting:
-                new_conflicts.append((leg, blocker))
+                new_conflicts.append((leg, blocker[1]))
             elif blocker is None and was_conflicting:
                 from app.services.notify import clear_notification_tag
 
@@ -733,13 +778,13 @@ async def _write_legs(
 def _partition(
     events: list[CalendarEvent],
     write_calendar_id: str,
-) -> tuple[list[Anchor], list[CalendarEvent], list[tuple[datetime, datetime]]]:
-    """Split events into routable anchors, managed commute legs, and the
-    spans of online meetings — not routed to, but legs shouldn't sit on
-    top of them either."""
+) -> tuple[list[Anchor], list[CalendarEvent], list[CalendarEvent]]:
+    """Split events into routable anchors, managed commute legs, and online
+    or location-less events — not routed to, but legs shouldn't sit on top
+    of them either."""
     anchors: list[Anchor] = []
     commutes: list[CalendarEvent] = []
-    online_spans: list[tuple[datetime, datetime]] = []
+    online: list[CalendarEvent] = []
     for ev in events:
         if ev.all_day:
             continue
@@ -748,7 +793,7 @@ def _partition(
                 commutes.append(ev)
             continue
         if is_online_location(ev.location):
-            online_spans.append((to_user_tz(ev.start), to_user_tz(ev.end)))
+            online.append(ev)
             continue
         anchors.append(
             Anchor(
@@ -759,7 +804,7 @@ def _partition(
             )
         )
     anchors.sort(key=lambda a: a.start)
-    return anchors, commutes, online_spans
+    return anchors, commutes, online
 
 
 def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:

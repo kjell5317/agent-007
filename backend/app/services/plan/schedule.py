@@ -228,6 +228,28 @@ async def _schedule_task_locked(
             task.id,
             task.due_date.isoformat() if task.due_date else None,
         )
+        if prior is not None and prior.end < datetime.now(user_tz()):
+            # The stored slot already passed and no new one exists — keeping
+            # it would show a schedule that isn't real (plus a dead mirror
+            # event that discover would sync right back). Drop both; the
+            # task reads as unscheduled until a slot opens up. Future slots
+            # (merely conflicting) are kept — they're still the plan.
+            log.info("plan.schedule · clearing stale past slot task=%s", task.id)
+            from app.services.calendar import delete_task_event
+
+            try:
+                await delete_task_event(session, task)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "plan.schedule · stale mirror delete failed task=%s err=%s", task.id, exc,
+                )
+            task.calendar_event_id = None
+            task.scheduled_date = None
+            session.flush()
+            session.commit()
+            from app.events import publish_task
+
+            publish_task(session, task.id)
         if notify:
             from app.services.notify import notify_no_slot
 
@@ -972,7 +994,35 @@ async def _repair_by_displacing_task(
         victims = victims[:MAX_VICTIM_ATTEMPTS]
     for victim, victim_event, freed_range in victims:
         displaced.add(victim.id)
-        block = Interval(victim_event.start, victim_event.end, victim_event.id)
+        # Place the new task first, as if the victim had vacated (its legs
+        # move with it), then reschedule the victim around that placement.
+        # Blocking only the new slot — not the victim's old span — lets the
+        # victim shift by minutes within its own former slot, e.g. sliding
+        # 15 minutes to open a small hole. It also means a victim is only
+        # ever moved once the task's spot is actually secured.
+        new_busy = [
+            ev
+            for ev in busy
+            if ev.id != victim_event.id
+            and not (ev.leg_key is not None and victim_event.id in ev.leg_key)
+        ]
+        slot = _slot_in_range(
+            new_busy,
+            total,
+            gaps,
+            freed_range,
+            extended_window=extended_window,
+        )
+        if slot is None:
+            continue
+        planned = _planned_from_block(slot, duration, gaps.commute, out_s, in_s)
+        # Pad by the event gap: the task isn't on the calendar yet, so the
+        # victim's replan can only see it through this blocked range.
+        block = Interval(
+            planned.block_start - gaps.event,
+            planned.block_end + gaps.event,
+            victim_event.id,
+        )
         try:
             # notify=False: a failed victim move keeps its old slot, so a
             # "could not schedule" for it would lie and get cleared moments
@@ -995,34 +1045,7 @@ async def _repair_by_displacing_task(
         from app.services.notify import clear_task_notification
 
         await clear_task_notification(victim.id)
-
-        # Rebuild the busy view: the victim (and its legs — they move with
-        # it) vacated, and its new trip block is occupied. Then sweep the
-        # freed range (clamped to the per-day working window) for the new
-        # task's block.
-        new_busy = [
-            ev
-            for ev in busy
-            if ev.id != victim_event.id
-            and not (ev.leg_key is not None and victim_event.id in ev.leg_key)
-        ]
-        new_busy.append(
-            BusyEvent(
-                victim_event.id,
-                victim_planned.block_start,
-                victim_planned.block_end,
-                "busy",
-            )
-        )
-        slot = _slot_in_range(
-            new_busy,
-            total,
-            gaps,
-            freed_range,
-            extended_window=extended_window,
-        )
-        if slot is not None:
-            return _planned_from_block(slot, duration, gaps.commute, out_s, in_s)
+        return planned
 
     raise ValueError("no free slot before due date")
 

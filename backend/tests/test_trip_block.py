@@ -30,6 +30,7 @@ from app.services.plan.schedule import (  # noqa: E402
     BusyEvent,
     Gaps,
     Interval,
+    PlannedSlot,
     _block_total,
     _chain_insert_slot,
     _cached_trip_legs,
@@ -604,7 +605,7 @@ async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
         origin_anchor="home", dest_anchor="ev-1", origin="Home", destination=GYM,
         mode="transit", depart=_day_at(18, 20), arrive=_day_at(18, 55),
     )
-    blocker = Anchor("ev-fixed", _day_at(18), _day_at(19), OFFICE)
+    blocker = ("ev-fixed", "Dinner")
     window = (_day_at(8), _day_at(23))
 
     # Fresh leg with a blocker → conflict reported once.
@@ -612,7 +613,7 @@ async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
         None, [leg], calendar_id="primary", existing=[], window=window,
         account_key=None, conflicts={leg.key: blocker},
     )
-    assert conflicts == [(leg, blocker)]
+    assert conflicts == [(leg, "Dinner")]
 
     # Same conflict already marked on the existing leg → no re-alert.
     marked = _calendar_event(
@@ -642,6 +643,61 @@ async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
     )
     assert conflicts == []
     assert cleared == ["conflict-home-ev-1"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_legs_are_deleted(monkeypatch):
+    # Two calendar events with the same leg identity (a diff that couldn't
+    # see the first copy created a second) — the surplus one is deleted and
+    # the survivor patched.
+    deleted = []
+
+    async def fake_delete(session, *, calendar_id, event_id, account_key=None):
+        deleted.append(event_id)
+
+    async def fake_write(session, **kwargs):
+        return None
+
+    monkeypatch.setattr(commute_planner, "delete_event", fake_delete)
+    monkeypatch.setattr(commute_planner, "patch_event", fake_write)
+    monkeypatch.setattr(commute_planner, "create_event", fake_write)
+    monkeypatch.setattr(
+        commute_planner, "get_settings", lambda: SimpleNamespace(reminder_lead_minutes=15),
+    )
+
+    leg = PlannedLeg(
+        origin_anchor="ev-1", dest_anchor="home", origin=GYM, destination="Home",
+        mode="bicycling", depart=_day_at(23, 5), arrive=_day_at(23, 20),
+    )
+    props = {
+        "managed_by": "plan_service", "kind": "commute",
+        "origin_anchor": "ev-1", "dest_anchor": "home", "mode": "transit",
+    }
+    old_transit = _calendar_event("dup-a", _day_at(23, 5), _day_at(23, 45), props=dict(props))
+    stray_bike = _calendar_event("dup-b", _day_at(23, 5), _day_at(23, 20), props=dict(props))
+
+    await commute_planner._write_legs(
+        None, [leg], calendar_id="primary", existing=[old_transit, stray_bike],
+        window=(_day_at(8), _day_at(23, 59)), account_key=None,
+    )
+
+    assert deleted == ["dup-b"]
+
+
+def test_immovable_conflicts_cover_online_events():
+    from app.services.commute.planner import _immovable_conflicts
+
+    # The dodge couldn't clear this location-less event — the leg overlaps
+    # it and the user must be told, same as with a located anchor.
+    leg = PlannedLeg(
+        origin_anchor="home", dest_anchor="ev-1", origin="Home", destination=GYM,
+        mode="transit", depart=_day_at(18, 20), arrive=_day_at(18, 55),
+    )
+    obstacles = [
+        ("ev-1", "Englischer", _day_at(19), _day_at(23)),      # own anchor — skipped
+        ("ev-blob", "(untitled)", _day_at(16, 30), _day_at(18, 30)),
+    ]
+    assert _immovable_conflicts([leg], obstacles) == {leg.key: ("ev-blob", "(untitled)")}
 
 
 def test_colliding_task_anchor_is_replaced_not_overlapped():
@@ -914,6 +970,109 @@ async def test_repair_passes_share_one_displacement_ledger(monkeypatch):
     assert len(ledgers) == 2  # normal + extended repair
     assert ledgers[0] is ledgers[1]
     assert task.id in ledgers[0]
+
+
+@pytest.mark.asyncio
+async def test_victim_may_shift_within_its_old_slot(monkeypatch):
+    # 15-min task into a 105-min corridor holding a 45-min victim: only a
+    # small victim shift fits (15+45+15+15+15 = 105). The victim's replan is
+    # blocked around the NEW task's slot — not its own old span — so it may
+    # slide inside it. And the victim is only moved once the slot is secured.
+    krcmar = BusyEvent("krcmar", _day_at(10, 15), _day_at(11, 15), "busy")
+    victim_ev = BusyEvent("unter", _day_at(11, 45), _day_at(12, 30), "task")
+    ebay = BusyEvent("ebay", _day_at(13), _day_at(13, 45), "busy")
+    victim_task = SimpleNamespace(
+        id=uuid.uuid4(), due_date=_day_at(23, 45), location=None,
+        estimation=45, calendar_event_id="unter",
+    )
+    freed = Interval(_day_at(11, 15), _day_at(13), "unter")
+
+    def fake_victims(session, task, busy, duration, gaps, ws, we, *, displaced=frozenset()):
+        return [(victim_task, victim_ev, freed)]
+
+    captured = {}
+
+    async def fake_locked(session, task, *, block, **kwargs):
+        captured["block"] = block
+        return PlannedSlot(block.start, block.end, block.start, block.end)
+
+    async def fake_clear(task_id):
+        return None
+
+    monkeypatch.setattr(schedule_service, "_movable_victims", fake_victims)
+    monkeypatch.setattr(schedule_service, "_schedule_task_locked", fake_locked)
+    monkeypatch.setattr("app.services.notify.clear_task_notification", fake_clear)
+
+    planned = await schedule_service._repair_by_displacing_task(
+        None,
+        SimpleNamespace(id=uuid.uuid4()),
+        [krcmar, victim_ev, ebay],
+        duration=timedelta(minutes=15),
+        gaps=GAPS,
+        out_s=0,
+        in_s=0,
+        window_start=_day_at(10),
+        window_end=_day_at(23, 45),
+        account_key=None,
+        depth=0,
+        displaced=set(),
+        extended_window=False,
+    )
+
+    assert (planned.start, planned.end) == (_day_at(12, 30), _day_at(12, 45))
+    # Victim exclusion zone = new slot ± event gap; its old span stays open.
+    assert captured["block"].start == _day_at(12, 15)
+    assert captured["block"].end == _day_at(13)
+
+
+@pytest.mark.asyncio
+async def test_no_slot_clears_stale_past_schedule(monkeypatch):
+    tz = user_tz()
+
+    async def raising_plan(*args, **kwargs):
+        raise ValueError("no free slot before due date")
+
+    async def fake_delete(session, task):
+        return None
+
+    async def fake_notify(task):
+        return None
+
+    monkeypatch.setattr(schedule_service, "plan_task_slot", raising_plan)
+    monkeypatch.setattr("app.services.calendar.delete_task_event", fake_delete)
+    monkeypatch.setattr("app.services.notify.notify_no_slot", fake_notify)
+    monkeypatch.setattr("app.events.publish_task", lambda session, task_id: None)
+    monkeypatch.setattr(
+        schedule_service, "get_settings",
+        lambda: SimpleNamespace(google_calendar_default_event_minutes=30),
+    )
+    session = SimpleNamespace(flush=lambda: None, commit=lambda: None)
+
+    # Slot already in the past → cleared: no phantom schedule in the frontend.
+    stale = SimpleNamespace(
+        id=uuid.uuid4(), title="x", due_date=datetime.now(tz) + timedelta(days=1),
+        scheduled_date=datetime.now(tz) - timedelta(hours=3),
+        calendar_event_id="ev-old", estimation=60, location=None,
+    )
+    result = await schedule_service._schedule_task_locked(
+        session, stale, block=None, account_key=None, notify=True, _depth=0,
+    )
+    assert result is None
+    assert stale.scheduled_date is None
+    assert stale.calendar_event_id is None
+
+    # Future (merely conflicting) slot → kept.
+    future = SimpleNamespace(
+        id=uuid.uuid4(), title="y", due_date=datetime.now(tz) + timedelta(days=2),
+        scheduled_date=datetime.now(tz) + timedelta(hours=3),
+        calendar_event_id="ev-live", estimation=60, location=None,
+    )
+    result = await schedule_service._schedule_task_locked(
+        session, future, block=None, account_key=None, notify=True, _depth=0,
+    )
+    assert result is None
+    assert future.scheduled_date is not None
+    assert future.calendar_event_id == "ev-live"
 
 
 @pytest.mark.asyncio
