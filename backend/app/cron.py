@@ -25,7 +25,7 @@ from app.db.clients import tasks as tasks_store
 from app.events import publish_points, publish_task
 from app.services.calendar.discover import discover_updated_events
 from app.services.input.poll import poll_sources
-from app.services.notify import notify_points_penalty
+from app.services.notify import notify_points_penalty, notify_task_created
 from app.services.plan import (
     cleanup_stray_commute_legs,
     plan_commutes_window,
@@ -112,6 +112,13 @@ async def _calendar_discover() -> None:
                 summary["scheduled_updates"],
                 summary["deleted"],
             )
+            if summary["updated"] or summary["deleted"]:
+                retry = await retry_unscheduled_tasks_once(respect_backoff=False)
+                if retry["attempted"]:
+                    log.info(
+                        "calendar-discover retry · attempted=%d scheduled=%d",
+                        retry["attempted"], retry["scheduled"],
+                    )
         except asyncio.CancelledError:
             log.info("calendar-discover loop cancelled")
             raise
@@ -137,11 +144,9 @@ async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
                 continue
             attempted += 1
             result = await schedule_task(session, task, block=block)
-            if result is None:
-                _no_slot_until[task.id] = now + NO_SLOT_RETRY
-                continue
-            _no_slot_until.pop(task.id, None)
-            rescheduled += 1
+            # The slot was missed whether or not a new one was found — the
+            # penalty applies either way (idempotent per slot). On failure
+            # the stale slot was cleared and the retry sweep takes over.
             if subtract_scheduled_overdue_penalty(
                 session,
                 task,
@@ -154,12 +159,44 @@ async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
                     points=PENALTY_POINTS,
                     reason="scheduled date was overdue",
                 )
+            if result is None:
+                _no_slot_until[task.id] = now + NO_SLOT_RETRY
+                continue
+            _no_slot_until.pop(task.id, None)
+            rescheduled += 1
             publish_task(session, task.id)
     return {
         "attempted": attempted,
         "rescheduled": rescheduled,
         "points_subtracted": points_subtracted,
     }
+
+
+async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[str, int]:
+    """Try to place open due-dated tasks that currently have no slot (their
+    stale slot was cleared after a failed schedule). Failures stay silent —
+    the original "could not schedule" notification stands until either a
+    retry succeeds or the user intervenes. `respect_backoff=False` is for
+    discover-triggered sweeps: the calendar actually changed, so waiting
+    out the hourly backoff would sit on fresh room."""
+    now = datetime.now(timezone.utc)
+    attempted = 0
+    scheduled = 0
+    with SessionLocal() as session:
+        for task in tasks_store.open_unscheduled_due(session):
+            backoff = _no_slot_until.get(task.id)
+            if respect_backoff and backoff is not None and now < backoff:
+                continue
+            attempted += 1
+            result = await schedule_task(session, task, notify=False)
+            if result is None:
+                _no_slot_until[task.id] = now + NO_SLOT_RETRY
+                continue
+            _no_slot_until.pop(task.id, None)
+            scheduled += 1
+            await notify_task_created(task, start=result[0], end=result[1])
+            publish_task(session, task.id)
+    return {"attempted": attempted, "scheduled": scheduled}
 
 
 async def penalize_overdue_due_tasks_once() -> dict[str, int]:
@@ -199,11 +236,15 @@ async def _overdue_scheduled_tasks() -> None:
                 log.debug("overdue-scheduled-tasks skipped (disabled)")
                 continue
             summary = await reschedule_overdue_scheduled_tasks_once()
+            retry = await retry_unscheduled_tasks_once()
             log.info(
-                "overdue-scheduled-tasks done · attempted=%d rescheduled=%d points=%d",
+                "overdue-scheduled-tasks done · attempted=%d rescheduled=%d points=%d"
+                " retry_attempted=%d retry_scheduled=%d",
                 summary["attempted"],
                 summary["rescheduled"],
                 summary["points_subtracted"],
+                retry["attempted"],
+                retry["scheduled"],
             )
         except asyncio.CancelledError:
             log.info("overdue-scheduled-tasks loop cancelled")

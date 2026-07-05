@@ -209,6 +209,7 @@ async def _schedule_task_locked(
     primary_action: dict[str, str] | None = None,
     _depth: int,
     _displaced: set | None = None,
+    _keep_slot: bool = False,
 ) -> PlannedSlot | None:
     is_fresh = task.calendar_event_id is None
     prior = scheduled_interval_for(task)
@@ -228,13 +229,16 @@ async def _schedule_task_locked(
             task.id,
             task.due_date.isoformat() if task.due_date else None,
         )
-        if prior is not None and prior.end < datetime.now(user_tz()):
-            # The stored slot already passed and no new one exists — keeping
-            # it would show a schedule that isn't real (plus a dead mirror
-            # event that discover would sync right back). Drop both; the
-            # task reads as unscheduled until a slot opens up. Future slots
-            # (merely conflicting) are kept — they're still the plan.
-            log.info("plan.schedule · clearing stale past slot task=%s", task.id)
+        if prior is not None and not _keep_slot:
+            # No valid slot exists for this task anymore — a stale
+            # scheduled_date (past or future-but-conflicting) shows a
+            # schedule that isn't real and breaks the frontend's
+            # unscheduled indicators, and discover would keep syncing it
+            # back from the mirror. Drop both; the cron retry sweep and
+            # discover changes pick the task up again. Displacement victims
+            # opt out (`_keep_slot`): their slot is still valid — they were
+            # only probed to make room for someone else.
+            log.info("plan.schedule · clearing unschedulable slot task=%s", task.id)
             from app.services.calendar import delete_task_event
 
             try:
@@ -1035,6 +1039,7 @@ async def _repair_by_displacing_task(
                 notify=False,
                 _depth=depth + 1,
                 _displaced=displaced,
+                _keep_slot=True,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("plan.schedule · victim move failed task=%s err=%s", victim.id, exc)

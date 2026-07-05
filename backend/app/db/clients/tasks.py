@@ -230,6 +230,40 @@ def overdue_scheduled_open(
     return list(session.execute(stmt).scalars())
 
 
+def open_unscheduled_due(
+    session: Session,
+    *,
+    limit: int = 100,
+) -> list[Task]:
+    """Open tasks with a due date but no slot — scheduling failed and the
+    stale slot was cleared. The cron retry sweep and discover changes pick
+    them back up."""
+    latest = (
+        select(
+            RawInput.task_id.label("task_id"),
+            RawInput.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=RawInput.task_id,
+                order_by=RawInput.received_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(RawInput.status != "duplicate")
+        .subquery()
+    )
+    stmt = (
+        select(Task)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.scheduled_date.is_(None))
+        .where(Task.due_date.is_not(None))
+        .where(func.coalesce(latest.c.status, "open") == "open")
+        .order_by(Task.due_date.asc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
 def overdue_due_open(
     session: Session,
     *,

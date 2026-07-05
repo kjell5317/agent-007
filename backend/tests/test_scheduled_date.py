@@ -687,7 +687,9 @@ async def test_overdue_scheduled_cron_waits_until_frame_and_grace_elapsed(monkey
 
 
 @pytest.mark.asyncio
-async def test_overdue_scheduled_cron_does_not_penalize_failed_reschedule(monkeypatch):
+async def test_overdue_scheduled_cron_penalizes_even_failed_reschedule(monkeypatch):
+    # The slot was missed whether or not a new one was found — the penalty
+    # applies either way; the cleared task moves on to the retry sweep.
     task = SimpleNamespace(
         id=uuid.uuid4(),
         title="Write report",
@@ -719,10 +721,14 @@ async def test_overdue_scheduled_cron_does_not_penalize_failed_reschedule(monkey
 
     summary = await cron.reschedule_overdue_scheduled_tasks_once()
 
-    assert summary == {"attempted": 1, "rescheduled": 0, "points_subtracted": 0}
-    assert points_store.total(session) == 0
-    assert published_points == []
-    assert notified == []
+    assert summary == {
+        "attempted": 1,
+        "rescheduled": 0,
+        "points_subtracted": cron.PENALTY_POINTS,
+    }
+    assert points_store.total(session) == -cron.PENALTY_POINTS
+    assert published_points == [-cron.PENALTY_POINTS]
+    assert notified == [1]
 
 
 @pytest.mark.asyncio

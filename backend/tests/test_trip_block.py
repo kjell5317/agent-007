@@ -1048,31 +1048,35 @@ async def test_no_slot_clears_stale_past_schedule(monkeypatch):
     )
     session = SimpleNamespace(flush=lambda: None, commit=lambda: None)
 
-    # Slot already in the past → cleared: no phantom schedule in the frontend.
-    stale = SimpleNamespace(
-        id=uuid.uuid4(), title="x", due_date=datetime.now(tz) + timedelta(days=1),
-        scheduled_date=datetime.now(tz) - timedelta(hours=3),
-        calendar_event_id="ev-old", estimation=60, location=None,
-    )
-    result = await schedule_service._schedule_task_locked(
-        session, stale, block=None, account_key=None, notify=True, _depth=0,
-    )
-    assert result is None
-    assert stale.scheduled_date is None
-    assert stale.calendar_event_id is None
+    # Any unschedulable slot — past or future-but-conflicting — is cleared:
+    # no phantom schedule in the frontend, and the retry sweep takes over.
+    for offset in (-timedelta(hours=3), timedelta(hours=3)):
+        task = SimpleNamespace(
+            id=uuid.uuid4(), title="x", due_date=datetime.now(tz) + timedelta(days=1),
+            scheduled_date=datetime.now(tz) + offset,
+            calendar_event_id="ev-old", estimation=60, location=None,
+        )
+        result = await schedule_service._schedule_task_locked(
+            session, task, block=None, account_key=None, notify=True, _depth=0,
+        )
+        assert result is None
+        assert task.scheduled_date is None
+        assert task.calendar_event_id is None
 
-    # Future (merely conflicting) slot → kept.
-    future = SimpleNamespace(
+    # Displacement victims opt out: their slot is still valid — they were
+    # only probed to make room for someone else.
+    victim = SimpleNamespace(
         id=uuid.uuid4(), title="y", due_date=datetime.now(tz) + timedelta(days=2),
         scheduled_date=datetime.now(tz) + timedelta(hours=3),
         calendar_event_id="ev-live", estimation=60, location=None,
     )
     result = await schedule_service._schedule_task_locked(
-        session, future, block=None, account_key=None, notify=True, _depth=0,
+        session, victim, block=None, account_key=None, notify=False, _depth=1,
+        _keep_slot=True,
     )
     assert result is None
-    assert future.scheduled_date is not None
-    assert future.calendar_event_id == "ev-live"
+    assert victim.scheduled_date is not None
+    assert victim.calendar_event_id == "ev-live"
 
 
 @pytest.mark.asyncio
