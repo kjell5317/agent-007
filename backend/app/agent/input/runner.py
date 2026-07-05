@@ -402,7 +402,7 @@ def _candidate_title(hit: SimilarInput) -> str:
 
 
 def _candidate_trace_ref(hit: SimilarInput) -> dict[str, Any]:
-    return {
+    ref: dict[str, Any] = {
         "ref": f"candidate:{hit.id}",
         "kind": "candidate",
         "id": str(hit.id),
@@ -416,6 +416,9 @@ def _candidate_trace_ref(hit: SimilarInput) -> dict[str, Any]:
         "sender": hit.sender,
         "received_at": hit.received_at.isoformat() if hit.received_at else None,
     }
+    if hit.label:
+        ref["label"] = hit.label
+    return ref
 
 
 def _selected_candidate_ref(candidates: list[SimilarInput], task_id: uuid.UUID) -> str | None:

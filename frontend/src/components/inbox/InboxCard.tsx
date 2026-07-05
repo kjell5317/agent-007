@@ -384,9 +384,11 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
         )}
         {row.sender && when && <MetaDot />}
         {when && <span className="font-medium">{when}</span>}
-        {(row.sender || when) && row.source && <MetaDot />}
+        {(row.sender || when) && row.label && <MetaDot />}
+        {row.label && <span className="font-medium">{row.label}</span>}
+        {(row.sender || when || row.label) && row.source && <MetaDot />}
         {row.source && <span className="font-medium">{row.source}</span>}
-        {row.similarity && (row.sender || when || row.source) && <MetaDot />}
+        {row.similarity && (row.sender || when || row.label || row.source) && <MetaDot />}
         {row.similarity && (
           <span
             className="inline-flex items-center gap-1 font-medium"

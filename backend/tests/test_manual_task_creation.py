@@ -75,11 +75,42 @@ async def test_manual_queue_uses_extracted_title_when_no_structured_title(monkey
         def __exit__(self, *_args):
             return None
 
-    async def fake_extract_task_fields(_session, _raw, *, context_inputs):
+    async def fake_extract_task_fields(_session, _raw, *, context_inputs, include_trace):
+        assert include_trace is True
         return {
             "title": "Check quarterly forecast",
             "estimation": 30,
             "due_date": datetime(2026, 7, 3, 9, 0, tzinfo=timezone.utc),
+        }, {
+            "branch": "manual",
+            "iterations": [
+                {
+                    "blocks": [
+                        {
+                            "type": "tool_use",
+                            "id": "create-1",
+                            "name": "create_task",
+                            "input": {"title": "Check quarterly forecast"},
+                        }
+                    ],
+                    "llm": {
+                        "provider": "test",
+                        "model": "test-model",
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                    },
+                    "tool_results": [
+                        {
+                            "name": "create_task",
+                            "status": "success",
+                            "purpose": "create task Check quarterly forecast",
+                            "preview": "extracted task fields",
+                            "result_summary": "extracted task fields",
+                            "changed_state": False,
+                            "artifact_refs": [],
+                        }
+                    ],
+                }
+            ],
         }
 
     def fake_create(_session, payload):
@@ -101,6 +132,17 @@ async def test_manual_queue_uses_extracted_title_when_no_structured_title(monkey
 
     assert created_payloads[0].title == "Check quarterly forecast"
     assert raw.status == "open"
+    assert raw.agent_trace["branch"] == "manual"
+    assert raw.agent_trace["outcome"] == "task_created"
+    assert raw.agent_trace["task_id"] == "30000000-0000-0000-0000-000000000001"
+    assert raw.agent_trace["agent_extracted"] == ["due_date", "estimation", "title"]
+    assert raw.agent_trace["user_provided"] == []
+    assert raw.agent_trace["iterations"][0]["llm"]["model"] == "test-model"
+    create_result = raw.agent_trace["iterations"][0]["tool_results"][0]
+    assert create_result["changed_state"] is True
+    assert create_result["artifact_refs"] == [
+        "task:30000000-0000-0000-0000-000000000001"
+    ]
 
 
 @pytest.mark.asyncio
@@ -123,12 +165,13 @@ async def test_manual_queue_structured_title_overrides_extracted_title(monkeypat
         def __exit__(self, *_args):
             return None
 
-    async def fake_extract_task_fields(_session, _raw, *, context_inputs):
+    async def fake_extract_task_fields(_session, _raw, *, context_inputs, include_trace):
+        assert include_trace is True
         return {
             "title": "Extracted title",
             "estimation": 45,
             "due_date": datetime(2026, 7, 3, 9, 0, tzinfo=timezone.utc),
-        }
+        }, {"branch": "manual", "iterations": []}
 
     def fake_create(_session, payload):
         created_payloads.append(payload)
@@ -148,3 +191,91 @@ async def test_manual_queue_structured_title_overrides_extracted_title(monkeypat
     await task_queue._process(raw_id, {"title": "Explicit title"}, [])
 
     assert created_payloads[0].title == "Explicit title"
+
+
+@pytest.mark.asyncio
+async def test_manual_queue_preserves_prior_trace_under_manual_override(monkeypatch):
+    raw_id = uuid.UUID("20000000-0000-0000-0000-000000000003")
+    prior_trace = {"outcome": "not_task", "reason": "FYI only"}
+    raw = SimpleNamespace(
+        id=raw_id,
+        task_id=None,
+        processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        agent_trace=prior_trace,
+        status="not_task",
+    )
+    session = SimpleNamespace(commit=lambda: None)
+
+    class FakeSessionLocal:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *_args):
+            return None
+
+    async def fake_extract_task_fields(_session, _raw, *, context_inputs, include_trace):
+        assert include_trace is True
+        return {
+            "title": "Override task",
+            "estimation": 25,
+            "due_date": datetime(2026, 7, 4, 9, 0, tzinfo=timezone.utc),
+        }, {
+            "branch": "manual",
+            "iterations": [
+                {
+                    "blocks": [
+                        {
+                            "type": "tool_use",
+                            "id": "search-1",
+                            "name": "search_notes",
+                            "input": {"query": "override"},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "create-1",
+                            "name": "create_task",
+                            "input": {"title": "Override task"},
+                        },
+                    ],
+                    "tool_results": [
+                        {
+                            "name": "search_notes",
+                            "status": "success",
+                            "result_summary": "found note",
+                        },
+                        {
+                            "name": "create_task",
+                            "status": "success",
+                            "artifact_refs": [],
+                        },
+                    ],
+                }
+            ],
+        }
+
+    def fake_create(_session, _payload):
+        return SimpleNamespace(id=uuid.UUID("30000000-0000-0000-0000-000000000003"))
+
+    async def fake_schedule_task(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(task_queue, "SessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(task_queue.raw_inputs_store, "get", lambda _session, _raw_id: raw)
+    monkeypatch.setattr(task_queue, "extract_task_fields", fake_extract_task_fields)
+    monkeypatch.setattr(task_queue.tasks_store, "create", fake_create)
+    monkeypatch.setattr(task_queue, "schedule_task", fake_schedule_task)
+    monkeypatch.setattr(task_queue, "publish_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(task_queue, "publish_input", lambda *_args, **_kwargs: None)
+
+    await task_queue._process(raw_id, {}, [])
+
+    assert raw.agent_trace["outcome"] == "not_task"
+    assert raw.agent_trace["reason"] == "FYI only"
+    override = raw.agent_trace["manual_override"]
+    assert override["branch"] == "manual"
+    assert override["outcome"] == "task_created"
+    assert override["task_id"] == "30000000-0000-0000-0000-000000000003"
+    assert override["iterations"][0]["tool_results"][0]["name"] == "search_notes"
+    assert override["iterations"][0]["tool_results"][1]["artifact_refs"] == [
+        "task:30000000-0000-0000-0000-000000000003"
+    ]
