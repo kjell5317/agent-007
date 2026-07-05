@@ -63,8 +63,14 @@ export function TasksPanel({
     return [t, w, l];
   }, [selectedLabel, sortMode, tasks]);
 
-  const hasVisibleTasks =
-    today.length > 0 || thisWeek.length > 0 || later.length > 0;
+  const groups = [
+    { key: "today", title: "Today", tasks: today },
+    { key: "week", title: "This week", tasks: thisWeek },
+    { key: "later", title: "Later", tasks: later },
+  ].filter((group) => group.tasks.length > 0);
+  // The filter controls live on the first visible section's header, falling
+  // back to a standalone "Today" header when everything is filtered away.
+  const filterHostKey = groups[0]?.key ?? "today";
   const selectedLabelMeta = labels.find((l) => l.name === selectedLabel);
   const emptyMessage = selectedLabel
     ? `No tasks with label "${selectedLabel}".`
@@ -83,58 +89,75 @@ export function TasksPanel({
     />
   );
 
+  const filterActive = Boolean(selectedLabel) || sortMode === "due";
+  const filters = filtersOpen ? (
+    <TaskFilters
+      labels={labels}
+      sortMode={sortMode}
+      onSortModeChange={setSortMode}
+      selectedLabel={selectedLabel}
+      selectedLabelMeta={selectedLabelMeta}
+      onSelectedLabelChange={setSelectedLabel}
+    />
+  ) : null;
+
   return (
     <div className="space-y-6">
-      <section>
-        <SectionToggle
-          title="Today"
-          open={filtersOpen}
-          onOpenChange={setFiltersOpen}
-          active={Boolean(selectedLabel) || sortMode === "due"}
-        />
-        {filtersOpen && (
-          <TaskFilters
-            labels={labels}
-            sortMode={sortMode}
-            onSortModeChange={setSortMode}
-            selectedLabel={selectedLabel}
-            selectedLabelMeta={selectedLabelMeta}
-            onSelectedLabelChange={setSelectedLabel}
+      {groups.length === 0 && (
+        <section>
+          <SectionToggle
+            title="Today"
+            open={filtersOpen}
+            onOpenChange={setFiltersOpen}
+            active={filterActive}
           />
-        )}
-        <div className="space-y-2">{today.map(renderTask)}</div>
-      </section>
-      {!hasVisibleTasks && (
-        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {emptyMessage}
-        </div>
+          {filters}
+          <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+            {emptyMessage}
+          </div>
+        </section>
       )}
-      {thisWeek.length > 0 && (
-        <Section title="This week">{thisWeek.map(renderTask)}</Section>
-      )}
-      {later.length > 0 && (
-        <CollapsibleSection
-          title="Later"
-          open={laterOpen}
-          onOpenChange={setLaterOpen}
-        >
-          {later.map(renderTask)}
-        </CollapsibleSection>
-      )}
+      {groups.map((group) => {
+        const isHost = group.key === filterHostKey;
+        // Later stays collapsible only when a section sits above it.
+        if (group.key === "later" && !isHost) {
+          return (
+            <CollapsibleSection
+              key={group.key}
+              title={group.title}
+              open={laterOpen}
+              onOpenChange={setLaterOpen}
+            >
+              {group.tasks.map(renderTask)}
+            </CollapsibleSection>
+          );
+        }
+        return (
+          <section key={group.key}>
+            {isHost ? (
+              <SectionToggle
+                title={group.title}
+                open={filtersOpen}
+                onOpenChange={setFiltersOpen}
+                active={filterActive}
+              />
+            ) : (
+              <SectionHeader title={group.title} />
+            )}
+            {isHost && filters}
+            <div className="space-y-2">{group.tasks.map(renderTask)}</div>
+          </section>
+        );
+      })}
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function SectionHeader({ title }: { title: string }) {
   return (
-    <section>
-      <div className="mb-2 flex items-start gap-2 px-1">
-        <h2 className="min-w-0 flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-        </h2>
-      </div>
-      <div className="space-y-2">{children}</div>
-    </section>
+    <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      {title}
+    </h2>
   );
 }
 

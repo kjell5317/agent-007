@@ -910,22 +910,37 @@ async def test_cancelled_event_span_recovery(monkeypatch):
     monkeypatch.setattr("app.services.calendar.get_event", broken_get_event)
     assert await _cancelled_event_span(None, "cal", {"id": "gone"}, account_key=None) is None
 
-    # GET on a cancelled recurring instance can resolve to the recurring master
-    # (a different id, dated at the series origin). Its times are years off from
-    # the deleted instance, so the span is treated as unrecoverable.
-    master = _calendar_event(
-        "series", datetime(2000, 1, 1, tzinfo=timezone.utc),
-        datetime(2000, 1, 2, tzinfo=timezone.utc),
-    )
+    # Recurring instance without originalStartTime: recover the time from the
+    # id suffix, never touching the API (`events.get` on such an id can hand
+    # back the master, dated at the series origin).
+    async def boom_get_event(session, *, calendar_id, event_id, account_key=None):
+        raise AssertionError("must not call get_event for a recurring instance id")
 
-    async def master_get_event(session, *, calendar_id, event_id, account_key=None):
-        return master
-
-    monkeypatch.setattr("app.services.calendar.get_event", master_get_event)
+    monkeypatch.setattr("app.services.calendar.get_event", boom_get_event)
     span = await _cancelled_event_span(
         None, "cal", {"id": "series_20310206T120000Z"}, account_key=None,
     )
-    assert span is None
+    assert span == (
+        datetime(2031, 2, 6, 12, tzinfo=timezone.utc),
+        datetime(2031, 2, 6, 12, tzinfo=timezone.utc),
+    )
+
+
+def test_recurring_instance_start_parses_id_suffix():
+    from app.services.calendar.discover import _recurring_instance_start
+
+    # Timed instance: basic-ISO UTC suffix.
+    assert _recurring_instance_start("26p6u4t7j57iaiqo5pk4rb38dc_20380513T110000Z") == datetime(
+        2038, 5, 13, 11, tzinfo=timezone.utc,
+    )
+    # All-day instance: date-only suffix.
+    assert _recurring_instance_start("abc_20380513") == datetime(
+        2038, 5, 13, tzinfo=timezone.utc,
+    )
+    # Plain (non-recurring) event id: no parseable suffix → None, so the caller
+    # falls back to fetching the owner's copy.
+    assert _recurring_instance_start("plainevent123") is None
+    assert _recurring_instance_start("has_underscore_butnotatime") is None
 
 
 def test_reschedule_overlap_skips_tasks_own_legs():

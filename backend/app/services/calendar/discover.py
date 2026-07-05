@@ -144,6 +144,7 @@ async def discover_updated_events(
             for task_id in synced_task_ids:
                 publish_task(session, task_id)
 
+        skipped_out_of_window = 0
         for item in cancelled_items:
             if cid == write_id:
                 rescheduled = await _reschedule_deleted_task_event(
@@ -163,18 +164,21 @@ async def discover_updated_events(
             # Incremental sync is unbounded in time: deleting a long recurring
             # series streams back tombstones for instances years outside the
             # look-ahead window. Only deletions that touch the window can move
-            # commutes we actually plan, so drop the rest.
+            # commutes we actually plan, so drop the rest — a bulk series
+            # deletion is thousands of these, so count them and log once.
             if not _span_touches_window(span, window_start, window_end):
-                log.info(
-                    "discover · event id=%s deleted on %s outside window %s..%s; skipping",
-                    item["id"], cid, span[0].isoformat(), span[1].isoformat(),
-                )
+                skipped_out_of_window += 1
                 continue
             log.info(
                 "discover · event id=%s deleted on %s; replanning commutes around %s..%s",
                 item["id"], cid, span[0].isoformat(), span[1].isoformat(),
             )
             deleted_spans.append(span)
+        if skipped_out_of_window:
+            log.info(
+                "discover · %d deleted event(s) on %s outside window %s..%s; skipped",
+                skipped_out_of_window, cid, window_start.isoformat(), window_end.isoformat(),
+            )
 
         # Something changed in a read/busy calendar, or a manual event on the
         # write calendar. Pull the write calendar and only move events we own
@@ -243,12 +247,19 @@ async def _cancelled_event_span(
     """Time span of a deleted event, or None when it can't be recovered.
 
     Sync tombstones are bare `{id, status}`; cancelled recurring instances
-    additionally carry `originalStartTime`. For plain deletions the owner's
-    copy is still fetchable and keeps its times."""
+    additionally carry `originalStartTime` and encode their original start in
+    the id (`{master}_{start}`). We recover the time offline from either — a
+    bulk series deletion is thousands of tombstones, and `events.get` on an
+    instance can hand back the master (dated at the series origin), so hitting
+    the API per instance would be both wasteful and wrong. `get_event` is a
+    last resort for plain, non-recurring deletions."""
     original = item.get("originalStartTime")
     if original:
         start, _ = _parse_time(original)
         return start, start
+    instance_start = _recurring_instance_start(item["id"])
+    if instance_start is not None:
+        return instance_start, instance_start
     from app.services.calendar import get_event
 
     try:
@@ -261,18 +272,25 @@ async def _cancelled_event_span(
             item["id"], exc,
         )
         return None
-    # GET on a cancelled recurring instance (`{master}_{ts}`) can resolve to the
-    # recurring master, whose start is the series origin — years off from the
-    # deleted instance. Its times would drive a replan around the wrong window,
-    # so trust the fetched event only when it's the one we asked for.
-    if event.id != item["id"]:
-        log.info(
-            "discover · deleted event=%s resolved to master id=%s; span unrecoverable, "
-            "daily re-baseline will heal",
-            item["id"], event.id,
-        )
-        return None
     return event.start, event.end
+
+
+def _recurring_instance_start(event_id: str) -> datetime | None:
+    """The original UTC start encoded in a recurring-instance id, or None.
+
+    Google names expanded instances `{masterId}_{start}`, where `start` is the
+    instance's original start in basic-ISO UTC — `20380513T110000Z` for a timed
+    event, `20380513` for an all-day one. Master ids are base32hex (no `_`), so
+    a trailing segment that parses as a timestamp is unambiguously an instance.
+    """
+    _, sep, suffix = event_id.rpartition("_")
+    if not sep or not suffix:
+        return None
+    fmt = "%Y%m%dT%H%M%SZ" if suffix.endswith("Z") else "%Y%m%d"
+    try:
+        return datetime.strptime(suffix, fmt).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 async def _plan_legs_for_changed_events(
