@@ -1026,6 +1026,89 @@ async def test_victim_may_shift_within_its_old_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cascading_victim_shifts_compact_the_day(monkeypatch):
+    # Real-world regression: San Diego (60m) overlaps a fixed event; the only
+    # resolution is a chain of small shifts — Putzen (15m) vacates to the
+    # Untermiete corridor, which itself slides 15 minutes earlier. Verifies
+    # the inverted victim logic end-to-end across two displacement levels.
+    tz = user_tz()
+    events = {
+        "wall": BusyEvent("wall", datetime.now(tz) - timedelta(hours=1), _day_at(8), "busy"),
+        "krcmar": BusyEvent("krcmar", _day_at(10, 15), _day_at(11, 15), "busy"),
+        "unter": BusyEvent("unter", _day_at(11, 45), _day_at(12, 30), "task"),
+        "ebay": BusyEvent("ebay", _day_at(13), _day_at(13, 45), "busy"),
+        "idt": BusyEvent("idt", _day_at(14), _day_at(15), "busy"),
+        "putzen": BusyEvent("putzen", _day_at(15, 15), _day_at(15, 30), "task"),
+        "sd": BusyEvent("sd", _day_at(15, 45), _day_at(16, 45), "task"),
+        "keintitel": BusyEvent("keintitel", _day_at(16, 30), _day_at(18), "busy"),
+        "leg": BusyEvent("leg", _day_at(18, 20), _day_at(18, 55), "commute"),
+        "englischer": BusyEvent("englischer", _day_at(19), _day_at(23), "busy"),
+    }
+
+    def mk_task(event_id, minutes, sched):
+        return SimpleNamespace(
+            id=uuid.uuid4(), title=event_id, due_date=_day_at(23, 45),
+            scheduled_date=sched, calendar_event_id=event_id,
+            estimation=minutes, location=None,
+        )
+
+    sd = mk_task("sd", 60, _day_at(15, 45))
+    putzen = mk_task("putzen", 15, _day_at(15, 15))
+    unter = mk_task("unter", 45, _day_at(11, 45))
+    by_event = {"putzen": putzen, "unter": unter}
+
+    async def fake_fetch(session, time_min, time_max, *, exclude_event_id=None, account_key=None):
+        return [ev for ev in events.values() if ev.id != exclude_event_id]
+
+    def fake_victims(session, task, busy, duration, gaps, ws, we, *, displaced=frozenset()):
+        out = []
+        for ev in busy:
+            if ev.kind != "task":
+                continue
+            victim = by_event.get(ev.id)
+            if victim is None or victim.id == task.id or victim.id in displaced:
+                continue
+            freed = schedule_service._effective_freed_range(ev, busy, ws, we)
+            if freed.end - freed.start < duration:
+                continue
+            out.append((victim, ev, freed))
+        out.sort(key=lambda entry: entry[0].estimation)  # mirrors shortest-first
+        return out
+
+    async def fake_update(session, task, *, start, end, changed_fields=None):
+        task.scheduled_date = start
+        events[task.calendar_event_id] = BusyEvent(task.calendar_event_id, start, end, "task")
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
+    monkeypatch.setattr(schedule_service, "_movable_victims", fake_victims)
+    monkeypatch.setattr("app.services.calendar.update_task_event", fake_update)
+    monkeypatch.setattr("app.services.notify.clear_task_notification", noop)
+    monkeypatch.setattr(
+        schedule_service, "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
+            google_calendar_default_event_minutes=30,
+            google_calendar_id="",
+            google_busy_calendar_ids=[],
+            slot_min_lead_minutes=0,
+            commute_enabled=False,
+            google_maps_api_key="",
+        ),
+    )
+
+    result = await schedule_service.schedule_task(None, sd, _depth=1)
+
+    assert result == (_day_at(15, 15), _day_at(16, 15))
+    assert (events["putzen"].start, events["putzen"].end) == (_day_at(12, 30), _day_at(12, 45))
+    assert (events["unter"].start, events["unter"].end) == (_day_at(11, 30), _day_at(12, 15))
+
+
+@pytest.mark.asyncio
 async def test_no_slot_clears_stale_past_schedule(monkeypatch):
     tz = user_tz()
 

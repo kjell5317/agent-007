@@ -1154,10 +1154,15 @@ def _movable_victims(
         stmt = stmt.where(Task.id.not_in(list(displaced)))
     rows = list(session.execute(stmt).scalars())
     # Location-less victims first (moving a located task breaks its trip
-    # chain and forces leg rework), then least-urgent (latest due) first.
+    # chain and forces leg rework), then shortest first (a 15-minute task
+    # re-places far more easily than an hour-long one — and a failed victim
+    # branch consumes its nested probes from the shared displacement ledger,
+    # so the most promising candidate should go first), then least urgent.
+    settings = get_settings()
     rows.sort(
         key=lambda row: (
             1 if (row.location or "").strip() else 0,
+            _duration_minutes(row, settings),
             -(row.due_date.timestamp() if row.due_date else 0),
         )
     )
