@@ -130,11 +130,16 @@ async def _process(
 
         needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
         agent_fields: dict = {}
+        agent_trace: dict[str, Any] = {"branch": "manual"}
         if needs_agent:
             context_inputs = _load_context_inputs(session, raw_input_id, context_input_ids)
-            agent_fields = await extract_task_fields(
-                session, raw, context_inputs=context_inputs
+            extraction = await extract_task_fields(
+                session, raw, context_inputs=context_inputs, include_trace=True
             )
+            if isinstance(extraction, tuple):
+                agent_fields, agent_trace = extraction
+            else:
+                agent_fields = extraction
 
         merged = {**agent_fields, **user_fields}
         task = tasks_store.create(
@@ -160,12 +165,14 @@ async def _process(
             "agent_extracted": sorted(agent_fields.keys()) if agent_fields else [],
             "user_provided": sorted(user_fields.keys()),
         }
+        manual_trace = {**agent_trace, **override_entry}
+        _attach_created_task_ref(manual_trace, task.id)
         if is_override:
             trace = dict(raw.agent_trace or {})
-            trace["manual_override"] = override_entry
+            trace["manual_override"] = manual_trace
             raw.agent_trace = trace
         else:
-            raw.agent_trace = {**override_entry, "branch": "manual"}
+            raw.agent_trace = manual_trace
 
         session.commit()
         await schedule_task(session, task)
@@ -190,6 +197,24 @@ def _load_context_inputs(
         if row is not None:
             out.append(row)
     return out
+
+
+def _attach_created_task_ref(trace: dict[str, Any], task_id: uuid.UUID) -> None:
+    """Annotate the extracted create_task tool result with the persisted task."""
+    ref = f"task:{task_id}"
+    for iteration in trace.get("iterations") or []:
+        if not isinstance(iteration, dict):
+            continue
+        for result in iteration.get("tool_results") or []:
+            if not isinstance(result, dict) or result.get("name") != "create_task":
+                continue
+            result["changed_state"] = True
+            refs = list(result.get("artifact_refs") or [])
+            if ref not in refs:
+                refs.append(ref)
+            result["artifact_refs"] = refs
+            result["preview"] = f"created task {task_id}"
+            result["result_summary"] = f"created task {task_id}"
 
 
 def _mark_failed(raw_input_id: uuid.UUID) -> None:

@@ -77,7 +77,9 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
         received_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
     )
 
-    payload = await runner.extract_task_fields(SimpleNamespace(), raw)
+    payload, trace = await runner.extract_task_fields(
+        SimpleNamespace(), raw, include_trace=True
+    )
 
     assert calls[0]["force_tool"] is None
     assert calls[1]["force_tool"] == "create_task"
@@ -86,3 +88,33 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
     assert calls[1]["messages"][-1].role == "tool"
     assert payload["title"] == "Send quarterly report"
     assert payload["due_date"].isoformat() == "2026-07-02T09:05:00+00:00"
+    assert trace["branch"] == "manual"
+    assert trace["iterations"][0]["blocks"] == [
+        {
+            "type": "tool_use",
+            "id": "search-1",
+            "name": "search_notes",
+            "input": {"query": "quarterly report"},
+        }
+    ]
+    assert trace["iterations"][0]["llm"] == {
+        "provider": "test",
+        "model": "test",
+        "usage": {},
+    }
+    assert trace["iterations"][0]["tool_results"][0]["name"] == "search_notes"
+    assert trace["iterations"][0]["tool_results"][0]["result_summary"] == "Notes: - report"
+    assert trace["iterations"][1]["blocks"] == [
+        {
+            "type": "tool_use",
+            "id": "create-1",
+            "name": "create_task",
+            "input": {
+                "title": "Send quarterly report",
+                "estimation": 30,
+                "due_date": "2026-07-02T09:01:00+00:00",
+                "label": "admin",
+            },
+        }
+    ]
+    assert trace["iterations"][1]["tool_results"][0]["name"] == "create_task"
