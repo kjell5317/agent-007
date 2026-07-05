@@ -35,6 +35,7 @@ from app.services.notify import (
     ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
+    clear_task_notification,
     notify_kotx_confirm_merge,
     notify_kotx_open_pr,
     notify_kotx_review_ready,
@@ -158,27 +159,33 @@ async def _run_transition(session: Session, raw) -> dict:
     # notification; a start/review prompt on top of it would be the duplicate
     # the handoff warns against.
     if trace["outcome"] == "no_change":
-        await _notify_kotx_prompt(task, kind, state, meta)
+        await _sync_kotx_prompt(task, kind, state, meta)
     return trace
 
 
-async def _notify_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> None:
-    subject = str(meta.get("subject") or task.title or "")
+async def _sync_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> None:
+    """Post the prompt for the current transition, or clear a stale one.
+
+    When the run moved past the state that proposed an action — the user opened
+    the PR or merged on GitHub, or work simply resumed — the proposed action is
+    no longer available, so any lingering prompt is dropped. resolve_conflict is
+    auxiliary: it never prompts and never disturbs the primary run's prompt."""
     if kind == "implement" and state == "draft":
-        await notify_kotx_start(task, subject=subject)
+        await notify_kotx_start(task)
     elif kind == "implement" and state == "awaiting_approval":
         if meta.get("kotx_proposes") == "merge":
             ctx = await kotx_client.fetch_merge_context(int(meta["kotx_task_id"])) or {}
             await notify_kotx_confirm_merge(
                 task,
-                subject=subject,
                 approved_by=ctx.get("approvedBy"),
                 comment=ctx.get("commentMarkdown"),
             )
         else:
-            await notify_kotx_open_pr(task, subject=subject)
+            await notify_kotx_open_pr(task)
     elif kind == "review" and state == "awaiting_approval":
-        await notify_kotx_review_ready(task, subject=subject)
+        await notify_kotx_review_ready(task)
+    elif kind in ("implement", "review"):
+        await clear_task_notification(task.id)
 
 
 def _kotx_primary_action(meta: dict) -> dict[str, str] | None:

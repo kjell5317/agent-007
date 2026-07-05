@@ -209,13 +209,18 @@ def kotx_prompts(monkeypatch):
     calls: list[dict] = []
 
     def _recorder(name: str):
-        async def _fn(task, *, subject: str, **extra):
-            calls.append({"prompt": name, "task_id": task.id, "subject": subject, **extra})
+        async def _fn(task, **extra):
+            calls.append({"prompt": name, "task_id": task.id, **extra})
 
         return _fn
 
     for name in ("start", "open_pr", "confirm_merge", "review_ready"):
         monkeypatch.setattr(kotx_runner, f"notify_kotx_{name}", _recorder(name))
+
+    async def _noop_clear(task_id):
+        pass
+
+    monkeypatch.setattr(kotx_runner, "clear_task_notification", _noop_clear)
     return calls
 
 
@@ -682,7 +687,6 @@ async def test_open_pr_transition_sends_open_pr_prompt(monkeypatch, kotx_prompts
     assert trace["outcome"] == "no_change"
     assert [c["prompt"] for c in kotx_prompts] == ["open_pr"]
     assert kotx_prompts[0]["task_id"] == task.id
-    assert kotx_prompts[0]["subject"] == "owner/repo#31 Add a metadata index"
 
 
 @pytest.mark.asyncio
@@ -732,6 +736,56 @@ async def test_review_awaiting_approval_sends_review_ready_prompt(
 
     assert trace["outcome"] == "no_change"
     assert [c["prompt"] for c in kotx_prompts] == ["review_ready"]
+
+
+@pytest.mark.asyncio
+async def test_non_prompt_transition_clears_stale_prompt(monkeypatch, kotx_prompts):
+    # The run moved past its prompt state (e.g. PR opened on GitHub, work
+    # resumed) — the proposed action is gone, so any lingering prompt clears.
+    task = SimpleNamespace(id=uuid.uuid4(), title="t", kotx_task_id=42, link=None)
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+    cleared = []
+
+    async def fake_clear(task_id):
+        cleared.append(task_id)
+
+    monkeypatch.setattr(kotx_runner, "clear_task_notification", fake_clear)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="running")))
+
+    assert trace["outcome"] == "no_change"
+    assert kotx_prompts == []
+    assert cleared == [task.id]
+
+
+@pytest.mark.asyncio
+async def test_resolve_conflict_transition_leaves_prompt_untouched(monkeypatch, kotx_prompts):
+    # Auxiliary runs on the same task must not clear the primary run's prompt.
+    task = SimpleNamespace(id=uuid.uuid4(), title="t", kotx_task_id=42, link=None)
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task.id: "open"}
+    )
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+    cleared = []
+
+    async def fake_clear(task_id):
+        cleared.append(task_id)
+
+    monkeypatch.setattr(kotx_runner, "clear_task_notification", fake_clear)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="resolve_conflict", state="running", status="resolving"))
+    )
+
+    assert trace["outcome"] == "no_change"
+    assert cleared == []
 
 
 @pytest.mark.asyncio
@@ -915,11 +969,11 @@ async def test_scheduled_notification_keeps_done_without_action(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_open_pr_notification_offers_open_pr_and_dismiss(monkeypatch):
+async def test_open_pr_notification_title_message_and_buttons(monkeypatch):
     captured = _capture_notify(monkeypatch)
-    await notify_svc.notify_kotx_open_pr(
-        SimpleNamespace(id=uuid.uuid4(), title="t"), subject="owner/repo#31 T"
-    )
+    await notify_svc.notify_kotx_open_pr(SimpleNamespace(id=uuid.uuid4(), title="#31 Add index"))
+    assert captured["title"] == "#31 Add index"
+    assert captured["message"] == "Open Pull Request"
     assert [a["action"] for a in captured["actions"]] == [
         notify_svc.ACTION_KOTX_APPROVE,
         notify_svc.ACTION_DISMISS_TASK,
@@ -930,13 +984,15 @@ async def test_open_pr_notification_offers_open_pr_and_dismiss(monkeypatch):
 async def test_confirm_merge_notification_names_reviewer_and_clips_comment(monkeypatch):
     captured = _capture_notify(monkeypatch)
     await notify_svc.notify_kotx_confirm_merge(
-        SimpleNamespace(id=uuid.uuid4(), title="t"),
-        subject="owner/repo#31 T",
+        SimpleNamespace(id=uuid.uuid4(), title="#31 Add index"),
         approved_by="octocat",
         comment="x" * 500,
     )
+    assert captured["title"] == "#31 Add index"
     # Merge is the only offered action.
     assert captured["actions"] == [{"action": notify_svc.ACTION_KOTX_MERGE, "title": "Merge"}]
+    lines = captured["message"].splitlines()
+    assert lines[0] == "Merge Pull Request"
     assert "Approved by octocat" in captured["message"]
     assert captured["message"].endswith("…")  # comment truncated
 
@@ -944,10 +1000,8 @@ async def test_confirm_merge_notification_names_reviewer_and_clips_comment(monke
 @pytest.mark.asyncio
 async def test_confirm_merge_notification_falls_back_without_context(monkeypatch):
     captured = _capture_notify(monkeypatch)
-    await notify_svc.notify_kotx_confirm_merge(
-        SimpleNamespace(id=uuid.uuid4(), title="t"), subject="s"
-    )
-    assert "merge proposal" in captured["message"]
+    await notify_svc.notify_kotx_confirm_merge(SimpleNamespace(id=uuid.uuid4(), title="t"))
+    assert captured["message"] == "Merge Pull Request"
     assert captured["actions"] == [{"action": notify_svc.ACTION_KOTX_MERGE, "title": "Merge"}]
 
 

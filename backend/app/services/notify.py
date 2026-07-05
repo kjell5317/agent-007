@@ -177,14 +177,14 @@ async def notify_task_created(
 _DISMISS_BUTTON = {"action": ACTION_DISMISS_TASK, "title": "Dismiss"}
 
 
-async def notify_kotx_start(task, *, subject: str) -> None:
+async def notify_kotx_start(task) -> None:
     """A kotx implement run drafted TASK.md and is waiting to start the write
     phase, on a task that was already surfaced (adoption / re-draft). The first
     notification carries this action inline via `notify_task_created`; this is
     the standalone fallback for the already-scheduled case."""
     await notify(
-        title=f"Ready to start · {subject[:80]}",
-        message="kotx drafted the brief — review it, then start the implementation.",
+        title=_short_title(task),
+        message="Start Implementation",
         url=task_url(task.id),
         tag=task_tag(task.id),
         actions=[{"action": ACTION_KOTX_START, "title": "Start"}, _DISMISS_BUTTON],
@@ -192,12 +192,12 @@ async def notify_kotx_start(task, *, subject: str) -> None:
     )
 
 
-async def notify_kotx_open_pr(task, *, subject: str) -> None:
+async def notify_kotx_open_pr(task) -> None:
     """A kotx implement run finished coding and proposed a pull request.
     Replaces kotx's removed "Open PR" prompt."""
     await notify(
-        title=f"Open PR · {subject[:80]}",
-        message="kotx finished coding and proposed a pull request — review and open it.",
+        title=_short_title(task),
+        message="Open Pull Request",
         url=task_url(task.id),
         tag=task_tag(task.id),
         actions=[{"action": ACTION_KOTX_APPROVE, "title": "Open PR"}, _DISMISS_BUTTON],
@@ -206,21 +206,19 @@ async def notify_kotx_open_pr(task, *, subject: str) -> None:
 
 
 async def notify_kotx_confirm_merge(
-    task, *, subject: str, approved_by: str | None = None, comment: str | None = None
+    task, *, approved_by: str | None = None, comment: str | None = None
 ) -> None:
     """An approving PR review moved a tracked implement run back to
     awaiting_approval with a merge proposal. Replaces kotx's removed
     "Confirm merge" prompt — names the approver and shows their (truncated)
     approval comment. Merge is the only offered action."""
-    lines: list[str] = []
+    lines = ["Merge Pull Request"]
     if approved_by:
         lines.append(f"Approved by {approved_by}")
     if comment and comment.strip():
         lines.append(_clip(comment, 200))
-    if not lines:
-        lines.append("An approving review created a merge proposal.")
     await notify(
-        title=f"Confirm merge · {subject[:80]}",
+        title=_short_title(task),
         message="\n".join(lines),
         url=task_url(task.id),
         tag=task_tag(task.id),
@@ -229,14 +227,14 @@ async def notify_kotx_confirm_merge(
     )
 
 
-async def notify_kotx_review_ready(task, *, subject: str) -> None:
+async def notify_kotx_review_ready(task) -> None:
     """A kotx review run produced REVIEW.md and is waiting on a human decision,
     on a task that was already surfaced. The first notification carries the
     Comment action inline via `notify_task_created`; this is the standalone
     fallback for the already-scheduled case."""
     await notify(
-        title=f"Review ready · {subject[:80]}",
-        message="kotx finished a review — comment it, or open the task to approve.",
+        title=_short_title(task),
+        message="Comment Review",
         url=task_url(task.id),
         tag=task_tag(task.id),
         actions=[{"action": ACTION_KOTX_COMMENT, "title": "Comment"}, _DISMISS_BUTTON],
