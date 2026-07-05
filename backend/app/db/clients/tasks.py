@@ -91,9 +91,9 @@ def set_schedule(
 def clear_calendar_event(session: Session, task: Task) -> Task:
     """Drop the calendar mirror pointer, keeping the task's slot.
 
-    `scheduled_date` is NOT NULL — a deleted mirror doesn't un-schedule the
-    task, it just detaches the (now-gone) event so a later re-plan creates a
-    fresh one."""
+    A deleted mirror doesn't un-schedule the task (its `scheduled_date` stays);
+    it just detaches the (now-gone) event so a later re-plan creates a fresh
+    one. Clearing the slot itself is the schedule path's job (sets it null)."""
     task.calendar_event_id = None
     session.flush()
     return task

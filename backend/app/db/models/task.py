@@ -25,11 +25,12 @@ class Task(Base):
     due_date: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    # Every task carries a slot. New rows default to now() so the invariant
-    # holds before the planner assigns a real slot; a task that never lands one
-    # keeps a past slot that the overdue-reschedule cron keeps re-planning.
-    scheduled_date: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+    # Null means unscheduled: no valid slot exists yet (couldn't be placed
+    # before the due date, or its stale slot was cleared). `open_unscheduled_due`
+    # + the retry cron sweep keep re-planning these. New rows default to now()
+    # so a fresh task holds a provisional slot until the planner assigns a real one.
+    scheduled_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, server_default=func.now()
     )
     estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
