@@ -306,6 +306,33 @@ async def notify_unroutable_leg(
     )
 
 
+async def notify_leg_conflict(
+    *,
+    destination: str,
+    blocker: str,
+    depart: datetime,
+    tag: str,
+) -> None:
+    """A commute leg had to be written over (or too close to) an event
+    nothing can move — the user has to resolve the collision by hand."""
+    await notify(
+        title="⚠️ Commute conflicts with an event",
+        message=(
+            f"Leg to {destination[:100]} departing {_fmt_when(depart)} "
+            f"collides with {_clip(blocker, 100)}. Nothing movable — resolve by hand."
+        ),
+        url=get_settings().task_default_url,
+        tag=tag,
+        channel="Scheduling warnings",
+        color="#f59e0b",
+    )
+
+
+async def clear_notification_tag(tag: str) -> None:
+    """Remove a lingering tagged notification (companion-app magic payload)."""
+    await notify(title="", message="clear_notification", tag=tag)
+
+
 async def notify_points_penalty(task, *, points: int, reason: str) -> None:
     await notify(
         title="Points subtracted",

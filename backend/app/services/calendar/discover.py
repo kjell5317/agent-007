@@ -44,7 +44,7 @@ from app.services.calendar.events import (
     is_managed_event,
     is_task_event,
 )
-from app.services.location import is_online_location, resolve_location_alias
+from app.services.location import resolve_location_alias
 from app.services.plan.schedule import (
     _duration_minutes,
     reschedule_event,
@@ -175,8 +175,9 @@ async def discover_updated_events(
         for ev in active:
             if cid == write_id and is_managed_event(ev):
                 continue
-            overlapping = _first_managed_overlap(ev, write_events)
-            if overlapping is not None:
+            # A single changed event can collide with several tasks and legs
+            # at once — every one of them needs its own reschedule.
+            for overlapping in _managed_overlaps(ev, write_events):
                 summary["overlapping"] += 1
                 kind = (
                     "commute" if is_commute_event(overlapping)
@@ -268,7 +269,7 @@ async def _plan_legs_for_changed_events(
     from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
 
     spans: list[tuple[datetime, datetime]] = []
-    span = _physical_span(events)
+    span = _replan_span(events)
     if span is not None:
         spans.append(span)
     if deleted_spans:
@@ -285,14 +286,17 @@ async def _plan_legs_for_changed_events(
     )
 
 
-def _physical_span(events: list[CalendarEvent]) -> tuple[datetime, datetime] | None:
-    """Time range covered by the routable events in `events`, or None."""
+def _replan_span(events: list[CalendarEvent]) -> tuple[datetime, datetime] | None:
+    """Time range legs may need re-deriving around, or None.
+
+    Any changed timed event counts: located ones are routing anchors, and
+    online / location-less ones are avoid spans legs must dodge — a new
+    meeting dropped onto a leg has to push it around. Only the planner's
+    own commute legs and all-day events don't shape legs."""
     spans = [
         (ev.start, ev.end)
         for ev in events
-        if not ev.all_day
-        and not is_commute_event(ev)
-        and not is_online_location(ev.location)
+        if not ev.all_day and not is_commute_event(ev)
     ]
     if not spans:
         return None
@@ -428,23 +432,25 @@ async def _reschedule_deleted_task_event(
     return row.id if result is not None else None
 
 
-def _first_managed_overlap(
+def _managed_overlaps(
     event: CalendarEvent,
     others: Iterable[CalendarEvent],
-) -> CalendarEvent | None:
-    """Return the first managed write event overlapping `event`.
+) -> list[CalendarEvent]:
+    """Every managed write event overlapping `event`.
 
     All-day events only reach this marked busy (`_active_events` drops
     show-as-free ones) and block their whole days. Two intervals [a, b)
     overlap iff `a.start < b.end and b.start < a.end`.
     """
     start, end = _effective_span(event)
-    for other in others:
-        if other.id == event.id or other.all_day or not is_managed_event(other):
-            continue
-        if start < other.end and other.start < end:
-            return other
-    return None
+    return [
+        other for other in others
+        if other.id != event.id
+        and not other.all_day
+        and is_managed_event(other)
+        and start < other.end
+        and other.start < end
+    ]
 
 
 def _effective_span(event: CalendarEvent) -> tuple[datetime, datetime]:

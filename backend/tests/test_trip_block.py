@@ -14,7 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.db.models.route_cache import RouteCache  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
-from app.services.calendar.discover import _physical_span  # noqa: E402
+from app.services.calendar.discover import _replan_span  # noqa: E402
 from app.services.commute import planner as commute_planner  # noqa: E402
 from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
 from app.services.commute.planner import (  # noqa: E402
@@ -589,6 +589,61 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
     assert sorted(deleted_ids) == ["past", "stray"]
 
 
+@pytest.mark.asyncio
+async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
+    async def fake_write(session, **kwargs):
+        return None
+
+    monkeypatch.setattr(commute_planner, "create_event", fake_write)
+    monkeypatch.setattr(commute_planner, "patch_event", fake_write)
+    monkeypatch.setattr(
+        commute_planner, "get_settings", lambda: SimpleNamespace(reminder_lead_minutes=15),
+    )
+
+    leg = PlannedLeg(
+        origin_anchor="home", dest_anchor="ev-1", origin="Home", destination=GYM,
+        mode="transit", depart=_day_at(18, 20), arrive=_day_at(18, 55),
+    )
+    blocker = Anchor("ev-fixed", _day_at(18), _day_at(19), OFFICE)
+    window = (_day_at(8), _day_at(23))
+
+    # Fresh leg with a blocker → conflict reported once.
+    _, _, conflicts = await commute_planner._write_legs(
+        None, [leg], calendar_id="primary", existing=[], window=window,
+        account_key=None, conflicts={leg.key: blocker},
+    )
+    assert conflicts == [(leg, blocker)]
+
+    # Same conflict already marked on the existing leg → no re-alert.
+    marked = _calendar_event(
+        "leg-ev", leg.depart, leg.arrive,
+        props={
+            "managed_by": "plan_service", "kind": "commute",
+            "origin_anchor": "home", "dest_anchor": "ev-1",
+            "mode": "transit", "conflict": "ev-fixed",
+        },
+    )
+    _, _, conflicts = await commute_planner._write_legs(
+        None, [leg], calendar_id="primary", existing=[marked], window=window,
+        account_key=None, conflicts={leg.key: blocker},
+    )
+    assert conflicts == []
+
+    # Conflict resolved → notification tag cleared.
+    cleared = []
+
+    async def fake_clear(tag):
+        cleared.append(tag)
+
+    monkeypatch.setattr("app.services.notify.clear_notification_tag", fake_clear)
+    _, _, conflicts = await commute_planner._write_legs(
+        None, [leg], calendar_id="primary", existing=[marked], window=window,
+        account_key=None, conflicts={},
+    )
+    assert conflicts == []
+    assert cleared == ["conflict-home-ev-1"]
+
+
 def test_colliding_task_anchor_is_replaced_not_overlapped():
     # Old-system task packed tight against a fixed event: its outbound leg
     # would land on top of the event → the task must be re-placed.
@@ -631,7 +686,7 @@ def _calendar_event(
     )
 
 
-def test_physical_span_covers_only_routable_events():
+def test_replan_span_covers_timed_events_including_online():
     commute_props = {"managed_by": "plan_service", "kind": "commute"}
     events = [
         _calendar_event("gym", _day_at(14), _day_at(15), location=GYM),
@@ -640,14 +695,18 @@ def test_physical_span_covers_only_routable_events():
         _calendar_event("leg", _day_at(13), _day_at(13, 30), location=GYM, props=commute_props),
         _calendar_event("holiday", _day_at(0), _day_at(23), location=GYM, all_day=True),
     ]
-    span = _physical_span(events)
+    span = _replan_span(events)
     assert span == (_day_at(9), _day_at(15))
 
-    assert _physical_span([events[2], events[3], events[4]]) is None
+    # A changed online / location-less event still shapes legs (they dodge
+    # it) — its span alone must trigger a replan.
+    assert _replan_span([events[2]]) == (_day_at(11), _day_at(12))
+    # Only the planner's own legs and all-day events don't.
+    assert _replan_span([events[3], events[4]]) is None
 
 
 def test_all_day_busy_event_triggers_overlap_with_task():
-    from app.services.calendar.discover import _first_managed_overlap
+    from app.services.calendar.discover import _managed_overlaps
 
     task_props = {"managed_by": "plan_service", "kind": "task"}
     all_day = _calendar_event(
@@ -655,7 +714,7 @@ def test_all_day_busy_event_triggers_overlap_with_task():
     )
     task = _calendar_event("task-ev", _day_at(15), _day_at(16), props=task_props)
 
-    assert _first_managed_overlap(all_day, [task]) is task
+    assert _managed_overlaps(all_day, [task]) == [task]
 
 
 @pytest.mark.asyncio
@@ -771,6 +830,25 @@ def test_reschedule_overlap_skips_tasks_own_legs():
     assert _first_overlap(slot, [own], "ev-1") is None
     hit = _first_overlap(slot, [foreign], "ev-1")
     assert hit is not None and hit.start == foreign.depart
+
+
+def test_reschedule_overlap_catches_too_close_foreign_leg():
+    # A foreign leg re-derived to sit 5 minutes after the task violates the
+    # event gap — the task must move, same as a true overlap.
+    slot = Interval(_day_at(17, 30), _day_at(18, 15), "ev-1")
+    close = PlannedLeg(
+        origin_anchor="home", dest_anchor="ev-2", origin="Home", destination=GYM,
+        mode="transit", depart=_day_at(18, 20), arrive=_day_at(18, 55),
+    )
+    hit = _first_overlap(slot, [close], "ev-1")
+    assert hit is not None and hit.start == close.depart
+
+    # Exactly the event gap away is fine.
+    clear = PlannedLeg(
+        origin_anchor="home", dest_anchor="ev-2", origin="Home", destination=GYM,
+        mode="transit", depart=_day_at(18, 30), arrive=_day_at(19, 5),
+    )
+    assert _first_overlap(slot, [clear], "ev-1") is None
 
 
 @pytest.mark.asyncio

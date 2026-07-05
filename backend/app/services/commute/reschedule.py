@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
 from app.services.commute.legs import PlannedLeg
@@ -71,10 +72,15 @@ async def reschedule_overlapping_tasks(
         overlap = _first_overlap(current, legs, task.calendar_event_id)
         if overlap is None:
             continue
+        # Pad the blocked range by the event gap: block markers carry zero
+        # gap themselves, and the just-written leg may not be visible in the
+        # planner's calendar read yet — without the pad the task could land
+        # right back within the gap it was moved for.
+        gap = timedelta(minutes=get_settings().event_buffer_minutes)
         result = await schedule_task(
             session,
             task,
-            block=overlap,
+            block=Interval(overlap.start - gap, overlap.end + gap, overlap.event_id),
             account_key=account_key,
             notify=not batch,
             _depth=_depth,
@@ -126,10 +132,16 @@ def _first_overlap(
     legs: list[PlannedLeg],
     task_event_id: str,
 ) -> Interval | None:
+    """First leg overlapping the task or sitting closer than the event gap.
+
+    A leg keeps the full event gap to any event it doesn't serve — a leg
+    re-derived to land just next to a task (e.g. a mode flip shifting its
+    departure) forces the task to move, same as a true overlap."""
+    gap = timedelta(minutes=get_settings().event_buffer_minutes)
     for leg in legs:
         # A task's own legs touch its slot by construction — not a conflict.
         if task_event_id in leg.key:
             continue
-        if leg.depart < task_interval.end and task_interval.start < leg.arrive:
+        if leg.depart < task_interval.end + gap and task_interval.start - gap < leg.arrive:
             return Interval(leg.depart, leg.arrive, leg.dest_anchor)
     return None

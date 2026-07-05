@@ -221,15 +221,28 @@ async def plan_window_commutes(
     if needs_replacement:
         to_write = [leg for leg in to_write if not (set(leg.key) & needs_replacement)]
 
-    summary["planned"], new_failures = await _write_legs(
+    # Whatever still collides after task re-placement involves only fixed
+    # events — nothing can move, so the leg is written anyway, the conflict
+    # stays visible on the calendar, and the user gets one alert (tracked
+    # via a marker on the leg so replans don't re-alert).
+    conflicts = _immovable_conflicts(to_write, anchors)
+    for key, blocker in conflicts.items():
+        log.warning(
+            "commute · leg %s -> %s overlaps immovable event id=%s; leaving the conflict visible",
+            key[0], key[1], blocker.id,
+        )
+
+    summary["planned"], new_failures, new_conflicts = await _write_legs(
         session,
         to_write,
         calendar_id=write_calendar_id,
         existing=existing_commutes,
         window=(window_start, window_end),
         account_key=account_key,
+        conflicts=conflicts,
     )
     await _notify_new_failures(new_failures)
+    await _notify_new_conflicts(new_conflicts, {ev.id: ev.summary for ev in events})
 
     # Arrival truth comes from the full derived set — an anchor at the window
     # edge may keep a leg that was written by an earlier replan.
@@ -575,6 +588,42 @@ async def _notify_new_failures(legs: list[PlannedLeg]) -> None:
         )
 
 
+def _immovable_conflicts(
+    legs: list[PlannedLeg],
+    anchors: list[Anchor],
+) -> dict[tuple[str, str], Anchor]:
+    """Legs still colliding with an anchor after task re-placement — only
+    immovable events remain in their way."""
+    out: dict[tuple[str, str], Anchor] = {}
+    for leg in legs:
+        for anchor in anchors:
+            if anchor.id in leg.key:
+                continue
+            if leg.depart < anchor.end and anchor.start < leg.arrive:
+                out[leg.key] = anchor
+                break
+    return out
+
+
+def _conflict_tag(key: tuple[str, str]) -> str:
+    return f"conflict-{key[0]}-{key[1]}"
+
+
+async def _notify_new_conflicts(
+    conflicts: list[tuple[PlannedLeg, Anchor]],
+    summaries: dict[str, str],
+) -> None:
+    from app.services.notify import notify_leg_conflict
+
+    for leg, blocker in conflicts:
+        await notify_leg_conflict(
+            destination=leg.destination,
+            blocker=summaries.get(blocker.id) or blocker.location,
+            depart=leg.depart,
+            tag=_conflict_tag(leg.key),
+        )
+
+
 async def _write_legs(
     session: Session,
     legs: list[PlannedLeg],
@@ -583,7 +632,9 @@ async def _write_legs(
     existing: list[CalendarEvent],
     window: tuple[datetime, datetime],
     account_key: str | None,
-) -> tuple[int, list[PlannedLeg]]:
+    conflicts: dict[tuple[str, str], Anchor] | None = None,
+) -> tuple[int, list[PlannedLeg], list[tuple[PlannedLeg, Anchor]]]:
+    conflicts = conflicts or {}
     desired = {leg.key: leg for leg in legs}
     existing_by_key: dict[tuple[str, str], CalendarEvent] = {}
     legacy: list[CalendarEvent] = []
@@ -614,19 +665,26 @@ async def _write_legs(
 
     written = 0
     new_failures: list[PlannedLeg] = []
+    new_conflicts: list[tuple[PlannedLeg, Anchor]] = []
     for key, leg in desired.items():
         summary = _summary_for(leg)
         description = _description_for(leg)
+        blocker = conflicts.get(key)
         props = commute_private_properties(
             origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor, mode=leg.mode,
         )
+        # Conflict marker: persisted on the leg so replans that re-derive the
+        # same collision don't re-alert; cleared (empty) when it resolves.
+        props["conflict"] = blocker.id if blocker is not None else ""
         reminders = _reminders_for_leg(leg)
         current = existing_by_key.get(key)
-        # Notify only when a leg *becomes* failed — a replan that re-writes an
-        # already-failed placeholder shouldn't re-alert on every pass.
+        was_conflicting = bool(private_properties(current).get("conflict")) if current else False
+        # Notify only when a leg *becomes* failed/conflicting — a replan that
+        # re-writes the same state shouldn't re-alert on every pass.
         newly_failed = leg.mode == FAILED_MODE and (
             current is None or _commute_mode(current) != FAILED_MODE
         )
+        newly_conflicting = blocker is not None and not was_conflicting
         try:
             if current is None:
                 await create_event(
@@ -641,7 +699,7 @@ async def _write_legs(
                     reminders=reminders,
                     account_key=account_key,
                 )
-            elif _needs_patch(current, leg, summary, description, reminders):
+            elif _needs_patch(current, leg, summary, description, reminders, props["conflict"]):
                 await patch_event(
                     session,
                     calendar_id=calendar_id,
@@ -658,12 +716,18 @@ async def _write_legs(
             written += 1
             if newly_failed:
                 new_failures.append(leg)
+            if newly_conflicting:
+                new_conflicts.append((leg, blocker))
+            elif blocker is None and was_conflicting:
+                from app.services.notify import clear_notification_tag
+
+                await clear_notification_tag(_conflict_tag(key))
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "commute · upsert failed origin=%s dest=%s err=%s",
                 leg.origin_anchor, leg.dest_anchor, exc,
             )
-    return written, new_failures
+    return written, new_failures, new_conflicts
 
 
 def _partition(
@@ -728,6 +792,7 @@ def _needs_patch(
     summary: str,
     description: str,
     reminders: dict,
+    conflict_marker: str = "",
 ) -> bool:
     # The Updated stamp changes on every derivation — comparing it would turn
     # every replan into a patch of every leg.
@@ -738,6 +803,7 @@ def _needs_patch(
         or _epoch(ev.start) != _epoch(leg.depart)
         or _epoch(ev.end) != _epoch(leg.arrive)
         or reminders_differ(ev, reminders)
+        or (private_properties(ev).get("conflict") or "") != conflict_marker
     )
 
 
