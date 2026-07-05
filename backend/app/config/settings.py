@@ -77,8 +77,9 @@ class Settings(BaseSettings):
     # Labels
     labels_config_path: str = "config/labels.toml"
 
-    # Points-per-estimated-minute awarded automatically when a task is
+    # Points-per-estimated-minute awarded automatically when a non-kotx task is
     # completed (e.g. 0.2 → a 30-minute task earns 6 points). 0 disables it.
+    # Kotx-linked completions use a fixed 0.1 factor.
     points_task_done_factor: float = 0.2
 
     # Write calendar

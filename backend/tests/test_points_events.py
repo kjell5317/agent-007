@@ -28,13 +28,14 @@ def _sqlite_session():
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
 
 
-def _task(*, estimation: int | None) -> Task:
+def _task(*, estimation: int | None, kotx_task_id: int | None = None) -> Task:
     now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
     return Task(
         title="Write report",
         due_date=now,
         scheduled_date=now,
         estimation=estimation,
+        kotx_task_id=kotx_task_id,
     )
 
 
@@ -162,6 +163,50 @@ async def test_close_task_awards_points_and_publishes_new_total(monkeypatch):
     assert raw_input.status == "closed"
     assert published_tasks == [task.id]
     assert published_inputs == [raw_input_id]
+
+
+@pytest.mark.asyncio
+async def test_close_kotx_task_awards_fixed_factor(monkeypatch):
+    session = _sqlite_session()
+    task = _task(estimation=30, kotx_task_id=42)
+    session.add(task)
+    session.commit()
+
+    published: list[str] = []
+    raw_input = SimpleNamespace(id=uuid.uuid4(), status="open", processed_at=None)
+
+    monkeypatch.setattr(
+        points_service,
+        "get_settings",
+        lambda: SimpleNamespace(points_task_done_factor=0.5),
+    )
+    monkeypatch.setattr(publish_events.bus, "publish", published.append)
+    monkeypatch.setattr(close_service.raw_inputs_store, "latest_for_task", lambda *_args: raw_input)
+    monkeypatch.setattr(close_service, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(close_service, "publish_input", lambda *_args: None)
+
+    async def fake_delete_task_event(*_args, **_kwargs):
+        return None
+
+    async def fake_clear_task_notification(*_args, **_kwargs):
+        return None
+
+    async def fake_discard_task(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(close_service, "delete_task_event", fake_delete_task_event)
+    monkeypatch.setattr(close_service, "clear_task_notification", fake_clear_task_notification)
+    monkeypatch.setattr(close_service.kotx_client, "discard_task", fake_discard_task)
+
+    await close_service.close_task(session, task.id)
+
+    assert points_store.total(session) == 3
+    entry = session.query(PointsEntry).one()
+    assert entry.factor == 0.1
+    assert entry.quantity == 30
+    assert entry.amount == 3
+    assert _decode(published) == [{"type": "points", "total": 3.0}]
+    assert raw_input.status == "closed"
 
 
 @pytest.mark.asyncio

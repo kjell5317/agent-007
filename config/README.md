@@ -22,5 +22,7 @@ that as a signal the input isn't a task for the user.
 ## Points
 
 Points have no config file. The running score lives in the database; the
-topbar shows it and lets you add/subtract manually. Completing a task awards
-`POINTS_TASK_DONE_FACTOR` × estimated minutes (set in `.env`, 0 to disable).
+topbar shows it and lets you add/subtract manually. Completing a non-kotx task
+awards `POINTS_TASK_DONE_FACTOR` × estimated minutes (set in `.env`, 0 to
+disable). Completing a kotx-linked task awards a fixed `0.1` × estimated
+minutes.
