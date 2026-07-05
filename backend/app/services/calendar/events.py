@@ -429,13 +429,18 @@ def task_private_properties(task) -> dict[str, str]:
     }
 
 
-def commute_private_properties(*, origin_anchor: str, dest_anchor: str) -> dict[str, str]:
-    return {
+def commute_private_properties(
+    *, origin_anchor: str, dest_anchor: str, mode: str | None = None,
+) -> dict[str, str]:
+    props = {
         PROP_MANAGED_BY: MANAGED_BY,
         PROP_KIND: KIND_COMMUTE,
         "origin_anchor": origin_anchor,
         "dest_anchor": dest_anchor,
     }
+    if mode:
+        props["mode"] = mode
+    return props
 
 
 def commute_leg_key(event: CalendarEvent) -> tuple[str, str] | None:

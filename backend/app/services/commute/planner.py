@@ -190,21 +190,24 @@ async def plan_window_commutes(
         # into a bogus "no route" placeholder. Leave the calendar untouched;
         # the next scheduled pass retries.
         return summary
-    missing_transit: set[tuple[str, str]] = set()
-    legs, skipped_unroutable = derive_legs(
-        anchors, home, durations, hourly_rain, settings,
-        avoid=online_spans, missing_transit=missing_transit,
-    )
-    if missing_transit:
-        # The bike-stays-home rule forced transit onto pairs the optimistic
-        # first pass didn't fetch — resolve just those and re-derive.
+    # The chain rules (bike stays home / one mode per trip) can force transit
+    # onto pairs the optimistic first pass didn't fetch — and each re-derive
+    # may surface further pairs. Fetch just those and loop; two extra rounds
+    # cover any chain in practice.
+    legs: list[PlannedLeg] = []
+    skipped_unroutable = 0
+    for _ in range(3):
+        missing_transit: set[tuple[str, str]] = set()
+        legs, skipped_unroutable = derive_legs(
+            anchors, home, durations, hourly_rain, settings,
+            avoid=online_spans, missing_transit=missing_transit,
+        )
+        if not missing_transit:
+            break
         if not await _resolve_missing_transit(
             session, missing_transit, anchors, home, durations, summary,
         ):
             return summary
-        legs, skipped_unroutable = derive_legs(
-            anchors, home, durations, hourly_rain, settings, avoid=online_spans,
-        )
     summary["skipped_unroutable"] = skipped_unroutable
 
     to_write = _legs_to_write(legs, anchors, window_start, window_end)
@@ -614,7 +617,9 @@ async def _write_legs(
     for key, leg in desired.items():
         summary = _summary_for(leg)
         description = _description_for(leg)
-        props = commute_private_properties(origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor)
+        props = commute_private_properties(
+            origin_anchor=leg.origin_anchor, dest_anchor=leg.dest_anchor, mode=leg.mode,
+        )
         reminders = _reminders_for_leg(leg)
         current = existing_by_key.get(key)
         # Notify only when a leg *becomes* failed — a replan that re-writes an
@@ -724,13 +729,21 @@ def _needs_patch(
     description: str,
     reminders: dict,
 ) -> bool:
+    # The Updated stamp changes on every derivation — comparing it would turn
+    # every replan into a patch of every leg.
     return (
         ev.summary != summary
-        or (ev.description or "") != description
+        or _without_updated_line(ev.description or "") != _without_updated_line(description)
         or (ev.location or "") != leg.destination
         or _epoch(ev.start) != _epoch(leg.depart)
         or _epoch(ev.end) != _epoch(leg.arrive)
         or reminders_differ(ev, reminders)
+    )
+
+
+def _without_updated_line(description: str) -> str:
+    return "\n".join(
+        line for line in description.splitlines() if not line.startswith("Updated:")
     )
 
 
@@ -739,36 +752,41 @@ def _epoch(dt: datetime) -> int:
 
 
 def _summary_for(leg: PlannedLeg) -> str:
-    target = "home" if leg.dest_anchor == HOME else leg.destination.split(",")[0]
+    # The destination already lives in the event's location field.
     if leg.mode == FAILED_MODE:
-        return f"⚠️ Commute to {target} (no route)"
-    mode = "Bike" if leg.mode == "bicycling" else "Transit"
-    return f"{mode} {target}" if leg.dest_anchor == HOME else f"{mode} to {target}"
+        return "⚠️ No route"
+    return "🚲" if leg.mode == "bicycling" else "🚆"
 
 
 def _description_for(leg: PlannedLeg) -> str:
-    lines = [f"From: {leg.origin}", f"To: {leg.destination}", f"Mode: {leg.mode}"]
+    # Destination sits in the location field, the mode in the emoji title.
+    lines = [f"From: {leg.origin}"]
     if leg.reason:
         lines.append(f"Reason: {leg.reason}")
     if leg.mode == FAILED_MODE:
         lines.append("No route found — reserved 30 min. Check the address.")
     lines.append(f"Navigate: {_navigation_url(leg)}")
+    updated = to_user_tz(datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
+    lines.append(f"Updated: {updated}")
     return "\n".join(lines)
 
 
 def _navigation_url(leg: PlannedLeg) -> str:
     """Google Maps universal deep link — opens the Maps app with the route
     pre-filled (the Distance Matrix API itself returns no links). Failed
-    legs get no travelmode so Maps picks whatever it can find."""
+    legs get no travelmode so Maps picks whatever it can find. No
+    departure_time: the deep link ignores it."""
     params = {"api": "1", "origin": leg.origin, "destination": leg.destination}
     if leg.mode != FAILED_MODE:
         params["travelmode"] = leg.mode
-    if leg.mode == "transit":
-        params["departure_time"] = str(int(leg.depart.astimezone(timezone.utc).timestamp()))
     return f"https://www.google.com/maps/dir/?{urlencode(params)}"
 
 
 def _commute_mode(ev: CalendarEvent) -> str | None:
+    mode = ev.private_properties.get("mode")
+    if mode:
+        return mode
+    # Legacy legs carried the mode as a description line.
     for line in (ev.description or "").splitlines():
         key, sep, value = line.partition(":")
         if sep and key.strip().lower() == "mode":

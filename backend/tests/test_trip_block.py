@@ -63,7 +63,7 @@ def _url_query(url: str) -> dict[str, list[str]]:
     return parse_qs(urlparse(url).query)
 
 
-def test_transit_navigation_url_includes_departure_time():
+def test_leg_event_format():
     depart = datetime(2026, 7, 3, 8, 30, tzinfo=timezone(timedelta(hours=2)))
     arrive = depart + timedelta(minutes=40)
     leg = PlannedLeg(
@@ -74,21 +74,33 @@ def test_transit_navigation_url_includes_departure_time():
         mode="transit",
         depart=depart,
         arrive=arrive,
+        reason="rain 80% >= 30% threshold",
     )
 
+    from app.services.commute.planner import _summary_for
+
+    # Title is just the mode emoji — destination lives in the location field.
+    assert _summary_for(leg) == "🚆"
+    assert _summary_for(replace_leg(leg, mode="bicycling")) == "🚲"
+    assert _summary_for(replace_leg(leg, mode=FAILED_MODE)) == "⚠️ No route"
+
+    # The Maps deep link ignores departure_time — never send it.
     query = _url_query(_navigation_url(leg))
-
     assert query["travelmode"] == ["transit"]
-    assert query["departure_time"] == [
-        str(int(depart.astimezone(timezone.utc).timestamp()))
-    ]
+    assert "departure_time" not in query
 
-    navigate_line = next(
-        line.removeprefix("Navigate: ")
-        for line in _description_for(leg).splitlines()
-        if line.startswith("Navigate: ")
-    )
-    assert _url_query(navigate_line)["departure_time"] == query["departure_time"]
+    desc = _description_for(leg)
+    lines = desc.splitlines()
+    assert lines[0] == "From: Home"
+    assert not any(line.startswith(("To:", "Mode:")) for line in lines)
+    assert any(line.startswith("Reason: ") for line in lines)
+    assert any(line.startswith("Updated: ") for line in lines)
+
+
+def replace_leg(leg, **changes):
+    from dataclasses import replace as dc_replace
+
+    return dc_replace(leg, **changes)
 
 
 @pytest.mark.parametrize("mode", ["bicycling", FAILED_MODE])
@@ -791,6 +803,39 @@ async def test_reschedule_lands_flush_after_own_vacated_slot(monkeypatch):
 
     assert planned.start == prior.end
     assert planned.end == due
+
+
+@pytest.mark.asyncio
+async def test_repair_passes_share_one_displacement_ledger(monkeypatch):
+    # Normal-window and extended-window repair must consult the SAME ledger,
+    # so a task attempted once is never re-planned in this call — that keeps
+    # the displacement search linear instead of exponential.
+    ledgers = []
+
+    def fake_victims(session, task, busy, duration, gaps, ws, we, *, displaced=frozenset()):
+        ledgers.append(displaced)
+        return []
+
+    tz = user_tz()
+    due = (datetime.now(tz) + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
+    wall = BusyEvent("wall", datetime.now(tz) - timedelta(hours=1), due, "busy")
+
+    async def fake_fetch(session, time_min, time_max, **kwargs):
+        return [wall]
+
+    monkeypatch.setattr(schedule_service, "_movable_victims", fake_victims)
+    monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), due_date=due, location=None, estimation=60, calendar_event_id=None,
+    )
+    with pytest.raises(ValueError):
+        await schedule_service.plan_task_slot(None, task)
+
+    assert len(ledgers) == 2  # normal + extended repair
+    assert ledgers[0] is ledgers[1]
+    assert task.id in ledgers[0]
 
 
 @pytest.mark.asyncio

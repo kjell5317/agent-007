@@ -73,6 +73,9 @@ END_OF_DAY = time(23, 59, 59)
 MAX_REPAIR_DEPTH = 8
 # Chain-insert evaluates at most this many gaps (each costs Maps lookups).
 MAX_CHAIN_GAPS = 8
+# Displacement repair tries at most this many victims per attempt — each one
+# costs a full nested planning round (calendar lists + sweeps).
+MAX_VICTIM_ATTEMPTS = 5
 
 # Process-wide scheduling lock. Held across the entire plan→write section so no
 # two placements ever race on the same stale calendar snapshot. See module docs.
@@ -107,7 +110,9 @@ class Gaps:
     event: timedelta
 
     def neighbor_gap(
-        self, ev: BusyEvent, inner_ids: set[str] = frozenset(),
+        self,
+        ev: BusyEvent,
+        inner_ids: set[str] = frozenset(),
     ) -> timedelta:
         """Gap required between a candidate placement and `ev`.
 
@@ -147,6 +152,7 @@ async def schedule_task(
     notify: bool = True,
     primary_action: dict[str, str] | None = None,
     _depth: int = 0,
+    _displaced: set | None = None,
 ) -> tuple[datetime, datetime] | None:
     """Plan `task` and create/update its calendar mirror (plus commute legs).
 
@@ -176,6 +182,7 @@ async def schedule_task(
             notify=notify,
             primary_action=primary_action,
             _depth=_depth,
+            _displaced=_displaced,
         )
     else:
         async with _schedule_lock:
@@ -187,6 +194,7 @@ async def schedule_task(
                 notify=notify,
                 primary_action=primary_action,
                 _depth=_depth,
+                _displaced=_displaced,
             )
     return (planned.start, planned.end) if planned is not None else None
 
@@ -200,7 +208,7 @@ async def _schedule_task_locked(
     notify: bool,
     primary_action: dict[str, str] | None = None,
     _depth: int,
-    _displaced: frozenset = frozenset(),
+    _displaced: set | None = None,
 ) -> PlannedSlot | None:
     is_fresh = task.calendar_event_id is None
     prior = scheduled_interval_for(task)
@@ -217,7 +225,8 @@ async def _schedule_task_locked(
     except ValueError:
         log.warning(
             "plan.schedule · no slot for task=%s due=%s",
-            task.id, task.due_date.isoformat() if task.due_date else None,
+            task.id,
+            task.due_date.isoformat() if task.due_date else None,
         )
         if notify:
             from app.services.notify import notify_no_slot
@@ -239,7 +248,9 @@ async def _schedule_task_locked(
         # out the next time they open Google Calendar.
         log.error(
             "plan.schedule · calendar write failed task=%s err=%s",
-            task.id, exc, exc_info=True,
+            task.id,
+            exc,
+            exc_info=True,
         )
         if notify:
             from app.services.notify import notify_error
@@ -328,7 +339,7 @@ async def plan_task_slot(
     block: Interval | None = None,
     account_key: str | None = None,
     _depth: int = 0,
-    _displaced: frozenset = frozenset(),
+    _displaced: set | None = None,
 ) -> PlannedSlot:
     """Return a `PlannedSlot` for `task` (task span + reserved trip block).
 
@@ -341,6 +352,11 @@ async def plan_task_slot(
     """
     if task.due_date is None:
         raise ValueError("task has no due_date")
+
+    # One ledger per top-level scheduling call, shared (same object) with
+    # every nested victim attempt: a task is planned at most once per call,
+    # which keeps displacement repair linear instead of exponential.
+    displaced = _displaced if _displaced is not None else set()
 
     settings = get_settings()
     due = to_user_tz(task.due_date)
@@ -406,15 +422,62 @@ async def plan_task_slot(
             return _finalize(planned)
 
     planned = await _swept_block(
-        session, task, busy,
-        duration=duration, gaps=gaps, out_s=out_s, in_s=in_s,
-        window_start=window_start, window_end=window_end, extended_window=False,
+        session,
+        task,
+        busy,
+        duration=duration,
+        gaps=gaps,
+        out_s=out_s,
+        in_s=in_s,
+        window_start=window_start,
+        window_end=window_end,
+        extended_window=False,
     )
     if planned is not None:
         return _finalize(planned)
 
     try:
-        return _finalize(await _repair_by_displacing_task(
+        return _finalize(
+            await _repair_by_displacing_task(
+                session,
+                task,
+                busy,
+                duration=duration,
+                gaps=gaps,
+                out_s=out_s,
+                in_s=in_s,
+                window_start=window_start,
+                window_end=window_end,
+                account_key=account_key,
+                depth=_depth,
+                displaced=displaced,
+                extended_window=False,
+            )
+        )
+    except ValueError:
+        log.info(
+            "plan.schedule · normal window exhausted task=%s due=%s; trying extended window",
+            task.id,
+            task.due_date.isoformat() if task.due_date else None,
+        )
+
+    planned = await _swept_block(
+        session,
+        task,
+        busy,
+        duration=duration,
+        gaps=gaps,
+        out_s=out_s,
+        in_s=in_s,
+        window_start=window_start,
+        window_end=window_end,
+        extended_window=True,
+    )
+    if planned is not None:
+        return _finalize(planned)
+
+    return _finalize(
+        await _repair_by_displacing_task(
             session,
             task,
             busy,
@@ -426,38 +489,10 @@ async def plan_task_slot(
             window_end=window_end,
             account_key=account_key,
             depth=_depth,
-            displaced=_displaced,
-            extended_window=False,
-        ))
-    except ValueError:
-        log.info(
-            "plan.schedule · normal window exhausted task=%s due=%s; trying extended window",
-            task.id, task.due_date.isoformat() if task.due_date else None,
+            displaced=displaced,
+            extended_window=True,
         )
-
-    planned = await _swept_block(
-        session, task, busy,
-        duration=duration, gaps=gaps, out_s=out_s, in_s=in_s,
-        window_start=window_start, window_end=window_end, extended_window=True,
     )
-    if planned is not None:
-        return _finalize(planned)
-
-    return _finalize(await _repair_by_displacing_task(
-        session,
-        task,
-        busy,
-        duration=duration,
-        gaps=gaps,
-        out_s=out_s,
-        in_s=in_s,
-        window_start=window_start,
-        window_end=window_end,
-        account_key=account_key,
-        depth=_depth,
-        displaced=_displaced,
-        extended_window=True,
-    ))
 
 
 # --- Trip-block geometry -------------------------------------------------
@@ -502,7 +537,12 @@ async def _swept_block(
     for _ in range(2):
         total = _block_total(duration, gaps.commute, out_s, in_s)
         slot = _find_free_slot(
-            busy, total, window_start, window_end, gaps, extended_window=extended_window,
+            busy,
+            total,
+            window_start,
+            window_end,
+            gaps,
+            extended_window=extended_window,
         )
         if slot is None:
             return None
@@ -532,7 +572,8 @@ def _piggyback_slot(
     conflict check: it gets re-derived around the task."""
     target = _norm_loc(location)
     anchors = [
-        ev for ev in busy
+        ev
+        for ev in busy
         if ev.kind != "commute" and ev.location and _norm_loc(ev.location) == target
     ]
     for anchor in sorted(anchors, key=lambda ev: ev.start, reverse=True):
@@ -544,8 +585,11 @@ def _piggyback_slot(
             and end <= window_end
             and _within_day_window(start, end, extended=False)
             and _conflict_free(
-                busy, start, block_end,
-                gaps=gaps, ignore_anchor_leg=(anchor.id, 0),
+                busy,
+                start,
+                block_end,
+                gaps=gaps,
+                ignore_anchor_leg=(anchor.id, 0),
             )
         ):
             return PlannedSlot(start, end, start, block_end, 0, in_s)
@@ -558,8 +602,11 @@ def _piggyback_slot(
             and end <= window_end
             and _within_day_window(start, end, extended=False)
             and _conflict_free(
-                busy, block_start, end,
-                gaps=gaps, ignore_anchor_leg=(anchor.id, 1),
+                busy,
+                block_start,
+                end,
+                gaps=gaps,
+                ignore_anchor_leg=(anchor.id, 1),
             )
         ):
             return PlannedSlot(start, end, block_start, end, out_s, 0)
@@ -613,8 +660,13 @@ async def _chain_insert_slot(
         block_start = start - buffer - timedelta(seconds=t_pt)
         block_end = end + buffer + timedelta(seconds=t_tn)
         if not _conflict_free(
-            busy, block_start, block_end, gaps=gaps, inner_ids={prev.id, nxt.id},
-            ignore_anchor_leg=(prev.id, 0), ignore_anchor_leg2=(nxt.id, 1),
+            busy,
+            block_start,
+            block_end,
+            gaps=gaps,
+            inner_ids={prev.id, nxt.id},
+            ignore_anchor_leg=(prev.id, 0),
+            ignore_anchor_leg2=(nxt.id, 1),
         ):
             continue
         t_pn = await _one_way_seconds(session, prev.location, nxt.location, prev.end) or 0
@@ -728,8 +780,11 @@ async def _one_way_seconds(
     settings = get_settings()
     try:
         bike = await resolve_duration(
-            session, origin=origin, destination=destination,
-            mode="bicycling", departure=reference,
+            session,
+            origin=origin,
+            destination=destination,
+            mode="bicycling",
+            departure=reference,
         )
     except Exception as exc:  # noqa: BLE001 — Maps hiccups must not kill planning
         log.warning("plan.schedule · bike lookup failed %s->%s err=%s", origin, destination, exc)
@@ -738,8 +793,11 @@ async def _one_way_seconds(
         return bike
     try:
         transit = await resolve_duration(
-            session, origin=origin, destination=destination,
-            mode="transit", departure=reference,
+            session,
+            origin=origin,
+            destination=destination,
+            mode="transit",
+            departure=reference,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("plan.schedule · transit lookup failed %s->%s err=%s", origin, destination, exc)
@@ -762,8 +820,11 @@ def _cached_trip_legs(
     def cached(origin: str, destination: str) -> int:
         # Bike routes live in the time-invariant bucket 0 (see resolver).
         row = route_cache.lookup_with_bicycling_reverse(
-            session, origin=origin, destination=destination,
-            mode="bicycling", hour_bucket=0,
+            session,
+            origin=origin,
+            destination=destination,
+            mode="bicycling",
+            hour_bucket=0,
         )
         return row.duration_seconds if row is not None else 0
 
@@ -883,17 +944,34 @@ async def _repair_by_displacing_task(
     window_end: datetime,
     account_key: str | None,
     depth: int,
-    displaced: frozenset,
+    displaced: set,
     extended_window: bool,
 ) -> PlannedSlot:
     if depth >= MAX_REPAIR_DEPTH:
         raise ValueError("repair recursion limit reached")
 
+    displaced.add(task.id)
     total = _block_total(duration, gaps.commute, out_s, in_s)
     victims = _movable_victims(
-        session, task, busy, total, gaps, window_start, window_end, displaced=displaced,
+        session,
+        task,
+        busy,
+        total,
+        gaps,
+        window_start,
+        window_end,
+        displaced=displaced,
     )
+    if len(victims) > MAX_VICTIM_ATTEMPTS:
+        log.info(
+            "plan.schedule · trying %d of %d displacement candidates for task=%s",
+            MAX_VICTIM_ATTEMPTS,
+            len(victims),
+            task.id,
+        )
+        victims = victims[:MAX_VICTIM_ATTEMPTS]
     for victim, victim_event, freed_range in victims:
+        displaced.add(victim.id)
         block = Interval(victim_event.start, victim_event.end, victim_event.id)
         try:
             # notify=False: a failed victim move keeps its old slot, so a
@@ -906,7 +984,7 @@ async def _repair_by_displacing_task(
                 account_key=account_key,
                 notify=False,
                 _depth=depth + 1,
-                _displaced=displaced | {task.id},
+                _displaced=displaced,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("plan.schedule · victim move failed task=%s err=%s", victim.id, exc)
@@ -923,7 +1001,8 @@ async def _repair_by_displacing_task(
         # freed range (clamped to the per-day working window) for the new
         # task's block.
         new_busy = [
-            ev for ev in busy
+            ev
+            for ev in busy
             if ev.id != victim_event.id
             and not (ev.leg_key is not None and victim_event.id in ev.leg_key)
         ]
@@ -964,20 +1043,35 @@ def _slot_in_range(
     while day <= last_day:
         if extended_window:
             lower, upper = _day_bounds(
-                day, DAY_TARGET, END_OF_DAY, tz, freed_range.start, freed_range.end,
+                day,
+                DAY_TARGET,
+                END_OF_DAY,
+                tz,
+                freed_range.start,
+                freed_range.end,
             )
             slot = _sweep_forward(busy, duration, gaps, lower, upper)
             if slot is not None:
                 return slot
             lower, upper = _day_bounds(
-                day, EARLY_MORNING, DAY_START, tz, freed_range.start, freed_range.end,
+                day,
+                EARLY_MORNING,
+                DAY_START,
+                tz,
+                freed_range.start,
+                freed_range.end,
             )
             slot = _sweep_backward(busy, duration, gaps, lower, upper)
             if slot is not None:
                 return slot
         else:
             lower, upper = _day_bounds(
-                day, DAY_START, DAY_TARGET, tz, freed_range.start, freed_range.end,
+                day,
+                DAY_START,
+                DAY_TARGET,
+                tz,
+                freed_range.start,
+                freed_range.end,
             )
             slot = _sweep_backward(busy, duration, gaps, lower, upper)
             if slot is not None:
@@ -995,7 +1089,7 @@ def _movable_victims(
     window_start: datetime,
     window_end: datetime,
     *,
-    displaced: frozenset = frozenset(),
+    displaced: set = frozenset(),
 ) -> list[tuple[Task, BusyEvent, Interval]]:
     """Task events whose displacement would free a contiguous range large
     enough for the new task. The freed range counts adjacent gaps — a 30min
@@ -1041,7 +1135,8 @@ def _movable_victims(
     )
     return [
         (row, *by_event_id[row.calendar_event_id])
-        for row in rows if row.calendar_event_id in by_event_id
+        for row in rows
+        if row.calendar_event_id in by_event_id
     ]
 
 
@@ -1072,17 +1167,24 @@ def _effective_freed_range(
 
 
 def _gap_conflicts(
-    events: list[BusyEvent], start: datetime, end: datetime, gaps: Gaps,
+    events: list[BusyEvent],
+    start: datetime,
+    end: datetime,
+    gaps: Gaps,
 ) -> list[BusyEvent]:
     # Swept blocks chain with nothing — neighbour gaps only vary by kind.
     return [
-        ev for ev in events
+        ev
+        for ev in events
         if ev.start < end + gaps.neighbor_gap(ev) and start - gaps.neighbor_gap(ev) < ev.end
     ]
 
 
 def _latest_conflict(
-    events: list[BusyEvent], start: datetime, end: datetime, gaps: Gaps,
+    events: list[BusyEvent],
+    start: datetime,
+    end: datetime,
+    gaps: Gaps,
 ) -> BusyEvent | None:
     conflicts = _gap_conflicts(events, start, end, gaps)
     if not conflicts:
@@ -1091,7 +1193,10 @@ def _latest_conflict(
 
 
 def _earliest_conflict(
-    events: list[BusyEvent], start: datetime, end: datetime, gaps: Gaps,
+    events: list[BusyEvent],
+    start: datetime,
+    end: datetime,
+    gaps: Gaps,
 ) -> BusyEvent | None:
     conflicts = _gap_conflicts(events, start, end, gaps)
     if not conflicts:
@@ -1139,7 +1244,9 @@ def _db_scheduled_busy(
             if (out[i].start, out[i].end) != (start, end):
                 log.info(
                     "plan.schedule · stale calendar span for task=%s event=%s; using DB slot %s",
-                    row.id, row.calendar_event_id, start.isoformat(),
+                    row.id,
+                    row.calendar_event_id,
+                    start.isoformat(),
                 )
                 out[i] = replace(out[i], start=start, end=end)
             continue

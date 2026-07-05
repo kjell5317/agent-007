@@ -21,10 +21,11 @@ doesn't route to but the user still attends. Legs from home cap the slide
 at `MAX_EARLY_DODGE`; a bounded wait at the destination beats riding
 through a meeting, an unbounded one doesn't.
 
-The bike lives at home: a leg may only be ridden when every previous leg
-since the last home departure was ridden too. Once a chain leaves home by
-transit (or any leg falls back to transit), the rest of that chain stays
-off the bike until it passes through home again.
+The bike lives at home and must come back home: a trip (home → … → home)
+rides one mode. A leg may only be ridden when every previous leg since the
+last home departure was ridden too, and a chain that would mix bike with
+transit (e.g. rain flips only the return) is harmonized — transit for the
+whole trip when it routes, otherwise the bike is kept throughout.
 
 The module is pure: callers resolve route durations (`required_routes`
 lists what's needed) and pass them in as a dict, so the derivation is
@@ -33,7 +34,7 @@ unit-testable from fixtures.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from app.timezones import to_user_tz
@@ -255,7 +256,101 @@ def derive_legs(
                 missing_transit=missing_transit,
             )
         )
+    legs = _harmonize_chain_modes(legs, durations, settings, missing_transit)
     return legs, sum(1 for leg in legs if leg.mode == FAILED_MODE)
+
+
+def _harmonize_chain_modes(
+    legs: list[PlannedLeg],
+    durations: Durations,
+    settings,
+    missing_transit: set[tuple[str, str]] | None,
+) -> list[PlannedLeg]:
+    """A trip rides one mode — the bike must come back home.
+
+    A chain mixing bike and transit (e.g. rain flips only the return)
+    strands the bike, so the whole trip goes onto transit. When some leg
+    has no transit route the trip keeps the bike throughout instead — a
+    wet ride home beats a stranded bike."""
+    out: list[PlannedLeg] = []
+    for chain in _chains(legs):
+        out.extend(_harmonized_chain(chain, durations, settings, missing_transit))
+    return out
+
+
+def _chains(legs: list[PlannedLeg]) -> list[list[PlannedLeg]]:
+    chains: list[list[PlannedLeg]] = []
+    current: list[PlannedLeg] = []
+    for leg in legs:
+        if leg.origin_anchor == HOME and current:
+            chains.append(current)
+            current = []
+        current.append(leg)
+    if current:
+        chains.append(current)
+    return chains
+
+
+def _harmonized_chain(
+    chain: list[PlannedLeg],
+    durations: Durations,
+    settings,
+    missing_transit: set[tuple[str, str]] | None,
+) -> list[PlannedLeg]:
+    bike_legs = [leg for leg in chain if leg.mode == "bicycling"]
+    others = [leg for leg in chain if leg.mode != "bicycling"]
+    if not bike_legs or not others:
+        return chain
+
+    # Preferred: the whole trip on transit.
+    transit: dict[tuple[str, str], int | None] = {}
+    unfetched = False
+    for leg in bike_legs:
+        key = (leg.origin, leg.destination, "transit")
+        if key not in durations:
+            if missing_transit is not None:
+                missing_transit.add((leg.origin, leg.destination))
+            unfetched = True
+        else:
+            transit[leg.key] = durations[key]
+    if unfetched:
+        # The caller fetches the recorded pairs and re-derives.
+        return chain
+    if all(seconds is not None for seconds in transit.values()):
+        return [
+            _with_mode(leg, "transit", transit[leg.key], "one mode per trip — transit throughout")
+            if leg.mode == "bicycling"
+            else leg
+            for leg in chain
+        ]
+
+    # No full transit trip — ride the whole way if every flipped leg can be
+    # ridden (rain flips can; threshold or no-route legs cannot, and then
+    # the mix stays visible for the user to resolve).
+    bike: dict[tuple[str, str], int] = {}
+    for leg in others:
+        seconds = durations.get((leg.origin, leg.destination, "bicycling"))
+        if (
+            leg.mode != "transit"
+            or seconds is None
+            or seconds > settings.commute_bike_max_minutes * 60
+        ):
+            return chain
+        bike[leg.key] = seconds
+    return [
+        _with_mode(leg, "bicycling", bike[leg.key], "no transit for the whole trip — keeping the bike")
+        if leg.mode != "bicycling"
+        else leg
+        for leg in chain
+    ]
+
+
+def _with_mode(leg: PlannedLeg, mode: str, seconds: int, reason: str) -> PlannedLeg:
+    """Swap a leg's mode keeping its anchored end fixed: arrivals stay
+    anchored on `arrive`, rides home on `depart`."""
+    if leg.dest_anchor == HOME:
+        return replace(leg, mode=mode, reason=reason, arrive=leg.depart + timedelta(seconds=seconds))
+    return replace(leg, mode=mode, reason=reason, depart=leg.arrive - timedelta(seconds=seconds))
 
 
 def _arrive_leg(

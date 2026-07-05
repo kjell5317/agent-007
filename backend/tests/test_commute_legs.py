@@ -133,6 +133,58 @@ def test_bike_over_threshold_uses_transit_and_never_bikes_back():
     assert inbound.reason == "no route found"
 
 
+def test_rain_on_return_sends_whole_trip_to_transit():
+    # Bike out at 14:00, rain at the 15:00 ride home: a transit return would
+    # strand the bike, so the whole trip goes onto transit.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({(HOME_ADDR, GYM, "transit"): 1200, (GYM, HOME_ADDR, "transit"): 1200})
+    rain = {to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80}
+    legs, skipped = derive_legs([anchor], HOME_ADDR, durations, rain, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.mode for leg in legs] == ["transit", "transit"]
+    outbound = legs[0]
+    assert outbound.reason == "one mode per trip — transit throughout"
+    assert outbound.arrive == anchor.start - BUFFER
+    assert outbound.depart == outbound.arrive - timedelta(seconds=1200)
+
+
+def test_harmonize_records_missing_transit_and_converges():
+    # Rain on the return flips it to transit, but the outbound transit was
+    # never fetched — recorded for the lazy fetch, then the re-derive lands
+    # the whole trip on transit.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({(GYM, HOME_ADDR, "transit"): 1200})
+    rain = {to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80}
+
+    missing: set[tuple[str, str]] = set()
+    derive_legs([anchor], HOME_ADDR, durations, rain, SETTINGS, missing_transit=missing)
+    assert missing == {(HOME_ADDR, GYM)}
+
+    durations[(HOME_ADDR, GYM, "transit")] = 1100
+    legs, _ = derive_legs([anchor], HOME_ADDR, durations, rain, SETTINGS)
+    assert [leg.mode for leg in legs] == ["transit", "transit"]
+
+
+def test_no_outbound_transit_keeps_bike_round_trip_despite_rain():
+    # Transit can't cover the outbound (definitive no-route), so the trip
+    # keeps the bike both ways even though rain wanted transit home.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({
+        (HOME_ADDR, GYM, "transit"): None,
+        (GYM, HOME_ADDR, "transit"): 1200,
+    })
+    rain = {to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80}
+    legs, skipped = derive_legs([anchor], HOME_ADDR, durations, rain, SETTINGS)
+
+    assert skipped == 0
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling"]
+    inbound = legs[1]
+    assert inbound.reason == "no transit for the whole trip — keeping the bike"
+    assert inbound.depart == anchor.end + BUFFER
+    assert inbound.arrive == inbound.depart + timedelta(seconds=600)
+
+
 def test_transit_fallback_to_bike_still_works_when_bike_is_along():
     # Rain wants transit for the ride home, but no transit route exists.
     # The outbound leg was ridden, so the bike is on hand to fall back to.

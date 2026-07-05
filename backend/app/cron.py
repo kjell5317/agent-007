@@ -52,6 +52,12 @@ MIGRATION_DELAY_S = 120
 MIGRATION_RETRY_S = 300
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=24).total_seconds())
+# A task the planner could not place stays overdue — without a backoff the
+# 5-minute loop would re-run the whole (expensive) displacement search
+# forever. One retry per hour is plenty; any calendar edit or task update
+# triggers its own reschedule anyway.
+NO_SLOT_RETRY = timedelta(hours=1)
+_no_slot_until: dict[Any, datetime] = {}
 
 
 async def _auto_poll() -> None:
@@ -126,10 +132,15 @@ async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
             block = scheduled_interval_for(task)
             if block is None or block.end + OVERDUE_TASK_GRACE > now:
                 continue
+            backoff = _no_slot_until.get(task.id)
+            if backoff is not None and now < backoff:
+                continue
             attempted += 1
             result = await schedule_task(session, task, block=block)
             if result is None:
+                _no_slot_until[task.id] = now + NO_SLOT_RETRY
                 continue
+            _no_slot_until.pop(task.id, None)
             rescheduled += 1
             if subtract_scheduled_overdue_penalty(
                 session,
