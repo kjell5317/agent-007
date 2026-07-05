@@ -882,6 +882,56 @@ async def test_deleted_event_span_widens_replan_window(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sync_overflow_drops_token_to_rebaseline(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+
+    settings = SimpleNamespace(
+        google_calendar_id="primary", event_buffer_minutes=10, commute_enabled=False,
+    )
+    monkeypatch.setattr(discover_mod, "get_settings", lambda: settings)
+
+    recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    token_row = SimpleNamespace(
+        account_key="acct",
+        extra={
+            "calendar_sync_tokens": {"primary": "stale-token"},
+            "calendar_sync_baselines": {"primary": recent},
+        },
+    )
+    monkeypatch.setattr(
+        discover_mod.oauth_tokens, "get_decrypted",
+        lambda session, *, provider, account_key: token_row,
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        discover_mod.oauth_tokens, "set_extra",
+        lambda session, *, provider, account_key, patch: captured.update(patch=patch),
+    )
+
+    class FakeClient:
+        # A change-set too large to page through: partial items, no token.
+        async def sync_events(self, cid, *, sync_token=None, time_min=None, time_max=None):
+            return [], None
+
+        async def list_events(self, cid, *, time_min=None, time_max=None):
+            return []
+
+    async def fake_authorized_client(session, account_key):
+        return FakeClient()
+
+    monkeypatch.setattr(discover_mod, "authorized_client", fake_authorized_client)
+
+    await discover_mod.discover_updated_events(
+        SimpleNamespace(commit=lambda: None), calendar_ids=["primary"], account_key="acct",
+    )
+
+    # The overflowing cursor is dropped so the next run re-baselines within the
+    # window rather than replaying the same delta forever.
+    assert "primary" not in captured["patch"]["calendar_sync_tokens"]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_event_span_recovery(monkeypatch):
     from app.services.calendar.discover import _cancelled_event_span
 

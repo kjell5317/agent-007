@@ -122,6 +122,14 @@ async def discover_updated_events(
         )
         if new_token is not None:
             sync_tokens[cid] = new_token
+        elif cid in sync_tokens:
+            # Sync bailed without a token (page cap, see _MAX_SYNC_PAGES) — a
+            # single change-set too large to page through, e.g. a huge recurring
+            # series deleted at once. Drop the stale cursor so the next run
+            # re-baselines within the window instead of replaying the same
+            # overflowing delta forever.
+            del sync_tokens[cid]
+            log.info("discover · sync overflowed for %s; dropping token to re-baseline", cid)
         baselines[cid] = new_baseline.isoformat()
 
         active = _active_events(raw_items, cid)
