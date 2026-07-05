@@ -19,6 +19,7 @@ def _hit(**overrides) -> SimilarInput:
         "source": "gmail",
         "status": "not_task",
         "task_id": None,
+        "label": None,
         "similarity": 0.8123,
         "decayed_similarity": 0.8123,
         "agent_trace": {"reason": "Informational newsletter with no action requested."},
@@ -66,6 +67,7 @@ def test_new_input_prompt_renders_task_candidate_header_without_duplicate_title(
     ) in message
     assert "  description: Send the final Q2 report to finance." in message
     assert "  estimation: 20 min" in message
+    assert "  label: admin" in message
     assert message.count("title: Send Q2 report") == 1
 
 
@@ -110,7 +112,7 @@ def test_candidate_title_falls_back_to_sender_without_placeholder():
 
 
 def test_candidate_trace_ref_includes_readable_evidence_fields():
-    hit = _hit()
+    hit = _hit(label="admin")
 
     ref = runner._candidate_trace_ref(hit)
 
@@ -121,6 +123,7 @@ def test_candidate_trace_ref_includes_readable_evidence_fields():
         "status": "not_task",
         "source": "gmail",
         "task_id": None,
+        "label": "admin",
         "similarity": 0.8123,
         "sim": 0.8123,
         "title": "Weekly FYI",

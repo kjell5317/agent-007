@@ -274,7 +274,7 @@ def _thread_lookup_filters(meta: dict) -> dict[str, str]:
 
 def _evidence_ref(hit: SimilarInput, *, selected: bool = False) -> dict:
     """Compact, human-readable pointer back to a similar raw input."""
-    return {
+    ref = {
         "ref": f"precedent:{hit.id}",
         "kind": "precedent",
         "id": str(hit.id),
@@ -289,6 +289,9 @@ def _evidence_ref(hit: SimilarInput, *, selected: bool = False) -> dict:
         "received_at": hit.received_at.isoformat() if hit.received_at else None,
         "selected": selected,
     }
+    if hit.label:
+        ref["label"] = hit.label
+    return ref
 
 
 def _candidate_title(hit: SimilarInput) -> str:

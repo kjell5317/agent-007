@@ -291,22 +291,26 @@ class SimilarInput:
     sender: str | None
     content_snippet: str | None
     received_at: datetime
+    label: str | None = None
 
 
 _SIMILAR_INPUTS_SQL = text(
     """
     SELECT
-      id, source, status, task_id, received_at, agent_trace, source_metadata,
-      LEFT(content, 1000) AS content_snippet,
-      1.0 - (embedding <=> CAST(:emb AS vector)) AS similarity,
-      (1.0 - (embedding <=> CAST(:emb AS vector)))
-        * exp(- EXTRACT(EPOCH FROM (now() - received_at))
+      raw_inputs.id, raw_inputs.source, raw_inputs.status, raw_inputs.task_id,
+      tasks.label, raw_inputs.received_at, raw_inputs.agent_trace,
+      raw_inputs.source_metadata,
+      LEFT(raw_inputs.content, 1000) AS content_snippet,
+      1.0 - (raw_inputs.embedding <=> CAST(:emb AS vector)) AS similarity,
+      (1.0 - (raw_inputs.embedding <=> CAST(:emb AS vector)))
+        * exp(- EXTRACT(EPOCH FROM (now() - raw_inputs.received_at))
               / (:half_life_days * 86400.0)) AS decayed_similarity
     FROM raw_inputs
-    WHERE embedding IS NOT NULL
-      AND processed_at IS NOT NULL
-      AND status = ANY(:statuses)
-      AND id <> :exclude_id
+    LEFT JOIN tasks ON tasks.id = raw_inputs.task_id
+    WHERE raw_inputs.embedding IS NOT NULL
+      AND raw_inputs.processed_at IS NOT NULL
+      AND raw_inputs.status = ANY(:statuses)
+      AND raw_inputs.id <> :exclude_id
     ORDER BY decayed_similarity DESC
     LIMIT :k
     """
@@ -344,6 +348,7 @@ def search_similar(
                 source=r.source,
                 status=r.status,
                 task_id=r.task_id,
+                label=r.label,
                 similarity=float(r.similarity) if r.similarity is not None else 0.0,
                 decayed_similarity=(
                     float(r.decayed_similarity)
