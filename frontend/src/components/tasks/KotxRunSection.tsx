@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CircleDot, GitBranch, GitMerge, GitPullRequest, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ interface Props {
   // Called after a terminal action (approve/merge/comment/start) — the task
   // list should refresh since the kotx transition may close the 007 task.
   onActionDone: () => void;
+  onActionPendingChange?: (pending: boolean) => void;
 }
 
 // The consolidated task modal shows only the markdown views — prompt and log
@@ -41,7 +42,12 @@ function subjectUrl(task: KotxTask): string {
   return task.githubUrl;
 }
 
-export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
+export function KotxRunSection({
+  task,
+  onChanged,
+  onActionDone,
+  onActionPendingChange,
+}: Props) {
   const doc: "task" | "review" = task.kind === "review" ? "review" : "task";
   const primaryLabel = doc === "task" ? "TASK.md" : "REVIEW.md";
   const mergeProposal = isMergeProposal(task);
@@ -60,8 +66,10 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
   const [prTitleDraft, setPrTitleDraft] = useState("");
   const [prBodyDraft, setPrBodyDraft] = useState("");
   const [editing, setEditing] = useState(false);
+  const [editorHeight, setEditorHeight] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const documentPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setView(defaultView);
@@ -71,6 +79,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
     let cancelled = false;
     setLoading(true);
     setEditing(false);
+    setEditorHeight(null);
     if (view === "pr") {
       setPr(null);
     } else {
@@ -111,17 +120,35 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
     };
   }, [task.id, doc, view]);
 
+  const startEditing = () => {
+    const panelHeight = documentPanelRef.current?.getBoundingClientRect().height;
+    setEditorHeight(panelHeight ?? null);
+    setEditing(true);
+  };
+
+  const stopEditing = () => {
+    setEditing(false);
+    setEditorHeight(null);
+  };
+
   async function withBusy<T>(fn: () => Promise<T>, msg: string, done?: boolean) {
     setBusy(true);
+    if (done) onActionPendingChange?.(true);
+    let clearedActionPending = false;
     try {
       await fn();
       toast.success(msg);
       await onChanged();
-      if (done) onActionDone();
+      if (done) {
+        onActionPendingChange?.(false);
+        clearedActionPending = true;
+        onActionDone();
+      }
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
+      if (done && !clearedActionPending) onActionPendingChange?.(false);
     }
   }
 
@@ -130,7 +157,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
       const put = doc === "task" ? kotx.putBrief : kotx.putReview;
       await put(task.id, draft);
       setContent(draft);
-      setEditing(false);
+      stopEditing();
     }, `${primaryLabel} saved`);
 
   const savePr = () =>
@@ -138,7 +165,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
       const next = { title: prTitleDraft, body: prBodyDraft };
       await kotx.putPr(task.id, next);
       setPr(next);
-      setEditing(false);
+      stopEditing();
     }, "PR saved");
 
   const views: { key: View; label: string }[] = [
@@ -242,11 +269,20 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
         </div>
       )}
 
-      <div className="max-h-[32rem] min-h-64 overflow-auto rounded-lg border">
+      <div
+        ref={documentPanelRef}
+        className={cn(
+          "max-h-[32rem] min-h-64 overflow-auto rounded-lg border",
+          editing && "overflow-hidden",
+        )}
+        style={
+          editing && editorHeight !== null ? { height: editorHeight } : undefined
+        }
+      >
         {loading ? (
           <div className="p-3 text-sm text-muted-foreground">Loading…</div>
         ) : editing && view === "pr" ? (
-          <div className="flex flex-col gap-2 p-2">
+          <div className="flex h-full min-h-64 flex-col gap-2 p-2">
             <Input
               value={prTitleDraft}
               onChange={(e) => setPrTitleDraft(e.target.value)}
@@ -258,14 +294,14 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
               value={prBodyDraft}
               onChange={(e) => setPrBodyDraft(e.target.value)}
               placeholder="PR body"
-              className="min-h-64 resize-y rounded-lg font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-0"
+              className="min-h-0 flex-1 resize-none overflow-auto rounded-lg font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-0"
             />
           </div>
         ) : editing ? (
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="min-h-64 w-full resize-y rounded-lg border-0 font-mono text-xs leading-relaxed focus-visible:ring-0"
+            className="h-full min-h-64 w-full resize-none overflow-auto rounded-lg border-0 font-mono text-xs leading-relaxed focus-visible:ring-0"
             autoFocus
           />
         ) : view === "pr" ? (
@@ -320,7 +356,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setEditing(true)}
+              onClick={startEditing}
               disabled={busy}
             >
               <Pencil className="h-3.5 w-3.5" />
@@ -331,7 +367,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setEditing(true)}
+              onClick={startEditing}
               disabled={busy}
             >
               <Pencil className="h-3.5 w-3.5" />
@@ -350,7 +386,7 @@ export function KotxRunSection({ task, onChanged, onActionDone }: Props) {
                   } else {
                     setDraft(content ?? "");
                   }
-                  setEditing(false);
+                  stopEditing();
                 }}
                 disabled={busy}
               >

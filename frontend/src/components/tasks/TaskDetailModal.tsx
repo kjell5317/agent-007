@@ -91,6 +91,7 @@ export function TaskDetailModal({
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [kotxActionPending, setKotxActionPending] = useState(false);
   const [closingAction, setClosingAction] = useState<"done" | "dismiss" | null>(
     null,
   );
@@ -106,6 +107,7 @@ export function TaskDetailModal({
     setPickerEstimation(task.estimation);
     setPickerLabel(task.label ?? "");
     setClosingAction(null);
+    setKotxActionPending(false);
   }, [task]);
 
   useEffect(() => {
@@ -372,6 +374,7 @@ export function TaskDetailModal({
           labels={labels}
           busy={busy}
           closingAction={closingAction}
+          kotxActionPending={kotxActionPending}
           editingText={editingText}
           textDraft={textDraft}
           activePicker={activePicker}
@@ -413,6 +416,7 @@ export function TaskDetailModal({
           onReopenTask={reopenCurrentTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
+          onKotxActionPendingChange={setKotxActionPending}
         />
       )}
     </Modal>
@@ -476,6 +480,7 @@ function TaskSummary({
   labels,
   busy,
   closingAction,
+  kotxActionPending,
   editingText,
   textDraft,
   activePicker,
@@ -505,6 +510,7 @@ function TaskSummary({
   onReopenTask,
   onReschedule,
   onCreateGithubIssue,
+  onKotxActionPendingChange,
 }: {
   task: Task;
   kotxTask: KotxTask | null;
@@ -513,6 +519,7 @@ function TaskSummary({
   labels: Label[];
   busy: boolean;
   closingAction: "done" | "dismiss" | null;
+  kotxActionPending: boolean;
   editingText: TextField | null;
   textDraft: string;
   activePicker: PickerField | null;
@@ -542,6 +549,7 @@ function TaskSummary({
   onReopenTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
+  onKotxActionPendingChange: (pending: boolean) => void;
 }) {
   const labelMeta = labels.find((l) => l.name === task.label);
   const dueOverdue = isOverdue(task.due_date);
@@ -762,6 +770,7 @@ function TaskSummary({
             task={kotxTask}
             onChanged={onKotxChanged ?? (() => {})}
             onActionDone={onKotxActionDone}
+            onActionPendingChange={onKotxActionPendingChange}
           />
         )}
 
@@ -811,7 +820,10 @@ function TaskSummary({
           </div>
         )}
 
-        <LinkedInputsSection inputs={task.raw_inputs ?? []} />
+        <LinkedInputsSection
+          inputs={task.raw_inputs ?? []}
+          muted={kotxActionPending}
+        />
       </div>
     </div>
   );
@@ -1215,11 +1227,23 @@ function InlinePickerPanel({
   );
 }
 
-function LinkedInputsSection({ inputs }: { inputs: TaskRawInput[] }) {
+function LinkedInputsSection({
+  inputs,
+  muted = false,
+}: {
+  inputs: TaskRawInput[];
+  muted?: boolean;
+}) {
   if (inputs.length === 0) return null;
 
   return (
-    <section className="space-y-2 border-t pt-3">
+    <section
+      className={cn(
+        "space-y-2 border-t pt-3 transition-opacity",
+        muted && "pointer-events-none opacity-50",
+      )}
+      aria-disabled={muted}
+    >
       <div className="text-xs font-medium uppercase text-muted-foreground">
         Linked inputs
       </div>
@@ -1237,7 +1261,9 @@ function LinkedInputsSection({ inputs }: { inputs: TaskRawInput[] }) {
                 </div>
               </div>
               {input.source_url && (
-                <OpenLink href={input.source_url}>Open source</OpenLink>
+                <OpenLink href={input.source_url} disabled={muted}>
+                  Open source
+                </OpenLink>
               )}
             </div>
             {hasInputDetails(input) && (
@@ -1252,7 +1278,27 @@ function LinkedInputsSection({ inputs }: { inputs: TaskRawInput[] }) {
   );
 }
 
-function OpenLink({ href, children }: { href: string; children: ReactNode }) {
+function OpenLink({
+  href,
+  disabled = false,
+  children,
+}: {
+  href: string;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  if (disabled) {
+    return (
+      <span
+        aria-disabled="true"
+        className="inline-flex max-w-full items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-primary"
+      >
+        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{children}</span>
+      </span>
+    );
+  }
+
   return (
     <a
       href={href}
