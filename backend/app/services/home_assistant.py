@@ -90,14 +90,15 @@ async def get_next_event_datetime() -> datetime | None:
     return _parse_home_assistant_datetime(state)
 
 
-async def minutes_until_next_event_prep(now: datetime | None = None) -> int:
+async def minutes_until_next_event_prep(now: datetime | None = None) -> int | None:
     """Minutes from `now` until `NEXT_EVENT_PREP_LEAD` before the next event.
 
-    0 when HA isn't configured or the entity holds no usable datetime.
+    None when HA isn't configured or the entity holds no usable datetime — the
+    caller must not treat that as "0 minutes left".
     """
     target = await get_next_event_datetime()
     if target is None:
-        return 0
+        return None
     reference = now if now is not None else datetime.now(timezone.utc)
     return round((target - NEXT_EVENT_PREP_LEAD - reference).total_seconds() / 60)
 

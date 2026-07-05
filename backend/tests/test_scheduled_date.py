@@ -567,12 +567,13 @@ async def test_day_action_without_sleep_deducts_nothing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_night_action_deducts_rounded_tenth_of_minutes_from_points(monkeypatch):
+async def test_night_action_docks_sleep_deficit_against_8h_target(monkeypatch):
     session = SimpleNamespace()
     adjustments: list[tuple] = []
 
+    # 7h54m until prep → 8h − 7h54m = 6 min short → round(6/10) = 1 point.
     async def fake_minutes_until_next_event_prep():
-        return 437
+        return 474
 
     monkeypatch.setattr(
         notifications, "minutes_until_next_event_prep", fake_minutes_until_next_event_prep
@@ -598,20 +599,20 @@ async def test_night_action_deducts_rounded_tenth_of_minutes_from_points(monkeyp
 
     result = await notifications.handle_action(payload, request, session=session)
 
-    # 437 min → rounded to 440 → / 10 = 44 points deducted.
     assert result == {
         "ok": True,
         "action": "NIGHT",
-        "minutes_until_prep": 437,
-        "points_deducted": 44,
+        "minutes_until_prep": 474,
+        "points_deducted": 1,
     }
-    assert adjustments == [(-44, "night", "437 min to next event")]
+    assert adjustments == [(-1, "night", "6 min under 8h")]
 
 
 @pytest.mark.asyncio
-async def test_night_action_deducts_nothing_when_no_time_remains(monkeypatch):
+async def test_night_action_deducts_nothing_with_enough_sleep(monkeypatch):
+    # 8h30m until prep is over the 8h target → no deficit, no deduction.
     async def fake_minutes_until_next_event_prep():
-        return 0
+        return 510
 
     monkeypatch.setattr(
         notifications, "minutes_until_next_event_prep", fake_minutes_until_next_event_prep
@@ -619,7 +620,7 @@ async def test_night_action_deducts_nothing_when_no_time_remains(monkeypatch):
     monkeypatch.setattr(
         notifications,
         "adjust_points",
-        lambda *_a, **_k: pytest.fail("zero timedelta must not touch points"),
+        lambda *_a, **_k: pytest.fail("no deficit must not touch points"),
     )
     monkeypatch.setattr(
         notifications,
@@ -635,7 +636,39 @@ async def test_night_action_deducts_nothing_when_no_time_remains(monkeypatch):
     assert result == {
         "ok": True,
         "action": "NIGHT",
-        "minutes_until_prep": 0,
+        "minutes_until_prep": 510,
+        "points_deducted": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_night_action_skips_points_when_next_event_unknown(monkeypatch):
+    async def fake_minutes_until_next_event_prep():
+        return None
+
+    monkeypatch.setattr(
+        notifications, "minutes_until_next_event_prep", fake_minutes_until_next_event_prep
+    )
+    monkeypatch.setattr(
+        notifications,
+        "adjust_points",
+        lambda *_a, **_k: pytest.fail("unknown next event must not touch points"),
+    )
+    monkeypatch.setattr(
+        notifications,
+        "get_settings",
+        lambda: SimpleNamespace(home_assistant_action_secret=""),
+    )
+
+    request = SimpleNamespace(headers={}, query_params={})
+    payload = notifications.ActionPayload(action=notifications.ACTION_NIGHT)
+
+    result = await notifications.handle_action(payload, request, session=SimpleNamespace())
+
+    assert result == {
+        "ok": True,
+        "action": "NIGHT",
+        "minutes_until_prep": None,
         "points_deducted": 0,
     }
 

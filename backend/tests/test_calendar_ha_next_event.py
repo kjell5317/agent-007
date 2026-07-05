@@ -266,7 +266,7 @@ async def test_minutes_until_next_event_prep_counts_down_to_lead(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_minutes_until_next_event_prep_zero_when_unavailable(monkeypatch):
+async def test_minutes_until_next_event_prep_none_when_unavailable(monkeypatch):
     async def fake_get():
         return None
 
@@ -276,7 +276,7 @@ async def test_minutes_until_next_event_prep_zero_when_unavailable(monkeypatch):
         now=datetime(2026, 7, 6, 23, 0, tzinfo=timezone.utc)
     )
 
-    assert minutes == 0
+    assert minutes is None
 
 
 async def _run_discovery_with_events(

@@ -50,6 +50,10 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+# NIGHT docks points for falling short of an 8h sleep target: the minutes below
+# 8h until the next-event prep time, rounded to 10 min and divided by 10.
+NIGHT_SLEEP_TARGET_MINUTES = 8 * 60
+
 # HA action id → kotx client function name. Resolved via getattr at call time so
 # the actual POST is dispatched (and stays patchable in tests).
 _KOTX_ACTIONS = {
@@ -123,12 +127,15 @@ async def handle_action(
 
     if payload.action == ACTION_NIGHT:
         minutes = await minutes_until_next_event_prep()
-        # timedelta rounded to the nearest 10 min, then divided by 10.
-        penalty = max(0, round(minutes / 10))
-        if penalty:
-            adjust_points(
-                session, -penalty, caller="night", reason=f"{minutes} min to next event"
-            )
+        penalty = 0
+        if minutes is not None:
+            shortfall = NIGHT_SLEEP_TARGET_MINUTES - minutes
+            # shortfall rounded to the nearest 10 min, then divided by 10.
+            penalty = max(0, round(shortfall / 10))
+            if penalty:
+                adjust_points(
+                    session, -penalty, caller="night", reason=f"{shortfall} min under 8h",
+                )
         log.info(
             "notify action · night minutes_until_prep=%s points_deducted=%s",
             minutes, penalty,
