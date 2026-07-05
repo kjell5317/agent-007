@@ -73,6 +73,19 @@ async def run_kotx_transition(session: Session, raw) -> dict:
     # enough; the unique constraint stays as the backstop.
     kotx_id = int((raw.source_metadata or {})["kotx_task_id"])
     async with _lock_for(kotx_id):
+        # A redelivery of this exact transition (kotx retries after a delivery
+        # timeout) may have been finalized by the delivery that held the lock
+        # before us. Re-read past the identity map: reprocessing would re-run
+        # the state machine and downgrade the task's own anchor to duplicate.
+        state = raw_inputs.processing_state(session, raw.id)
+        if state is not None and state[0] is not None:
+            return {
+                "outcome": "already_processed",
+                "branch": "kotx",
+                "auto_decided": True,
+                "kotx_task_id": kotx_id,
+                "status": state[1],
+            }
         return await _run_transition(session, raw)
 
 
@@ -147,9 +160,16 @@ async def _run_transition(session: Session, raw) -> dict:
     else:
         trace["outcome"] = "no_change"
 
-    raw_inputs.finalize(
-        session, raw.id, status="duplicate", task_id=task.id, agent_trace=trace
-    )
+    # Never downgrade a row that is already this task's own open anchor. The
+    # derived task status reads the latest non-duplicate row, so flipping the
+    # anchor to duplicate would erase the task's open state and drop it out of
+    # the list — the failure that motivated this guard.
+    if getattr(raw, "task_id", None) == task.id and getattr(raw, "status", None) == "open":
+        trace["anchor_preserved"] = True
+    else:
+        raw_inputs.finalize(
+            session, raw.id, status="duplicate", task_id=task.id, agent_trace=trace
+        )
     _backfill_unlinked_thread_inputs(session, meta, task, trace)
     session.commit()
 

@@ -203,6 +203,16 @@ def _no_thread_backfill(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _unprocessed_by_default(monkeypatch):
+    """The post-lock redelivery guard does a fresh DB read; the state-machine
+    tests run on SimpleNamespace sessions with no `execute`, so default it to
+    "not yet processed" and let the redelivery test override it."""
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "processing_state", lambda *_a, **_k: None
+    )
+
+
+@pytest.fixture(autouse=True)
 def kotx_prompts(monkeypatch):
     """Capture the HA prompts the runner sends in place of kotx's removed ones,
     and keep every test hermetic (no real notify() regardless of CWD/.env)."""
@@ -663,6 +673,64 @@ async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypat
     assert len(creates) == 1
     outcomes = sorted(t["outcome"] for t in traces)
     assert outcomes == ["no_change", "task_created"]
+
+
+@pytest.mark.asyncio
+async def test_redelivery_finalized_by_prior_delivery_is_skipped(monkeypatch):
+    # kotx retried a transition after a delivery timeout; the delivery that
+    # held the lock before us already finalized the raw. The post-lock re-read
+    # must short-circuit so the state machine doesn't run again and downgrade
+    # the task's own open anchor to duplicate (which drops it from the list).
+    def boom(*_a, **_k):
+        raise AssertionError("a redelivery must not re-run the state machine")
+
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", boom)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", boom)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "processing_state",
+        lambda s, rid: (datetime.now(timezone.utc), "open"),
+    )
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="draft")))
+
+    assert trace["outcome"] == "already_processed"
+    assert trace["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_open_anchor_row_is_never_downgraded_to_duplicate(monkeypatch):
+    # Reprocessing a row that is already the task's open anchor must not flip
+    # it to duplicate — the derived task status reads the latest non-duplicate
+    # row, so the downgrade would erase the open state and drop the task.
+    task_id = uuid.uuid4()
+    task = SimpleNamespace(id=task_id, kotx_task_id=42, link=None)
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: task)
+    monkeypatch.setattr(
+        kotx_runner.tasks, "latest_status_for", lambda s, ids: {task_id: "open"}
+    )
+    finalized: dict = {}
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs,
+        "finalize",
+        lambda session, raw_id, **kw: finalized.update({"called": True, **kw}),
+    )
+
+    raw = SimpleNamespace(
+        id=uuid.uuid4(),
+        source="kotx",
+        source_metadata=_meta(state="awaiting_approval"),
+        content="kotx transition",
+        status="open",
+        task_id=task_id,
+    )
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(session, raw)
+
+    assert trace["outcome"] == "no_change"
+    assert trace["anchor_preserved"] is True
+    assert "called" not in finalized
 
 
 # --- HA prompts replacing kotx's removed notifications --------------------------

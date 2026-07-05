@@ -173,6 +173,23 @@ def finalize(
     return row
 
 
+def processing_state(
+    session: Session, raw_input_id: uuid.UUID
+) -> tuple[datetime | None, str] | None:
+    """Fresh `(processed_at, status)` read that bypasses the identity map.
+
+    A caller holding the per-kotx-id lock uses this to detect a redelivery
+    that another session finalized while it waited — a plain `session.get`
+    would hand back the stale in-transaction copy (still unprocessed).
+    Returns None if the row is gone."""
+    row = session.execute(
+        select(RawInput.processed_at, RawInput.status).where(
+            RawInput.id == raw_input_id
+        )
+    ).first()
+    return (row.processed_at, row.status) if row is not None else None
+
+
 def link_unassigned_by_thread(
     session: Session,
     *,

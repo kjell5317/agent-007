@@ -14,7 +14,7 @@ import hmac
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
 from app.config import get_settings
 from app.db import SessionLocal
@@ -34,8 +34,33 @@ def _verify_signature(body: bytes, header: str | None, secret: str) -> bool:
     return hmac.compare_digest(header.removeprefix("sha256="), expected)
 
 
+async def _process_kotx_delivery(task: dict) -> None:
+    """Drain one kotx transition off the request path.
+
+    kotx's delivery timeout is shorter than a worst-case transition (brief
+    fetch + LLM extraction + a scheduling sweep that exhausts both windows),
+    so processing inline made kotx time out and *redeliver* — a second run
+    that raced the first and clobbered its task status/notification. We ack
+    fast and do the work here instead."""
+    session = SessionLocal()
+    try:
+        summary = await drain(KotxSource([task]), session)
+    finally:
+        session.close()
+
+    # Nudge connected browsers to refetch /kotx/tasks — every delivery means a
+    # run changed upstream, whether or not it became an actionable inbox item.
+    publish_kotx()
+
+    log.info(
+        "kotx webhook · task=%s state=%s fetched=%d errors=%d",
+        task.get("id"), task.get("state"),
+        summary["fetched"], len(summary["errors"]),
+    )
+
+
 @router.post("/kotx")
-async def kotx_webhook(request: Request) -> dict:
+async def kotx_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
     settings = get_settings()
     if not settings.kotx_webhook_secret:
         raise HTTPException(
@@ -57,19 +82,7 @@ async def kotx_webhook(request: Request) -> dict:
     if not isinstance(task, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing task payload")
 
-    session = SessionLocal()
-    try:
-        summary = await drain(KotxSource([task]), session)
-    finally:
-        session.close()
-
-    # Nudge connected browsers to refetch /kotx/tasks — every delivery means a
-    # run changed upstream, whether or not it became an actionable inbox item.
-    publish_kotx()
-
-    log.info(
-        "kotx webhook · task=%s state=%s fetched=%d errors=%d",
-        task.get("id"), task.get("state"),
-        summary["fetched"], len(summary["errors"]),
-    )
+    # Verify + parse synchronously (fast, and the signature must gate access),
+    # but process out of band so we ack well inside kotx's delivery timeout.
+    background_tasks.add_task(_process_kotx_delivery, task)
     return {"ok": True}
