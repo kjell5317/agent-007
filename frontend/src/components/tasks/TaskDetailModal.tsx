@@ -611,6 +611,7 @@ function TaskSummary({
                   onChange={onPickerLabelChange}
                   onSave={onSaveLabel}
                   labels={labels}
+                  defaultOpen
                 />
               </InlinePickerPanel>
             }

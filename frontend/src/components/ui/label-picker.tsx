@@ -10,10 +10,17 @@ interface Props {
   onChange: (v: string) => void;
   onSave: () => void;
   labels: Label[];
+  defaultOpen?: boolean;
 }
 
-export function LabelPicker({ value, onChange, onSave, labels }: Props) {
-  const [open, setOpen] = useState(false);
+export function LabelPicker({
+  value,
+  onChange,
+  onSave,
+  labels,
+  defaultOpen = false,
+}: Props) {
+  const [open, setOpen] = useState(defaultOpen);
   const wrapRef = useRef<HTMLDivElement>(null);
   const selected = labels.find((l) => l.name === value);
 
