@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +14,8 @@ from app.auth.google_tokens import (
     GoogleTokenMissing,
     get_fresh_google_token,
 )
+
+log = logging.getLogger(__name__)
 
 _BASE = "https://health.googleapis.com/v4"
 _SLEEP_PARENT = "users/me/dataTypes/sleep"
@@ -44,7 +47,11 @@ class GoogleHealthClient:
         }
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             resp = await client.get(f"{_BASE}/{_SLEEP_PARENT}/dataPoints", params=params)
-            resp.raise_for_status()
+            if resp.is_error:
+                # Google's error body carries the actual reason (SERVICE_DISABLED,
+                # PERMISSION_DENIED, an activation link, …); surface it before raising.
+                log.warning("google health sleep · %s %s", resp.status_code, resp.text)
+                resp.raise_for_status()
             return resp.json()
 
 

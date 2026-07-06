@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
@@ -37,6 +38,8 @@ async def test_google_health_client_list_sleep_request(monkeypatch):
     calls = []
 
     class FakeResponse:
+        is_error = False
+
         def raise_for_status(self):
             return None
 
@@ -87,6 +90,37 @@ async def test_google_health_client_list_sleep_request(monkeypatch):
             "timeout": 12.0,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_sleep_logs_google_error_body_before_raising(monkeypatch, caplog):
+    body = '{"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "denied"}}'
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout, headers):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, params):
+            return httpx.Response(403, request=httpx.Request("GET", url), text=body)
+
+    monkeypatch.setattr(health_client.httpx, "AsyncClient", FakeAsyncClient)
+    client = health_client.GoogleHealthClient("access-token")
+
+    with caplog.at_level(logging.WARNING, logger="app.services.health.client"):
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.list_sleep(
+                start=datetime(2026, 7, 4, tzinfo=timezone.utc),
+                end=datetime(2026, 7, 5, tzinfo=timezone.utc),
+            )
+
+    assert "403" in caplog.text
+    assert "PERMISSION_DENIED" in caplog.text
 
 
 @pytest.mark.asyncio
