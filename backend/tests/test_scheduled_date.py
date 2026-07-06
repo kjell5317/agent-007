@@ -571,7 +571,7 @@ async def test_night_action_docks_sleep_deficit_against_8h_target(monkeypatch):
     session = SimpleNamespace()
     adjustments: list[tuple] = []
 
-    # 7h54m until prep → 8h − 7h54m = 6 min short → round(6/10) = 1 point.
+    # 7h54m until prep → 8h − 7h54m = 6 min short → round(6/2) = 3 points.
     async def fake_minutes_until_next_event_prep():
         return 474
 
@@ -603,9 +603,9 @@ async def test_night_action_docks_sleep_deficit_against_8h_target(monkeypatch):
         "ok": True,
         "action": "NIGHT",
         "minutes_until_prep": 474,
-        "points_deducted": 1,
+        "points_deducted": 3,
     }
-    assert adjustments == [(-1, "night", "6 min under 8h")]
+    assert adjustments == [(-3, "night", "6 min under 8h")]
 
 
 @pytest.mark.asyncio

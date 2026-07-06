@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -9,7 +10,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.health.client import SLEEP_SEGMENT_DATA_TYPE, authorized_client
-from app.timezones import user_tz
+from app.timezones import to_user_tz, user_tz
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,8 +56,17 @@ async def request_awake_minutes(
         session, account_key=account_key, now=reference
     )
     if interval is None:
+        log.info("google sleep · none returned for today's local day")
         return 0
-    return round((reference - interval.end).total_seconds() / 60)
+    minutes = round((reference - interval.end).total_seconds() / 60)
+    log.info(
+        "google sleep · start=%s end=%s segments=%d awake_minutes=%s",
+        to_user_tz(interval.start).isoformat(timespec="minutes"),
+        to_user_tz(interval.end).isoformat(timespec="minutes"),
+        len(interval.segments),
+        minutes,
+    )
+    return minutes
 
 
 def normalize_sleep_interval(payload: dict[str, Any]) -> SleepInterval | None:
