@@ -14,39 +14,26 @@ from app.services.health import client as health_client  # noqa: E402
 from app.services.health import sleep as sleep_service  # noqa: E402
 
 
-def _nanos(dt: datetime) -> str:
-    utc = dt.astimezone(timezone.utc)
-    return str(int(utc.timestamp()) * 1_000_000_000 + utc.microsecond * 1000)
+def _rfc3339(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _millis(dt: datetime) -> int:
-    return int(dt.timestamp() * 1000)
-
-
-def _sleep_payload(*segments: tuple[datetime, datetime, int]) -> dict:
+def _sleep_payload(*sessions: tuple[datetime, datetime, str]) -> dict:
     return {
-        "bucket": [
+        "dataPoints": [
             {
-                "dataset": [
-                    {
-                        "point": [
-                            {
-                                "dataTypeName": "com.google.sleep.segment",
-                                "startTimeNanos": _nanos(start),
-                                "endTimeNanos": _nanos(end),
-                                "value": [{"intVal": stage}],
-                            }
-                            for start, end, stage in segments
-                        ]
-                    }
-                ]
+                "sleep": {
+                    "interval": {"startTime": _rfc3339(start), "endTime": _rfc3339(end)},
+                    "type": sleep_type,
+                }
             }
+            for start, end, sleep_type in sessions
         ]
     }
 
 
 @pytest.mark.asyncio
-async def test_google_fit_client_aggregate_sleep_request(monkeypatch):
+async def test_google_health_client_list_sleep_request(monkeypatch):
     calls = []
 
     class FakeResponse:
@@ -54,7 +41,7 @@ async def test_google_fit_client_aggregate_sleep_request(monkeypatch):
             return None
 
         def json(self):
-            return {"bucket": []}
+            return {"dataPoints": []}
 
     class FakeAsyncClient:
         def __init__(self, *, timeout, headers):
@@ -67,11 +54,11 @@ async def test_google_fit_client_aggregate_sleep_request(monkeypatch):
         async def __aexit__(self, *_args):
             return None
 
-        async def post(self, url, *, json):
+        async def get(self, url, *, params):
             calls.append(
                 {
                     "url": url,
-                    "json": json,
+                    "params": params,
                     "headers": self.headers,
                     "timeout": self.timeout,
                 }
@@ -79,25 +66,38 @@ async def test_google_fit_client_aggregate_sleep_request(monkeypatch):
             return FakeResponse()
 
     monkeypatch.setattr(health_client.httpx, "AsyncClient", FakeAsyncClient)
-    client = health_client.GoogleFitClient("access-token", timeout=12.0)
+    client = health_client.GoogleHealthClient("access-token", timeout=12.0)
     start = datetime(2026, 7, 4, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
     end = datetime(2026, 7, 5, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
 
-    payload = await client.aggregate_sleep_segments(start=start, end=end)
+    payload = await client.list_sleep(start=start, end=end)
 
-    assert payload == {"bucket": []}
+    assert payload == {"dataPoints": []}
     assert calls == [
         {
-            "url": "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
-            "json": {
-                "aggregateBy": [{"dataTypeName": "com.google.sleep.segment"}],
-                "startTimeMillis": _millis(start),
-                "endTimeMillis": _millis(end),
+            "url": "https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints",
+            "params": {
+                "filter": (
+                    f'sleep.interval.end_time >= "{_rfc3339(start)}" AND '
+                    f'sleep.interval.end_time < "{_rfc3339(end)}"'
+                ),
+                "pageSize": 25,
             },
             "headers": {"Authorization": "Bearer access-token"},
             "timeout": 12.0,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_sleep_rejects_naive_or_empty_range():
+    client = health_client.GoogleHealthClient("access-token")
+    aware = datetime(2026, 7, 4, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError):
+        await client.list_sleep(start=datetime(2026, 7, 4), end=aware)
+    with pytest.raises(ValueError):
+        await client.list_sleep(start=aware, end=aware)
 
 
 @pytest.mark.asyncio
@@ -112,11 +112,11 @@ async def test_todays_sleep_interval_uses_local_day_bounds(monkeypatch):
     second_end = datetime(2026, 7, 4, 7, 30, tzinfo=tz)
 
     class FakeClient:
-        async def aggregate_sleep_segments(self, *, start, end):
+        async def list_sleep(self, *, start, end):
             calls.append((start, end))
             return _sleep_payload(
-                (second_start, second_end, 110),
-                (first_start, first_end, 109),
+                (second_start, second_end, "STAGES"),
+                (first_start, first_end, "CLASSIC"),
             )
 
     async def fake_authorized_client(session_arg, account_key):
@@ -142,7 +142,7 @@ async def test_todays_sleep_interval_uses_local_day_bounds(monkeypatch):
     assert interval is not None
     assert interval.start == first_start.astimezone(timezone.utc)
     assert interval.end == second_end.astimezone(timezone.utc)
-    assert [segment.sleep_stage for segment in interval.segments] == [109, 110]
+    assert [segment.sleep_type for segment in interval.segments] == ["CLASSIC", "STAGES"]
     assert [segment.start for segment in interval.segments] == [
         first_start.astimezone(timezone.utc),
         second_start.astimezone(timezone.utc),
@@ -152,8 +152,8 @@ async def test_todays_sleep_interval_uses_local_day_bounds(monkeypatch):
 @pytest.mark.asyncio
 async def test_todays_sleep_interval_returns_none_when_google_has_no_data(monkeypatch):
     class FakeClient:
-        async def aggregate_sleep_segments(self, *, start, end):
-            return {"bucket": [{"dataset": [{"point": []}]}]}
+        async def list_sleep(self, *, start, end):
+            return {"dataPoints": []}
 
     async def fake_authorized_client(session, account_key):
         return FakeClient()
@@ -210,19 +210,16 @@ async def test_request_awake_minutes_is_zero_without_sleep(monkeypatch, caplog):
     assert "google sleep · none returned" in caplog.text
 
 
-def test_normalize_sleep_interval_ignores_non_sleep_and_malformed_points():
+def test_normalize_sleep_interval_ignores_malformed_data_points():
     tz = ZoneInfo("Europe/Berlin")
     start = datetime(2026, 7, 4, 1, tzinfo=tz)
     end = datetime(2026, 7, 4, 6, tzinfo=tz)
-    payload = _sleep_payload((start, end, 109))
-    payload["bucket"][0]["dataset"][0]["point"].extend(
+    payload = _sleep_payload((start, end, "STAGES"))
+    payload["dataPoints"].extend(
         [
-            {
-                "dataTypeName": "com.google.step_count.delta",
-                "startTimeNanos": _nanos(start),
-                "endTimeNanos": _nanos(end),
-            },
-            {"dataTypeName": "com.google.sleep.segment"},
+            {"dataSource": {"name": "steps"}},  # no "sleep"
+            {"sleep": {"type": "STAGES"}},  # no "interval"
+            {"sleep": {"interval": {"startTime": "nonsense", "endTime": "also-bad"}}},
         ]
     )
 
@@ -232,3 +229,9 @@ def test_normalize_sleep_interval_ignores_non_sleep_and_malformed_points():
     assert interval.start == start.astimezone(timezone.utc)
     assert interval.end == end.astimezone(timezone.utc)
     assert len(interval.segments) == 1
+
+
+def test_parse_rfc3339_trims_nanosecond_precision():
+    parsed = sleep_service._parse_rfc3339("2026-07-04T07:30:12.045123456Z")
+
+    assert parsed == datetime(2026, 7, 4, 7, 30, 12, 45123, tzinfo=timezone.utc)

@@ -1,15 +1,16 @@
-"""Handler for reading today's sleep interval from Google Fit."""
+"""Handler for reading today's sleep interval from Google Health."""
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.health.client import SLEEP_SEGMENT_DATA_TYPE, authorized_client
+from app.services.health.client import authorized_client
 from app.timezones import to_user_tz, user_tz
 
 log = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ log = logging.getLogger(__name__)
 class SleepSegment:
     start: datetime
     end: datetime
-    sleep_stage: int | None
+    sleep_type: str | None
     raw: dict[str, Any]
 
 
@@ -40,7 +41,7 @@ async def request_todays_sleep_interval(
     """Fetch and normalize the user's sleep interval for today's local day."""
     start, end = _today_bounds(now)
     client = await authorized_client(session, account_key)
-    payload = await client.aggregate_sleep_segments(start=start, end=end)
+    payload = await client.list_sleep(start=start, end=end)
     return normalize_sleep_interval(payload)
 
 
@@ -71,9 +72,9 @@ async def request_awake_minutes(
 
 def normalize_sleep_interval(payload: dict[str, Any]) -> SleepInterval | None:
     segments: list[SleepSegment] = []
-    for point in _sleep_points(payload):
+    for point in payload.get("dataPoints", []):
         try:
-            segment = _normalize_point(point)
+            segment = _normalize_session(point)
         except (KeyError, TypeError, ValueError):
             continue
         if segment.end > segment.start:
@@ -104,34 +105,34 @@ def _today_bounds(now: datetime | None) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _sleep_points(payload: dict[str, Any]):
-    for bucket in payload.get("bucket", []):
-        for dataset in bucket.get("dataset", []):
-            for point in dataset.get("point", []):
-                if point.get("dataTypeName", SLEEP_SEGMENT_DATA_TYPE) != SLEEP_SEGMENT_DATA_TYPE:
-                    continue
-                yield point
-
-
-def _normalize_point(point: dict[str, Any]) -> SleepSegment:
+def _normalize_session(point: dict[str, Any]) -> SleepSegment:
+    sleep = point["sleep"]
+    interval = sleep["interval"]
     return SleepSegment(
-        start=_nanos_to_datetime(point["startTimeNanos"]),
-        end=_nanos_to_datetime(point["endTimeNanos"]),
-        sleep_stage=_sleep_stage(point),
+        start=_parse_rfc3339(interval["startTime"]),
+        end=_parse_rfc3339(interval["endTime"]),
+        sleep_type=sleep.get("type"),
         raw=point,
     )
 
 
-def _sleep_stage(point: dict[str, Any]) -> int | None:
-    values = point.get("value") or []
-    if not values:
-        return None
-    first = values[0]
-    if not isinstance(first, dict) or "intVal" not in first:
-        return None
-    return int(first["intVal"])
+_RFC3339 = re.compile(
+    r"^(?P<base>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"
+    r"(?:\.(?P<frac>\d+))?"
+    r"(?P<tz>Z|[+-]\d{2}:\d{2})$"
+)
 
 
-def _nanos_to_datetime(value: str | int) -> datetime:
-    seconds, nanos = divmod(int(value), 1_000_000_000)
-    return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=nanos // 1000)
+def _parse_rfc3339(value: str) -> datetime:
+    """Parse an RFC3339 timestamp, tolerating Google's nanosecond precision.
+
+    `datetime.fromisoformat` accepts at most 6 fractional digits, so trim any
+    extra before handing it over.
+    """
+    match = _RFC3339.match(value.strip())
+    if match is None:
+        raise ValueError(f"unrecognized RFC3339 timestamp: {value!r}")
+    frac = match.group("frac")
+    offset = "+00:00" if match.group("tz") == "Z" else match.group("tz")
+    iso = match.group("base") + (f".{frac[:6]}" if frac else "") + offset
+    return datetime.fromisoformat(iso)

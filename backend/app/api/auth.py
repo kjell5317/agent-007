@@ -8,7 +8,7 @@ One Google consent screen, two outcomes:
      handler can call Google APIs without a separate authorization step.
 
 Reuses `GoogleOAuthProvider`, which already requests the full scope set
-(openid email · gmail.readonly · calendar.events · fitness.sleep.read) with
+(openid email · gmail.readonly · calendar.events · googlehealth.sleep.readonly) with
 offline access. The allowlist is enforced before the bundle is persisted —
 denied emails leave no trace in the database.
 

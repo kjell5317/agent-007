@@ -23,6 +23,6 @@ def test_google_authorize_url_includes_sleep_scope(monkeypatch):
     query = parse_qs(urlparse(url).query)
 
     scopes = query["scope"][0].split()
-    assert "https://www.googleapis.com/auth/fitness.sleep.read" in scopes
+    assert "https://www.googleapis.com/auth/googlehealth.sleep.readonly" in scopes
     assert query["include_granted_scopes"] == ["true"]
     assert query["prompt"] == ["consent"]

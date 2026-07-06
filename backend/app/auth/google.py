@@ -20,8 +20,8 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 # Least-privilege default. Gmail read-only covers the ingestion path;
-# calendar.events covers the Calendar service; fitness.sleep.read covers the
-# isolated Google Fit sleep handler. Existing users must re-authorize once
+# calendar.events covers the Calendar service; googlehealth.sleep.readonly
+# covers the Google Health sleep handler. Existing users must re-authorize once
 # after this list changes — Google's consent screen handles that because we
 # pass prompt=consent below.
 DEFAULT_SCOPES = [
@@ -29,7 +29,7 @@ DEFAULT_SCOPES = [
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/fitness.sleep.read",
+    "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
 ]
 
 
