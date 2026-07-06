@@ -76,10 +76,7 @@ def _check_secret(request: Request) -> None:
     expected = get_settings().home_assistant_action_secret
     if not expected:
         return
-    provided = (
-        request.headers.get("x-notify-secret")
-        or request.query_params.get("secret")
-    )
+    provided = request.headers.get("x-notify-secret") or request.query_params.get("secret")
     if provided != expected:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid notify secret")
 
@@ -87,7 +84,7 @@ def _check_secret(request: Request) -> None:
 def _resolve_task_id(payload: ActionPayload) -> uuid.UUID:
     raw = payload.task_id
     if not raw and payload.tag and payload.tag.startswith("task-"):
-        raw = payload.tag[len("task-"):]
+        raw = payload.tag[len("task-") :]
     if not raw:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -111,12 +108,11 @@ async def handle_action(
         awake_minutes = await request_awake_minutes(session)
         penalty = max(0, awake_minutes * 2)
         if penalty:
-            adjust_points(
-                session, -penalty, caller="day", reason=f"awake {awake_minutes} min"
-            )
+            adjust_points(session, -penalty, caller="day", reason=f"awake {awake_minutes} min")
         log.info(
             "notify action · day awake_minutes=%s points_deducted=%s",
-            awake_minutes, penalty,
+            awake_minutes,
+            penalty,
         )
         return {
             "ok": True,
@@ -130,15 +126,19 @@ async def handle_action(
         penalty = 0
         if minutes is not None:
             shortfall = NIGHT_SLEEP_TARGET_MINUTES - minutes
-            # shortfall rounded to the nearest 10 min, then divided by 10.
-            penalty = max(0, round(shortfall / 10))
+            # shortfall rounded to the nearest 10 min, then divided by 2.
+            penalty = max(0, round(shortfall / 2))
             if penalty:
                 adjust_points(
-                    session, -penalty, caller="night", reason=f"{shortfall} min under 8h",
+                    session,
+                    -penalty,
+                    caller="night",
+                    reason=f"{shortfall} min under 8h",
                 )
         log.info(
             "notify action · night minutes_until_prep=%s points_deducted=%s",
-            minutes, penalty,
+            minutes,
+            penalty,
         )
         return {
             "ok": True,
@@ -172,9 +172,7 @@ async def handle_action(
     kotx_fn_name = _KOTX_ACTIONS.get(payload.action)
     if kotx_fn_name is not None:
         if task.kotx_task_id is None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "task has no linked kotx run"
-            )
+            raise HTTPException(status.HTTP_409_CONFLICT, "task has no linked kotx run")
         # kotx's own transition webhook mirrors the resulting state back to us,
         # so there's nothing to publish here — the run section refreshes then.
         ok = await getattr(kotx_client, kotx_fn_name)(task.kotx_task_id)
@@ -183,7 +181,10 @@ async def handle_action(
         await clear_task_notification(task.id)
         log.info(
             "notify action · kotx %s task=%s kotx_id=%s ok=%s",
-            payload.action, task.id, task.kotx_task_id, ok,
+            payload.action,
+            task.id,
+            task.kotx_task_id,
+            ok,
         )
         return {"ok": ok, "action": payload.action, "task_id": str(task.id)}
 
