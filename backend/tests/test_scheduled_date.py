@@ -411,7 +411,13 @@ async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
         calendar_event_id=None,
         estimation=30,
     )
-    extended_start = datetime.now(timezone.utc) + timedelta(hours=6)
+    # A realistic in-window local slot (noon tomorrow) — the day-window
+    # invariant in _finalize rejects physically-impossible times.
+    from app.timezones import user_tz
+
+    extended_start = (datetime.now(user_tz()) + timedelta(days=1)).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
     extended_slot = (extended_start, extended_start + timedelta(minutes=30))
     searches: list[bool] = []
     repairs: list[bool] = []

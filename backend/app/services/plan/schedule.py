@@ -219,6 +219,8 @@ async def _schedule_task_locked(
     _depth: int,
     _displaced: set | None = None,
     _keep_slot: bool = False,
+    _busy_snapshot: list[BusyEvent] | None = None,
+    _snapshot_range: tuple[datetime, datetime] | None = None,
 ) -> PlannedSlot | None:
     is_fresh = task.calendar_event_id is None
     prior = scheduled_interval_for(task)
@@ -231,6 +233,8 @@ async def _schedule_task_locked(
             account_key=account_key,
             _depth=_depth,
             _displaced=_displaced,
+            _busy_snapshot=_busy_snapshot,
+            _snapshot_range=_snapshot_range,
         )
     except ValueError:
         log.warning(
@@ -375,6 +379,8 @@ async def plan_task_slot(
     account_key: str | None = None,
     _depth: int = 0,
     _displaced: set | None = None,
+    _busy_snapshot: list[BusyEvent] | None = None,
+    _snapshot_range: tuple[datetime, datetime] | None = None,
 ) -> PlannedSlot:
     """Return a `PlannedSlot` for `task` (task span + reserved trip block).
 
@@ -384,6 +390,13 @@ async def plan_task_slot(
     target time and moves backward toward the start time. If the normal
     10:00–21:00 window cannot place the block, the planner automatically
     tries the extended 08:00–24:00 fallback before raising.
+
+    `_busy_snapshot` / `_snapshot_range` carry the parent's raw calendar read
+    down a displacement chain: a victim reschedule whose window nests inside
+    the range reuses it instead of hitting the Calendar API again. Freshness
+    is preserved because our own in-chain writes are reconciled from the DB
+    (`_db_scheduled_busy`) and the not-yet-written slot arrives via `block` —
+    and nothing external mutates the calendar mid-chain (one locked loop).
     """
     if task.due_date is None:
         raise ValueError("task has no due_date")
@@ -410,14 +423,21 @@ async def plan_task_slot(
     # a gap past a candidate slot, and Google's timeMax is exclusive on the
     # event *start* — without the pad, an event starting exactly at the due
     # date is invisible and the task lands flush against it.
-    busy = await _fetch_busy_events(
-        session,
-        window_start - pad,
-        window_end + pad,
-        exclude_event_id=task.calendar_event_id,
-        account_key=account_key,
-    )
-    busy = _db_scheduled_busy(session, task, window_start - pad, window_end + pad, busy)
+    fetch_lo, fetch_hi = window_start - pad, window_end + pad
+    if (
+        _busy_snapshot is not None
+        and _snapshot_range is not None
+        and _snapshot_range[0] <= fetch_lo
+        and fetch_hi <= _snapshot_range[1]
+    ):
+        raw_busy, covered = _busy_snapshot, _snapshot_range
+    else:
+        raw_busy = await _fetch_busy_events(session, fetch_lo, fetch_hi, account_key=account_key)
+        covered = (fetch_lo, fetch_hi)
+    # The raw snapshot is exclusion-agnostic so a reusing victim can drop its
+    # own mirror; the parent's mirror stays visible to it (unwritten move).
+    busy = [ev for ev in raw_busy if ev.id != task.calendar_event_id]
+    busy = _db_scheduled_busy(session, task, fetch_lo, fetch_hi, busy)
     for itv in extra_busy or []:
         busy.append(BusyEvent(itv.event_id or "extra", itv.start, itv.end, "extra"))
     if block is not None:
@@ -427,6 +447,16 @@ async def plan_task_slot(
     out_s, in_s, unroutable = await _estimate_trip_legs(session, task, reference=window_end)
 
     def _finalize(ps: PlannedSlot) -> PlannedSlot:
+        # Every placement path funnels through here — a last-line invariant so
+        # no path can ever write a task outside the widest working window.
+        if not _within_day_window(ps.start, ps.end, extended=True):
+            log.error(
+                "plan.schedule · placement %s–%s escaped the day window for task=%s; rejecting",
+                ps.start.isoformat(),
+                ps.end.isoformat(),
+                task.id,
+            )
+            raise ValueError("placement outside day window")
         return replace(ps, unroutable=True) if unroutable else ps
 
     location: str | None = None
@@ -492,6 +522,8 @@ async def plan_task_slot(
                 depth=_depth,
                 displaced=displaced,
                 extended_window=False,
+                busy_snapshot=raw_busy,
+                snapshot_range=covered,
             )
         )
     except ValueError:
@@ -549,6 +581,8 @@ async def plan_task_slot(
             depth=_depth,
             displaced=displaced,
             extended_window=True,
+            busy_snapshot=raw_busy,
+            snapshot_range=covered,
         )
     )
 
@@ -746,11 +780,15 @@ async def _chain_insert_slot(
     gaps: Gaps,
     window_start: datetime,
     window_end: datetime,
+    extended: bool = False,
 ) -> PlannedSlot | None:
     """Insert the task into a gap between two located anchors when the detour
-    travel fits — the user is already out, so day-window bounds don't apply.
-    Picks the gap with the least added travel. Every boundary here touches a
-    leg (anchor↔leg, leg↔task), so all spacing uses the commute gap."""
+    travel fits. Being already out only waives a *fresh* commute, not the
+    working day: the task itself must still land inside the active window
+    (`extended` picks normal 10–21 vs. 08–24), or a gap between two late/early
+    anchors would schedule work at 3am. Picks the gap with the least added
+    travel. Every boundary here touches a leg (anchor↔leg, leg↔task), so all
+    spacing uses the commute gap."""
     buffer = gaps.commute
     target = _norm_loc(location)
     anchors = sorted(
@@ -780,6 +818,10 @@ async def _chain_insert_slot(
         end = min(nxt.start - 2 * buffer - timedelta(seconds=t_tn), window_end)
         start = end - duration
         if start - 2 * buffer - timedelta(seconds=t_pt) < prev.end or start < window_start:
+            continue
+        if not _within_day_window(start, end, extended=extended):
+            # On-the-way, but the gap sits outside the working day — a
+            # standalone sweep will find an in-window slot instead.
             continue
         block_start = start - buffer - timedelta(seconds=t_pt)
         block_end = end + buffer + timedelta(seconds=t_tn)
@@ -1075,6 +1117,8 @@ async def _repair_by_displacing_task(
     depth: int,
     displaced: set,
     extended_window: bool,
+    busy_snapshot: list[BusyEvent] | None = None,
+    snapshot_range: tuple[datetime, datetime] | None = None,
 ) -> PlannedSlot:
     if depth >= MAX_REPAIR_DEPTH:
         raise ValueError("repair recursion limit reached")
@@ -1144,6 +1188,7 @@ async def _repair_by_displacing_task(
                     gaps=gaps,
                     window_start=window_start,
                     window_end=window_end,
+                    extended=extended_window,
                 )
         if planned is None:
             slot = _slot_in_range(
@@ -1180,6 +1225,8 @@ async def _repair_by_displacing_task(
                 _depth=depth + 1,
                 _displaced=displaced,
                 _keep_slot=True,
+                _busy_snapshot=busy_snapshot,
+                _snapshot_range=snapshot_range,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("plan.schedule · victim move failed task=%s err=%s", victim.id, exc)
@@ -1454,8 +1501,8 @@ async def _fetch_busy_events(
     time_min: datetime,
     time_max: datetime,
     *,
-    exclude_event_id: str | None,
-    account_key: str | None,
+    exclude_event_id: str | None = None,
+    account_key: str | None = None,
 ) -> list[BusyEvent]:
     from app.services.calendar import (
         commute_leg_key,

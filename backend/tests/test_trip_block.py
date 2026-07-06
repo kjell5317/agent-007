@@ -350,6 +350,34 @@ async def test_chain_insert_skips_unroutable_and_tight_gaps(monkeypatch):
     assert planned is None
 
 
+@pytest.mark.asyncio
+async def test_chain_insert_rejects_out_of_window_gap(monkeypatch):
+    # A gap between a 22:00–23:00 anchor and a 06:00–07:00 anchor the next
+    # morning fits the detour travel, but flushing the task against the next
+    # anchor lands it around 05:00 — outside the working day. It must be
+    # refused so the standalone sweep can find an in-window slot instead.
+    async def fake_one_way(_session, _origin, _destination, _reference):
+        return 600
+
+    monkeypatch.setattr(schedule_service, "_one_way_seconds", fake_one_way)
+    prev = BusyEvent("late", _day_at(22), _day_at(23), "busy", location=GYM)
+    nxt = BusyEvent(
+        "early", _day_at(6, day_offset=4), _day_at(7, day_offset=4), "busy", location=OFFICE
+    )
+    for extended in (False, True):
+        planned = await _chain_insert_slot(
+            None,
+            [prev, nxt],
+            location=LIBRARY,
+            duration=timedelta(minutes=30),
+            gaps=GAPS,
+            window_start=_day_at(8),
+            window_end=_day_at(20, day_offset=4),
+            extended=extended,
+        )
+        assert planned is None
+
+
 def test_freed_range_ignores_victims_own_legs():
     victim = BusyEvent("task-1", _day_at(12), _day_at(13), "task", location=GYM)
     busy = [
@@ -1167,6 +1195,48 @@ async def test_repair_passes_share_one_displacement_ledger(monkeypatch):
     assert len(ledgers) == 2  # normal + extended repair
     assert ledgers[0] is ledgers[1]
     assert task.id in ledgers[0]
+
+
+@pytest.mark.asyncio
+async def test_plan_reuses_covering_snapshot_instead_of_refetching(monkeypatch):
+    # A displacement victim whose window nests inside the parent's already-read
+    # range must reuse that snapshot rather than hit the Calendar API again;
+    # a window the snapshot can't cover still forces a fresh read.
+    tz = user_tz()
+    due = (datetime.now(tz) + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
+    task = SimpleNamespace(
+        id=uuid.uuid4(), due_date=due, location=None, estimation=30, calendar_event_id=None,
+    )
+    fetches: list[tuple] = []
+
+    async def fake_fetch(session, time_min, time_max, **kwargs):
+        fetches.append((time_min, time_max))
+        return []
+
+    monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_fetch)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
+    monkeypatch.setattr(
+        schedule_service, "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=5, event_buffer_minutes=15,
+            google_calendar_default_event_minutes=30, google_calendar_id="",
+            google_busy_calendar_ids=[], slot_min_lead_minutes=0,
+            commute_enabled=False, google_maps_api_key="",
+        ),
+    )
+
+    covering = (datetime.now(tz) - timedelta(days=10), due + timedelta(days=1))
+    planned = await schedule_service.plan_task_slot(
+        None, task, _busy_snapshot=[], _snapshot_range=covering,
+    )
+    assert planned is not None
+    assert fetches == []  # reused the snapshot, no calendar read
+
+    partial = (due - timedelta(minutes=1), due)
+    await schedule_service.plan_task_slot(
+        None, task, _busy_snapshot=[], _snapshot_range=partial,
+    )
+    assert len(fetches) == 1  # snapshot didn't cover the window → fetched
 
 
 @pytest.mark.asyncio
