@@ -56,16 +56,23 @@ class GoogleHealthClient:
 
 
 async def authorized_client(session: Session, account_key: str | None) -> GoogleHealthClient:
-    """Resolve a Google token, refreshing it on demand, and wrap it for use."""
+    """Resolve the health-only Google token, refreshing on demand, and wrap it.
+
+    Uses the `google_health` grant — a health-scoped token distinct from the
+    Gmail/Calendar one, since the Health API rejects tokens with other scopes.
+    """
     try:
-        token = await get_fresh_google_token(session, account_key=account_key)
+        token = await get_fresh_google_token(
+            session, account_key=account_key, provider="google_health"
+        )
     except GoogleTokenMissing:
         raise RuntimeError(
-            "No Google account connected — sign in via /auth/login first."
+            "No Google Health authorization — visit /oauth/google_health/authorize first."
         )
     except GoogleReauthorizationRequired:
         raise RuntimeError(
-            "Google access token expired and no refresh_token available; re-authorize."
+            "Google Health token expired and no refresh_token available; re-authorize "
+            "at /oauth/google_health/authorize."
         )
     return GoogleHealthClient(token.access_token)
 

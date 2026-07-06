@@ -25,11 +25,16 @@ async def get_fresh_google_token(
     session: Session,
     *,
     account_key: str | None = None,
+    provider: str = "google",
 ) -> DecryptedToken:
-    """Return a usable Google token, refreshing and persisting it when expired."""
+    """Return a usable Google token, refreshing and persisting it when expired.
+
+    `provider` selects the grant: "google" for the shared Gmail/Calendar/SSO
+    token, "google_health" for the isolated health-only token.
+    """
     token = oauth_tokens.get_decrypted(
         session,
-        provider="google",
+        provider=provider,
         account_key=account_key,
     )
     if token is None:
@@ -43,10 +48,10 @@ async def get_fresh_google_token(
             "Google access token expired and no refresh_token available; re-authorize."
         )
 
-    bundle = await get_provider("google")().refresh(token.refresh_token)
+    bundle = await get_provider(provider)().refresh(token.refresh_token)
     oauth_tokens.upsert(
         session,
-        provider="google",
+        provider=provider,
         account_key=token.account_key,
         bundle=bundle,
         extra_merge=token.extra,
@@ -55,7 +60,7 @@ async def get_fresh_google_token(
 
     refreshed = oauth_tokens.get_decrypted(
         session,
-        provider="google",
+        provider=provider,
         account_key=token.account_key,
     )
     if refreshed is None:

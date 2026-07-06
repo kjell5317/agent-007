@@ -4,13 +4,16 @@ One Google consent screen, two outcomes:
 
   1. A signed session cookie keyed by email (used by `AuthMiddleware`).
   2. A persisted token bundle in `oauth_tokens` for the same account, so the
-     Gmail ingestion source, Calendar service, and isolated health/sleep
-     handler can call Google APIs without a separate authorization step.
+     Gmail ingestion source and Calendar service can call Google APIs without
+     a separate authorization step.
 
-Reuses `GoogleOAuthProvider`, which already requests the full scope set
-(openid email · gmail.readonly · calendar.events · googlehealth.sleep.readonly) with
-offline access. The allowlist is enforced before the bundle is persisted —
-denied emails leave no trace in the database.
+Reuses `GoogleOAuthProvider`, which requests openid email · gmail.readonly ·
+calendar.events with offline access. The allowlist is enforced before the
+bundle is persisted — denied emails leave no trace in the database.
+
+Sleep is NOT captured here: the Google Health API rejects tokens that also
+carry Gmail/Calendar scopes, so it has its own health-only grant — visit
+`/oauth/google_health/authorize` once to connect it.
 
 The provider-agnostic `/oauth/google/*` routes still work for re-authorizing
 after a scope change; this flow just removes the need to visit them.

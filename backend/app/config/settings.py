@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     # Gmail & Calendar
     google_oauth_redirect_uri: str = "http://localhost:8001/oauth/google/callback"
+    # Health sleep — a separate grant on the same client, health-only scopes
+    # (the Health API rejects tokens that also carry Gmail/Calendar scopes).
+    google_oauth_health_redirect_uri: str = "http://localhost:8001/oauth/google_health/callback"
     # Login
     google_oauth_login_redirect_uri: str = "http://localhost:8001/auth/callback"
     auth_allowed_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)

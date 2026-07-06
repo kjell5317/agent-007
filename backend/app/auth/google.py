@@ -20,34 +20,47 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 # Least-privilege default. Gmail read-only covers the ingestion path;
-# calendar.events covers the Calendar service; googlehealth.sleep.readonly
-# covers the Google Health sleep handler. Existing users must re-authorize once
-# after this list changes — Google's consent screen handles that because we
-# pass prompt=consent below.
+# calendar.events covers the Calendar service; openid+email drive SSO. Existing
+# users must re-authorize once after this list changes — Google's consent screen
+# handles that because we pass prompt=consent below.
 DEFAULT_SCOPES = [
     "openid",
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+]
+
+# The Google Health API refuses any token that also carries non-health scopes,
+# so sleep lives on a SEPARATE grant (same OAuth client) requesting only these.
+# openid+email stay in — they're identity scopes, not on the disallowed list —
+# so identify() still resolves the account email.
+HEALTH_SCOPES = [
+    "openid",
+    "email",
     "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
 ]
 
 
 @register_provider("google")
 class GoogleOAuthProvider(OAuthProvider):
+    scopes = DEFAULT_SCOPES
+    # Union past grants so incremental SSO re-auth keeps Gmail/Calendar access.
+    include_granted_scopes = True
+
     def authorize_url(self, state: str, redirect_uri: str) -> str:
         s = get_settings()
         params = {
             "client_id": s.google_oauth_client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": " ".join(DEFAULT_SCOPES),
+            "scope": " ".join(self.scopes),
             "state": state,
             # offline + consent ensures we always get a refresh_token, even on re-auth
             "access_type": "offline",
             "prompt": "consent",
-            "include_granted_scopes": "true",
         }
+        if self.include_granted_scopes:
+            params["include_granted_scopes"] = "true"
         return f"{_AUTH_URL}?{urlencode(params)}"
 
     async def exchange_code(self, code: str, redirect_uri: str) -> TokenBundle:
@@ -88,6 +101,19 @@ class GoogleOAuthProvider(OAuthProvider):
             )
             resp.raise_for_status()
             return resp.json()["email"]
+
+
+@register_provider("google_health")
+class GoogleHealthOAuthProvider(GoogleOAuthProvider):
+    """Same OAuth client as `google`, but a health-only grant.
+
+    Its token must not carry Gmail/Calendar scopes (the Health API rejects
+    those), so it requests `HEALTH_SCOPES` alone and does NOT union previously
+    granted scopes.
+    """
+
+    scopes = HEALTH_SCOPES
+    include_granted_scopes = False
 
 
 def _bundle_from_token_response(payload: dict) -> TokenBundle:
