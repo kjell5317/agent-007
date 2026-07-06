@@ -106,7 +106,7 @@ async def handle_action(
 
     if payload.action == ACTION_DAY:
         awake_minutes = await request_awake_minutes(session)
-        penalty = max(0, awake_minutes * 2)
+        penalty = max(0, awake_minutes)
         if penalty:
             adjust_points(session, -penalty, caller="day", reason=f"awake {awake_minutes} min")
         log.info(

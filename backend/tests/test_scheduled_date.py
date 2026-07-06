@@ -497,7 +497,7 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_day_action_deducts_double_awake_minutes_from_points(monkeypatch):
+async def test_day_action_deducts_awake_minutes_from_points(monkeypatch):
     session = SimpleNamespace()
     adjustments: list[tuple] = []
 
@@ -531,9 +531,9 @@ async def test_day_action_deducts_double_awake_minutes_from_points(monkeypatch):
         "ok": True,
         "action": "DAY",
         "awake_minutes": 92,
-        "points_deducted": 184,
+        "points_deducted": 92,
     }
-    assert adjustments == [(-184, "day", "awake 92 min")]
+    assert adjustments == [(-92, "day", "awake 92 min")]
 
 
 @pytest.mark.asyncio
