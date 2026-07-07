@@ -28,15 +28,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agent import extract_task_fields
+from app.agent.retrieval import search_raw_inputs
 from app.db import SessionLocal
 from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
+from app.db.clients.raw_inputs import SimilarInput
+from app.services.input.embedding import candidate_query_text, embed
 
 log = logging.getLogger(__name__)
 
 _QueueItem = tuple[uuid.UUID, dict[str, Any], list[uuid.UUID], uuid.UUID | None]
+EXTRACT_PRECEDENT_K = 5
 
 _queue: asyncio.Queue[_QueueItem] | None = None
 _worker: asyncio.Task | None = None
@@ -133,9 +137,16 @@ async def _process(
         agent_trace: dict[str, Any] = {"branch": "manual"}
         if needs_agent:
             context_inputs = _load_context_inputs(session, raw_input_id, context_input_ids)
-            extraction = await extract_task_fields(
-                session, raw, context_inputs=context_inputs, include_trace=True
+            precedent_candidates = await _collect_extraction_precedents(
+                session, raw, raw_input_id
             )
+            extract_kwargs: dict[str, Any] = {
+                "context_inputs": context_inputs,
+                "include_trace": True,
+            }
+            if precedent_candidates:
+                extract_kwargs["precedent_candidates"] = precedent_candidates
+            extraction = await extract_task_fields(session, raw, **extract_kwargs)
             if isinstance(extraction, tuple):
                 agent_fields, agent_trace = extraction
             else:
@@ -197,6 +208,44 @@ def _load_context_inputs(
         if row is not None:
             out.append(row)
     return out
+
+
+async def _collect_extraction_precedents(
+    session, raw, raw_input_id: uuid.UUID
+) -> list[SimilarInput]:
+    """Find prior similar decisions for manual/promoted extraction.
+
+    Fresh manual rows are not embedded by the synchronous create path, so this
+    computes and stores the same canonical embedding the ingestion pipeline uses.
+    KOTX rows stay out of similarity lookup by design.
+    """
+    if getattr(raw, "source", None) == "kotx":
+        return []
+
+    query_embedding = getattr(raw, "embedding", None)
+    if query_embedding is None:
+        query_text = candidate_query_text(
+            getattr(raw, "content", "") or "",
+            getattr(raw, "source_metadata", None) or {},
+        )
+        if not query_text:
+            return []
+        query_embedding = await embed(query_text)
+        if query_embedding is None:
+            log.info(
+                "task-creation · raw=%s no embedding available, skipping precedents",
+                raw_input_id,
+            )
+            return []
+        raw_inputs_store.set_embedding(session, raw_input_id, query_embedding)
+
+    return search_raw_inputs(
+        session,
+        embedding=query_embedding,
+        exclude_id=raw_input_id,
+        statuses=["open", "closed", "not_task"],
+        k=EXTRACT_PRECEDENT_K,
+    )
 
 
 def _attach_created_task_ref(trace: dict[str, Any], task_id: uuid.UUID) -> None:

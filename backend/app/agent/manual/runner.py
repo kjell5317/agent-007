@@ -24,8 +24,15 @@ from app.agent.helpers.llm import (
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
+from app.agent.helpers.precedents import (
+    candidate_trace_ref,
+    not_task_candidate_lines,
+    task_candidate_lines,
+)
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
+from app.db.clients import tasks
+from app.db.clients.raw_inputs import SimilarInput
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +42,7 @@ async def extract_task_fields(
     raw,
     *,
     context_inputs=(),
+    precedent_candidates: list[SimilarInput] | None = None,
     include_trace: bool = False,
 ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
     """Ask the LLM to extract task fields from a raw input.
@@ -48,7 +56,8 @@ async def extract_task_fields(
     so we always end with a populated payload."""
     settings = get_settings()
 
-    user_msg = _build_extract_message(raw, context_inputs)
+    precedent_candidates = precedent_candidates or []
+    user_msg = _build_extract_message(session, raw, context_inputs, precedent_candidates)
     create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
     search_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "search_notes")
     extract_tools = [search_tool, create_tool]
@@ -59,6 +68,8 @@ async def extract_task_fields(
     payload: dict[str, Any] = {}
     trace: dict[str, Any] = {
         "branch": "manual",
+        "candidates": [candidate_trace_ref(h) for h in precedent_candidates],
+        "evidence_refs": [candidate_trace_ref(h) for h in precedent_candidates],
         "iterations": [],
     }
     for attempt in range(MAX_TOOL_ITERATIONS - 1):
@@ -194,14 +205,21 @@ def _backstop_required(payload: dict, *, raw_id) -> None:
         )
 
 
-def _build_extract_message(raw, context_inputs=()) -> str:
+def _build_extract_message(
+    session: Session,
+    raw,
+    context_inputs=(),
+    precedent_candidates: list[SimilarInput] | None = None,
+) -> str:
     now_line = f"Current time: {now_iso(get_settings().user_timezone)}"
+    precedent_lines = _precedent_lines(session, precedent_candidates or [])
     if not context_inputs:
-        return "\n".join([now_line, *_render_input_lines(raw)])
+        return "\n".join([now_line, *precedent_lines, *_render_input_lines(raw)])
 
     ordered = sorted([raw, *context_inputs], key=lambda r: r.received_at)
     lines = [
         now_line,
+        *precedent_lines,
         "",
         f"This input is part of a conversation thread of {len(ordered)} "
         "messages, shown oldest first. Create ONE task that captures the "
@@ -212,6 +230,37 @@ def _build_extract_message(raw, context_inputs=()) -> str:
         lines.append(f"===== Message {i} of {len(ordered)} =====")
         lines.extend(_render_input_lines(item))
     return "\n".join(lines)
+
+
+def _precedent_lines(session: Session, candidates: list[SimilarInput]) -> list[str]:
+    if not candidates:
+        return []
+
+    task_candidates: list[tuple[SimilarInput, Any]] = []
+    for hit in candidates:
+        if hit.task_id and hit.status in ("open", "closed"):
+            task = tasks.get(session, hit.task_id)
+            if task is not None:
+                task_candidates.append((hit, task))
+    not_task_signals = [h for h in candidates if h.status == "not_task"]
+
+    rendered: list[str] = []
+    for hit, task in task_candidates:
+        rendered.extend(task_candidate_lines(hit, task, include_existing_task_id=False))
+    for hit in not_task_signals:
+        rendered.extend(not_task_candidate_lines(hit))
+    if not rendered:
+        return []
+
+    return [
+        "",
+        (
+            "Past similar inputs (ranked by similarity). Treat these prior "
+            "decisions as strong precedent for field choices, estimates, labels, "
+            "and whether similar wording was previously judged not actionable."
+        ),
+        *rendered,
+    ]
 
 
 def _render_input_lines(raw) -> list[str]:

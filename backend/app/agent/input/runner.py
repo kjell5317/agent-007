@@ -33,7 +33,14 @@ from app.agent.helpers.text import (
     append_meta_lines,
     normalize_agent_due_date,
     now_iso,
-    task_field_lines,
+)
+from app.agent.helpers.precedents import (
+    candidate_title,
+    candidate_trace_ref as _candidate_trace_ref,
+    not_task_candidate_lines as _not_task_candidate_lines,
+    selected_candidate_ref as _selected_candidate_ref,
+    task_candidate_lines as _task_candidate_lines,
+    truncate_inline as _truncate_inline,
 )
 from app.agent.tools import NEW_INPUT_TOOLS
 from app.config import get_settings
@@ -346,86 +353,8 @@ def _build_new_input_message(
     return "\n".join(lines)
 
 
-def _task_candidate_lines(hit: SimilarInput, task: Any) -> list[str]:
-    title = _truncate_inline(str(getattr(task, "title", "") or "(untitled task)"), 120)
-    lines = [
-        "",
-        (
-            f"[{hit.status.upper()}] sim={hit.similarity:.2f} · "
-            f"existing_task_id={task.id} · title: {title}"
-        ),
-    ]
-    for line in task_field_lines(task):
-        if line.strip().lower().startswith("title:"):
-            continue
-        lines.append(line)
-    return lines
-
-
-def _not_task_candidate_lines(hit: SimilarInput) -> list[str]:
-    title = _candidate_title(hit)
-    lines = [
-        "",
-        f"[NOT_TASK] sim={hit.similarity:.2f} · title: {title}",
-        f"  id: {hit.id}",
-    ]
-
-    meta = _candidate_metadata(hit)
-    if meta:
-        lines.append(f"  metadata: {meta}")
-
-    snippet = _truncate_inline(hit.content_snippet or "", 300)
-    if snippet:
-        lines.append(f"  snippet: {snippet}")
-
-    reason = _truncate_inline(str((hit.agent_trace or {}).get("reason") or ""), 180)
-    if reason:
-        lines.append(f"  reason: {reason}")
-
-    return lines
-
-
 def _candidate_title(hit: SimilarInput) -> str:
-    subject = _truncate_inline(hit.subject or "", 120)
-    if subject:
-        return subject
-
-    for raw_line in (hit.content_snippet or "").splitlines():
-        line = _truncate_inline(raw_line, 120)
-        if line:
-            return line
-
-    sender = _truncate_inline(hit.sender or "", 80)
-    if sender:
-        return f"{hit.source} from {sender}"
-    return f"{hit.source} input"
-
-
-def _candidate_trace_ref(hit: SimilarInput) -> dict[str, Any]:
-    ref: dict[str, Any] = {
-        "ref": f"candidate:{hit.id}",
-        "kind": "candidate",
-        "id": str(hit.id),
-        "status": hit.status,
-        "source": hit.source,
-        "task_id": str(hit.task_id) if hit.task_id else None,
-        "similarity": round(hit.similarity, 4),
-        "sim": round(hit.similarity, 4),
-        "title": _candidate_title(hit),
-        "snippet": _truncate_inline(hit.content_snippet or "", 300),
-        "sender": hit.sender,
-        "received_at": hit.received_at.isoformat() if hit.received_at else None,
-    }
-    if hit.label:
-        ref["label"] = hit.label
-    return ref
-
-
-def _selected_candidate_ref(candidates: list[SimilarInput], task_id: uuid.UUID) -> str | None:
-    for hit in candidates:
-        if hit.task_id == task_id:
-            return f"candidate:{hit.id}"
-    return None
+    return candidate_title(hit)
 
 
 def _tool_result_entry(
@@ -465,20 +394,3 @@ def _tool_purpose(name: str, tool_input: dict[str, Any]) -> str:
     if name == "no_change":
         return "leave existing task unchanged"
     return name
-
-
-def _candidate_metadata(hit: SimilarInput) -> str:
-    parts = [f"source={hit.source}"]
-    sender = _truncate_inline(hit.sender or "", 100)
-    if sender:
-        parts.append(f"from={sender}")
-    if hit.received_at:
-        parts.append(f"received_at={hit.received_at.isoformat()}")
-    return " · ".join(parts)
-
-
-def _truncate_inline(value: str, limit: int) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)].rstrip() + "…"
