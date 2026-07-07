@@ -214,6 +214,7 @@ def _attach_created_task_ref(trace: dict[str, Any], task_id: uuid.UUID) -> None:
                 refs.append(ref)
             result["artifact_refs"] = refs
             result["preview"] = f"created task {task_id}"
+            result["result_markdown"] = f"created task {task_id}"
             result["result_summary"] = f"created task {task_id}"
 
 
