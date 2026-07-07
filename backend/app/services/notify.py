@@ -334,6 +334,17 @@ async def notify_leg_conflict(
     )
 
 
+async def notify_calendar_event_updated(event) -> None:
+    """A non-managed calendar event was updated from an input correction."""
+    await notify(
+        title="Calendar event updated",
+        message=f"{_clip(event.summary, 120)}\n{_fmt_when(event.start)}",
+        url=event.html_link or get_settings().task_default_url,
+        tag=f"event-update-{event.id}",
+        channel="Calendar",
+    )
+
+
 async def clear_notification_tag(tag: str) -> None:
     """Remove a lingering tagged notification (companion-app magic payload)."""
     await notify(title="", message="clear_notification", tag=tag)

@@ -583,6 +583,7 @@ function toolPurpose(name: string, input: JsonRecord | null | undefined): string
   if (name === "search_notes") return `Search notes for "${truncate(stringValue(input?.query) ?? "", 80)}"`;
   if (name === "find_calendar_events") return "Find calendar conflicts";
   if (name === "create_event") return `Create event "${stringValue(input?.summary) ?? "event"}"`;
+  if (name === "update_event") return "Update calendar event";
   if (name === "create_task") return `Create task "${stringValue(input?.title) ?? "task"}"`;
   if (name === "update_task") return "Update existing task";
   if (name === "mark_not_task") return "Mark as not a task";
