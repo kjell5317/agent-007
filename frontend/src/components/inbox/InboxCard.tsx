@@ -235,7 +235,7 @@ export function ActionButton({
 // modal skips the body block) when nothing would show. kotx transitions omit
 // the reason: it's deterministic boilerplate ("… nothing to do yet").
 export function hasInputDetails(data: RawInput): boolean {
-  if (data.content) return true;
+  if (hasSourceContentDetails(data)) return true;
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
   if (!trace) return false;
   return (
@@ -252,10 +252,10 @@ export function InputBody({ data }: { data: RawInput }) {
 
   return (
     <>
-      {data.content && (
+      {hasSourceContentDetails(data) && (
         <Section title="Source content">
-          <div className="max-h-60 overflow-y-auto whitespace-pre-wrap break-words text-xs">
-            {data.content}
+          <div className="max-h-60 overflow-y-auto break-words text-xs">
+            <Markdown content={data.content} className="text-xs" />
           </div>
         </Section>
       )}
@@ -296,6 +296,10 @@ export function InputBody({ data }: { data: RawInput }) {
         )}
     </>
   );
+}
+
+function hasSourceContentDetails(data: RawInput): boolean {
+  return data.source !== "kotx" && Boolean(data.content);
 }
 
 function SectionLabel({ title }: { title: string }) {

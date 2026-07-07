@@ -343,7 +343,11 @@ function toolRowsFromBlocks(
           (display.hideInput ? undefined : genericInputFields(input)),
         result: display.hideResult
           ? undefined
-          : stringValue(result?.result_summary) ?? stringValue(result?.preview),
+          : stringValue(result?.result_markdown) ??
+            stringValue(result?.result) ??
+            stringValue(result?.output) ??
+            stringValue(result?.result_summary) ??
+            stringValue(result?.preview),
         reason: display.hideReason ? undefined : resultReason,
         confidence: display.hideConfidence
           ? undefined
@@ -437,7 +441,14 @@ function logRow(record: JsonRecord, index: number): LogRow | null {
       status,
       title: toolName ?? nonRepeatedMessage(message, indicator) ?? "Tool call",
       subtitle: message && toolName ? nonRepeatedMessage(message, indicator) : undefined,
-      body: truncate(stringValue(record.result) ?? stringValue(record.preview) ?? "", 280),
+      body: truncate(
+        stringValue(record.result_markdown) ??
+          stringValue(record.result) ??
+          stringValue(record.output) ??
+          stringValue(record.preview) ??
+          "",
+        280,
+      ),
       bodyFormat: "markdown",
       tokens,
     };
