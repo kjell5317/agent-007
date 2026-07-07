@@ -211,6 +211,7 @@ function TaskFilters({
 }) {
   const nextSortMode: TaskSortMode = sortMode === "scheduled" ? "due" : "scheduled";
   const nextSortLabel = sortMode === "scheduled" ? "By Due" : "By Scheduled";
+  const dueSortActive = sortMode === "due";
 
   const toggleLabel = (name: string) => {
     onSelectedLabelChange(selectedLabel === name ? null : name);
@@ -223,8 +224,14 @@ function TaskFilters({
     <div className="mb-3 flex flex-wrap gap-2 px-1">
       <button
         type="button"
+        aria-pressed={dueSortActive}
         onClick={() => onSortModeChange(nextSortMode)}
-        className={cn(chipBase, "border-input bg-background text-foreground hover:bg-accent")}
+        className={cn(
+          chipBase,
+          dueSortActive
+            ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+            : "border-input text-muted-foreground hover:bg-accent hover:text-foreground",
+        )}
       >
         {nextSortLabel}
       </button>
