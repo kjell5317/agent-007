@@ -147,6 +147,7 @@ def test_tool_result_entry_records_status_purpose_and_artifacts():
     assert entry["purpose"] == "create task Send Q2 report"
     assert entry["changed_state"] is True
     assert entry["artifact_refs"] == ["task:10000000-0000-0000-0000-000000000001"]
+    assert entry["result_markdown"] == "created task 10000000-0000-0000-0000-000000000001"
     assert entry["result_summary"] == "created task 10000000-0000-0000-0000-000000000001"
 
 
