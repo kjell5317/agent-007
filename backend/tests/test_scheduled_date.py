@@ -24,6 +24,7 @@ from app.db.schemas.task import TaskRead  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar import discover  # noqa: E402
 from app.services.calendar import events as calendar_events  # noqa: E402
+from app.services import home_assistant as home_assistant_service  # noqa: E402
 from app.services import notify as notify_service  # noqa: E402
 from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.plan.schedule import Interval  # noqa: E402
@@ -502,15 +503,9 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
     assert calls[0] == Interval(scheduled, scheduled + timedelta(minutes=45), "event-1")
 
 
-@pytest.mark.asyncio
-async def test_day_action_deducts_awake_minutes_from_points(monkeypatch):
-    request_session = SimpleNamespace()
+def test_schedule_day_action_captures_utc_timestamp_and_queues_worker(monkeypatch):
     action_at = datetime(2026, 7, 1, 6, 30, tzinfo=timezone.utc)
-    background_session = SimpleNamespace(closed=False)
     background_tasks = SimpleNamespace(tasks=[])
-    adjustments: list[tuple] = []
-    sleeps: list[int] = []
-    events: list[str] = []
 
     class FrozenDatetime(datetime):
         @classmethod
@@ -521,30 +516,27 @@ async def test_day_action_deducts_awake_minutes_from_points(monkeypatch):
     def add_task(func, *args, **kwargs):
         background_tasks.tasks.append((func, args, kwargs))
 
-    def close_session():
-        background_session.closed = True
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-        events.append("sleep")
-
-    async def fake_request_awake_minutes(session_arg, *, now):
-        events.append("request")
-        assert session_arg is background_session
-        assert now is action_at
-        return 92
-
     background_tasks.add_task = add_task
-    background_session.close = close_session
-    monkeypatch.setattr(notifications, "datetime", FrozenDatetime)
-    monkeypatch.setattr(notifications.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(notifications, "SessionLocal", lambda: background_session)
-    monkeypatch.setattr(notifications, "request_awake_minutes", fake_request_awake_minutes)
-    monkeypatch.setattr(
-        notifications,
-        "adjust_points",
-        lambda _session, amount, *, caller, reason: adjustments.append((amount, caller, reason)),
-    )
+    monkeypatch.setattr(home_assistant_service, "datetime", FrozenDatetime)
+
+    queued_at = home_assistant_service.schedule_day_action(background_tasks)
+
+    assert queued_at is action_at
+    assert background_tasks.tasks == [
+        (home_assistant_service.process_day_action, (action_at,), {})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_day_action_dispatches_to_home_assistant_service(monkeypatch):
+    request_session = SimpleNamespace()
+    background_tasks = SimpleNamespace()
+    calls = []
+
+    def fake_schedule_day_action(background_tasks_arg):
+        calls.append(background_tasks_arg)
+
+    monkeypatch.setattr(notifications, "schedule_day_action", fake_schedule_day_action)
     monkeypatch.setattr(
         notifications.tasks_store,
         "get",
@@ -569,28 +561,55 @@ async def test_day_action_deducts_awake_minutes_from_points(monkeypatch):
     assert result == {
         "ok": True,
         "action": "DAY",
-        "scheduled": True,
+        "queued": True,
     }
-    assert len(background_tasks.tasks) == 1
-    func, args, kwargs = background_tasks.tasks[0]
-    assert args == (action_at,)
-    assert kwargs == {}
+    assert calls == [background_tasks]
 
-    await func(*args, **kwargs)
 
-    assert sleeps == [notifications.DAY_HEALTH_SYNC_DELAY_S]
+@pytest.mark.asyncio
+async def test_process_day_action_deducts_awake_minutes_from_points(monkeypatch):
+    action_at = datetime(2026, 7, 1, 6, 30, tzinfo=timezone.utc)
+    background_session = SimpleNamespace(closed=False)
+    adjustments: list[tuple] = []
+    sleeps: list[int] = []
+    events: list[str] = []
+
+    def close_session():
+        background_session.closed = True
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        events.append("sleep")
+
+    async def fake_request_awake_minutes(session_arg, *, now):
+        events.append("request")
+        assert session_arg is background_session
+        assert now == action_at
+        return 92
+
+    background_session.close = close_session
+    monkeypatch.setattr(home_assistant_service.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(home_assistant_service, "SessionLocal", lambda: background_session)
+    monkeypatch.setattr(
+        home_assistant_service, "request_awake_minutes", fake_request_awake_minutes
+    )
+    monkeypatch.setattr(
+        home_assistant_service,
+        "adjust_points",
+        lambda _session, amount, *, caller, reason: adjustments.append((amount, caller, reason)),
+    )
+
+    await home_assistant_service.process_day_action(action_at)
+
+    assert sleeps == [home_assistant_service.DAY_HEALTH_SYNC_DELAY_S]
     assert events == ["sleep", "request"]
     assert adjustments == [(-92, "day", "awake 92 min")]
     assert background_session.closed is True
 
 
 @pytest.mark.asyncio
-async def test_day_action_without_sleep_deducts_nothing(monkeypatch):
+async def test_process_day_action_without_sleep_deducts_nothing(monkeypatch):
     background_session = SimpleNamespace(closed=False)
-    background_tasks = SimpleNamespace(tasks=[])
-
-    def add_task(func, *args, **kwargs):
-        background_tasks.tasks.append((func, args, kwargs))
 
     def close_session():
         background_session.closed = True
@@ -602,40 +621,20 @@ async def test_day_action_without_sleep_deducts_nothing(monkeypatch):
         assert now.tzinfo is timezone.utc
         return 0
 
-    background_tasks.add_task = add_task
     background_session.close = close_session
-    monkeypatch.setattr(notifications.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(notifications, "SessionLocal", lambda: background_session)
-    monkeypatch.setattr(notifications, "request_awake_minutes", fake_request_awake_minutes)
+    monkeypatch.setattr(home_assistant_service.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(home_assistant_service, "SessionLocal", lambda: background_session)
     monkeypatch.setattr(
-        notifications,
+        home_assistant_service, "request_awake_minutes", fake_request_awake_minutes
+    )
+    monkeypatch.setattr(
+        home_assistant_service,
         "adjust_points",
         lambda *_a, **_k: pytest.fail("no sleep must not touch points"),
     )
-    monkeypatch.setattr(
-        notifications,
-        "get_settings",
-        lambda: SimpleNamespace(home_assistant_action_secret=""),
-    )
 
-    request = SimpleNamespace(headers={}, query_params={})
-    payload = notifications.ActionPayload(action=notifications.ACTION_DAY)
+    await home_assistant_service.process_day_action(datetime(2026, 7, 1, 6, 30))
 
-    result = await notifications.handle_action(
-        payload,
-        request,
-        background_tasks=background_tasks,
-        session=SimpleNamespace(),
-    )
-
-    assert result == {
-        "ok": True,
-        "action": "DAY",
-        "scheduled": True,
-    }
-    assert len(background_tasks.tasks) == 1
-    func, args, kwargs = background_tasks.tasks[0]
-    await func(*args, **kwargs)
     assert background_session.closed is True
 
 

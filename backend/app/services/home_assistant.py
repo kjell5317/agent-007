@@ -6,12 +6,17 @@ calendar/task loops when HA is disabled or temporarily unavailable.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Protocol
 
 import httpx
 
 from app.config import get_settings
+from app.db import SessionLocal
+from app.services.health import request_awake_minutes
+from app.services.points import adjust_points
 from app.timezones import user_tz
 
 log = logging.getLogger(__name__)
@@ -20,6 +25,48 @@ _TIMEOUT = 5.0
 
 # Lead time before the next event that the NIGHT action counts down to.
 NEXT_EVENT_PREP_LEAD = timedelta(minutes=45)
+
+# Wait for Google Health data to sync after the DAY action before requesting it.
+DAY_HEALTH_SYNC_DELAY_S = 5 * 60
+
+
+class BackgroundTaskScheduler(Protocol):
+    def add_task(self, func, *args, **kwargs) -> None: ...
+
+
+def schedule_day_action(background_tasks: BackgroundTaskScheduler | None = None) -> datetime:
+    """Queue the DAY action worker and return the captured action timestamp."""
+    action_at = datetime.now(timezone.utc)
+    if background_tasks is None:
+        asyncio.create_task(process_day_action(action_at), name="day-health-sync")
+    else:
+        background_tasks.add_task(process_day_action, action_at)
+    log.info("notify action · day queued action_at=%s", action_at.isoformat())
+    return action_at
+
+
+async def process_day_action(action_at: datetime) -> None:
+    """Wait for Google Health sync, then deduct points for awake minutes."""
+    if action_at.tzinfo is None:
+        action_at = action_at.replace(tzinfo=timezone.utc)
+    else:
+        action_at = action_at.astimezone(timezone.utc)
+
+    await asyncio.sleep(DAY_HEALTH_SYNC_DELAY_S)
+
+    session = SessionLocal()
+    try:
+        awake_minutes = await request_awake_minutes(session, now=action_at)
+        penalty = max(0, awake_minutes)
+        if penalty:
+            adjust_points(session, -penalty, caller="day", reason=f"awake {awake_minutes} min")
+        log.info(
+            "notify action · day awake_minutes=%s points_deducted=%s",
+            awake_minutes,
+            penalty,
+        )
+    finally:
+        session.close()
 
 
 def next_event_datetime_configured() -> bool:
