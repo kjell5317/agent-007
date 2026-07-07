@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, String, func
+from sqlalchemy import DateTime, Float, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,8 +26,11 @@ class PointsEntry(Base):
     period_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
 
+    # factor (e.g. 0.2 points/min) and quantity (minutes) stay fractional;
+    # amount is the whole-number points the total is summed from — rounded at
+    # the write chokepoint in `points_store.add_entry`.
     factor: Mapped[float] = mapped_column(Float)
     quantity: Mapped[float] = mapped_column(Float)
-    amount: Mapped[float] = mapped_column(Float)
+    amount: Mapped[int] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

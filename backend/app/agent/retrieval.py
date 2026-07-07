@@ -39,7 +39,7 @@ async def search_notes(session: Any, *, query: str, k: int = 5) -> str:
     vec = await embed(query)
     if vec is None:
         return "search_notes: embeddings disabled — no notes available."
-    hits = notes_store.search_similar(session, embedding=vec, k=k)
+    hits = notes_store.search_similar(session, embedding=vec, query=query, k=k)
     if not hits:
         return "search_notes: no matching notes."
     return "Notes:\n" + "\n".join(_note_line(h) for h in hits)

@@ -30,6 +30,7 @@ from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.db.models.task import Task
 from app.events import publish_task
+from app.services.calendar.cache import cache_calendar_events
 from app.services.calendar.client import (
     CalendarEvent,
     CalendarSyncTokenExpired,
@@ -116,6 +117,7 @@ async def discover_updated_events(
 
     changed_physical: list[CalendarEvent] = []
     deleted_spans: list[tuple[datetime, datetime]] = []
+    cancelled_docs: list[tuple[str, str]] = []
     for cid in ids:
         raw_items, new_token, new_baseline = await _sync_calendar(
             client,
@@ -144,6 +146,7 @@ async def discover_updated_events(
         ]
         summary["updated"] += len(active)
         changed_physical.extend(active)
+        cancelled_docs.extend((cid, it["id"]) for it in cancelled_items)
 
         if cid == write_id:
             synced_task_ids: list[uuid.UUID] = []
@@ -235,6 +238,20 @@ async def discover_updated_events(
         patch={_SYNC_TOKENS_KEY: sync_tokens, _BASELINES_KEY: baselines},
     )
     session.commit()
+
+    # Mirror every changed event into the search cache (embedded, past events
+    # kept). Isolated from the reschedule work above: a cache/embedding failure
+    # must not undo the reconcile that already committed.
+    try:
+        cache_summary = await cache_calendar_events(
+            session, active=changed_physical, cancelled=cancelled_docs,
+        )
+        session.commit()
+        summary["cached"] = cache_summary["upserted"]
+        summary["cache_embedded"] = cache_summary["embedded"]
+    except Exception:  # noqa: BLE001 — caching is best-effort
+        log.exception("discover · calendar document cache failed")
+        session.rollback()
 
     await _plan_legs_for_changed_events(
         session, changed_physical, deleted_spans=deleted_spans, account_key=account_key,

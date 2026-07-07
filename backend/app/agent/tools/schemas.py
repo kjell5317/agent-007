@@ -200,16 +200,27 @@ NEW_INPUT_TOOLS = [
     {
         "name": "find_calendar_events",
         "description": (
-            "List events already on the user's primary calendar inside a time "
-            "window. Call this before `create_event` to check whether the event "
-            "the current input describes is already there, so you don't create a "
-            "duplicate. Also call this before `update_event` so you have the "
-            "event id to update. Non-terminal — you still need a terminal tool "
-            "(`create_task`, `mark_not_task`, or a duplicate action) to finish."
+            "Find events on the user's calendar. Two ways to search, "
+            "combinable: pass a `query` to match by meaning against cached "
+            "events (e.g. 'team offsite' finds 'Q3 offsite planning') — best "
+            "when you don't know the exact time; and/or pass a `time_min`/"
+            "`time_max` window to list events in that range. Call before "
+            "`create_event` to avoid duplicating an event that already exists, "
+            "and before `update_event` to get the `event_id`. Non-terminal — "
+            "you still need a terminal tool (`create_task`, `mark_not_task`, or "
+            "a duplicate action) to finish."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Free-text description of the event to find, matched "
+                        "semantically against cached events. Optionally narrowed "
+                        "by the time window."
+                    ),
+                },
                 "time_min": {
                     "type": "string",
                     "description": "ISO 8601 start of the search window (inclusive).",
@@ -219,7 +230,6 @@ NEW_INPUT_TOOLS = [
                     "description": "ISO 8601 end of the search window (exclusive).",
                 },
             },
-            "required": ["time_min", "time_max"],
         },
     },
     {

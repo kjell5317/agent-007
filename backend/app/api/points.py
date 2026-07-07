@@ -33,7 +33,7 @@ router = APIRouter(prefix="/points", tags=["points"])
 
 
 class TotalRead(BaseModel):
-    total: float
+    total: int
 
 
 class AdjustPayload(BaseModel):
@@ -44,7 +44,7 @@ class AdjustPayload(BaseModel):
 
 class PointsLogEntryRead(BaseModel):
     id: uuid.UUID
-    amount: float
+    amount: int
     source: str
     reason: str
     caller: str | None

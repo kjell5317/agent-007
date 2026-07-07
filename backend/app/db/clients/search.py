@@ -133,7 +133,9 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
     )
 
 
-def _filters_sql(corpus: str, *, source, label, status, before, after) -> str:
+def _filters_sql(
+    corpus: str, *, source, label, status, before, after, exclude_linked_inputs: bool
+) -> str:
     parts: list[str] = []
     ts = _BRANCHES[corpus]["ts"]
     # CAST(...) not `::timestamptz`: SQLAlchemy's text() bind-param regex skips
@@ -146,10 +148,17 @@ def _filters_sql(corpus: str, *, source, label, status, before, after) -> str:
             parts.append("t.label = :label")
         if status is not None:
             parts.append(_TASK_STATUS_CLAUSE)
-    # One `source:` filter spans both origin corpora — matched against the
-    # input's `source` column and the document's `provider` column.
-    if corpus == INPUT and source is not None:
-        parts.append("r.source = :source")
+    if corpus == INPUT:
+        # One `source:` filter spans both origin corpora — matched against the
+        # input's `source` column and the document's `provider` column.
+        if source is not None:
+            parts.append("r.source = :source")
+        # Distinct on the task: an input folded into a task is represented by
+        # that task's row, so drop it (many inputs → one task, shown once).
+        # Only when the task branch is present to stand in for it — otherwise
+        # (e.g. `source:gmail`, inputs-only) the input must still surface.
+        if exclude_linked_inputs:
+            parts.append("r.task_id IS NULL")
     if corpus == DOCUMENT and source is not None:
         parts.append("d.provider = :source")
     return "".join(f" AND {p}" for p in parts)
@@ -174,6 +183,9 @@ def suggest(
     if not active:
         return []
 
+    # Dedup inputs into their task only when the task branch is present to
+    # represent them (see _filters_sql).
+    exclude_linked_inputs = TASK in branches
     union = " UNION ALL ".join(
         _branch_sql(
             c,
@@ -185,6 +197,7 @@ def suggest(
                 status=status,
                 before=before,
                 after=after,
+                exclude_linked_inputs=exclude_linked_inputs,
             ),
         )
         for c in active

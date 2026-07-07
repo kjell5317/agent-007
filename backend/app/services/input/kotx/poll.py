@@ -19,6 +19,7 @@ from app.events import publish_kotx
 from app.services.input.create import drain
 from app.services.input.kotx.source import KotxSource
 from app.services.kotx import client as kotx_client
+from app.services.kotx.cache import cache_kotx_task
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,15 @@ async def poll(session: Session, account_key: str | None) -> dict:
         return _empty("")
     log.debug("kotx poll · %d updated tasks", len(payloads))
     summary = await drain(KotxSource(payloads), session)
+    # Mirror each task's docs into the search cache (best-effort per task).
+    cached = False
+    for task in payloads:
+        try:
+            cached = await cache_kotx_task(session, task) or cached
+        except Exception:  # noqa: BLE001
+            log.exception("kotx poll · document cache failed · task=%s", task.get("id"))
+    if cached:
+        session.commit()
     # Updated runs found outside the webhook path (missed deliveries) — give
     # the browser the same refetch nudge the webhook would have sent.
     publish_kotx()

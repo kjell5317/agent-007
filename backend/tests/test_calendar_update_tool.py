@@ -68,12 +68,50 @@ async def test_find_calendar_events_returns_ids(monkeypatch):
 
     out = await calendar_lookup.run_find_calendar_events(
         SimpleNamespace(),
-        "2026-07-10T13:00:00+00:00",
-        "2026-07-10T16:00:00+00:00",
+        time_min="2026-07-10T13:00:00+00:00",
+        time_max="2026-07-10T16:00:00+00:00",
     )
 
     assert "id=evt_123" in out
     assert "Talk" in out
+
+
+@pytest.mark.asyncio
+async def test_find_calendar_events_query_uses_semantic_cache(monkeypatch):
+    monkeypatch.setattr(
+        calendar_lookup,
+        "get_settings",
+        lambda: SimpleNamespace(
+            user_timezone="UTC",
+            google_calendar_id="primary",
+            calendar_semantic_match_limit=8,
+            calendar_semantic_min_similarity=0.35,
+        ),
+    )
+
+    async def fake_embed(_text, **_kwargs):
+        return [0.1] * 1536
+
+    match = calendar_lookup.documents_store.CalendarMatch(
+        event_id="evt_offsite",
+        calendar_id="primary",
+        summary="Q3 offsite planning",
+        location="Room 4.05",
+        starts_at=None,
+        similarity=0.87,
+    )
+    monkeypatch.setattr(calendar_lookup, "embed", fake_embed)
+    monkeypatch.setattr(
+        calendar_lookup.documents_store,
+        "search_calendar_semantic",
+        lambda *_a, **_k: [match],
+    )
+
+    out = await calendar_lookup.run_find_calendar_events(SimpleNamespace(), query="team offsite")
+
+    assert "id=evt_offsite" in out
+    assert "Q3 offsite planning" in out
+    assert "sim=0.87" in out
 
 
 @pytest.mark.asyncio

@@ -87,10 +87,12 @@ exactly one terminal tool:
   input mentions a person, project, account, or fact you might have
   recorded earlier. You may call it more than once.
 
-- `find_calendar_events(time_min, time_max)` — list events already on the
-  user's calendar in a window, including event ids. Call this before
-  `create_event` so you don't duplicate an event that already exists, and
-  before `update_event` so you can pass the correct event id.
+- `find_calendar_events(query?, time_min?, time_max?)` — find events on the
+  user's calendar, with event ids. Pass a `query` to match by meaning against
+  cached events (e.g. "team offsite" finds "Q3 offsite planning") when you
+  don't know the exact time, and/or a `time_min`/`time_max` window to list a
+  range. Call before `create_event` so you don't duplicate an event that
+  already exists, and before `update_event` to get the correct event id.
 
 - `create_event(summary, start, end, ...)` — add an event to the user's
   primary calendar. Creating it does NOT finish the run; follow up with a

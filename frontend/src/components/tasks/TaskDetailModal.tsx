@@ -22,6 +22,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { Input } from "@/components/ui/input";
 import { LabelPicker } from "@/components/ui/label-picker";
+import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -812,6 +813,7 @@ function TaskSummary({
               draft={textDraft}
               busy={busy}
               multiline
+              markdown
               onEdit={() => onEditText("description")}
               onChange={onChangeText}
               onCancel={onCancelText}
@@ -860,6 +862,7 @@ function EditableTextBlock({
   draft,
   busy,
   multiline,
+  markdown,
   suggestions = [],
   onEdit,
   onChange,
@@ -875,6 +878,7 @@ function EditableTextBlock({
   draft: string;
   busy: boolean;
   multiline?: boolean;
+  markdown?: boolean;
   suggestions?: string[];
   onEdit: () => void;
   onChange: (value: string) => void;
@@ -909,6 +913,33 @@ function EditableTextBlock({
             onSave={onSave}
           />
         )}
+      </div>
+    );
+  }
+
+  // Rendered markdown can contain links, so it can't sit inside the click-to-
+  // edit <button> (nested <a>, and clicks would trigger an edit). Lay it out as
+  // a plain block with a dedicated edit pencil instead. Empty descriptions fall
+  // through to the button below so "Add description" stays one tap.
+  if (markdown && value) {
+    return (
+      <div className="group relative flex w-full min-w-0 items-start gap-3 rounded-lg p-2 transition-colors hover:bg-accent/60">
+        {icon && <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>}
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-medium uppercase text-muted-foreground">
+            {TEXT_LABEL[field]}
+          </span>
+          <Markdown content={value} className="mt-1" />
+        </span>
+        <button
+          type="button"
+          onClick={onEdit}
+          disabled={busy}
+          aria-label={`Edit ${TEXT_LABEL[field]}`}
+          className="shrink-0 self-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+        >
+          <Pencil className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+        </button>
       </div>
     );
   }

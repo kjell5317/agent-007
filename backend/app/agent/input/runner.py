@@ -141,8 +141,9 @@ async def run_new_input_agent(
                 elif tu.name == "find_calendar_events":
                     out = await run_find_calendar_events(
                         session,
-                        str(tin.get("time_min") or ""),
-                        str(tin.get("time_max") or ""),
+                        time_min=str(tin.get("time_min")) if tin.get("time_min") else None,
+                        time_max=str(tin.get("time_max")) if tin.get("time_max") else None,
+                        query=str(tin.get("query")) if tin.get("query") else None,
                     )
                 elif tu.name == "create_event":
                     out, event_id = await run_create_event(

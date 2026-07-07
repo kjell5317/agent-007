@@ -39,35 +39,70 @@ class SimilarNote:
     source_subject: str | None
 
 
+# Hybrid: fuse a pgvector nearest-neighbour ranking with a Postgres FTS ranking
+# via Reciprocal Rank Fusion (Σ 1/(60+rank)), so a note that matches by keyword
+# (an account number, a name) surfaces even when the embedding misses it, and
+# vice versa. RRF is rank-based, so cosine and ts_rank scales never need
+# reconciling. The fused score is then re-ranked by the same recency decay the
+# vector-only lookup used, keeping the mild bias toward recent memory.
+_NOTE_POOL = 40
+
 _SIMILAR_NOTES_SQL = text(
     """
+    WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),
+    vec AS (
+        SELECT n.id, row_number() OVER (ORDER BY n.embedding <=> CAST(:emb AS vector)) AS rnk
+        FROM notes n
+        WHERE n.embedding IS NOT NULL
+        ORDER BY n.embedding <=> CAST(:emb AS vector)
+        LIMIT :pool
+    ),
+    kw AS (
+        SELECT n.id, row_number() OVER (ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC) AS rnk
+        FROM notes n, q
+        WHERE q.tsq @@ n.tsv
+        ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC
+        LIMIT :pool
+    ),
+    fused AS (
+        SELECT coalesce(vec.id, kw.id) AS id,
+               coalesce(1.0 / (60 + vec.rnk), 0.0)
+                 + coalesce(1.0 / (60 + kw.rnk), 0.0) AS rrf
+        FROM vec FULL OUTER JOIN kw ON vec.id = kw.id
+    )
     SELECT
       n.id, n.content, n.source_raw_input_id, n.created_at,
       r.source_metadata->>'from' AS source_from,
       r.source_metadata->>'subject' AS source_subject,
       1.0 - (n.embedding <=> CAST(:emb AS vector)) AS similarity
-    FROM notes n
+    FROM fused
+    JOIN notes n ON n.id = fused.id
     LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
-    WHERE n.embedding IS NOT NULL
     ORDER BY
-      (1.0 - (n.embedding <=> CAST(:emb AS vector)))
-        * exp(- EXTRACT(EPOCH FROM (now() - n.created_at))
-              / (:half_life_days * 86400.0))
+      fused.rrf
+        * exp(- EXTRACT(EPOCH FROM (now() - n.created_at)) / (:half_life_days * 86400.0))
       DESC
     LIMIT :k
     """
-).bindparams(bindparam("emb", type_=String()))
+).bindparams(bindparam("emb", type_=String()), bindparam("raw_q", type_=String()))
 
 
 def search_similar(
-    session: Session, *, embedding: list[float], k: int = 5
+    session: Session, *, embedding: list[float], query: str, k: int = 5
 ) -> list[SimilarNote]:
-    """Top-k notes by cosine similarity, lightly re-ranked toward recent notes."""
+    """Top-k notes by hybrid similarity + keyword (RRF over pgvector and FTS),
+    re-ranked with a mild recency decay."""
     emb_literal = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
     half_life_days = get_settings().notes_similarity_half_life_days
     rows = session.execute(
         _SIMILAR_NOTES_SQL,
-        {"emb": emb_literal, "k": k, "half_life_days": half_life_days},
+        {
+            "emb": emb_literal,
+            "raw_q": query or "",
+            "k": k,
+            "pool": _NOTE_POOL,
+            "half_life_days": half_life_days,
+        },
     ).all()
     return [
         SimilarNote(

@@ -32,8 +32,8 @@ def adjust_points(
     *,
     caller: str | None = None,
     reason: str | None = None,
-) -> float:
-    """Add a signed amount to the ledger and return the new total."""
+) -> int:
+    """Add a signed amount to the ledger and return the new (whole) total."""
     points_store.add_entry(
         session,
         source="manual",

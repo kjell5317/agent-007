@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.agent.helpers.text import parse_iso
 from app.config import get_settings
+from app.db.clients import documents as documents_store
 from app.services.calendar.events import (
     PROP_KIND,
     create_event,
@@ -32,6 +33,7 @@ from app.services.calendar.events import (
     list_events_between,
     patch_event,
 )
+from app.services.input.embedding import embed
 from app.services.notify import notify_calendar_event_updated
 
 KIND_INVITATION = "invitation"
@@ -43,17 +45,53 @@ def _aware(dt: datetime, tz: ZoneInfo) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=tz)
 
 
-async def run_find_calendar_events(session: Session, time_min: str, time_max: str) -> str:
+async def run_find_calendar_events(
+    session: Session,
+    *,
+    time_min: str | None = None,
+    time_max: str | None = None,
+    query: str | None = None,
+) -> str:
+    """Find events either by time window (live calendar read) or by `query`
+    (hybrid keyword + semantic search over the cached calendar events discovery
+    mirrors in). A `query` matches both by term and by meaning — "team offsite"
+    finds "Q3 offsite planning" — and returns only upcoming events (anything
+    starting before now is excluded). An optional time window narrows further."""
     settings = get_settings()
     tz = ZoneInfo(settings.user_timezone)
     calendar_id = (settings.google_calendar_id or "").strip()
     if not calendar_id:
         return "find_calendar_events: no calendar configured."
-    start = parse_iso(time_min)
-    end = parse_iso(time_max)
-    if start is None or end is None:
+
+    start = _parse_bound(time_min, tz)
+    end = _parse_bound(time_max, tz)
+    if start is False or end is False:
         return "find_calendar_events: time_min and time_max must be ISO timestamps."
-    start, end = _aware(start, tz), _aware(end, tz)
+
+    q = (query or "").strip()
+    if q:
+        embedding = await embed(q)
+        if embedding is not None:
+            # Default the window start to now so past events (starting before
+            # now) drop out; an explicit time_min from the agent still wins.
+            floor = start or datetime.now(tz)
+            matches = documents_store.search_calendar_semantic(
+                session,
+                embedding=embedding,
+                raw_text=q,
+                k=settings.calendar_semantic_match_limit,
+                min_similarity=settings.calendar_semantic_min_similarity,
+                time_min=floor.isoformat(),
+                time_max=end.isoformat() if end else None,
+            )
+            return _format_matches(q, matches, tz)
+        # No embeddings configured: fall back to a window listing if one was
+        # given, otherwise say so.
+        if start is None or end is None:
+            return "find_calendar_events: semantic search needs embeddings configured."
+
+    if start is None or end is None:
+        return "find_calendar_events: provide `query`, or both `time_min` and `time_max`."
     if end <= start:
         return "find_calendar_events: time_max must be after time_min."
     events = await list_events_between(
@@ -61,12 +99,39 @@ async def run_find_calendar_events(session: Session, time_min: str, time_max: st
     )
     if not events:
         return "find_calendar_events: no existing events in that window."
-    lines = []
-    for e in events:
-        when = e.start.astimezone(tz).isoformat()
-        loc = f" @ {e.location}" if e.location else ""
-        lines.append(f"- id={e.id} | {when} | {e.summary}{loc}")
+    lines = [_event_line(e.id, e.start.astimezone(tz).isoformat(), e.summary, e.location)
+             for e in events]
     return "Existing calendar events:\n" + "\n".join(lines)
+
+
+def _parse_bound(value: str | None, tz: ZoneInfo) -> datetime | bool | None:
+    """None when absent, False when malformed, else an aware datetime."""
+    if not value:
+        return None
+    try:
+        parsed = parse_iso(value)
+    except ValueError:
+        return False
+    if parsed is None:
+        return False
+    return _aware(parsed, tz)
+
+
+def _event_line(event_id: str, when: str, summary: str, location: str | None) -> str:
+    loc = f" @ {location}" if location else ""
+    return f"- id={event_id} | {when} | {summary}{loc}"
+
+
+def _format_matches(query: str, matches, tz: ZoneInfo) -> str:
+    if not matches:
+        return f"find_calendar_events: no cached events matching '{query}'."
+    lines = []
+    for m in matches:
+        when = m.starts_at.astimezone(tz).isoformat() if m.starts_at else "(no time)"
+        lines.append(
+            _event_line(m.event_id, when, m.summary, m.location) + f" | sim={m.similarity:.2f}"
+        )
+    return f"Cached calendar events matching '{query}':\n" + "\n".join(lines)
 
 
 async def run_create_event(

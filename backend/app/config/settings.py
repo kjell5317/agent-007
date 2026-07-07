@@ -61,11 +61,23 @@ class Settings(BaseSettings):
     # Search (stage 1 suggest-as-you-type). Shorter e-folding than the precedent
     # searches above: live search wants recent items to surface, not near-flat
     # decay. Note the formula is exp(-age/days), not a true half-life.
-    search_recency_half_life_days: float = 30
-    search_suggest_limit: int = 8
+    search_recency_half_life_days: float = 100
+    search_suggest_limit: int = 5
     # In-process TTL cache over suggest results. Short: the same query re-fires
     # on backspace/retype, so even a few seconds spares the DB per keystroke.
-    search_suggest_cache_ttl_seconds: float = 10.0
+    search_suggest_cache_ttl_seconds: float = 90.0
+
+    # Calendar semantic lookup (`find_calendar_events` query mode): how many
+    # nearest cached events to return, and the minimum cosine similarity a match
+    # must clear. Raise the floor for stricter dedup (fewer, more certain hits);
+    # lower it for broader recall.
+    # Calendar hybrid lookup (`find_calendar_events` query mode): fuses pgvector
+    # similarity with Postgres keyword (FTS) ranking via RRF. `match_limit` caps
+    # results; `min_similarity` gates the vector side so a far-off cosine can't
+    # ride in (keyword matches still surface regardless). The time window — not a
+    # decay — handles recency; the tool defaults it to "now" so past events drop.
+    calendar_semantic_match_limit: int = 5
+    calendar_semantic_min_similarity: float = 0.4
 
     # Google OAuth
     google_oauth_client_id: str = ""

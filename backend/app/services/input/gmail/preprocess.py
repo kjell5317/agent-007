@@ -5,7 +5,8 @@ with base64url-encoded bodies and MIME parts. The agent expects compact, plain
 text plus per-source metadata. This module performs the conversion:
 
   1. Walk MIME parts; prefer `text/plain`, fall back to `text/html`.
-  2. Convert HTML → text (BeautifulSoup).
+  2. Convert HTML → Markdown (BeautifulSoup) — headings, lists, links,
+     emphasis and blockquotes survive as CommonMark the UI can render.
   3. Strip quoted replies (`>`, "On <date> ... wrote:", "----- Original Message -----").
   4. Strip signatures (`-- \\n` sigdash + common phrases like "Sent from my ...").
   5. Collapse whitespace and trim.
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field
 from email.utils import getaddresses
 from typing import Any
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 # Cap on body size kept after preprocessing — protects the agent's context
 # from huge marketing emails. Tune as needed.
@@ -92,7 +93,7 @@ def preprocess_message(
     headers = _index_headers(payload.get("headers") or [])
 
     plain, html = _extract_bodies(payload)
-    body = plain if plain else (_html_to_text(html) if html else "")
+    body = plain if plain else (_html_to_markdown(html) if html else "")
 
     body = _strip_quoted_replies(body)
     body = _strip_signature(body)
@@ -223,24 +224,98 @@ def _has_attachments(payload: dict) -> bool:
     return False
 
 
-# --- HTML → text --------------------------------------------------------------
+# --- HTML → Markdown ----------------------------------------------------------
 
-def _html_to_text(html: str) -> str:
+# Tags whose content is a block: emitted with surrounding blank lines. Layout
+# tables (which emails overuse) fall in here too — treated as plain blocks, not
+# Markdown tables, since a `| a | b |` grid of layout cells is noise.
+_BLOCK_TAGS = {"p", "div", "section", "article", "header", "footer", "main",
+               "table", "tr", "td", "th", "tbody", "thead", "figure", "figcaption"}
+_DROP_TAGS = {"script", "style", "head", "meta", "link", "title", "noscript"}
+
+
+def _html_to_markdown(html: str) -> str:
+    """Convert an HTML email part to a small CommonMark subset (the same the UI
+    renders): headings, `- `/`1.` lists, `> ` quotes, ``` fences, inline `code`,
+    `[text](url)`, `**bold**`, `*italic*`, `---`. Link URLs stay inline so
+    `_extract_urls` still finds them."""
     soup = BeautifulSoup(html, "lxml")
-
-    # Drop content the user never sees but that bs4 would otherwise inline.
-    for tag in soup(["script", "style", "head", "meta", "link"]):
+    for tag in soup(list(_DROP_TAGS)):
         tag.decompose()
+    md = _node_md(soup.body or soup)
+    # Leave trailing spaces alone here: `_collapse_whitespace` rstrips lines
+    # later, and stripping them now would strip the RFC-3676 sigdash's trailing
+    # space ("-- "), defeating `_strip_signature`.
+    md = re.sub(r"\n{3,}", "\n\n", md)
+    return md.strip()
 
-    # Preserve link targets as inline "[text](url)" so URL extraction still works.
-    for a in soup.find_all("a"):
-        href = a.get("href")
-        text = a.get_text(strip=True)
-        if href and text and href != text:
-            a.replace_with(f"{text} ({href})")
 
-    # `\n` separator keeps block-level structure roughly intact.
-    return soup.get_text(separator="\n")
+def _children_md(node: Tag) -> str:
+    return "".join(_node_md(child) for child in node.children)
+
+
+def _node_md(node) -> str:  # noqa: PLR0911 — a tag dispatch, one return per tag
+    if isinstance(node, NavigableString):
+        return re.sub(r"\s+", " ", str(node))
+    if not isinstance(node, Tag):
+        return ""
+
+    name = (node.name or "").lower()
+    if name in _DROP_TAGS:
+        return ""
+    if name == "br":
+        return "\n"
+    if name == "hr":
+        return "\n\n---\n\n"
+    if name == "a":
+        inner = _children_md(node).strip()
+        href = (node.get("href") or "").strip()
+        if inner and href.startswith(("http://", "https://", "mailto:")):
+            return f"[{inner}]({href})"
+        return inner
+    if name == "img":
+        return (node.get("alt") or "").strip()
+    if name in ("strong", "b"):
+        inner = _children_md(node).strip()
+        return f"**{inner}**" if inner else ""
+    if name in ("em", "i"):
+        inner = _children_md(node).strip()
+        return f"*{inner}*" if inner else ""
+    if name == "code" and not (node.parent and node.parent.name == "pre"):
+        inner = _children_md(node).strip()
+        return f"`{inner}`" if inner else ""
+    if name == "pre":
+        code = node.get_text().strip("\n")
+        return f"\n\n```\n{code}\n```\n\n" if code else ""
+    if name in ("h1", "h2", "h3", "h4", "h5", "h6"):
+        inner = _children_md(node).strip()
+        return f"\n\n{'#' * int(name[1])} {inner}\n\n" if inner else ""
+    if name == "ul":
+        return _list_md(node, ordered=False)
+    if name == "ol":
+        return _list_md(node, ordered=True)
+    if name == "blockquote":
+        inner = _children_md(node).strip()
+        quoted = "\n".join("> " + line for line in inner.splitlines())
+        return f"\n\n{quoted}\n\n" if quoted else ""
+    if name in _BLOCK_TAGS:
+        inner = _children_md(node).strip()
+        return f"\n\n{inner}\n\n" if inner else ""
+    return _children_md(node)
+
+
+def _list_md(node: Tag, *, ordered: bool) -> str:
+    items: list[str] = []
+    for index, li in enumerate(node.find_all("li", recursive=False), start=1):
+        inner = _children_md(li).strip()
+        if not inner:
+            continue
+        marker = f"{index}. " if ordered else "- "
+        # Keep multi-line items readable; nested content stays on continuation lines.
+        first, *rest = inner.splitlines()
+        lines = [marker + first, *("  " + line for line in rest)]
+        items.append("\n".join(lines))
+    return "\n\n" + "\n".join(items) + "\n\n" if items else ""
 
 
 # --- Quote / signature stripping ---------------------------------------------

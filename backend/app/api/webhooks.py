@@ -21,6 +21,7 @@ from app.db import SessionLocal
 from app.events import publish_kotx
 from app.services.input.create import drain
 from app.services.input.kotx.source import KotxSource
+from app.services.kotx.cache import cache_kotx_task
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,14 @@ async def _process_kotx_delivery(task: dict) -> None:
     session = SessionLocal()
     try:
         summary = await drain(KotxSource([task]), session)
+        # Mirror the task's docs into the search cache (best-effort — a fetch
+        # or embedding failure must not fail the delivery ack).
+        try:
+            if await cache_kotx_task(session, task):
+                session.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("kotx webhook · document cache failed · task=%s", task.get("id"))
+            session.rollback()
     finally:
         session.close()
 

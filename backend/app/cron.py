@@ -28,7 +28,6 @@ from app.services.input.poll import poll_sources
 from app.services.notify import notify_points_penalty, notify_task_created
 from app.services.plan import (
     cleanup_stray_commute_legs,
-    plan_commutes_window,
     refresh_commutes_for_weather,
     schedule_task,
     scheduled_interval_for,
@@ -42,14 +41,13 @@ from app.services.points import (
 log = logging.getLogger(__name__)
 
 AUTO_POLL_INTERVAL_S = 300
-DISCOVER_INTERVAL_S = 300
+# Every minute: calendar-discover is a cheap incremental syncToken pull (only
+# what changed since the last poll), so it can run tight without hammering the
+# Google API — and a near-real-time reschedule around external edits is worth it.
+DISCOVER_INTERVAL_S = 60
 OVERDUE_TASK_INTERVAL_S = 300
 OVERDUE_DUE_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
-# One-shot migration pass shortly after startup; retried while auto-poll is
-# paused so it still runs exactly once when automation comes back on.
-MIGRATION_DELAY_S = 120
-MIGRATION_RETRY_S = 300
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # A task the planner could not place stays overdue — without a backoff the
@@ -105,12 +103,13 @@ async def _calendar_discover() -> None:
                 summary = await discover_updated_events(session, calendar_ids=ids)
             log.info(
                 "calendar-discover done · checked=%d updated=%d overlapping=%d"
-                " synced=%d deleted=%d",
+                " synced=%d deleted=%d cached=%d",
                 summary["checked"],
                 summary["updated"],
                 summary["overlapping"],
                 summary["scheduled_updates"],
                 summary["deleted"],
+                summary.get("cached", 0),
             )
             if summary["updated"] or summary["deleted"]:
                 retry = await retry_unscheduled_tasks_once(respect_backoff=False)
@@ -302,61 +301,10 @@ async def _weather_commute_refresh() -> None:
             log.exception("weather-commute-refresh iteration failed")
 
 
-async def _commute_migration() -> None:
-    """One-shot startup pass: derive commute legs for everything physical in
-    the lookahead window — pre-feature events with locations, scheduled
-    located tasks (re-placed as trip blocks by the planner's collision check
-    when their slot has no room), and legacy-format commute cleanup. New and
-    recurring events are handled from here on by calendar-discover, which
-    replans around every changed/visible instance."""
-    log.info("commute-migration scheduled · delay=%ds", MIGRATION_DELAY_S)
-    await asyncio.sleep(MIGRATION_DELAY_S)
-    while True:
-        try:
-            if not state.auto_poll_enabled:
-                log.debug("commute-migration waiting (automation paused)")
-                await asyncio.sleep(MIGRATION_RETRY_S)
-                continue
-            settings = get_settings()
-            now = datetime.now(timezone.utc)
-            with SessionLocal() as session:
-                removed_strays = await cleanup_stray_commute_legs(session)
-                summary = await plan_commutes_window(
-                    session,
-                    window_start=now,
-                    window_end=now + timedelta(days=settings.commute_lookahead_days),
-                )
-            log.info(
-                "commute-migration done · removed_strays=%d planned=%d"
-                " rescheduled_tasks=%d unroutable=%d errors=%d",
-                removed_strays,
-                summary["planned"],
-                summary["rescheduled_tasks"],
-                summary["skipped_unroutable"],
-                len(summary["errors"]),
-            )
-            if summary["errors"]:
-                log.warning("commute-migration errors · %s", summary["errors"])
-            if any(err.get("transient") for err in summary["errors"]):
-                log.info(
-                    "commute-migration hit a transient Maps failure; retrying in %ds",
-                    MIGRATION_RETRY_S,
-                )
-                await asyncio.sleep(MIGRATION_RETRY_S)
-                continue
-            return
-        except asyncio.CancelledError:
-            log.info("commute-migration cancelled")
-            raise
-        except Exception:  # noqa: BLE001 — retry until the one pass succeeds
-            log.exception("commute-migration failed; retrying in %ds", MIGRATION_RETRY_S)
-            await asyncio.sleep(MIGRATION_RETRY_S)
-
-
 async def _commute_cleanup() -> None:
-    """Daily sweep deleting commute legs outside the live window — already
-    ended or beyond the lookahead horizon (the startup migration also runs
-    one, so restarts don't wait a day for it)."""
+    """Periodic sweep deleting commute legs outside the live window — already
+    ended or beyond the lookahead horizon. calendar-discover replans around
+    every changed/visible event, so no separate startup migration is needed."""
     log.info("commute-cleanup loop started · interval=%ds", COMMUTE_CLEANUP_INTERVAL_S)
     while True:
         try:
@@ -380,12 +328,11 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("overdue-scheduled-tasks", _overdue_scheduled_tasks),
     ("overdue-due-tasks", _overdue_due_tasks),
     ("weather-commute-refresh", _weather_commute_refresh),
-    ("commute-migration", _commute_migration),
     ("commute-cleanup", _commute_cleanup),
 ]
 
 # Names of jobs that only make sense with commute enabled.
-_COMMUTE_JOBS = {"weather-commute-refresh", "commute-migration", "commute-cleanup"}
+_COMMUTE_JOBS = {"weather-commute-refresh", "commute-cleanup"}
 
 _tasks: list[asyncio.Task] = []
 

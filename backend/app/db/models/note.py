@@ -2,8 +2,8 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Computed, DateTime, ForeignKey, Text, func
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -30,5 +30,12 @@ class Note(Base):
     )
 
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+
+    # Generated in the DB (keyword side of the hybrid lookup); read-only here.
+    tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', coalesce(content, ''))", persisted=True),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

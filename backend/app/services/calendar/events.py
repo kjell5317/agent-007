@@ -125,7 +125,9 @@ async def create_event(
     client = await authorized_client(session, account_key)
     log.info("calendar insert · calendar=%s summary=%r", calendar_id, summary)
     raw = await client.insert_event(calendar_id, body)
-    return normalize(raw, calendar_id)
+    event = normalize(raw, calendar_id)
+    await _mirror_to_cache(event)
+    return event
 
 
 async def get_event(
@@ -182,7 +184,9 @@ async def patch_event(
     client = await authorized_client(session, account_key)
     log.info("calendar patch · calendar=%s event=%s", calendar_id, event_id)
     raw = await client.patch_event(calendar_id, event_id, body)
-    return normalize(raw, calendar_id)
+    event = normalize(raw, calendar_id)
+    await _mirror_to_cache(event)
+    return event
 
 
 async def delete_event(
@@ -196,6 +200,22 @@ async def delete_event(
     client = await authorized_client(session, account_key)
     log.info("calendar delete · calendar=%s event=%s", calendar_id, event_id)
     await client.delete_event(calendar_id, event_id)
+    _forget_from_cache(calendar_id, event_id)
+
+
+# Write-through to the search cache. Lazily imported: `app.services.calendar.
+# cache` imports this module (for `is_commute_event`), so a top-level import
+# here would be circular. Best-effort — the cache functions never raise.
+async def _mirror_to_cache(event: CalendarEvent) -> None:
+    from app.services.calendar.cache import write_through_event
+
+    await write_through_event(event)
+
+
+def _forget_from_cache(calendar_id: str, event_id: str) -> None:
+    from app.services.calendar.cache import forget_event
+
+    forget_event(calendar_id, event_id)
 
 
 # --- Task-mirror helpers -----------------------------------------------------

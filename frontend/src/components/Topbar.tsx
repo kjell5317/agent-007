@@ -21,7 +21,8 @@ const OAUTH_PROVIDERS: { label: string; href: string }[] = [
 ];
 
 function formatPoints(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  // Points are whole numbers server-side; round defensively for display.
+  return String(Math.round(n));
 }
 
 function formatSignedPoints(n: number): string {
@@ -362,7 +363,8 @@ function PointsModal({
   }, [logCount, open, tab]);
 
   const apply = async (sign: 1 | -1) => {
-    const magnitude = Math.abs(Number(amount));
+    // Points are whole numbers — round the entered amount before applying.
+    const magnitude = Math.round(Math.abs(Number(amount)));
     if (!Number.isFinite(magnitude) || magnitude === 0) {
       toast.error("Enter a non-zero amount.");
       return;
@@ -434,9 +436,9 @@ function PointsModal({
             )}
             <Input
               type="number"
-              inputMode="decimal"
+              inputMode="numeric"
               min="0"
-              step="any"
+              step="1"
               autoFocus
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
