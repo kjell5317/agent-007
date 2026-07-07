@@ -28,6 +28,7 @@ def test_search_raw_inputs_delegates_to_existing_pgvector_client(monkeypatch):
     hits = retrieval.search_raw_inputs(
         session,
         embedding=[0.1, 0.2],
+        query="rent invoice",
         exclude_id=exclude_id,
         statuses=["open"],
         k=4,
@@ -37,10 +38,26 @@ def test_search_raw_inputs_delegates_to_existing_pgvector_client(monkeypatch):
     assert captured == {
         "session": session,
         "embedding": [0.1, 0.2],
+        "query": "rent invoice",
         "exclude_id": exclude_id,
         "statuses": ["open"],
         "k": 4,
     }
+
+
+def test_precedent_query_text_prefers_subject_then_content():
+    from types import SimpleNamespace
+
+    assert (
+        retrieval.precedent_query_text(
+            SimpleNamespace(source_metadata={"subject": "Rent invoice"}, content="body")
+        )
+        == "Rent invoice"
+    )
+    assert (
+        retrieval.precedent_query_text(SimpleNamespace(source_metadata={}, content="buy milk"))
+        == "buy milk"
+    )
 
 
 @pytest.mark.asyncio

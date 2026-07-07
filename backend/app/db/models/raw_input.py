@@ -2,8 +2,8 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, Computed, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -58,3 +58,15 @@ class RawInput(Base):
     agent_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+
+    # Keyword side of the hybrid precedent lookup (subject + content), generated
+    # in the DB; read-only here.
+    tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "to_tsvector('english', "
+            "coalesce(source_metadata->>'subject', '') || ' ' || coalesce(content, ''))",
+            persisted=True,
+        ),
+        nullable=True,
+    )

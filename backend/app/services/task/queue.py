@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agent import extract_task_fields
-from app.agent.retrieval import search_raw_inputs
+from app.agent.retrieval import precedent_query_text, search_raw_inputs
 from app.db import SessionLocal
 from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
@@ -242,6 +242,7 @@ async def _collect_extraction_precedents(
     return search_raw_inputs(
         session,
         embedding=query_embedding,
+        query=precedent_query_text(raw),
         exclude_id=raw_input_id,
         statuses=["open", "closed", "not_task"],
         k=EXTRACT_PRECEDENT_K,

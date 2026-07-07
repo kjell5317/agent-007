@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
 from app.agent.input.runner import run_new_input_agent
 from app.agent.kotx.runner import run_kotx_transition
-from app.agent.retrieval import search_raw_inputs
+from app.agent.retrieval import precedent_query_text, search_raw_inputs
 from app.agent.thread.runner import run_thread_followup
 from app.config import get_settings
 from app.db.clients import raw_inputs, tasks
@@ -49,6 +50,17 @@ SUPPRESSED_GITHUB_REASONS = frozenset({"push", "review_requested", "assign"})
 SIMILAR_K = 4
 # How many ranked candidates (across all statuses) the new-input agent sees.
 CANDIDATE_K = 5
+
+
+def _strongest_by_cosine(hits: Iterable[SimilarInput]) -> SimilarInput | None:
+    """The candidate with the highest recency-decayed cosine, or None. The
+    auto-decide gate is calibrated to cosine, so it ranks candidates by that —
+    independent of the hybrid (RRF) order they came back in."""
+    best: SimilarInput | None = None
+    for hit in hits:
+        if best is None or hit.decayed_similarity > best.decayed_similarity:
+            best = hit
+    return best
 
 
 async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
@@ -112,9 +124,11 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     closed_hits: list[SimilarInput] = []
 
     if query_embedding is not None:
+        precedent_query = precedent_query_text(raw)
         not_task_hits = search_raw_inputs(
             session,
             embedding=query_embedding,
+            query=precedent_query,
             exclude_id=raw_input_id,
             statuses=["not_task"],
             k=SIMILAR_K,
@@ -122,6 +136,7 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         open_hits = search_raw_inputs(
             session,
             embedding=query_embedding,
+            query=precedent_query,
             exclude_id=raw_input_id,
             statuses=["open"],
             k=SIMILAR_K,
@@ -129,25 +144,26 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         closed_hits = search_raw_inputs(
             session,
             embedding=query_embedding,
+            query=precedent_query,
             exclude_id=raw_input_id,
             statuses=["closed"],
             k=SIMILAR_K,
         )
 
-    # Auto-decide against the strongest precedent over the threshold. The
-    # not_task and open(=duplicate) candidates compete on their recency-decayed
-    # similarity — an old precedent decays below the threshold and falls
-    # through to the agent instead of auto-deciding. Open wins exact ties:
-    # acting on an existing task is safer than silently dropping the input
-    # as not-a-task.
-    top_not_task = not_task_hits[0].decayed_similarity if not_task_hits else 0.0
-    top_open = (
-        open_hits[0].decayed_similarity if open_hits and open_hits[0].task_id else 0.0
-    )
+    # Auto-decide against the strongest precedent over the threshold. Candidates
+    # arrive hybrid-ranked (RRF), so pick the strongest by recency-decayed COSINE
+    # — the calibrated duplicate signal — rather than the top RRF row, which a
+    # keyword match could occupy. An old precedent decays below the threshold and
+    # falls through to the agent. Open wins exact ties: acting on an existing
+    # task is safer than silently dropping the input as not-a-task.
+    top_not_task_hit = _strongest_by_cosine(not_task_hits)
+    top_open_hit = _strongest_by_cosine(h for h in open_hits if h.task_id)
+    top_not_task = top_not_task_hit.decayed_similarity if top_not_task_hit else 0.0
+    top_open = top_open_hit.decayed_similarity if top_open_hit else 0.0
 
     if max(top_not_task, top_open) >= auto_threshold:
         if top_open >= top_not_task:
-            top = open_hits[0]
+            top = top_open_hit
             # A near-identical input to one we already linked to an open task is
             # almost always the same message arriving again / from another
             # source. It carries no new information, so the outcome is
@@ -176,7 +192,7 @@ async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
                 agent_trace=trace,
             )
         else:
-            top = not_task_hits[0]
+            top = top_not_task_hit
             reason = (top.agent_trace or {}).get("reason") or "matched earlier not_task input"
             trace = {
                 "outcome": "not_task",

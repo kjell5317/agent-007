@@ -235,6 +235,7 @@ async def test_manual_queue_passes_embedding_precedents_to_extractor(monkeypatch
     assert search_calls == [
         {
             "embedding": [0.1, 0.2],
+            "query": "Please turn this into a task.",
             "exclude_id": raw_id,
             "statuses": ["open", "closed", "not_task"],
             "k": task_queue.EXTRACT_PRECEDENT_K,

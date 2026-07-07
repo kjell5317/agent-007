@@ -18,6 +18,7 @@ def search_raw_inputs(
     session: Any,
     *,
     embedding: list[float],
+    query: str,
     exclude_id: uuid.UUID,
     statuses: list[str],
     k: int,
@@ -25,10 +26,20 @@ def search_raw_inputs(
     return raw_inputs.search_similar(
         session,
         embedding=embedding,
+        query=query,
         exclude_id=exclude_id,
         statuses=statuses,
         k=k,
     )
+
+
+def precedent_query_text(raw: Any) -> str:
+    """Keyword-side query for the hybrid precedent lookup: the subject when we
+    have one (the most discriminative short text), else the leading content.
+    Kept short so `websearch_to_tsquery` doesn't AND together a whole body."""
+    meta = getattr(raw, "source_metadata", None) or {}
+    subject = (meta.get("subject") or "").strip()
+    return (subject or (getattr(raw, "content", "") or "").strip())[:300]
 
 
 async def search_notes(session: Any, *, query: str, k: int = 5) -> str:

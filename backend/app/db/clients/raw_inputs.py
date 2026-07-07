@@ -311,8 +311,44 @@ class SimilarInput:
     label: str | None = None
 
 
+# Hybrid retrieval: fuse a pgvector nearest-neighbour ranking with a Postgres
+# FTS ranking (subject + content) via RRF, so a precedent that shares specific
+# terms surfaces even when the embedding under-ranks it, and vice versa. The
+# rows keep the raw cosine `similarity`/`decayed_similarity` — RRF only decides
+# *which* precedents come back and in what order; the orchestrator's auto-decide
+# gate still thresholds the (calibrated) decayed cosine, taking the strongest
+# candidate regardless of RRF order.
+_PRECEDENT_POOL = 40
+
 _SIMILAR_INPUTS_SQL = text(
     """
+    WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),
+    vec AS (
+        SELECT ri.id, row_number() OVER (ORDER BY ri.embedding <=> CAST(:emb AS vector)) AS rnk
+        FROM raw_inputs ri
+        WHERE ri.embedding IS NOT NULL
+          AND ri.processed_at IS NOT NULL
+          AND ri.status = ANY(:statuses)
+          AND ri.id <> :exclude_id
+        ORDER BY ri.embedding <=> CAST(:emb AS vector)
+        LIMIT :pool
+    ),
+    kw AS (
+        SELECT ri.id, row_number() OVER (ORDER BY ts_rank_cd(ri.tsv, q.tsq) DESC) AS rnk
+        FROM raw_inputs ri, q
+        WHERE ri.processed_at IS NOT NULL
+          AND ri.status = ANY(:statuses)
+          AND ri.id <> :exclude_id
+          AND q.tsq @@ ri.tsv
+        ORDER BY ts_rank_cd(ri.tsv, q.tsq) DESC
+        LIMIT :pool
+    ),
+    fused AS (
+        SELECT coalesce(vec.id, kw.id) AS id,
+               coalesce(1.0 / (60 + vec.rnk), 0.0)
+                 + coalesce(1.0 / (60 + kw.rnk), 0.0) AS rrf
+        FROM vec FULL OUTER JOIN kw ON vec.id = kw.id
+    )
     SELECT
       raw_inputs.id, raw_inputs.source, raw_inputs.status, raw_inputs.task_id,
       tasks.label, raw_inputs.received_at, raw_inputs.agent_trace,
@@ -322,37 +358,38 @@ _SIMILAR_INPUTS_SQL = text(
       (1.0 - (raw_inputs.embedding <=> CAST(:emb AS vector)))
         * exp(- EXTRACT(EPOCH FROM (now() - raw_inputs.received_at))
               / (:half_life_days * 86400.0)) AS decayed_similarity
-    FROM raw_inputs
+    FROM fused
+    JOIN raw_inputs ON raw_inputs.id = fused.id
     LEFT JOIN tasks ON tasks.id = raw_inputs.task_id
-    WHERE raw_inputs.embedding IS NOT NULL
-      AND raw_inputs.processed_at IS NOT NULL
-      AND raw_inputs.status = ANY(:statuses)
-      AND raw_inputs.id <> :exclude_id
-    ORDER BY decayed_similarity DESC
+    ORDER BY fused.rrf DESC
     LIMIT :k
     """
-).bindparams(bindparam("emb", type_=String()))
+).bindparams(bindparam("emb", type_=String()), bindparam("raw_q", type_=String()))
 
 
 def search_similar(
     session: Session,
     *,
     embedding: list[float],
+    query: str,
     exclude_id: uuid.UUID,
     statuses: list[str],
     k: int = 5,
 ) -> list[SimilarInput]:
-    """Top-k past raw inputs by recency-decayed cosine similarity, filtered to
-    the given statuses. `similarity` stays the raw cosine score;
-    `decayed_similarity` drives ranking and the orchestrator's auto-decide."""
+    """Top-k past raw inputs by hybrid similarity + keyword (RRF over pgvector
+    and FTS), filtered to the given statuses. `similarity` stays the raw cosine
+    score and `decayed_similarity` the recency-decayed cosine — the calibrated
+    signal the orchestrator's auto-decide gate thresholds."""
     emb_literal = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
     rows = session.execute(
         _SIMILAR_INPUTS_SQL,
         {
             "emb": emb_literal,
+            "raw_q": query or "",
             "exclude_id": exclude_id,
             "statuses": statuses,
             "k": k,
+            "pool": _PRECEDENT_POOL,
             "half_life_days": get_settings().input_similarity_half_life_days,
         },
     ).all()
