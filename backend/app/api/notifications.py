@@ -110,7 +110,7 @@ async def handle_action(
         if penalty:
             adjust_points(session, -penalty, caller="day", reason=f"awake {awake_minutes} min")
         log.info(
-            "notify action · day awake_minutes=%s points_deducted=%s",
+            "notify action · Day awake_minutes=%s points_deducted=%s",
             awake_minutes,
             penalty,
         )
@@ -136,7 +136,7 @@ async def handle_action(
                     reason=f"{shortfall} min under 8h",
                 )
         log.info(
-            "notify action · night minutes_until_prep=%s points_deducted=%s",
+            "notify action · Night minutes_until_prep=%s points_deducted=%s",
             minutes,
             penalty,
         )

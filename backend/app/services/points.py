@@ -97,7 +97,12 @@ def subtract_scheduled_overdue_penalty(session: Session, task, *, scheduled_date
     )
     if entry is None:
         return False
-    log.info("points · overdue scheduled penalty task=%s points=%s", task.id, PENALTY_POINTS)
+    log.info(
+        "points · overdue scheduled penalty task=%s (%s) points=%s",
+        task.id,
+        task.title,
+        PENALTY_POINTS,
+    )
     return True
 
 
@@ -114,7 +119,8 @@ def subtract_due_overdue_penalties(
 
     overdue_hours = int((current - due).total_seconds() // timedelta(hours=1).total_seconds())
     inserted = 0
-    for hour_index in range(overdue_hours + 1):
+    # Skip the first reduction: penalties start after 1h overdue, not at the due moment.
+    for hour_index in range(1, overdue_hours + 1):
         period_key = f"due:{_utc_key(due)}:h:{hour_index}"
         entry = points_store.add_penalty_entry_once(
             session,
@@ -127,8 +133,9 @@ def subtract_due_overdue_penalties(
             inserted += 1
     if inserted:
         log.info(
-            "points · overdue due penalties task=%s entries=%s points=%s",
+            "points · overdue due penalties task=%s (%s) entries=%s points=%s",
             task.id,
+            task.title,
             inserted,
             inserted * PENALTY_POINTS,
         )
