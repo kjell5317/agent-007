@@ -81,6 +81,26 @@ export function Topbar({
   );
   const prevPoints = useRef<number | null>(null);
   const flashSeq = useRef(0);
+  const pointsRefreshInFlight = useRef(false);
+
+  const refreshPoints = useCallback(
+    async ({ clearOnError = false }: { clearOnError?: boolean } = {}) => {
+      if (pointsRefreshInFlight.current) return;
+      pointsRefreshInFlight.current = true;
+      try {
+        const r = await api.getPoints();
+        setPoints(r.total);
+        prevPoints.current = r.total;
+      } catch {
+        if (clearOnError && prevPoints.current == null) {
+          setPoints(null);
+        }
+      } finally {
+        pointsRefreshInFlight.current = false;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     api
@@ -95,14 +115,32 @@ export function Topbar({
       .getSettings()
       .then((s) => setAutoPoll(s.auto_poll_enabled))
       .catch(() => setAutoPoll(null));
-    api
-      .getPoints()
-      .then((r) => {
-        setPoints(r.total);
-        prevPoints.current = r.total;
-      })
-      .catch(() => setPoints(null));
   }, []);
+
+  useEffect(() => {
+    refreshPoints({ clearOnError: true });
+  }, [refreshPoints]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const safeRefreshPoints = () => {
+      if (!cancelled) void refreshPoints();
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") safeRefreshPoints();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", safeRefreshPoints);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", safeRefreshPoints);
+    };
+  }, [refreshPoints]);
 
   // Live points: the backend pushes a `points` event whenever the total
   // changes (task crossed off, manual adjust, Home Assistant). Animate the
