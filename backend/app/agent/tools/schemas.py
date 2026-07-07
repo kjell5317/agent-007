@@ -203,7 +203,8 @@ NEW_INPUT_TOOLS = [
             "List events already on the user's primary calendar inside a time "
             "window. Call this before `create_event` to check whether the event "
             "the current input describes is already there, so you don't create a "
-            "duplicate. Non-terminal — you still need a terminal tool "
+            "duplicate. Also call this before `update_event` so you have the "
+            "event id to update. Non-terminal — you still need a terminal tool "
             "(`create_task`, `mark_not_task`, or a duplicate action) to finish."
         ),
         "parameters": {
@@ -219,6 +220,43 @@ NEW_INPUT_TOOLS = [
                 },
             },
             "required": ["time_min", "time_max"],
+        },
+    },
+    {
+        "name": "update_event",
+        "description": (
+            "Patch an existing non-task event on the user's primary calendar. "
+            "Use only after `find_calendar_events`, passing the returned "
+            "`event_id`, when the current input corrects or reschedules an "
+            "existing calendar event. Do not use for task mirrors or commute "
+            "events; use `update_task` for task-related changes. Include only "
+            "the fields that should change. Non-terminal: updating the event "
+            "does NOT finish the run; follow up with a terminal tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "Calendar event id returned by `find_calendar_events`.",
+                },
+                "summary": {"type": "string", "description": "Updated event title."},
+                "start": {
+                    "type": "string",
+                    "description": (
+                        "Updated ISO 8601 start. Use the user's local zone unless "
+                        "the input names another. If only start changes, the "
+                        "existing event duration is preserved."
+                    ),
+                },
+                "end": {
+                    "type": "string",
+                    "description": "Updated ISO 8601 end. Must be after start.",
+                },
+                "description": {"type": "string"},
+                "location": {"type": "string"},
+            },
+            "required": ["event_id"],
         },
     },
     {

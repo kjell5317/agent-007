@@ -27,7 +27,11 @@ from app.agent.helpers.llm import (
     user_message,
 )
 from app.agent.helpers.dispatch import apply_task_action
-from app.agent.tools.calendar_lookup import run_create_event, run_find_calendar_events
+from app.agent.tools.calendar_lookup import (
+    run_create_event,
+    run_find_calendar_events,
+    run_update_event,
+)
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
 from app.agent.helpers.text import (
     append_meta_lines,
@@ -120,7 +124,7 @@ async def run_new_input_agent(
         terminal_uses = [b for b in all_tool_uses if b.name in TERMINAL_TOOLS]
         non_terminal_uses = [b for b in all_tool_uses if b.name not in TERMINAL_TOOLS]
 
-        # Run non-terminal tools (lookups + event creation). Their results feed
+        # Run non-terminal tools (lookups + event creation/update). Their results feed
         # the next decision, so we run them whether or not a terminal tool rode
         # along in the same response — a `create_event` emitted next to
         # `mark_not_task` must still take effect. When no terminal tool is
@@ -131,6 +135,7 @@ async def run_new_input_agent(
             results = []
             for tu in non_terminal_uses:
                 tin = tu.input or {}
+                event_id = None
                 if tu.name == "search_notes":
                     out = await run_search_notes(session, str(tin.get("query") or ""))
                 elif tu.name == "find_calendar_events":
@@ -150,19 +155,51 @@ async def run_new_input_agent(
                     )
                     if event_id:
                         trace.setdefault("events_created", []).append(event_id)
+                elif tu.name == "update_event":
+                    out, event_id = await run_update_event(
+                        session,
+                        event_id=str(tin.get("event_id") or ""),
+                        summary=(
+                            str(tin.get("summary")) if tin.get("summary") is not None else None
+                        ),
+                        start=str(tin.get("start")) if tin.get("start") else None,
+                        end=str(tin.get("end")) if tin.get("end") else None,
+                        description=(
+                            str(tin.get("description"))
+                            if tin.get("description") is not None
+                            else None
+                        ),
+                        location=(
+                            str(tin.get("location")) if tin.get("location") is not None else None
+                        ),
+                    )
+                    if event_id:
+                        trace.setdefault("events_updated", []).append(event_id)
                 else:
                     out = f"unknown tool: {tu.name}"
+                changed_event = (
+                    (tu.name == "create_event" and event_id in trace.get("events_created", []))
+                    or (tu.name == "update_event" and event_id in trace.get("events_updated", []))
+                )
                 iter_log.setdefault("tool_results", []).append(
                     _tool_result_entry(
                         tu.name,
                         tin,
                         out,
-                        status="failed" if tu.name not in {"search_notes", "find_calendar_events", "create_event"} else "success",
-                        changed_state=tu.name == "create_event" and bool(trace.get("events_created")),
+                        status=(
+                            "success"
+                            if tu.name in {"search_notes", "find_calendar_events", "create_event"}
+                            or changed_event
+                            else "failed"
+                        ),
+                        changed_state=changed_event,
                         artifact_refs=[
                             f"event:{event_id}"
-                            for event_id in trace.get("events_created", [])
-                            if tu.name == "create_event"
+                            for event_id in trace.get(
+                                "events_created" if tu.name == "create_event" else "events_updated",
+                                [],
+                            )
+                            if tu.name in {"create_event", "update_event"}
                         ],
                     )
                 )
@@ -303,10 +340,10 @@ async def run_new_input_agent(
     if not done:
         trace["outcome"] = trace["outcome"] or "max_iterations"
 
-    # An input that only produced a calendar event (attending needs no action)
+    # An input that only created/updated a calendar event (attending needs no action)
     # finalizes as "event" rather than "not_task", which would misrepresent it.
     # When a task was created or a duplicate handled, that record takes priority.
-    if trace.get("events_created") and final_status == "not_task":
+    if (trace.get("events_created") or trace.get("events_updated")) and final_status == "not_task":
         final_status = "event"
 
     raw_inputs.finalize(
@@ -385,6 +422,8 @@ def _tool_purpose(name: str, tool_input: dict[str, Any]) -> str:
         return "find calendar conflicts"
     if name == "create_event":
         return f"create calendar event {_truncate_inline(str(tool_input.get('summary') or ''), 80)}"
+    if name == "update_event":
+        return f"update calendar event {_truncate_inline(str(tool_input.get('event_id') or ''), 80)}"
     if name == "create_task":
         return f"create task {_truncate_inline(str(tool_input.get('title') or ''), 80)}"
     if name == "update_task":

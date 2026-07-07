@@ -19,6 +19,7 @@ RawInputStatus = (
     "duplicate",   # matched an existing task (see task_id)
     "open",        # produced a task that is still open (see task_id)
     "closed",      # produced a task that is now done (see task_id)
+    "event",       # created or updated a calendar event, without a task
 )
 
 
