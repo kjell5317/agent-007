@@ -504,13 +504,41 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_day_action_deducts_awake_minutes_from_points(monkeypatch):
-    session = SimpleNamespace()
+    request_session = SimpleNamespace()
+    action_at = datetime(2026, 7, 1, 6, 30, tzinfo=timezone.utc)
+    background_session = SimpleNamespace(closed=False)
+    background_tasks = SimpleNamespace(tasks=[])
     adjustments: list[tuple] = []
+    sleeps: list[int] = []
+    events: list[str] = []
 
-    async def fake_request_awake_minutes(session_arg):
-        assert session_arg is session
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is timezone.utc
+            return action_at
+
+    def add_task(func, *args, **kwargs):
+        background_tasks.tasks.append((func, args, kwargs))
+
+    def close_session():
+        background_session.closed = True
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        events.append("sleep")
+
+    async def fake_request_awake_minutes(session_arg, *, now):
+        events.append("request")
+        assert session_arg is background_session
+        assert now is action_at
         return 92
 
+    background_tasks.add_task = add_task
+    background_session.close = close_session
+    monkeypatch.setattr(notifications, "datetime", FrozenDatetime)
+    monkeypatch.setattr(notifications.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(notifications, "SessionLocal", lambda: background_session)
     monkeypatch.setattr(notifications, "request_awake_minutes", fake_request_awake_minutes)
     monkeypatch.setattr(
         notifications,
@@ -531,22 +559,53 @@ async def test_day_action_deducts_awake_minutes_from_points(monkeypatch):
     request = SimpleNamespace(headers={}, query_params={})
     payload = notifications.ActionPayload(action=notifications.ACTION_DAY)
 
-    result = await notifications.handle_action(payload, request, session=session)
+    result = await notifications.handle_action(
+        payload,
+        request,
+        background_tasks=background_tasks,
+        session=request_session,
+    )
 
     assert result == {
         "ok": True,
         "action": "DAY",
-        "awake_minutes": 92,
-        "points_deducted": 92,
+        "scheduled": True,
     }
+    assert len(background_tasks.tasks) == 1
+    func, args, kwargs = background_tasks.tasks[0]
+    assert args == (action_at,)
+    assert kwargs == {}
+
+    await func(*args, **kwargs)
+
+    assert sleeps == [notifications.DAY_HEALTH_SYNC_DELAY_S]
+    assert events == ["sleep", "request"]
     assert adjustments == [(-92, "day", "awake 92 min")]
+    assert background_session.closed is True
 
 
 @pytest.mark.asyncio
 async def test_day_action_without_sleep_deducts_nothing(monkeypatch):
-    async def fake_request_awake_minutes(_session):
+    background_session = SimpleNamespace(closed=False)
+    background_tasks = SimpleNamespace(tasks=[])
+
+    def add_task(func, *args, **kwargs):
+        background_tasks.tasks.append((func, args, kwargs))
+
+    def close_session():
+        background_session.closed = True
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_request_awake_minutes(_session, *, now):
+        assert now.tzinfo is timezone.utc
         return 0
 
+    background_tasks.add_task = add_task
+    background_session.close = close_session
+    monkeypatch.setattr(notifications.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(notifications, "SessionLocal", lambda: background_session)
     monkeypatch.setattr(notifications, "request_awake_minutes", fake_request_awake_minutes)
     monkeypatch.setattr(
         notifications,
@@ -562,14 +621,22 @@ async def test_day_action_without_sleep_deducts_nothing(monkeypatch):
     request = SimpleNamespace(headers={}, query_params={})
     payload = notifications.ActionPayload(action=notifications.ACTION_DAY)
 
-    result = await notifications.handle_action(payload, request, session=SimpleNamespace())
+    result = await notifications.handle_action(
+        payload,
+        request,
+        background_tasks=background_tasks,
+        session=SimpleNamespace(),
+    )
 
     assert result == {
         "ok": True,
         "action": "DAY",
-        "awake_minutes": 0,
-        "points_deducted": 0,
+        "scheduled": True,
     }
+    assert len(background_tasks.tasks) == 1
+    func, args, kwargs = background_tasks.tasks[0]
+    await func(*args, **kwargs)
+    assert background_session.closed is True
 
 
 @pytest.mark.asyncio

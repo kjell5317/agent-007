@@ -15,15 +15,17 @@ session — so the shared secret IS the auth in production.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.db.clients import tasks as tasks_store
 from app.events import publish_task
 from app.services.health import request_awake_minutes
@@ -53,6 +55,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 # NIGHT docks points for falling short of an 8h sleep target: the minutes below
 # 8h until the next-event prep time, rounded to 10 min and divided by 10.
 NIGHT_SLEEP_TARGET_MINUTES = 8 * 60
+DAY_HEALTH_SYNC_DELAY_S = 5 * 60
 
 # HA action id → kotx client function name. Resolved via getattr at call time so
 # the actual POST is dispatched (and stays patchable in tests).
@@ -96,16 +99,12 @@ def _resolve_task_id(payload: ActionPayload) -> uuid.UUID:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid task id") from exc
 
 
-@router.post("/actions", status_code=status.HTTP_202_ACCEPTED)
-async def handle_action(
-    payload: ActionPayload,
-    request: Request,
-    session: Session = Depends(get_session),
-) -> dict:
-    _check_secret(request)
+async def _process_day_action(action_at: datetime) -> None:
+    await asyncio.sleep(DAY_HEALTH_SYNC_DELAY_S)
 
-    if payload.action == ACTION_DAY:
-        awake_minutes = await request_awake_minutes(session)
+    session = SessionLocal()
+    try:
+        awake_minutes = await request_awake_minutes(session, now=action_at)
         penalty = max(0, awake_minutes)
         if penalty:
             adjust_points(session, -penalty, caller="day", reason=f"awake {awake_minutes} min")
@@ -114,11 +113,30 @@ async def handle_action(
             awake_minutes,
             penalty,
         )
+    finally:
+        session.close()
+
+
+@router.post("/actions", status_code=status.HTTP_202_ACCEPTED)
+async def handle_action(
+    payload: ActionPayload,
+    request: Request,
+    background_tasks: BackgroundTasks = None,
+    session: Session = Depends(get_session),
+) -> dict:
+    _check_secret(request)
+
+    if payload.action == ACTION_DAY:
+        action_at = datetime.now(timezone.utc)
+        if background_tasks is None:
+            asyncio.create_task(_process_day_action(action_at), name="day-health-sync")
+        else:
+            background_tasks.add_task(_process_day_action, action_at)
+        log.info("notify action · day scheduled action_at=%s", action_at.isoformat())
         return {
             "ok": True,
             "action": payload.action,
-            "awake_minutes": awake_minutes,
-            "points_deducted": penalty,
+            "scheduled": True,
         }
 
     if payload.action == ACTION_NIGHT:
