@@ -32,7 +32,6 @@ from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_git
 from app.services.kotx import client as kotx_client
 from app.services.notify import (
     ACTION_KOTX_APPROVE,
-    ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
     clear_task_notification,
@@ -203,7 +202,9 @@ async def _sync_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> No
         else:
             await notify_kotx_open_pr(task)
     elif kind == "review" and state == "awaiting_approval":
-        await notify_kotx_review_ready(task)
+        await notify_kotx_review_ready(
+            task, assignee=str(meta.get("assignee") or "unassigned")
+        )
     elif kind in ("implement", "review"):
         await clear_task_notification(task.id)
 
@@ -219,8 +220,6 @@ def _kotx_primary_action(meta: dict) -> dict[str, str] | None:
         if meta.get("kotx_proposes") == "merge":
             return {"action": ACTION_KOTX_MERGE, "title": "Merge"}
         return {"action": ACTION_KOTX_APPROVE, "title": "Open PR"}
-    if kind == "review" and state == "awaiting_approval":
-        return {"action": ACTION_KOTX_COMMENT, "title": "Comment"}
     return None
 
 
