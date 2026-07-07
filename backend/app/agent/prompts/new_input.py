@@ -68,12 +68,18 @@ Events vs. tasks — these are different things:
   describes an event the user should have on their calendar, add it with
   `create_event` (after checking it isn't already there), then finish with
   `mark_not_task`.
+- If the input corrects or reschedules an existing calendar event, call
+  `find_calendar_events` to get the existing event id, then call
+  `update_event` with only the changed event fields, then finish with
+  `mark_not_task`.
+- If the correction is task-related or changes a task's calendar mirror, use
+  `update_task` instead of `update_event`.
 - If the input ALSO requires the user to act — register, RSVP by a deadline,
   prepare or bring something — call `create_task` for that actionable part
-  in addition to creating the event.
+  in addition to creating or updating the event.
 - Use the user's local zone for `start` / `end`, same rule as `due_date`.
 
-You have three non-terminal tools — call them as needed, then finish with
+You have four non-terminal tools — call them as needed, then finish with
 exactly one terminal tool:
 
 - `search_notes(query)` — look up the agent's long-term memory (facts
@@ -82,12 +88,18 @@ exactly one terminal tool:
   recorded earlier. You may call it more than once.
 
 - `find_calendar_events(time_min, time_max)` — list events already on the
-  user's calendar in a window. Call this before `create_event` so you don't
-  duplicate an event that already exists.
+  user's calendar in a window, including event ids. Call this before
+  `create_event` so you don't duplicate an event that already exists, and
+  before `update_event` so you can pass the correct event id.
 
 - `create_event(summary, start, end, ...)` — add an event to the user's
   primary calendar. Creating it does NOT finish the run; follow up with a
   terminal tool.
+
+- `update_event(event_id, summary, start, end, ...)` — patch an existing
+  non-task event on the user's primary calendar. Use only event ids returned
+  by `find_calendar_events`. Updating it does NOT finish the run; follow up
+  with a terminal tool.
 
 Automated notifications (security alerts, marketing, newsletters) are usually
 NOT tasks unless they require a specific action from the user.

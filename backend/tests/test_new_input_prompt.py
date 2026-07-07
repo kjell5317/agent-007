@@ -178,3 +178,21 @@ def test_update_task_schema_mentions_reopen_with_past_due_date_rule():
         in props["status"]["description"]
     )
     assert "new future due_date" in props["due_date"]["description"]
+
+
+def test_update_event_schema_requires_event_id_and_is_non_terminal():
+    update_event = next(tool for tool in NEW_INPUT_TOOLS if tool["name"] == "update_event")
+    props = update_event["parameters"]["properties"]
+
+    assert update_event["parameters"]["required"] == ["event_id"]
+    assert {"summary", "start", "end", "description", "location"} <= set(props)
+    assert "find_calendar_events" in update_event["description"]
+    assert "Do not use for task mirrors" in update_event["description"]
+    assert "Non-terminal" in update_event["description"]
+
+
+def test_new_input_prompt_guides_calendar_corrections_to_update_event():
+    assert "corrects or reschedules an existing calendar event" in NEW_INPUT_SYSTEM_PROMPT
+    assert "`find_calendar_events` to get the existing event id" in NEW_INPUT_SYSTEM_PROMPT
+    assert "`update_event` with only the changed event fields" in NEW_INPUT_SYSTEM_PROMPT
+    assert "use\n  `update_task` instead of `update_event`" in NEW_INPUT_SYSTEM_PROMPT

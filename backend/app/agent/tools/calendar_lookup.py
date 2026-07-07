@@ -1,10 +1,11 @@
-"""Calendar lookup + creation tools for the new-input agent.
+"""Calendar lookup + creation/update tools for the new-input agent.
 
 `find_calendar_events` lets the agent check the user's primary calendar for an
 existing event before creating one; `create_event` adds an event the user
 should see (an invitation, appointment, talk) without turning it into a task.
+`update_event` patches a non-managed event already on the primary calendar.
 
-Both are non-terminal: the runner appends their results to the conversation
+All are non-terminal: the runner appends their results to the conversation
 and the agent continues to a terminal decision.
 
 Agent-created events are tagged `kind=invitation` / `created_by=agent` but
@@ -24,8 +25,14 @@ from app.config import get_settings
 from app.services.calendar.events import (
     PROP_KIND,
     create_event,
+    get_event,
+    is_commute_event,
+    is_managed_event,
+    is_task_event,
     list_events_between,
+    patch_event,
 )
+from app.services.notify import notify_calendar_event_updated
 
 KIND_INVITATION = "invitation"
 PROP_CREATED_BY = "created_by"
@@ -58,7 +65,7 @@ async def run_find_calendar_events(session: Session, time_min: str, time_max: st
     for e in events:
         when = e.start.astimezone(tz).isoformat()
         loc = f" @ {e.location}" if e.location else ""
-        lines.append(f"- {when} | {e.summary}{loc}")
+        lines.append(f"- id={e.id} | {when} | {e.summary}{loc}")
     return "Existing calendar events:\n" + "\n".join(lines)
 
 
@@ -101,3 +108,115 @@ async def run_create_event(
         f"create_event: added '{summary}' at {start_dt.astimezone(tz).isoformat()}.",
         event.id,
     )
+
+
+async def run_update_event(
+    session: Session,
+    *,
+    event_id: str,
+    summary: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+) -> tuple[str, str | None]:
+    """Patch the event; return (message_for_llm, updated_event_id_or_None)."""
+    settings = get_settings()
+    tz = ZoneInfo(settings.user_timezone)
+    calendar_id = (settings.google_calendar_id or "").strip()
+    if not calendar_id:
+        return "update_event: no calendar configured — event not updated.", None
+
+    event_id = (event_id or "").strip()
+    if not event_id or any(ch.isspace() for ch in event_id) or "/" in event_id:
+        return "update_event: `event_id` must be a valid calendar event id.", None
+
+    existing = await get_event(session, calendar_id=calendar_id, event_id=event_id)
+    if is_managed_event(existing):
+        kind = (
+            "task"
+            if is_task_event(existing)
+            else "commute"
+            if is_commute_event(existing)
+            else "managed"
+        )
+        return (
+            f"update_event: {kind} calendar events are managed by the task planner; "
+            "use `update_task` for task-related changes instead.",
+            None,
+        )
+
+    start_dt = _parse_optional_datetime(start, tz)
+    end_dt = _parse_optional_datetime(end, tz)
+    if start_dt is False or end_dt is False:
+        return "update_event: `start` and `end` must be ISO timestamps when supplied.", None
+
+    patch_kwargs = _event_patch_kwargs(
+        existing_start=existing.start,
+        existing_end=existing.end,
+        summary=summary,
+        start=start_dt,
+        end=end_dt,
+        description=description,
+        location=location,
+    )
+    if not patch_kwargs:
+        return "update_event: no fields supplied to update.", None
+
+    effective_start = patch_kwargs.get("start", existing.start)
+    effective_end = patch_kwargs.get("end", existing.end)
+    if effective_end <= effective_start:
+        return "update_event: `end` must be after `start`.", None
+
+    updated = await patch_event(
+        session,
+        calendar_id=calendar_id,
+        event_id=event_id,
+        **patch_kwargs,
+    )
+    await notify_calendar_event_updated(updated)
+    return (
+        (
+            "update_event: updated "
+            f"'{updated.summary}' at {updated.start.astimezone(tz).isoformat()}."
+        ),
+        updated.id,
+    )
+
+
+def _parse_optional_datetime(value: str | None, tz: ZoneInfo) -> datetime | bool | None:
+    if value is None:
+        return None
+    try:
+        parsed = parse_iso(value)
+    except ValueError:
+        return False
+    if parsed is None:
+        return False
+    return _aware(parsed, tz)
+
+
+def _event_patch_kwargs(
+    *,
+    existing_start: datetime,
+    existing_end: datetime,
+    summary: str | None,
+    start: datetime | None,
+    end: datetime | None,
+    description: str | None,
+    location: str | None,
+) -> dict:
+    patch_kwargs: dict = {}
+    if summary is not None:
+        patch_kwargs["summary"] = summary
+    if start is not None:
+        patch_kwargs["start"] = start
+        if end is None:
+            patch_kwargs["end"] = start + (existing_end - existing_start)
+    if end is not None:
+        patch_kwargs["end"] = end
+    if description is not None:
+        patch_kwargs["description"] = description
+    if location is not None:
+        patch_kwargs["location"] = location
+    return patch_kwargs

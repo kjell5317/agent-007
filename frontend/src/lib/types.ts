@@ -53,7 +53,7 @@ export interface RawInput {
   };
   received_at: string;
   processed_at: string | null;
-  status: "processing" | "not_task" | "duplicate" | "open" | "closed";
+  status: "processing" | "not_task" | "duplicate" | "open" | "closed" | "event";
   task_id: string | null;
   task_title: string | null;
   agent_trace: AgentTrace | null;
