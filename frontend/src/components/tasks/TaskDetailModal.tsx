@@ -126,7 +126,8 @@ export function TaskDetailModal({
   );
 
   useEffect(() => {
-    if (editingText !== "location") {
+    // Only fetch suggestions once at least one character is typed.
+    if (editingText !== "location" || textDraft.trim().length < 1) {
       locationSuggestionRequestRef.current += 1;
       setLocationSuggestions([]);
       return;

@@ -307,7 +307,7 @@ export function App() {
       : null;
 
   return (
-    <div className="min-h-dvh pb-[120px]">
+    <div className="min-h-dvh pb-24">
       <Topbar
         theme={theme}
         onThemeChange={setTheme}
@@ -354,7 +354,7 @@ export function App() {
       {view === "search" ? (
         <SearchBar value={searchQuery} onChange={setSearchQuery} onClose={leaveOverlay} />
       ) : (
-        <Composer onCreated={refresh} />
+        <Composer onCreated={refresh} onOpenTask={openTask} />
       )}
       <Toaster />
     </div>

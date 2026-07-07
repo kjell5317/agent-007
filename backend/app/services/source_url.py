@@ -16,26 +16,13 @@ def source_url_for_raw_input(raw) -> str | None:
         return permalink.strip()
 
     if raw.source == "gmail":
-        account = metadata.get("account")
-        authuser = account.strip() if isinstance(account, str) and account.strip() else None
-
-        # The web UI's thread slug (e.g. FMfcg…) can't be derived from the API's
-        # threadId, and a bare threadId in #all/ no longer reliably resolves. An
-        # rfc822msgid: search jumps straight to the message and is stable across
-        # Gmail's id changes, so prefer it; fall back to the thread id.
-        message_id = metadata.get("message_id_header")
-        if isinstance(message_id, str) and message_id.strip():
-            query = "rfc822msgid:" + message_id.strip().strip("<>")
-            fragment = f"search/{quote(query, safe=':')}"
-        else:
-            thread_id = metadata.get("thread_id")
-            if not isinstance(thread_id, str) or not thread_id.strip():
-                return None
-            fragment = f"all/{quote(thread_id.strip(), safe='')}"
-
-        if authuser:
-            return f"https://mail.google.com/mail/?{urlencode({'authuser': authuser})}#{fragment}"
-        return f"https://mail.google.com/mail/u/0/#{fragment}"
+        # Deep-link the thread in the Gmail web UI. For GitHub-relabelled
+        # notifications the real Gmail thread id lives under `gmail_thread_id`
+        # (`thread_id` carries the canonical `github:…` key instead).
+        thread_id = metadata.get("gmail_thread_id") or metadata.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            return None
+        return f"https://mail.google.com/mail/u/0/#all/{quote(thread_id.strip(), safe='')}"
 
     if raw.source == "slack":
         channel_id = metadata.get("channel_id")

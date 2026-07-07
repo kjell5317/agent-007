@@ -1,4 +1,4 @@
-import type { Label, RawInput, Task } from "./types";
+import type { Label, RawInput, SearchHit, Task } from "./types";
 
 class ApiError extends Error {
   status: number;
@@ -110,6 +110,11 @@ export const api = {
   unreadInputCount: () => request<UnreadInputs>("/inputs/unread_count"),
   markInputsSeen: () =>
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
+
+  suggest: (q: string, limit = 8) =>
+    request<{ hits: SearchHit[] }>(
+      `/search/suggest?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
 
   listLabels: () => request<Label[]>("/labels"),
 

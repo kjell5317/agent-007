@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from app.services.source_url import source_url_for_raw_input
 
 
-def test_gmail_source_url_uses_rfc822msgid_search():
+def test_gmail_source_url_links_thread_in_web_ui():
     raw = SimpleNamespace(
         source="gmail",
         external_id="msg-1",
@@ -14,39 +14,34 @@ def test_gmail_source_url_uses_rfc822msgid_search():
         },
     )
 
-    assert source_url_for_raw_input(raw) == (
-        "https://mail.google.com/mail/?authuser=me%40example.com"
-        "#search/rfc822msgid:CAF%2Babc%40mail.gmail.com"
+    assert (
+        source_url_for_raw_input(raw)
+        == "https://mail.google.com/mail/u/0/#all/thread-123"
     )
 
 
-def test_gmail_source_url_falls_back_to_thread_id():
+def test_gmail_source_url_prefers_gmail_thread_id_for_github_relabelled():
+    # GitHub notifications get `thread_id` rewritten to the canonical github key;
+    # the real Gmail thread stays under `gmail_thread_id`.
     raw = SimpleNamespace(
         source="gmail",
         external_id="msg-1",
         source_metadata={
-            "account": "me@example.com",
-            "thread_id": "thread-123",
+            "thread_id": "github:owner/repo#42",
+            "gmail_thread_id": "thread-123",
         },
-    )
-
-    assert (
-        source_url_for_raw_input(raw)
-        == "https://mail.google.com/mail/?authuser=me%40example.com#all/thread-123"
-    )
-
-
-def test_gmail_source_url_without_account_uses_default_user():
-    raw = SimpleNamespace(
-        source="gmail",
-        external_id="msg-1",
-        source_metadata={"thread_id": "thread-123"},
     )
 
     assert (
         source_url_for_raw_input(raw)
         == "https://mail.google.com/mail/u/0/#all/thread-123"
     )
+
+
+def test_gmail_source_url_none_without_thread():
+    raw = SimpleNamespace(source="gmail", external_id="msg-1", source_metadata={})
+
+    assert source_url_for_raw_input(raw) is None
 
 
 def test_slack_source_url_prefers_stored_permalink():

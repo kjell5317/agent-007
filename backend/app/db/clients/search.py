@@ -159,8 +159,12 @@ def _filters_sql(
         # (e.g. `source:gmail`, inputs-only) the input must still surface.
         if exclude_linked_inputs:
             parts.append("r.task_id IS NULL")
-    if corpus == DOCUMENT and source is not None:
-        parts.append("d.provider = :source")
+    if corpus == DOCUMENT:
+        # kotx documents are always tied to a task, and that task already shows
+        # (distinct) — so they never surface as their own hit.
+        parts.append("d.provider <> 'kotx'")
+        if source is not None:
+            parts.append("d.provider = :source")
     return "".join(f" AND {p}" for p in parts)
 
 
