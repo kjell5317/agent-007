@@ -161,7 +161,7 @@ async def notify_task_created(
     """A new task was extracted and given a calendar slot.
 
     `primary_action` swaps the leading "Done" button for a task-specific action
-    (kotx tasks put "Start"/"Comment"/… here) while keeping Dismiss + Reschedule
+    (kotx tasks put "Start"/"Open PR"/… here) while keeping Dismiss + Reschedule
     — so a kotx task's first notification is the normal scheduled one with only
     that button changed."""
     parts = [f"Scheduled {_fmt_range(start, end)}"]
@@ -233,17 +233,16 @@ async def notify_kotx_confirm_merge(
     )
 
 
-async def notify_kotx_review_ready(task) -> None:
+async def notify_kotx_review_ready(task, *, assignee: str = "unassigned") -> None:
     """A kotx review run produced REVIEW.md and is waiting on a human decision,
-    on a task that was already surfaced. The first notification carries the
-    Comment action inline via `notify_task_created`; this is the standalone
-    fallback for the already-scheduled case."""
+    on a task that was already surfaced. The review itself stays in the task
+    modal; the notification identifies whose PR needs review."""
     await notify(
         title=_short_title(task),
-        message="Comment Review",
+        message=f"Comment PR of {assignee}",
         url=task_url(task.id),
         tag=task_tag(task.id),
-        actions=[{"action": ACTION_KOTX_COMMENT, "title": "Comment"}, _DISMISS_BUTTON],
+        actions=[_DISMISS_BUTTON],
         sticky=True,
     )
 

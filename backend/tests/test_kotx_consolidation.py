@@ -21,6 +21,7 @@ from app.services.kotx import discard as kotx_discard  # noqa: E402
 from app.services.input.kotx import poll as kotx_poll  # noqa: E402
 from app.services.input.gmail.preprocess import _apply_github_identity  # noqa: E402
 from app.services.input.kotx.normalize import (  # noqa: E402
+    display_assignee_for,
     envelope_for_transition,
     parse_github_subject,
 )
@@ -53,7 +54,11 @@ def _kotx_task(**overrides) -> dict:
 
 def test_envelope_carries_github_thread_key_and_dedup_id():
     env = envelope_for_transition(
-        _kotx_task(stateReason="waiting for user approval"), doc="# TASK\ndo the thing"
+        _kotx_task(
+            stateReason="waiting for user approval",
+            assigned=["", "octocat"],
+        ),
+        doc="# TASK\ndo the thing",
     )
     assert env is not None
     assert env.source == "kotx"
@@ -61,6 +66,7 @@ def test_envelope_carries_github_thread_key_and_dedup_id():
     assert env.source_metadata["thread_id"] == "github:owner/repo#31"
     assert env.source_metadata["kotx_task_id"] == 42
     assert env.source_metadata["state_reason"] == "waiting for user approval"
+    assert env.source_metadata["assignee"] == "octocat"
     assert env.content == "# TASK\ndo the thing"
     assert "kotx implement" not in env.content
     assert "State:" not in env.content
@@ -81,6 +87,12 @@ def test_envelope_distinguishes_pr_and_merge_proposals():
     )
     assert pr is not None and merge is not None
     assert pr.external_id != merge.external_id
+
+
+def test_display_assignee_uses_assigned_then_compat_assignees():
+    assert display_assignee_for(_kotx_task(assigned=["  monalisa  "])) == "monalisa"
+    assert display_assignee_for(_kotx_task(assigned=[], assignees=["octocat"])) == "octocat"
+    assert display_assignee_for(_kotx_task(assigned=[])) == "unassigned"
 
 
 def test_resolve_conflict_runs_are_ingested_with_thread_metadata_and_dedup_id():
@@ -808,11 +820,19 @@ async def test_review_awaiting_approval_sends_review_ready_prompt(
 
     session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
     trace = await kotx_runner.run_kotx_transition(
-        session, _raw(_meta(kind="review", state="awaiting_approval"))
+        session,
+        _raw(
+            _meta(
+                kind="review",
+                state="awaiting_approval",
+                assigned=["octocat"],
+            )
+        ),
     )
 
     assert trace["outcome"] == "no_change"
     assert [c["prompt"] for c in kotx_prompts] == ["review_ready"]
+    assert kotx_prompts[0]["assignee"] == "octocat"
 
 
 @pytest.mark.asyncio
@@ -903,6 +923,45 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
     # No standalone prompt — the action rides on the scheduled notification.
     assert kotx_prompts == []
     assert scheduled["primary_action"] == {"action": "KOTX_START", "title": "Start"}
+
+
+@pytest.mark.asyncio
+async def test_review_task_creation_keeps_done_as_scheduled_primary_action(
+    monkeypatch, kotx_prompts
+):
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
+    monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
+
+    async def fake_extract(session, raw):
+        return {"estimation": 20, "due_date": None, "label": None}
+
+    scheduled = {}
+
+    async def fake_schedule(session, task, *, primary_action=None, **kwargs):
+        scheduled["primary_action"] = primary_action
+        return None
+
+    monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
+    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
+    monkeypatch.setattr(
+        kotx_runner.tasks,
+        "create",
+        lambda s, payload: SimpleNamespace(
+            id=uuid.uuid4(), title=payload.title, kotx_task_id=None, link=payload.link
+        ),
+    )
+    monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
+    monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(kind="review", state="awaiting_approval"))
+    )
+
+    assert trace["outcome"] == "task_created"
+    assert kotx_prompts == []
+    assert scheduled["primary_action"] is None
 
 
 @pytest.mark.asyncio
@@ -1054,6 +1113,23 @@ async def test_open_pr_notification_title_message_and_buttons(monkeypatch):
     assert [a["action"] for a in captured["actions"]] == [
         notify_svc.ACTION_KOTX_APPROVE,
         notify_svc.ACTION_DISMISS_TASK,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_review_ready_notification_names_assignee_without_comment_button(
+    monkeypatch,
+):
+    captured = _capture_notify(monkeypatch)
+    await notify_svc.notify_kotx_review_ready(
+        SimpleNamespace(id=uuid.uuid4(), title="#31 Review index"),
+        assignee="octocat",
+    )
+
+    assert captured["title"] == "#31 Review index"
+    assert captured["message"] == "Comment PR of octocat"
+    assert captured["actions"] == [
+        {"action": notify_svc.ACTION_DISMISS_TASK, "title": "Dismiss"}
     ]
 
 

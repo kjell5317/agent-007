@@ -64,6 +64,19 @@ def brief_doc_for(task: dict) -> str | None:
     return "review" if kind == "review" else "task"
 
 
+def display_assignee_for(task: dict) -> str:
+    """First non-empty PR assignee from kotx, or a stable fallback."""
+    for field in ("assigned", "assignees"):
+        values = task.get(field)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            assignee = str(value or "").strip()
+            if assignee:
+                return assignee
+    return "unassigned"
+
+
 def envelope_for_transition(task: dict, doc: str | None = None) -> RawInputCreate | None:
     """One envelope per (task, attempt, state, proposal) — repeated deliveries
     of the same transition dedupe on external_id."""
@@ -98,6 +111,7 @@ def envelope_for_transition(task: dict, doc: str | None = None) -> RawInputCreat
             "github_url": task.get("githubUrl"),
             "pr_number": task.get("prNumber") or task.get("trackedPrNumber"),
             "branch": task.get("branch"),
+            "assignee": display_assignee_for(task),
             "subject": f"{repo}#{number} {title}",
         },
     )

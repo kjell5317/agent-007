@@ -42,6 +42,14 @@ function subjectUrl(task: KotxTask): string {
   return task.githubUrl;
 }
 
+function firstNonEmpty(values?: unknown[] | null): string | null {
+  return values?.map((value) => String(value ?? "").trim()).find(Boolean) ?? null;
+}
+
+function displayAssignee(task: KotxTask): string {
+  return firstNonEmpty(task.assigned) ?? firstNonEmpty(task.assignees) ?? "unassigned";
+}
+
 export function KotxRunSection({
   task,
   onChanged,
@@ -180,6 +188,7 @@ export function KotxRunSection({
   const SubjectIcon =
     task.subjectType === "pull_request" ? GitPullRequest : CircleDot;
   const approvedBy = mergeProposal ? mergeContext?.approvedBy?.trim() ?? "" : "";
+  const reviewAssignee = task.kind === "review" ? displayAssignee(task) : null;
 
   // Explicit manual follow-up: push the review feedback through a fresh
   // implement run on the tracked PR instead of merging as-is. This is the one
@@ -351,118 +360,129 @@ export function KotxRunSection({
             </span>
           )}
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-2">
-          {!editing && content !== null && view === "primary" && canEditPrimary && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={startEditing}
-              disabled={busy}
+        <div className="flex shrink-0 items-center justify-end gap-3">
+          {reviewAssignee && (
+            <div
+              className="max-w-40 truncate text-xs text-muted-foreground"
+              title={reviewAssignee}
             >
-              <Pencil className="h-3.5 w-3.5" />
-              Edit
-            </Button>
+              Assignee:{" "}
+              <span className="font-medium text-foreground">{reviewAssignee}</span>
+            </div>
           )}
-          {!editing && pr !== null && view === "pr" && showPr && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={startEditing}
-              disabled={busy}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              Edit
-            </Button>
-          )}
-          {editing && (
-            <>
+          <div className="flex items-center justify-end gap-2">
+            {!editing && content !== null && view === "primary" && canEditPrimary && (
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                onClick={() => {
-                  if (view === "pr") {
-                    setPrTitleDraft(pr?.title ?? "");
-                    setPrBodyDraft(pr?.body ?? "");
-                  } else {
-                    setDraft(content ?? "");
-                  }
-                  stopEditing();
-                }}
+                onClick={startEditing}
                 disabled={busy}
               >
-                Cancel
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
               </Button>
-              <Button size="sm" onClick={view === "pr" ? savePr : save} disabled={busy}>
-                Save
-              </Button>
-            </>
-          )}
-          {!editing && view === "merge" && mergeProposal && (
-            <>
-              {mergeComment.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={startPrFollowUp}
-                  disabled={busy || !canStartPrFollowUp}
-                  title={
-                    trackedPrNumber === null
-                      ? "No tracked pull request is available"
-                      : undefined
-                  }
-                >
-                  Run with feedback
-                </Button>
-              )}
+            )}
+            {!editing && pr !== null && view === "pr" && showPr && (
               <Button
+                variant="outline"
                 size="sm"
-                onClick={() => withBusy(() => kotx.merge(task.id), "Merged", true)}
+                onClick={startEditing}
                 disabled={busy}
               >
-                Merge
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
               </Button>
-            </>
-          )}
-          {!editing && view !== "merge" && (
-            <>
-              {task.canComment && (
+            )}
+            {editing && (
+              <>
                 <Button
+                  variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    withBusy(() => kotx.comment(task.id), "Comment posted", true)
-                  }
-                  disabled={busy || !content?.trim()}
-                >
-                  Comment
-                </Button>
-              )}
-              {task.canStart && (
-                <Button
-                  size="sm"
-                  onClick={() => withBusy(() => kotx.start(task.id), "Started", true)}
+                  onClick={() => {
+                    if (view === "pr") {
+                      setPrTitleDraft(pr?.title ?? "");
+                      setPrBodyDraft(pr?.body ?? "");
+                    } else {
+                      setDraft(content ?? "");
+                    }
+                    stopEditing();
+                  }}
                   disabled={busy}
                 >
-                  Start
+                  Cancel
                 </Button>
-              )}
-              {task.canApprove && !prFollowUpRun && !mergeProposal && (
+                <Button size="sm" onClick={view === "pr" ? savePr : save} disabled={busy}>
+                  Save
+                </Button>
+              </>
+            )}
+            {!editing && view === "merge" && mergeProposal && (
+              <>
+                {mergeComment.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={startPrFollowUp}
+                    disabled={busy || !canStartPrFollowUp}
+                    title={
+                      trackedPrNumber === null
+                        ? "No tracked pull request is available"
+                        : undefined
+                    }
+                  >
+                    Run with feedback
+                  </Button>
+                )}
                 <Button
-                  variant={task.proposes === "pr" ? "default" : "outline"}
                   size="sm"
-                  onClick={() =>
-                    withBusy(
-                      () => kotx.approve(task.id),
-                      task.proposes === "pr" ? "PR opened" : "Approved",
-                      true,
-                    )
-                  }
+                  onClick={() => withBusy(() => kotx.merge(task.id), "Merged", true)}
                   disabled={busy}
                 >
-                  {task.proposes === "pr" ? "Open PR" : "Approve"}
+                  Merge
                 </Button>
-              )}
-            </>
-          )}
+              </>
+            )}
+            {!editing && view !== "merge" && (
+              <>
+                {task.canComment && (
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      withBusy(() => kotx.comment(task.id), "Comment posted", true)
+                    }
+                    disabled={busy || !content?.trim()}
+                  >
+                    Comment
+                  </Button>
+                )}
+                {task.canStart && (
+                  <Button
+                    size="sm"
+                    onClick={() => withBusy(() => kotx.start(task.id), "Started", true)}
+                    disabled={busy}
+                  >
+                    Start
+                  </Button>
+                )}
+                {task.canApprove && !prFollowUpRun && !mergeProposal && (
+                  <Button
+                    variant={task.proposes === "pr" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() =>
+                      withBusy(
+                        () => kotx.approve(task.id),
+                        task.proposes === "pr" ? "PR opened" : "Approved",
+                        true,
+                      )
+                    }
+                    disabled={busy}
+                  >
+                    {task.proposes === "pr" ? "Open PR" : "Approve"}
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </section>

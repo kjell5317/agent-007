@@ -38,7 +38,8 @@ export interface KotxTask {
   branch: string | null;
   prNumber: number | null;
   trackedPrNumber: number | null;
-  assignees: string[];
+  assigned?: string[];
+  assignees?: string[];
   triggeredBy: string | null;
   outcome: string | null;
   attempt: number;
