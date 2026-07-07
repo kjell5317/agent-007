@@ -23,3 +23,12 @@ build/
 
 # Personal runtime config — copy from the *.example templates in config/
 config/labels.toml
+
+# Built SPA bundle. The Docker image rebuilds it from source in the frontend
+# stage (see Dockerfile) and never ships the host copy, so it doesn't belong
+# in git. Run `cd frontend && npm run build` to (re)populate it when serving
+# the backend standalone; the normal dev loop uses Vite's dev server instead.
+backend/app/static/
+
+# TypeScript incremental build caches
+frontend/*.tsbuildinfo

@@ -24,6 +24,7 @@ from app.api import (
     notifications,
     oauth,
     points,
+    search,
     settings as settings_router,
     tasks,
     webhooks,
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router)
     app.include_router(oauth.router)
     app.include_router(points.router)
+    app.include_router(search.router)
     app.include_router(settings_router.router)
     app.include_router(webhooks.router)
 

@@ -41,6 +41,24 @@ export interface AgentTrace {
   [k: string]: unknown;
 }
 
+export type SearchHitType = "task" | "note" | "input" | "document";
+
+export interface SearchHit {
+  type: SearchHitType;
+  id: string;
+  title: string;
+  snippet: string | null;
+  url: string | null;
+  // Present for task hits (its own id) and for input hits linked to a task —
+  // clicking either opens that task.
+  task_id: string | null;
+  // Unified origin: input source (gmail/slack/…) or document provider
+  // (calendar/…). Null for tasks and notes.
+  source: string | null;
+  ts: string | null;
+  score: number;
+}
+
 export interface RawInput {
   id: string;
   source: string;

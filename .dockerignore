@@ -28,8 +28,7 @@ frontend/.vite
 
 # Pre-built static output on the host. The image's frontend stage produces
 # its own copy; including the host's would risk shipping a stale bundle.
-src/app/static/assets
-src/app/static/index.html
+backend/app/static
 
 # Misc
 *.log

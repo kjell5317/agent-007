@@ -51,7 +51,7 @@ WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 MIGRATION_DELAY_S = 120
 MIGRATION_RETRY_S = 300
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
-COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=24).total_seconds())
+COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # A task the planner could not place stays overdue — without a backoff the
 # 5-minute loop would re-run the whole (expensive) displacement search
 # forever. One retry per hour is plenty; any calendar edit or task update
@@ -117,7 +117,8 @@ async def _calendar_discover() -> None:
                 if retry["attempted"]:
                     log.info(
                         "calendar-discover retry · attempted=%d scheduled=%d",
-                        retry["attempted"], retry["scheduled"],
+                        retry["attempted"],
+                        retry["scheduled"],
                     )
         except asyncio.CancelledError:
             log.info("calendar-discover loop cancelled")

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { SearchBar } from "@/components/search/SearchBar";
+import { SearchPanel } from "@/components/search/SearchPanel";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
@@ -16,7 +18,9 @@ import type { Task } from "@/lib/types";
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
-  const [mailOpen, setMailOpen] = useState(false);
+  const [view, setView] = useState<"tasks" | "mail" | "search">("tasks");
+  const [searchQuery, setSearchQuery] = useState("");
+  const mailOpen = view === "mail";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
   // load so it can resolve to the adopting task.
@@ -30,8 +34,16 @@ export function App() {
   const newestInputReceivedAtRef = useRef<number | null>(null);
   const pendingClearTaskIdsRef = useRef(new Set<string>());
   const pendingClearInputIdsRef = useRef(new Set<string>());
-  const tasksActive = !mailOpen;
-  const inboxActive = mailOpen;
+  const tasksActive = view === "tasks";
+  const inboxActive = view === "mail";
+
+  // Back / Escape / result-click out of the mail or search overlay. Clearing
+  // the query means re-entering search starts fresh rather than re-streaming
+  // the last one.
+  const leaveOverlay = useCallback(() => {
+    setView("tasks");
+    setSearchQuery("");
+  }, []);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -88,12 +100,12 @@ export function App() {
     if (link.kind === "task") {
       setSelectedTaskId(link.id);
       setPendingRunId(null);
-      setMailOpen(false);
+      setView("tasks");
       return;
     }
     setPendingRunId(link.id);
     setSelectedTaskId(null);
-    setMailOpen(false);
+    setView("tasks");
   }, []);
 
   useEffect(() => {
@@ -299,13 +311,14 @@ export function App() {
       <Topbar
         theme={theme}
         onThemeChange={setTheme}
-        mode={mailOpen ? "mail" : "normal"}
+        mode={view === "tasks" ? "normal" : view}
         unreadInbox={unreadInbox}
-        onMailOpen={() => setMailOpen(true)}
-        onBack={() => setMailOpen(false)}
+        onMailOpen={() => setView("mail")}
+        onSearchOpen={() => setView("search")}
+        onBack={leaveOverlay}
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
-        {mailOpen ? (
+        {view === "mail" ? (
           <InboxPanel
             inputs={inputs}
             onChanged={refresh}
@@ -315,6 +328,8 @@ export function App() {
             onInputsVisible={markInputsVisible}
             onOpenTask={openTask}
           />
+        ) : view === "search" ? (
+          <SearchPanel query={searchQuery} onOpenTask={openTask} />
         ) : (
           <TasksPanel
             tasks={tasks}
@@ -336,7 +351,11 @@ export function App() {
           onKotxChanged={runs.refresh}
         />
       )}
-      <Composer onCreated={refresh} />
+      {view === "search" ? (
+        <SearchBar value={searchQuery} onChange={setSearchQuery} onClose={leaveOverlay} />
+      ) : (
+        <Composer onCreated={refresh} />
+      )}
       <Toaster />
     </div>
   );

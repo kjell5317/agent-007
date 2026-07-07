@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # precedent stops auto-deciding and falls through to the agent instead.
     input_similarity_half_life_days: float = 400
 
+    # Search (stage 1 suggest-as-you-type). Shorter e-folding than the precedent
+    # searches above: live search wants recent items to surface, not near-flat
+    # decay. Note the formula is exp(-age/days), not a true half-life.
+    search_recency_half_life_days: float = 30
+    search_suggest_limit: int = 8
+    # In-process TTL cache over suggest results. Short: the same query re-fires
+    # on backspace/retype, so even a few seconds spares the DB per keystroke.
+    search_suggest_cache_ttl_seconds: float = 10.0
+
     # Google OAuth
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""

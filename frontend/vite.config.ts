@@ -24,6 +24,7 @@ export default defineConfig({
       "/inputs": "http://localhost:8001",
       "/kotx": "http://localhost:8001",
       "/points": "http://localhost:8001",
+      "/search": "http://localhost:8001",
       "/oauth": "http://localhost:8001",
       "/labels": "http://localhost:8001",
       "/notifications": "http://localhost:8001",
