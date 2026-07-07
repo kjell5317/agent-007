@@ -279,3 +279,7 @@ async def test_manual_queue_preserves_prior_trace_under_manual_override(monkeypa
     assert override["iterations"][0]["tool_results"][1]["artifact_refs"] == [
         "task:30000000-0000-0000-0000-000000000003"
     ]
+    assert (
+        override["iterations"][0]["tool_results"][1]["result_markdown"]
+        == "created task 30000000-0000-0000-0000-000000000003"
+    )

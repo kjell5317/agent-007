@@ -103,6 +103,10 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
         "usage": {},
     }
     assert trace["iterations"][0]["tool_results"][0]["name"] == "search_notes"
+    assert (
+        trace["iterations"][0]["tool_results"][0]["result_markdown"]
+        == "Notes:\n- report"
+    )
     assert trace["iterations"][0]["tool_results"][0]["result_summary"] == "Notes: - report"
     assert trace["iterations"][1]["blocks"] == [
         {

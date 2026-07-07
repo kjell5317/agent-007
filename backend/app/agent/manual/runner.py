@@ -161,6 +161,7 @@ def _tool_result_entry(
         "name": name,
         "status": status,
         "purpose": _tool_purpose(name, tool_input),
+        "result_markdown": str(summary or ""),
         "preview": _truncate_inline(summary, 200),
         "result_summary": _truncate_inline(summary, 500),
         "changed_state": changed_state,
