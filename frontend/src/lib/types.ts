@@ -41,7 +41,7 @@ export interface AgentTrace {
   [k: string]: unknown;
 }
 
-export type SearchHitType = "task" | "note" | "input" | "document";
+export type SearchHitType = "task" | "note" | "input" | "document" | "drive";
 
 export interface SearchHit {
   type: SearchHitType;
@@ -88,11 +88,14 @@ export interface ChatToolTrace {
   artifact_refs: string[];
 }
 
+export type ChatResponseMode = "sources" | "answer";
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations: ChatCitation[];
   tools: ChatToolTrace[];
+  response_mode?: ChatResponseMode;
   // Assistant message still streaming (spinner until the first token lands).
   pending: boolean;
 }

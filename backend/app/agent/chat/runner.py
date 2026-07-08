@@ -8,7 +8,8 @@ loop lets the model call any action tool (create/update/close tasks, events,
 notes) then answer; unlike the input flows there is no single terminal tool.
 
 The runner is transport-agnostic: it pushes structured events (`citations`,
-`token`, `tool_call`, `done`) to an `emit` callback that the SSE endpoint drains.
+`response_mode`, `token`, `tool_call`, `done`) to an `emit` callback that the
+SSE endpoint drains.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
@@ -55,6 +56,7 @@ from app.services.search.retrieve import list_tasks, retrieve
 log = logging.getLogger(__name__)
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
+ResponseMode = Literal["sources", "answer"]
 
 # Citation tag prefixes by hit type. "D" = document (kotx/GitHub issues, etc.),
 # kept distinct from "E" = calendar event so a document isn't read as an event;
@@ -132,8 +134,68 @@ def _context_line(tag: str, h: SearchHit) -> str:
     return line
 
 
-def _context_block(tz: str, entries: list[tuple[str, SearchHit]]) -> str:
-    lines = [f"Current time: {now_iso(tz)}", ""]
+_QUESTION_PREFIX_RE = re.compile(
+    r"^(what|what's|whats|when|where|who|whose|why|how|which|is|are|am|was|were|"
+    r"do|does|did|can|could|should|would|will|has|have|had|any)\b",
+    re.I,
+)
+_COMMAND_PREFIX_RE = re.compile(
+    r"^(create|add|make|update|edit|change|close|complete|finish|reopen|delete|remove|"
+    r"reschedule|schedule|move|set|save|remember|note|list|show|tell|give|find|search|"
+    r"look up|open|read|summarize|summarise|draft|send)\b",
+    re.I,
+)
+_AGENDA_RE = re.compile(
+    r"\b(todo|todos|task|tasks|due|overdue|agenda|calendar|schedule)\b.*\b(today|tomorrow|"
+    r"week|month|morning|afternoon|evening)\b|\b(today|tomorrow|week|month|morning|"
+    r"afternoon|evening)\b.*\b(todo|todos|task|tasks|due|overdue|agenda|calendar|schedule)\b",
+    re.I,
+)
+
+
+def classify_response_mode(text: str) -> ResponseMode:
+    """Classify a chat turn before prompting so source discovery is deterministic."""
+    q = " ".join(text.strip().split())
+    if not q:
+        return "answer"
+    if "?" in q or _QUESTION_PREFIX_RE.search(q):
+        return "answer"
+    if _COMMAND_PREFIX_RE.search(q):
+        return "answer"
+    if _AGENDA_RE.search(q):
+        return "answer"
+    # Terse keyword searches, tags, and comma-separated phrases should surface
+    # related source cards instead of trying to synthesize an agenda-style answer.
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_@./#:-]*", q)
+    if len(words) <= 4:
+        return "sources"
+    if "," in q and len(words) <= 8:
+        return "sources"
+    return "answer"
+
+
+def _mode_instruction(mode: ResponseMode) -> str:
+    if mode == "sources":
+        return (
+            "Response mode: sources\n"
+            "The latest user input is a keyword-style source discovery query. "
+            "Give a one- or two-sentence summary of the strongest signal from the "
+            "retrieved context. Cite only the few items you mention inline. Do not "
+            "write a document/source list; the UI will show related source cards "
+            "from the citation payload."
+        )
+    return (
+        "Response mode: answer\n"
+        "The latest user input is a question or command. Answer or act directly, "
+        "concisely, with inline citations for facts. Do not offer a related-source "
+        "list unless the user explicitly asks for sources."
+    )
+
+
+def _context_block(
+    tz: str, entries: list[tuple[str, SearchHit]], mode: ResponseMode
+) -> str:
+    lines = [f"Current time: {now_iso(tz)}", _mode_instruction(mode), ""]
     if entries:
         lines.append("Retrieved context (cite items with their bracketed tag):")
         lines.extend(_context_line(tag, h) for tag, h in entries)
@@ -147,6 +209,7 @@ async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> No
     history = turns[-settings.search_chat_history_messages :]
     last_user_idx = _last_user_index(history)
     query = history[last_user_idx].content if last_user_idx is not None else ""
+    response_mode = classify_response_mode(query)
 
     cites = Citations()
     # Same retrieval path as the `search` tool (local + calendar + Drive), so the
@@ -154,8 +217,9 @@ async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> No
     # resilient — a failing backend degrades to [] rather than sinking the answer.
     entries = cites.add(await retrieve(session, query))
     await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
+    await emit("response_mode", {"response_mode": response_mode})
 
-    context = _context_block(settings.user_timezone, entries)
+    context = _context_block(settings.user_timezone, entries, response_mode)
     messages = _build_messages(history, last_user_idx, context)
 
     # Notion's read-only tools only appear when a workspace is connected, so the
