@@ -51,5 +51,10 @@ Retrieval and actions:
   Notion workspace is connected: `notion_search` finds Notion pages/databases,
   `notion_fetch` reads one in full by its id/URL. Both are read-only. Use them
   for questions about Notion content; cite the page by title with its Notion URL.
+- When the `github_search` / `github_my_work` tools are available, GitHub is
+  connected (read-only). Use `github_my_work` for "what's assigned to me / PRs to
+  review"; use `github_search` with issue-search qualifiers (e.g. `is:open
+  assignee:@me`, `repo:owner/name is:pr`) for anything more specific. Cite issues
+  and PRs by their `owner/repo#number` and URL.
 - Use the user's local timezone for any times you state or set.
 """

@@ -662,3 +662,45 @@ NOTION_CHAT_TOOLS = [
         },
     },
 ]
+
+
+# GitHub (read-only) — appended to CHAT_TOOLS by the runner only when a PAT is
+# configured. Both hit GitHub's REST issue-search endpoint; there are no write
+# tools, so chat can read issues/PRs but never mutate them.
+GITHUB_CHAT_TOOLS = [
+    {
+        "name": "github_search",
+        "description": (
+            "Search the user's GitHub issues and pull requests with GitHub's "
+            "issue-search syntax (keywords plus qualifiers). Read-only. Examples: "
+            "`is:open assignee:@me`, `is:pr review-requested:@me`, "
+            "`repo:owner/name is:issue label:bug`, `author:@me is:open`, "
+            "`involves:@me updated:>2026-06-01`. Returns matching issues/PRs with "
+            "repo, number, state, author, and URL. Use `github_my_work` instead "
+            "for the plain 'what's assigned to me / awaiting my review' question."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "GitHub issue-search query: free text and/or qualifiers "
+                        "like is:open, is:pr, assignee:@me, author:@me, "
+                        "repo:owner/name, label:..., review-requested:@me."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "github_my_work",
+        "description": (
+            "List the user's open GitHub issues/PRs assigned to them and the PRs "
+            "awaiting their review. Read-only, no arguments. Use for 'what's on my "
+            "GitHub plate', 'PRs I need to review', or 'my open issues'."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+]

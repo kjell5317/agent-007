@@ -185,6 +185,19 @@ class Settings(BaseSettings):
     mcp_oauth_client_uri: str = ""
     mcp_oauth_logo_uri: str = ""
 
+    # GitHub — read-only issue/PR search for the chat agent. A fine-grained PAT
+    # with read-only Issues + Pull requests + Metadata (see .env.example). Empty
+    # disables the `github_search` / `github_my_work` chat tools.
+    github_token: str = ""
+
+    # Langfuse — LLM tracing/observability. Both keys empty = tracing off
+    # (all instrumentation degrades to a no-op). `host` is the EU cloud by
+    # default; use https://us.cloud.langfuse.com or a self-hosted URL otherwise.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_release: str = ""
+
     # kotx — external coding-agent API proxied under /kotx (see app.api.kotx).
     # Empty base URL or token disables the proxy (it answers 503).
     kotx_base_url: str = ""

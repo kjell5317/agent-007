@@ -30,6 +30,7 @@ dependencies = [
     "haystack-ai>=2.30.2",
     "anthropic-haystack>=5.11.0",
     "mcp>=1.10",
+    "langfuse>=4,<5",
 ]
 
 [project.optional-dependencies]
