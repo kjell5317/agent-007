@@ -178,6 +178,13 @@ class Settings(BaseSettings):
     slack_oauth_redirect_uri: str = "http://localhost:8001/oauth/slack/callback"
     slack_bootstrap_days: int = 1
 
+    # Notion MCP OAuth
+    mcp_notion_url: str = "https://mcp.notion.com/mcp"
+    notion_oauth_redirect_uri: str = "http://localhost:8001/oauth/notion/callback"
+    mcp_oauth_client_name: str = "Task Agent"
+    mcp_oauth_client_uri: str = ""
+    mcp_oauth_logo_uri: str = ""
+
     # kotx — external coding-agent API proxied under /kotx (see app.api.kotx).
     # Empty base URL or token disables the proxy (it answers 503).
     kotx_base_url: str = ""

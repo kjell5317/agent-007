@@ -35,6 +35,7 @@ from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.prompts import CHAT_SYSTEM_PROMPT
 from app.agent.tools import (
     CHAT_TOOLS,
+    NOTION_CHAT_TOOLS,
     run_create_event,
     run_delete_event,
     run_update_event,
@@ -44,6 +45,7 @@ from app.db.clients import notes as notes_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.search import SearchHit
 from app.db.schemas.task import TaskCreate
+from app.services import notion_mcp
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
 from app.services.search.drive import get_drive_file
@@ -154,6 +156,10 @@ async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> No
     context = _context_block(settings.user_timezone, entries)
     messages = _build_messages(history, last_user_idx, context)
 
+    # Notion's read-only tools only appear when a workspace is connected, so the
+    # model never sees a tool that would just fail with "not connected".
+    tools = CHAT_TOOLS + (NOTION_CHAT_TOOLS if notion_mcp.is_connected(session) else [])
+
     async def on_delta(text: str) -> None:
         await emit("token", {"text": text})
 
@@ -162,7 +168,7 @@ async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> No
             messages,
             settings,
             system_prompt=CHAT_SYSTEM_PROMPT,
-            tools=CHAT_TOOLS,
+            tools=tools,
             on_delta=on_delta,
         )
         if not resp.tool_calls:
@@ -331,6 +337,16 @@ async def _dispatch(
 
         if name == "create_note":
             return await _create_note(session, tin)
+
+        if name == "notion_search":
+            query = str(tin.get("query") or "").strip()
+            out = await notion_mcp.notion_search(session, query)
+            return out, _trace(name, purpose=f"notion search: {query}"[:80], summary=out)
+
+        if name == "notion_fetch":
+            ref = str(tin.get("id") or "").strip()
+            out = await notion_mcp.notion_fetch(session, ref)
+            return out, _trace(name, purpose=f"notion fetch: {ref}"[:80], summary=out)
 
         return f"unknown tool: {name}", _trace(name, purpose=name, summary="unknown tool", status="failed")
     except Exception as exc:  # noqa: BLE001 — one bad tool must not kill the chat
