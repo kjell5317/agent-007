@@ -48,6 +48,21 @@ def test_citations_tagging_dedupes_and_prefixes_by_type():
     assert [tag for tag, _ in again] == ["D1"]
 
 
+@pytest.mark.parametrize(
+    ("text", "mode"),
+    [
+        ("rent invoice", "sources"),
+        ("project alpha", "sources"),
+        ("uni deadline", "sources"),
+        ("what is due today?", "answer"),
+        ("create a task to call Alice tomorrow", "answer"),
+        ("today tasks", "answer"),
+    ],
+)
+def test_classify_response_mode_examples(text, mode):
+    assert chat_runner.classify_response_mode(text) == mode
+
+
 @pytest.mark.asyncio
 async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     # Model calls `search` (with filters), then answers. run_chat and the tool
@@ -93,12 +108,14 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
     kinds = [e for e, _ in events]
     assert kinds[0] == "citations"
+    assert kinds[1] == "response_mode"
     assert kinds[-1] == "done"
     assert "tool_call" in kinds
     assert "token" in kinds
 
     assert events[0][1]["items"][0]["tag"] == "T1"
     assert events[0][1]["items"][0]["title"] == "Buy milk"
+    assert events[1][1]["response_mode"] == "answer"
 
     tool_events = [d for e, d in events if e == "tool_call"]
     assert tool_events and tool_events[0]["name"] == "search"
@@ -110,6 +127,36 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
     tokens = "".join(d["text"] for e, d in events if e == "token")
     assert "one open task" in tokens
+
+
+@pytest.mark.asyncio
+async def test_source_mode_emits_metadata_and_prompt_context(monkeypatch):
+    seen = {"latest_user": ""}
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        seen["latest_user"] = messages[-1].text
+        await on_delta("Rent invoice is the strongest match [I1].")
+        return _resp(text="Rent invoice is the strongest match [I1].")
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return [_hit("input", "raw1", "Rent invoice", snippet="July rent invoice")]
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="rent invoice")], emit=emit)
+
+    assert events[0][0] == "citations"
+    assert events[1] == ("response_mode", {"response_mode": "sources"})
+    assert events[0][1]["items"][0]["tag"] == "I1"
+    assert "Response mode: sources" in seen["latest_user"]
+    assert "Do not write a document/source list" in seen["latest_user"]
 
 
 def test_context_line_surfaces_action_ids():

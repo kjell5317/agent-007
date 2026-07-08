@@ -11,6 +11,7 @@ const TYPE_ICON: Record<SearchHitType, ComponentType<{ className?: string }>> = 
   input: Inbox,
   note: FileText,
   document: FileText,
+  drive: FileText,
 };
 
 function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {
@@ -60,25 +61,29 @@ export function SearchResultRow({
   hit,
   onOpenTask,
   onActivate,
+  onShowContent,
   preventBlur = false,
 }: {
   hit: SearchHit;
   onOpenTask: (taskId: string) => void;
-  // Fired after any successful activation (task open or url) — the composer
-  // uses it to dismiss its dropdown.
+  // Fired after any successful activation — the composer uses it to dismiss
+  // its dropdown.
   onActivate?: () => void;
+  // Optional fallback for hits with no task or URL, used by chat citation cards.
+  onShowContent?: () => void;
   // In the composer the input must keep focus when a row is clicked.
   preventBlur?: boolean;
 }) {
   const Icon = hitIcon(hit);
-  const openTask = hit.task_id;
+  const openTask = hit.task_id ?? (hit.type === "task" ? hit.id : null);
   const openUrl = !openTask && hit.url ? hit.url : null;
-  const clickable = Boolean(openTask || openUrl);
+  const clickable = Boolean(openTask || openUrl || onShowContent);
   const meta = metaLine(hit);
 
   const activate = () => {
     if (openTask) onOpenTask(openTask);
     else if (openUrl) window.open(openUrl, "_blank", "noopener,noreferrer");
+    else onShowContent?.();
     onActivate?.();
   };
 
