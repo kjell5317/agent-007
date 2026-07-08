@@ -1,5 +1,5 @@
 """Chat runner loop, DB-free: mock retrieval + LLM, assert the emitted event
-sequence, citation tagging, and tool dispatch wiring."""
+sequence, citation tagging, tool dispatch, and the consolidated event tool."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ def _resp(text: str = "", tool_calls: tuple[ToolCall, ...] = ()) -> LLMResponse:
     )
 
 
+async def _noop_emit(event, data):
+    return None
+
+
 def test_citations_tagging_dedupes_and_prefixes_by_type():
     cites = Citations()
     first = cites.add(
@@ -40,17 +44,14 @@ def test_citations_tagging_dedupes_and_prefixes_by_type():
         ]
     )
     assert [tag for tag, _ in first] == ["T1", "I1", "T2"]
-    # Re-adding the same hits assigns no new tags (dedupe by type+id).
     again = cites.add([_hit("task", "t1", "Task one"), _hit("drive", "d1", "Doc")])
     assert [tag for tag, _ in again] == ["D1"]
 
 
 @pytest.mark.asyncio
 async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
-    async def fake_drive(query, *, k, timeout):
-        return []
-
-    # The model first calls `search` (with metadata filters), then answers.
+    # Model calls `search` (with filters), then answers. run_chat and the tool
+    # share one `retrieve`; capture the tool call's filters to prove they thread.
     scripted = [
         _resp(
             tool_calls=(
@@ -70,21 +71,17 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
             await on_delta(resp.text)
         return resp
 
-    monkeypatch.setattr(chat_runner, "_retrieve_drive", fake_drive)
-    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    calls = {"n": 0, "tool_filters": None}
 
-    # First call = initial retrieval (no filters); second = the `search` tool,
-    # whose Filters we capture to assert the tool forwards metadata filters.
-    calls: dict = {"n": 0, "tool_filters": None}
-
-    async def local_router(session, query, *, limit, filters=None):
+    async def fake_retrieve(session, query, *, filters=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return [_hit("task", "abc", "Buy milk", task_id="abc", status="open")]
         calls["tool_filters"] = filters
         return [_hit("input", "raw1", "Grocery email", task_id=None)]
 
-    monkeypatch.setattr(chat_runner, "retrieve_local", local_router)
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
 
     events: list[tuple[str, dict]] = []
 
@@ -99,93 +96,19 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     assert "tool_call" in kinds
     assert "token" in kinds
 
-    # Initial citation carries the tagged local hit.
-    first_items = events[0][1]["items"]
-    assert first_items[0]["tag"] == "T1"
-    assert first_items[0]["title"] == "Buy milk"
+    assert events[0][1]["items"][0]["tag"] == "T1"
+    assert events[0][1]["items"][0]["title"] == "Buy milk"
 
-    # The search tool emitted a second citations event with a fresh tag.
     tool_events = [d for e, d in events if e == "tool_call"]
     assert tool_events and tool_events[0]["name"] == "search"
 
-    # Metadata filters were forwarded (source lower-cased, status passed through).
+    # Metadata filters forwarded to the shared retrieve (source lower-cased).
     assert calls["tool_filters"] is not None
     assert calls["tool_filters"].source == "gmail"
     assert calls["tool_filters"].status == "open"
 
-    # The answer text was streamed.
     tokens = "".join(d["text"] for e, d in events if e == "token")
     assert "one open task" in tokens
-
-
-async def _noop_emit(event, data):
-    return None
-
-
-@pytest.mark.asyncio
-async def test_search_source_calendar_hits_calendar_api_only(monkeypatch):
-    called = {"cal": 0, "local": 0, "drive": 0}
-
-    async def fake_cal(session, *, time_min, time_max, query):
-        called["cal"] += 1
-        assert time_min == "2026-07-01" and query == "dentist"
-        return "Existing calendar events:\n- id=ev1 | 2026-07-02T09:00 | Dentist"
-
-    async def fake_local(session, query, *, limit, filters=None):
-        called["local"] += 1
-        return []
-
-    async def fake_drive(session, query, *, k, timeout):
-        called["drive"] += 1
-        return []
-
-    monkeypatch.setattr(chat_runner, "run_find_calendar_events", fake_cal)
-    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
-    monkeypatch.setattr(chat_runner, "search_drive", fake_drive)
-
-    out, trace = await chat_runner._search(
-        object(),
-        Citations(),
-        {"query": "dentist", "source": "calendar", "after": "2026-07-01"},
-        get_settings(),
-        _noop_emit,
-    )
-    assert called == {"cal": 1, "local": 0, "drive": 0}
-    assert "id=ev1" in out
-    assert trace["purpose"] == "calendar search"
-
-
-@pytest.mark.asyncio
-async def test_search_source_drive_hits_drive_only(monkeypatch):
-    called = {"cal": 0, "local": 0, "drive": 0}
-
-    async def fake_cal(session, *, time_min, time_max, query):
-        called["cal"] += 1
-        return ""
-
-    async def fake_local(session, query, *, limit, filters=None):
-        called["local"] += 1
-        return []
-
-    async def fake_drive(session, query, *, k, timeout):
-        called["drive"] += 1
-        return [_hit("drive", "f1", "Budget.xlsx", url="http://x")]
-
-    monkeypatch.setattr(chat_runner, "run_find_calendar_events", fake_cal)
-    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
-    monkeypatch.setattr(chat_runner, "search_drive", fake_drive)
-
-    events: list[tuple[str, dict]] = []
-
-    async def emit(event, data):
-        events.append((event, data))
-
-    out, trace = await chat_runner._search(
-        object(), Citations(), {"query": "budget", "source": "drive"}, get_settings(), emit
-    )
-    assert called == {"cal": 0, "local": 0, "drive": 1}
-    assert any(e == "citations" for e, _ in events)
-    assert events[0][1]["items"][0]["tag"] == "D1"
 
 
 @pytest.mark.asyncio
@@ -213,24 +136,3 @@ async def test_update_event_delete_routes_to_delete(monkeypatch):
     assert called == {"del": 1, "upd": 0}
     assert trace["purpose"] == "delete event"
     assert trace["changed_state"] is True
-
-
-@pytest.mark.asyncio
-async def test_search_no_source_federates_local_and_drive(monkeypatch):
-    called = {"local": 0, "drive": 0}
-
-    async def fake_local(session, query, *, limit, filters=None):
-        called["local"] += 1
-        return [_hit("task", "t1", "Task")]
-
-    async def fake_drive(query, *, k, timeout):
-        called["drive"] += 1
-        return [_hit("drive", "d1", "Doc", url="http://x")]
-
-    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
-    monkeypatch.setattr(chat_runner, "_retrieve_drive", fake_drive)
-
-    out, trace = await chat_runner._search(
-        object(), Citations(), {"query": "stuff"}, get_settings(), _noop_emit
-    )
-    assert called == {"local": 1, "drive": 1}

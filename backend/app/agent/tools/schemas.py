@@ -444,13 +444,14 @@ CHAT_TOOLS = [
         "description": (
             "Retrieve more by hybrid semantic + keyword match. The top results "
             "for the user's latest message are ALREADY in context — only call "
-            "this for a follow-up needing different keywords or a deeper dig. The "
-            "`source` filter picks the backend: `source=drive` queries Google "
-            "Drive files only; `source=calendar` queries the live calendar only "
-            "(returns event ids to pass to `update_event`), narrowed by "
-            "`after`/`before` as the time window; any other source (or none) "
-            "searches tasks, inbox, notes and cached events. Returns hits with "
-            "citation tags."
+            "this for a follow-up needing different keywords or a deeper dig. "
+            "With no `source` it searches everything: tasks, inbox, notes, "
+            "calendar events and Google Drive. The `source` filter narrows the "
+            "backend: `drive` = Drive files only, `calendar` = calendar events "
+            "only (each carries an event id for `update_event`), or an input "
+            "source (gmail/slack/…) to restrict the local search. The "
+            "`label`/`status`/`after`/`before` filters apply across all "
+            "backends. Returns hits with citation tags."
         ),
         "parameters": {
             "type": "object",

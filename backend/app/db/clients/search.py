@@ -278,8 +278,10 @@ def suggest(
 #   • raw_inputs — "from: <sender>[ in <channel>]" + subject + body[:1500]
 #     (app.services.input.embedding.candidate_query_text), embedded at ingest.
 #   • notes      — the note text (app.db.clients.notes / notes_lookup.save_notes).
-#   • documents  — provider-specific; calendar = summary + location + description
-#     (app.services.calendar.cache._content).
+#   • documents  — provider-specific text; here documents means kotx briefs
+#     (TASK.md/REVIEW.md/PR). Calendar events live in documents too but are
+#     EXCLUDED here — they're served by the dedicated semantic calendar search
+#     (app.db.clients.documents.search_calendar_semantic) so events appear once.
 #   • tasks      — NOT embedded (no embedding column). Tasks ride the keyword
 #     side only; semantically-close tasks still surface via their linked inputs.
 # The keyword side (FTS) matches each table's generated `tsv`: tasks =
@@ -301,6 +303,26 @@ _NOTE_DISPLAY = {
         "left(coalesce(n.content,''), 240) AS snippet, NULL::text AS url, "
         "nr.task_id::text AS task_id, 'note'::text AS source, "
         "nr.source_metadata->>'from' AS sender, 'note'::text AS status"
+    ),
+}
+
+# Stage-2 document display (own branch, not the stage-1 one). Calendar is served
+# by the dedicated semantic search, so this covers kotx (and future providers).
+# kotx docs are content-for-context but not distinct: link them to their task
+# (join on kotx_task_id) so the citation opens the task, mirroring how an input
+# hit resolves to its task.
+_DOC_DISPLAY = {
+    "from": (
+        "documents d LEFT JOIN tasks kt ON kt.kotx_task_id = "
+        "CASE WHEN d.provider = 'kotx' AND d.external_id ~ '^[0-9]+$' "
+        "THEN d.external_id::int END"
+    ),
+    "ts": "coalesce(d.starts_at, d.updated_at, now())",
+    "select": (
+        "'document' AS type, d.id::text AS id, d.title AS title, "
+        "coalesce(d.snippet, left(coalesce(d.content,''), 200)) AS snippet, "
+        "coalesce(kt.link, d.url) AS url, kt.id::text AS task_id, "
+        "d.provider AS source, NULL::text AS sender, NULL::text AS status"
     ),
 }
 
@@ -352,7 +374,7 @@ _HYBRID_SQL = text(
             UNION ALL
             (SELECT d.id::text, 'document', d.embedding <=> CAST(:emb AS vector)
                FROM documents d
-              WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'kotx'{_F_DOC}
+              WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'calendar'{_F_DOC}
               ORDER BY d.embedding <=> CAST(:emb AS vector) LIMIT :pool)
         ) v
         ORDER BY dist LIMIT :pool
@@ -375,7 +397,7 @@ _HYBRID_SQL = text(
               ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC LIMIT :pool)
             UNION ALL
             (SELECT d.id::text, 'document', ts_rank_cd(d.tsv, q.tsq)
-               FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'kotx'{_F_DOC}
+               FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'calendar'{_F_DOC}
               ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC LIMIT :pool)
         ) k
         ORDER BY rank DESC LIMIT :pool
@@ -402,6 +424,8 @@ _HYBRID_SQL = text(
 def _display_branch(corpus: str) -> dict[str, str]:
     if corpus == NOTE:
         return _NOTE_DISPLAY
+    if corpus == DOCUMENT:
+        return _DOC_DISPLAY
     return _BRANCHES[corpus]
 
 

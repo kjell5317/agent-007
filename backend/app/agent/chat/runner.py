@@ -13,7 +13,6 @@ The runner is transport-agnostic: it pushes structured events (`citations`,
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import uuid
@@ -38,20 +37,18 @@ from app.agent.tools import (
     CHAT_TOOLS,
     run_create_event,
     run_delete_event,
-    run_find_calendar_events,
     run_update_event,
 )
 from app.config import get_settings
-from app.db import SessionLocal
 from app.db.clients import notes as notes_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.search import SearchHit
 from app.db.schemas.task import TaskCreate
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
-from app.services.search.drive import get_drive_file, search_drive
+from app.services.search.drive import get_drive_file
 from app.services.search.filters import Filters
-from app.services.search.retrieve import retrieve_local
+from app.services.search.retrieve import retrieve
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +118,10 @@ def _context_line(tag: str, h: SearchHit) -> str:
         line += f" — {h.snippet[:200]}"
     if h.task_id:
         line += f" [task_id={h.task_id}]"
+    # Calendar hits carry the event id (their hit id) so the agent can pass it
+    # straight to update_event.
+    elif h.type == "document" and h.source == "calendar":
+        line += f" [event_id={h.id}]"
     return line
 
 
@@ -134,23 +135,6 @@ def _context_block(tz: str, entries: list[tuple[str, SearchHit]]) -> str:
     return "\n".join(lines)
 
 
-async def _retrieve_drive(query: str, *, k: int, timeout: float) -> list[SearchHit]:
-    """Drive federation on its own session so it can run concurrently with the
-    local search without sharing the request session (Session isn't reentrant)."""
-    session = SessionLocal()
-    try:
-        return await search_drive(session, query, k=k, timeout=timeout)
-    finally:
-        session.close()
-
-
-def _ok(result: Any, label: str) -> list[SearchHit]:
-    if isinstance(result, BaseException):
-        log.warning("chat retrieval (%s) failed: %s", label, result)
-        return []
-    return result
-
-
 async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> None:
     settings = get_settings()
     history = turns[-settings.search_chat_history_messages :]
@@ -158,18 +142,10 @@ async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> No
     query = history[last_user_idx].content if last_user_idx is not None else ""
 
     cites = Citations()
-    # Retrieval must never sink the answer — degrade a failing side to [] so the
-    # model still answers (from the other corpus, or from history).
-    local, drive = await asyncio.gather(
-        retrieve_local(session, query, limit=settings.search_chat_local_limit),
-        _retrieve_drive(
-            query,
-            k=settings.search_chat_drive_limit,
-            timeout=settings.search_drive_timeout_seconds,
-        ),
-        return_exceptions=True,
-    )
-    entries = cites.add([*_ok(local, "local"), *_ok(drive, "drive")])
+    # Same retrieval path as the `search` tool (local + calendar + Drive), so the
+    # up-front context and a manual re-query behave identically. `retrieve` is
+    # resilient — a failing backend degrades to [] rather than sinking the answer.
+    entries = cites.add(await retrieve(session, query))
     await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
 
     context = _context_block(settings.user_timezone, entries)
@@ -249,7 +225,7 @@ async def _dispatch(
     tin = tc.input or {}
     try:
         if name == "search":
-            return await _search(session, cites, tin, settings, emit)
+            return await _search(session, cites, tin, emit)
 
         if name == "get_drive_file":
             file_id = str(tin.get("file_id") or "")
@@ -326,64 +302,28 @@ async def _dispatch(
 
 
 async def _search(
-    session: Session, cites: Citations, tin: dict[str, Any], settings, emit: Emit
+    session: Session, cites: Citations, tin: dict[str, Any], emit: Emit
 ) -> tuple[str, dict[str, Any]]:
-    """The multi-query retrieval tool. `source` routes the backend: `drive` hits
-    Google Drive only; `calendar` hits the calendar API only (returning event
-    ids); anything else searches the local corpora, filtered."""
+    """The multi-query retrieval tool — the same `retrieve` path as the up-front
+    context. `source` routes the fan-out (`drive`/`calendar` = that API only,
+    another source narrows the local search, none = everything); the metadata
+    filters apply across every backend."""
     q = str(tin.get("query") or "").strip()
-    source = str(tin["source"]).lower() if tin.get("source") else None
-    after = str(tin["after"]) if tin.get("after") else None
-    before = str(tin["before"]) if tin.get("before") else None
-
-    if source == "calendar":
-        out = await run_find_calendar_events(
-            session, time_min=after, time_max=before, query=q or None
-        )
-        return out, _trace("search", purpose="calendar search", summary=out)
-
-    if source == "drive":
-        hits = await search_drive(
-            session,
-            q,
-            k=settings.search_chat_drive_limit,
-            timeout=settings.search_drive_timeout_seconds,
-        )
-    else:
-        filters = Filters(
-            source=source,
-            label=(str(tin["label"]) if tin.get("label") else None),
-            status=(str(tin["status"]) if tin.get("status") else None),
-            before=before,
-            after=after,
-        )
-        # No source → search everything, federating Drive too (like the up-front
-        # retrieval). A specific input source narrows to the local corpora only,
-        # since Drive isn't one of those sources.
-        if source is None:
-            local, drive = await asyncio.gather(
-                retrieve_local(session, q, limit=settings.search_chat_local_limit, filters=filters),
-                _retrieve_drive(
-                    q,
-                    k=settings.search_chat_drive_limit,
-                    timeout=settings.search_drive_timeout_seconds,
-                ),
-                return_exceptions=True,
-            )
-            hits = [*_ok(local, "local"), *_ok(drive, "drive")]
-        else:
-            hits = await retrieve_local(
-                session, q, limit=settings.search_chat_local_limit, filters=filters
-            )
-
+    filters = Filters(
+        source=(str(tin["source"]).lower() if tin.get("source") else None),
+        label=(str(tin["label"]) if tin.get("label") else None),
+        status=(str(tin["status"]) if tin.get("status") else None),
+        before=(str(tin["before"]) if tin.get("before") else None),
+        after=(str(tin["after"]) if tin.get("after") else None),
+    )
+    hits = await retrieve(session, q, filters=filters)
     new = cites.add(hits)
     if new:
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
     body = "\n".join(_context_line(tag, h) for tag, h in new) or "no new matches"
-    label = "drive" if source == "drive" else "search"
     return (
-        f"{label} results for '{q}':\n{body}",
-        _trace("search", purpose=f"{label}: {q}"[:80], summary=f"{len(new)} new hits"),
+        f"search results for '{q}':\n{body}",
+        _trace("search", purpose=f"search: {q}"[:80], summary=f"{len(new)} new hits"),
     )
 
 

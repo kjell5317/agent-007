@@ -73,6 +73,7 @@ class CalendarMatch:
     location: str | None
     starts_at: datetime | None
     similarity: float
+    url: str | None = None
 
 
 # Hybrid: fuse a pgvector nearest-neighbour ranking with a Postgres FTS ranking
@@ -122,6 +123,7 @@ _CALENDAR_HYBRID_SQL = text(
       d.title AS summary,
       d.metadata->>'location' AS location,
       d.starts_at,
+      d.url AS url,
       1.0 - (d.embedding <=> CAST(:emb AS vector)) AS similarity
     FROM fused JOIN documents d ON d.id = fused.id
     ORDER BY fused.score DESC, d.starts_at ASC
@@ -171,6 +173,7 @@ def search_calendar_semantic(
             location=r.location,
             starts_at=r.starts_at,
             similarity=float(r.similarity) if r.similarity is not None else 0.0,
+            url=r.url,
         )
         for r in rows
         if r.event_id

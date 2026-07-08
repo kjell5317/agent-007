@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.google_tokens import GoogleTokenError, get_fresh_google_token
 from app.db.schemas.search import SearchHit
+from app.services.search.extract import extract_text
 
 log = logging.getLogger(__name__)
 
@@ -33,9 +34,16 @@ class DriveClient:
         self._headers = {"Authorization": f"Bearer {access_token}"}
         self._timeout = timeout
 
-    async def search(self, query: str, *, limit: int) -> list[dict]:
+    async def search(
+        self, query: str, *, limit: int, after: str | None = None, before: str | None = None
+    ) -> list[dict]:
+        clauses = [f"fullText contains '{_escape(query)}'", "trashed = false"]
+        if after:
+            clauses.append(f"modifiedTime >= '{_rfc3339(after)}'")
+        if before:
+            clauses.append(f"modifiedTime < '{_rfc3339(before)}'")
         params = {
-            "q": f"fullText contains '{_escape(query)}' and trashed = false",
+            "q": " and ".join(clauses),
             "fields": _FIELDS,
             "pageSize": limit,
             "orderBy": "modifiedTime desc",
@@ -50,7 +58,8 @@ class DriveClient:
     async def file_text(self, file_id: str, *, max_chars: int) -> str:
         """Plain-text content of a Drive file. Google-native docs are exported
         (Docs/Slides → text, Sheets → CSV); text/* files are read directly;
-        anything else (PDF, images, binaries) can't be extracted here."""
+        PDFs and Office (docx/pptx/xlsx) are extracted from their bytes; images
+        and other binaries can't be read."""
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             meta = await client.get(
                 f"{_BASE}/{file_id}", params={"fields": "id,name,mimeType,webViewLink"}
@@ -59,23 +68,34 @@ class DriveClient:
             info = meta.json()
             mime = info.get("mimeType") or ""
             name = info.get("name") or file_id
+            link = info.get("webViewLink") or ""
 
             if mime.startswith("application/vnd.google-apps."):
                 export_mime = "text/csv" if "spreadsheet" in mime else "text/plain"
                 resp = await client.get(
                     f"{_BASE}/{file_id}/export", params={"mimeType": export_mime}
                 )
-            elif mime.startswith("text/") or mime in ("application/json", "application/xml"):
-                resp = await client.get(f"{_BASE}/{file_id}", params={"alt": "media"})
-            else:
-                link = info.get("webViewLink") or ""
-                return f"'{name}' is a {mime} file; text can't be extracted. Open it: {link}"
+                resp.raise_for_status()
+                return _clip(name, resp.text, max_chars)
 
+            if mime.startswith("text/") or mime in ("application/json", "application/xml"):
+                resp = await client.get(f"{_BASE}/{file_id}", params={"alt": "media"})
+                resp.raise_for_status()
+                return _clip(name, resp.text, max_chars)
+
+            # Rich binary (PDF / Office): download the bytes and extract locally.
+            resp = await client.get(f"{_BASE}/{file_id}", params={"alt": "media"})
             resp.raise_for_status()
-            body = resp.text
-            clipped = body[:max_chars]
-            suffix = "\n…(truncated)" if len(body) > max_chars else ""
-            return f"'{name}':\n{clipped}{suffix}"
+            extracted = extract_text(mime, resp.content, max_chars=max_chars)
+            if extracted:
+                return f"'{name}':\n{extracted}"
+            return f"'{name}' is a {mime} file; text can't be extracted. Open it: {link}"
+
+
+def _clip(name: str, body: str, max_chars: int) -> str:
+    clipped = body[:max_chars]
+    suffix = "\n…(truncated)" if len(body) > max_chars else ""
+    return f"'{name}':\n{clipped}{suffix}"
 
 
 def _escape(query: str) -> str:
@@ -83,22 +103,35 @@ def _escape(query: str) -> str:
     return query.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _rfc3339(date: str) -> str:
+    """A `YYYY-MM-DD` filter boundary → the RFC 3339 timestamp Drive expects."""
+    return date if "T" in date else f"{date}T00:00:00"
+
+
 async def search_drive(
-    session: Session, query: str, *, k: int, timeout: float
+    session: Session,
+    query: str,
+    *,
+    k: int,
+    timeout: float,
+    after: str | None = None,
+    before: str | None = None,
 ) -> list[SearchHit]:
     query = (query or "").strip()
     if not query:
         return []
     try:
-        return await asyncio.wait_for(_search(session, query, k), timeout=timeout)
+        return await asyncio.wait_for(_search(session, query, k, after, before), timeout=timeout)
     except (asyncio.TimeoutError, GoogleTokenError, httpx.HTTPError) as exc:
         log.info("drive search skipped · %s: %s", type(exc).__name__, exc)
         return []
 
 
-async def _search(session: Session, query: str, k: int) -> list[SearchHit]:
+async def _search(
+    session: Session, query: str, k: int, after: str | None, before: str | None
+) -> list[SearchHit]:
     token = await get_fresh_google_token(session)
-    files = await DriveClient(token.access_token).search(query, limit=k)
+    files = await DriveClient(token.access_token).search(query, limit=k, after=after, before=before)
     return [_to_hit(f) for f in files]
 
 
