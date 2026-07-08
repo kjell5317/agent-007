@@ -442,11 +442,15 @@ CHAT_TOOLS = [
     {
         "name": "search",
         "description": (
-            "Retrieve more from the user's tasks, inbox, notes and calendar by "
-            "hybrid semantic + keyword match. The top results for the user's "
-            "latest message are ALREADY in context — only call this for a "
-            "follow-up that needs different keywords, or to dig deeper. Optional "
-            "metadata filters narrow the results. Returns hits with citation tags."
+            "Retrieve more by hybrid semantic + keyword match. The top results "
+            "for the user's latest message are ALREADY in context — only call "
+            "this for a follow-up needing different keywords or a deeper dig. The "
+            "`source` filter picks the backend: `source=drive` queries Google "
+            "Drive files only; `source=calendar` queries the live calendar only "
+            "(returns event ids to pass to `update_event`), narrowed by "
+            "`after`/`before` as the time window; any other source (or none) "
+            "searches tasks, inbox, notes and cached events. Returns hits with "
+            "citation tags."
         ),
         "parameters": {
             "type": "object",
@@ -455,8 +459,9 @@ CHAT_TOOLS = [
                 "source": {
                     "type": "string",
                     "description": (
-                        "Restrict to one origin: an input source (gmail/slack/…) "
-                        "or a document provider (calendar/drive/…)."
+                        "Backend / origin filter: `drive` (Drive files only), "
+                        "`calendar` (calendar API only), or an input source "
+                        "(gmail/slack/…) to restrict the local search."
                     ),
                 },
                 "label": {"type": "string", "description": "Restrict tasks to this label."},
@@ -466,11 +471,17 @@ CHAT_TOOLS = [
                 },
                 "before": {
                     "type": "string",
-                    "description": "Only items before this date (YYYY-MM-DD, exclusive).",
+                    "description": (
+                        "Only items before this date (YYYY-MM-DD, exclusive); for "
+                        "`source=calendar` it's the window end."
+                    ),
                 },
                 "after": {
                     "type": "string",
-                    "description": "Only items on/after this date (YYYY-MM-DD, inclusive).",
+                    "description": (
+                        "Only items on/after this date (YYYY-MM-DD, inclusive); for "
+                        "`source=calendar` it's the window start."
+                    ),
                 },
             },
             "required": ["query"],
@@ -490,23 +501,6 @@ CHAT_TOOLS = [
                 "file_id": {"type": "string", "description": "Drive file id."}
             },
             "required": ["file_id"],
-        },
-    },
-    {
-        "name": "find_calendar_events",
-        "description": (
-            "Find events on the user's calendar by meaning (`query`) and/or a "
-            "`time_min`/`time_max` window. Call before `update_event`/"
-            "`delete_event` to get the `event_id`, or before `create_event` to "
-            "avoid duplicates."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "time_min": {"type": "string", "description": "ISO 8601 window start."},
-                "time_max": {"type": "string", "description": "ISO 8601 window end."},
-            },
         },
     },
     {
@@ -535,8 +529,8 @@ CHAT_TOOLS = [
     {
         "name": "create_event",
         "description": (
-            "Add an event to the user's primary calendar. Check "
-            "`find_calendar_events` first to avoid duplicating one."
+            "Add an event to the user's primary calendar. Run `search` with "
+            "`source=calendar` first to avoid duplicating one."
         ),
         "parameters": {
             "type": "object",
@@ -547,30 +541,23 @@ CHAT_TOOLS = [
     {
         "name": "update_event",
         "description": (
-            "Patch an existing non-managed calendar event. Use `update_task` for "
-            "task-related changes. Pass the `event_id` from `find_calendar_events`."
+            "Change an existing non-managed calendar event: patch the given "
+            "fields, or set `delete=true` to remove it (the single edit/delete "
+            "tool, like `update_task`'s `status`). Task and commute events are "
+            "planner-managed — use `update_task` for those. Get the `event_id` "
+            "from `search` with `source=calendar`."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "event_id": {"type": "string"},
+                "delete": {
+                    "type": "boolean",
+                    "description": "Set true to delete the event; other fields are ignored.",
+                },
                 **{k: v for k, v in _EVENT_TIME_PROPS.items() if k != "summary"},
                 "summary": {"type": "string", "description": "Updated event title."},
             },
-            "required": ["event_id"],
-        },
-    },
-    {
-        "name": "delete_event",
-        "description": (
-            "Delete (close) a non-managed calendar event. Task and commute events "
-            "are managed by the planner and cannot be deleted here — use "
-            "`update_task` to close a task. Pass the `event_id` from "
-            "`find_calendar_events`."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"event_id": {"type": "string"}},
             "required": ["event_id"],
         },
     },

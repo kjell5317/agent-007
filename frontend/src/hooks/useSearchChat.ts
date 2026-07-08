@@ -1,55 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { ChatCitation, ChatMessage, ChatToolTrace } from "@/lib/types";
+import type { ChatCitation, ChatMessage, ChatSummary, ChatToolTrace } from "@/lib/types";
 
 const HISTORY = 5;
-const STORAGE_KEY = "search-chat-history";
-const STORE_MAX = 40;
+const RECENT = 5;
 
 interface SearchChat {
   messages: ChatMessage[];
   streaming: boolean;
+  recent: ChatSummary[];
   send: (text: string) => void;
-  reset: () => void;
+  newChat: () => void;
+  loadChat: (id: string) => void;
 }
 
-function loadStored(): ChatMessage[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    // Clear any spinner left over from a message that was mid-stream on unload.
-    return parsed.map((m: ChatMessage) => ({ ...m, pending: false }));
-  } catch {
-    return [];
-  }
+function deriveTitle(messages: ChatMessage[]): string {
+  const firstUser = messages.find((m) => m.role === "user");
+  return (firstUser?.content ?? "New chat").slice(0, 120);
 }
 
 /**
- * Holds the chat conversation and streams `/search/chat`. Each `send` posts the
- * last few turns, appends a pending assistant message, and folds the SSE events
- * (citations / tokens / tool traces) into it as they arrive. Opening a new send
- * while one is in flight is ignored; `reset` aborts and clears.
+ * Holds the chat conversation and streams `/search/chat`. Conversations are
+ * persisted server-side: the recent list is fetched for the empty-chat view,
+ * a completed turn is saved (create then update), and `loadChat` reopens one.
+ * Streamed pre-tool preamble ("thinking") is dropped — the content resets when
+ * a tool runs, so only the final post-tool answer is shown.
  */
 export function useSearchChat(): SearchChat {
-  const [messages, setMessages] = useState<ChatMessage[]>(loadStored);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [recent, setRecent] = useState<ChatSummary[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const conversationIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  const prevStreaming = useRef(false);
 
-  // Persist the conversation so reopening the view shows the last chat. Skip
-  // while streaming — the transient token updates would thrash localStorage;
-  // the final state persists once streaming settles.
   useEffect(() => {
-    if (streaming) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-STORE_MAX)));
-    } catch {
-      // storage full / unavailable — history just won't persist this session
-    }
-  }, [messages, streaming]);
+    messagesRef.current = messages;
+  }, [messages]);
 
-  // Mutate the trailing (assistant) message in place.
   const patchLast = useCallback((patch: (m: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
       if (prev.length === 0) return prev;
@@ -59,15 +48,60 @@ export function useSearchChat(): SearchChat {
     });
   }, []);
 
-  const reset = useCallback(() => {
+  const refreshRecent = useCallback(async () => {
+    try {
+      setRecent(await api.listChats(RECENT));
+    } catch {
+      // recent list is best-effort
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRecent();
+  }, [refreshRecent]);
+
+  const persist = useCallback(async () => {
+    const msgs = messagesRef.current;
+    if (msgs.length === 0) return;
+    const body = { title: deriveTitle(msgs), messages: msgs };
+    try {
+      if (conversationIdRef.current) {
+        await api.updateChat(conversationIdRef.current, body);
+      } else {
+        const created = await api.createChat(body);
+        conversationIdRef.current = created.id;
+      }
+      void refreshRecent();
+    } catch {
+      // persistence is best-effort; the conversation stays in memory
+    }
+  }, [refreshRecent]);
+
+  // Persist once a turn finishes streaming (not on plain message edits / loads).
+  useEffect(() => {
+    const justFinished = prevStreaming.current && !streaming;
+    prevStreaming.current = streaming;
+    if (justFinished) void persist();
+  }, [streaming, persist]);
+
+  const newChat = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    conversationIdRef.current = null;
+    setStreaming(false);
     setMessages([]);
+  }, []);
+
+  const loadChat = useCallback(async (id: string) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     setStreaming(false);
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      const conv = await api.getChat(id);
+      conversationIdRef.current = conv.id;
+      setMessages(conv.messages.map((m) => ({ ...m, pending: false })));
     } catch {
-      // ignore
+      // ignore a failed load
     }
   }, []);
 
@@ -105,7 +139,9 @@ export function useSearchChat(): SearchChat {
           onToken: (t: string) =>
             patchLast((m) => ({ ...m, content: m.content + t, pending: false })),
           onTool: (trace: ChatToolTrace) =>
-            patchLast((m) => ({ ...m, tools: [...m.tools, trace] })),
+            // Drop any streamed preamble ("thinking") — keep only the tool chips
+            // and let the post-tool answer stream fresh.
+            patchLast((m) => ({ ...m, tools: [...m.tools, trace], content: "", pending: true })),
           onError: (msg: string) =>
             patchLast((m) => ({
               ...m,
@@ -130,7 +166,7 @@ export function useSearchChat(): SearchChat {
     [messages, patchLast, streaming],
   );
 
-  return { messages, streaming, send, reset };
+  return { messages, streaming, recent, send, newChat, loadChat };
 }
 
 function dedupeTags(items: ChatCitation[]): ChatCitation[] {

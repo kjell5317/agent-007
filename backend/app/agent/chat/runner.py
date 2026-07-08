@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -248,42 +249,17 @@ async def _dispatch(
     tin = tc.input or {}
     try:
         if name == "search":
-            q = str(tin.get("query") or "").strip()
-            filters = Filters(
-                source=(str(tin["source"]).lower() if tin.get("source") else None),
-                label=(str(tin["label"]) if tin.get("label") else None),
-                status=(str(tin["status"]) if tin.get("status") else None),
-                before=(str(tin["before"]) if tin.get("before") else None),
-                after=(str(tin["after"]) if tin.get("after") else None),
-            )
-            hits = await retrieve_local(
-                session, q, limit=settings.search_chat_local_limit, filters=filters
-            )
-            new = cites.add(hits)
-            if new:
-                await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
-            body = "\n".join(_context_line(tag, h) for tag, h in new) or "no new matches"
-            return (
-                f"search results for '{q}':\n{body}",
-                _trace(name, purpose=f"search: {q}", summary=f"{len(new)} new hits"),
-            )
+            return await _search(session, cites, tin, settings, emit)
 
         if name == "get_drive_file":
+            file_id = str(tin.get("file_id") or "")
             out = await get_drive_file(
-                session,
-                str(tin.get("file_id") or ""),
-                max_chars=settings.search_drive_file_max_chars,
+                session, file_id, max_chars=settings.search_drive_file_max_chars
             )
-            return out, _trace(name, purpose="read drive file", summary=out)
-
-        if name == "find_calendar_events":
-            out = await run_find_calendar_events(
-                session,
-                time_min=str(tin.get("time_min")) if tin.get("time_min") else None,
-                time_max=str(tin.get("time_max")) if tin.get("time_max") else None,
-                query=str(tin.get("query")) if tin.get("query") else None,
-            )
-            return out, _trace(name, purpose="find calendar events", summary=out)
+            # The output leads with the file's name in quotes; show it on the chip.
+            name_match = re.match(r"^'([^']+)'", out)
+            label = name_match.group(1) if name_match else (file_id or "drive file")
+            return out, _trace(name, purpose=f"read {label}"[:80], summary=out)
 
         if name == "create_task":
             return await _create_task(session, tin)
@@ -310,31 +286,27 @@ async def _dispatch(
             )
 
         if name == "update_event":
-            out, event_id = await run_update_event(
-                session,
-                event_id=str(tin.get("event_id") or ""),
-                summary=str(tin.get("summary")) if tin.get("summary") is not None else None,
-                start=str(tin.get("start")) if tin.get("start") else None,
-                end=str(tin.get("end")) if tin.get("end") else None,
-                description=(
-                    str(tin.get("description")) if tin.get("description") is not None else None
-                ),
-                location=str(tin.get("location")) if tin.get("location") is not None else None,
-            )
+            # Consolidated edit/delete, mirroring update_task's lifecycle field.
+            deleting = bool(tin.get("delete"))
+            if deleting:
+                out, event_id = await run_delete_event(
+                    session, event_id=str(tin.get("event_id") or "")
+                )
+            else:
+                out, event_id = await run_update_event(
+                    session,
+                    event_id=str(tin.get("event_id") or ""),
+                    summary=str(tin.get("summary")) if tin.get("summary") is not None else None,
+                    start=str(tin.get("start")) if tin.get("start") else None,
+                    end=str(tin.get("end")) if tin.get("end") else None,
+                    description=(
+                        str(tin.get("description")) if tin.get("description") is not None else None
+                    ),
+                    location=str(tin.get("location")) if tin.get("location") is not None else None,
+                )
             return out, _trace(
                 name,
-                purpose="update event",
-                summary=out,
-                status="success" if event_id else "failed",
-                changed_state=bool(event_id),
-                artifact_refs=[f"event:{event_id}"] if event_id else [],
-            )
-
-        if name == "delete_event":
-            out, event_id = await run_delete_event(session, event_id=str(tin.get("event_id") or ""))
-            return out, _trace(
-                name,
-                purpose="delete event",
+                purpose="delete event" if deleting else "update event",
                 summary=out,
                 status="success" if event_id else "failed",
                 changed_state=bool(event_id),
@@ -351,6 +323,68 @@ async def _dispatch(
             f"{name} failed: {exc}",
             _trace(name, purpose=name, summary=str(exc), status="failed"),
         )
+
+
+async def _search(
+    session: Session, cites: Citations, tin: dict[str, Any], settings, emit: Emit
+) -> tuple[str, dict[str, Any]]:
+    """The multi-query retrieval tool. `source` routes the backend: `drive` hits
+    Google Drive only; `calendar` hits the calendar API only (returning event
+    ids); anything else searches the local corpora, filtered."""
+    q = str(tin.get("query") or "").strip()
+    source = str(tin["source"]).lower() if tin.get("source") else None
+    after = str(tin["after"]) if tin.get("after") else None
+    before = str(tin["before"]) if tin.get("before") else None
+
+    if source == "calendar":
+        out = await run_find_calendar_events(
+            session, time_min=after, time_max=before, query=q or None
+        )
+        return out, _trace("search", purpose="calendar search", summary=out)
+
+    if source == "drive":
+        hits = await search_drive(
+            session,
+            q,
+            k=settings.search_chat_drive_limit,
+            timeout=settings.search_drive_timeout_seconds,
+        )
+    else:
+        filters = Filters(
+            source=source,
+            label=(str(tin["label"]) if tin.get("label") else None),
+            status=(str(tin["status"]) if tin.get("status") else None),
+            before=before,
+            after=after,
+        )
+        # No source → search everything, federating Drive too (like the up-front
+        # retrieval). A specific input source narrows to the local corpora only,
+        # since Drive isn't one of those sources.
+        if source is None:
+            local, drive = await asyncio.gather(
+                retrieve_local(session, q, limit=settings.search_chat_local_limit, filters=filters),
+                _retrieve_drive(
+                    q,
+                    k=settings.search_chat_drive_limit,
+                    timeout=settings.search_drive_timeout_seconds,
+                ),
+                return_exceptions=True,
+            )
+            hits = [*_ok(local, "local"), *_ok(drive, "drive")]
+        else:
+            hits = await retrieve_local(
+                session, q, limit=settings.search_chat_local_limit, filters=filters
+            )
+
+    new = cites.add(hits)
+    if new:
+        await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
+    body = "\n".join(_context_line(tag, h) for tag, h in new) or "no new matches"
+    label = "drive" if source == "drive" else "search"
+    return (
+        f"{label} results for '{q}':\n{body}",
+        _trace("search", purpose=f"{label}: {q}"[:80], summary=f"{len(new)} new hits"),
+    )
 
 
 async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:

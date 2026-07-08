@@ -1,3 +1,4 @@
+from app.db.models.chat import ChatConversation
 from app.db.models.document import Document
 from app.db.models.geocode_cache import GeocodeCache
 from app.db.models.note import Note
@@ -8,6 +9,7 @@ from app.db.models.route_cache import RouteCache
 from app.db.models.task import Task
 
 __all__ = [
+    "ChatConversation",
     "Document",
     "GeocodeCache",
     "Note",

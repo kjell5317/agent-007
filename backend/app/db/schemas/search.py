@@ -49,3 +49,23 @@ class ChatMessageIn(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessageIn]
+
+
+# --- Persisted conversations (recent-chats list + reload) ---------------------
+
+
+class ChatConversationWrite(BaseModel):
+    title: str = ""
+    # Opaque message list as the client holds it (role, content, citations,
+    # tools). Stored verbatim as JSONB; the server doesn't inspect it.
+    messages: list[dict] = []
+
+
+class ChatConversationSummary(BaseModel):
+    id: str
+    title: str
+    updated_at: datetime
+
+
+class ChatConversationRead(ChatConversationSummary):
+    messages: list[dict]

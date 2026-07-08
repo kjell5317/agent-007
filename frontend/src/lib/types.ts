@@ -97,6 +97,13 @@ export interface ChatMessage {
   pending: boolean;
 }
 
+// A persisted conversation as shown in the recent-chats list.
+export interface ChatSummary {
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
 export interface RawInput {
   id: string;
   source: string;

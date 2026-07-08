@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut, Mail, Search } from "lucide-react";
+import { CircleUser, ExternalLink, LogOut, Mail, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,6 +63,7 @@ export function Topbar({
   onMailOpen,
   onSearchOpen,
   onBack,
+  onNewChat,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
@@ -71,6 +72,7 @@ export function Topbar({
   onMailOpen?: () => void;
   onSearchOpen?: () => void;
   onBack?: () => void;
+  onNewChat?: () => void;
 }) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
@@ -198,7 +200,20 @@ export function Topbar({
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
         {mode !== "normal" ? (
-          <Button onClick={onBack}>Back</Button>
+          <div className="flex items-center gap-2">
+            {mode === "search" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={onNewChat}
+                aria-label="New chat"
+                title="New chat"
+              >
+                <Plus className="h-5 w-5" />
+              </Button>
+            )}
+            <Button onClick={onBack}>Back</Button>
+          </div>
         ) : (
           <>
             {points != null && (

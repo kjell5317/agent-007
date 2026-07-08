@@ -8,6 +8,7 @@ import pytest
 from app.agent.chat import runner as chat_runner
 from app.agent.chat.runner import ChatTurn, Citations, run_chat
 from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall
+from app.config import get_settings
 from app.db.schemas.search import SearchHit
 
 
@@ -115,3 +116,121 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     # The answer text was streamed.
     tokens = "".join(d["text"] for e, d in events if e == "token")
     assert "one open task" in tokens
+
+
+async def _noop_emit(event, data):
+    return None
+
+
+@pytest.mark.asyncio
+async def test_search_source_calendar_hits_calendar_api_only(monkeypatch):
+    called = {"cal": 0, "local": 0, "drive": 0}
+
+    async def fake_cal(session, *, time_min, time_max, query):
+        called["cal"] += 1
+        assert time_min == "2026-07-01" and query == "dentist"
+        return "Existing calendar events:\n- id=ev1 | 2026-07-02T09:00 | Dentist"
+
+    async def fake_local(session, query, *, limit, filters=None):
+        called["local"] += 1
+        return []
+
+    async def fake_drive(session, query, *, k, timeout):
+        called["drive"] += 1
+        return []
+
+    monkeypatch.setattr(chat_runner, "run_find_calendar_events", fake_cal)
+    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
+    monkeypatch.setattr(chat_runner, "search_drive", fake_drive)
+
+    out, trace = await chat_runner._search(
+        object(),
+        Citations(),
+        {"query": "dentist", "source": "calendar", "after": "2026-07-01"},
+        get_settings(),
+        _noop_emit,
+    )
+    assert called == {"cal": 1, "local": 0, "drive": 0}
+    assert "id=ev1" in out
+    assert trace["purpose"] == "calendar search"
+
+
+@pytest.mark.asyncio
+async def test_search_source_drive_hits_drive_only(monkeypatch):
+    called = {"cal": 0, "local": 0, "drive": 0}
+
+    async def fake_cal(session, *, time_min, time_max, query):
+        called["cal"] += 1
+        return ""
+
+    async def fake_local(session, query, *, limit, filters=None):
+        called["local"] += 1
+        return []
+
+    async def fake_drive(session, query, *, k, timeout):
+        called["drive"] += 1
+        return [_hit("drive", "f1", "Budget.xlsx", url="http://x")]
+
+    monkeypatch.setattr(chat_runner, "run_find_calendar_events", fake_cal)
+    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
+    monkeypatch.setattr(chat_runner, "search_drive", fake_drive)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    out, trace = await chat_runner._search(
+        object(), Citations(), {"query": "budget", "source": "drive"}, get_settings(), emit
+    )
+    assert called == {"cal": 0, "local": 0, "drive": 1}
+    assert any(e == "citations" for e, _ in events)
+    assert events[0][1]["items"][0]["tag"] == "D1"
+
+
+@pytest.mark.asyncio
+async def test_update_event_delete_routes_to_delete(monkeypatch):
+    called = {"del": 0, "upd": 0}
+
+    async def fake_del(session, *, event_id):
+        called["del"] += 1
+        return "delete_event: deleted 'Standup'.", event_id
+
+    async def fake_upd(session, **kwargs):
+        called["upd"] += 1
+        return "update_event: updated.", "e1"
+
+    monkeypatch.setattr(chat_runner, "run_delete_event", fake_del)
+    monkeypatch.setattr(chat_runner, "run_update_event", fake_upd)
+
+    _, trace = await chat_runner._dispatch(
+        object(),
+        Citations(),
+        ToolCall(id="1", name="update_event", input={"event_id": "e1", "delete": True}),
+        get_settings(),
+        _noop_emit,
+    )
+    assert called == {"del": 1, "upd": 0}
+    assert trace["purpose"] == "delete event"
+    assert trace["changed_state"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_no_source_federates_local_and_drive(monkeypatch):
+    called = {"local": 0, "drive": 0}
+
+    async def fake_local(session, query, *, limit, filters=None):
+        called["local"] += 1
+        return [_hit("task", "t1", "Task")]
+
+    async def fake_drive(query, *, k, timeout):
+        called["drive"] += 1
+        return [_hit("drive", "d1", "Doc", url="http://x")]
+
+    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
+    monkeypatch.setattr(chat_runner, "_retrieve_drive", fake_drive)
+
+    out, trace = await chat_runner._search(
+        object(), Citations(), {"query": "stuff"}, get_settings(), _noop_emit
+    )
+    assert called == {"local": 1, "drive": 1}

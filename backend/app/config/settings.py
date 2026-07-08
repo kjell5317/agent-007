@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # how many prior turns travel with the request; `max_iterations` bounds the
     # tool loop before a final answer; `drive_timeout` is the per-request Drive
     # federation budget (past it, Drive results are dropped, never blocking).
-    search_chat_local_limit: int = 12
+    search_chat_local_limit: int = 10
     search_chat_drive_limit: int = 5
     search_drive_timeout_seconds: float = 4.0
     search_chat_max_iterations: int = 4

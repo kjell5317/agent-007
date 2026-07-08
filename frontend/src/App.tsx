@@ -314,8 +314,12 @@ export function App() {
         mode={view === "tasks" ? "normal" : view}
         unreadInbox={unreadInbox}
         onMailOpen={() => setView("mail")}
-        onSearchOpen={() => setView("search")}
+        onSearchOpen={() => {
+          chat.newChat();
+          setView("search");
+        }}
         onBack={leaveOverlay}
+        onNewChat={chat.newChat}
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
         {view === "mail" ? (
@@ -333,7 +337,8 @@ export function App() {
             messages={chat.messages}
             streaming={chat.streaming}
             onOpenTask={openTask}
-            onNewChat={chat.reset}
+            recent={chat.recent}
+            onLoadChat={chat.loadChat}
           />
         ) : (
           <TasksPanel

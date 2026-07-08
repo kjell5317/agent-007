@@ -14,14 +14,23 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Query
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.agent.chat import ChatTurn, run_chat
 from app.db import SessionLocal, get_session
-from app.db.schemas.search import ChatRequest, SuggestResponse
+from app.db.clients import chats as chats_store
+from app.db.schemas.search import (
+    ChatConversationRead,
+    ChatConversationSummary,
+    ChatConversationWrite,
+    ChatRequest,
+    SuggestResponse,
+)
 from app.services.search import run_suggest
 
 log = logging.getLogger(__name__)
@@ -106,3 +115,53 @@ async def chat(body: ChatRequest) -> EventSourceResponse:
             session.close()
 
     return EventSourceResponse(gen())
+
+
+# --- Persisted conversations --------------------------------------------------
+
+
+def _summary(row) -> ChatConversationSummary:
+    return ChatConversationSummary(id=str(row.id), title=row.title, updated_at=row.updated_at)
+
+
+@router.get("/chats", response_model=list[ChatConversationSummary])
+def list_chats(
+    limit: int = Query(5, ge=1, le=50),
+    session: Session = Depends(get_session),
+) -> list[ChatConversationSummary]:
+    return [_summary(r) for r in chats_store.list_recent(session, limit=limit)]
+
+
+@router.post("/chats", response_model=ChatConversationSummary)
+def create_chat(
+    body: ChatConversationWrite,
+    session: Session = Depends(get_session),
+) -> ChatConversationSummary:
+    return _summary(chats_store.create(session, title=body.title, messages=body.messages))
+
+
+@router.get("/chats/{conversation_id}", response_model=ChatConversationRead)
+def get_chat(
+    conversation_id: uuid.UUID,
+    session: Session = Depends(get_session),
+) -> ChatConversationRead:
+    row = chats_store.get(session, conversation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return ChatConversationRead(
+        id=str(row.id), title=row.title, updated_at=row.updated_at, messages=row.messages
+    )
+
+
+@router.put("/chats/{conversation_id}", response_model=ChatConversationSummary)
+def update_chat(
+    conversation_id: uuid.UUID,
+    body: ChatConversationWrite,
+    session: Session = Depends(get_session),
+) -> ChatConversationSummary:
+    row = chats_store.update(
+        session, conversation_id, title=body.title, messages=body.messages
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return _summary(row)

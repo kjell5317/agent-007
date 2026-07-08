@@ -1,5 +1,7 @@
 import type {
   ChatCitation,
+  ChatMessage,
+  ChatSummary,
   ChatToolTrace,
   Label,
   RawInput,
@@ -124,6 +126,14 @@ export const api = {
     ),
 
   chatStream,
+
+  listChats: (limit = 5) => request<ChatSummary[]>(`/search/chats?limit=${limit}`),
+  getChat: (id: string) =>
+    request<ChatSummary & { messages: ChatMessage[] }>(`/search/chats/${id}`),
+  createChat: (body: { title: string; messages: ChatMessage[] }) =>
+    request<ChatSummary>("/search/chats", { method: "POST", body: JSON.stringify(body) }),
+  updateChat: (id: string, body: { title: string; messages: ChatMessage[] }) =>
+    request<ChatSummary>(`/search/chats/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 
   listLabels: () => request<Label[]>("/labels"),
 
