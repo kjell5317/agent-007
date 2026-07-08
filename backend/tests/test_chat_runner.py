@@ -45,7 +45,11 @@ def test_citations_tagging_dedupes_and_prefixes_by_type():
     )
     assert [tag for tag, _ in first] == ["T1", "I1", "T2"]
     again = cites.add([_hit("task", "t1", "Task one"), _hit("drive", "d1", "Doc")])
-    assert [tag for tag, _ in again] == ["D1"]
+    assert [tag for tag, _ in again] == ["G1"]
+    # Documents (kotx/GitHub issues) get "D"; calendar events get "E" — so a
+    # document is never read as an event.
+    typed = cites.add([_hit("document", "doc1", "Issue"), _hit("calendar", "cal1", "Standup")])
+    assert [tag for tag, _ in typed] == ["D1", "E1"]
 
 
 @pytest.mark.asyncio

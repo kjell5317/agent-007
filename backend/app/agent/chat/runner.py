@@ -56,14 +56,16 @@ log = logging.getLogger(__name__)
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 
-# Citation tag prefixes by hit type.
+# Citation tag prefixes by hit type. "D" = document (kotx/GitHub issues, etc.),
+# kept distinct from "E" = calendar event so a document isn't read as an event;
+# "G" = Google Drive file.
 _TAG_PREFIX = {
     "task": "T",
     "input": "I",
     "note": "N",
-    "document": "E",
+    "document": "D",
     "calendar": "E",
-    "drive": "D",
+    "drive": "G",
 }
 
 
