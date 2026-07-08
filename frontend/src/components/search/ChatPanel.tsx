@@ -1,10 +1,17 @@
 import { Check, Loader2, MessageSquare, Wrench, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AssistantContent } from "@/components/search/AssistantContent";
+import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Modal } from "@/components/ui/modal";
 import { fmtWhen } from "@/lib/dates";
 import { cn } from "@/lib/utils";
-import type { ChatCitation, ChatMessage, ChatSummary, ChatToolTrace } from "@/lib/types";
+import type {
+  ChatCitation,
+  ChatMessage,
+  ChatSummary,
+  ChatToolTrace,
+  SearchHit,
+} from "@/lib/types";
 
 export function ChatPanel({
   messages,
@@ -135,8 +142,66 @@ function AssistantBubble({
       {streaming && message.content && (
         <span className="inline-block h-3 w-1.5 animate-pulse rounded-sm bg-muted-foreground align-middle" />
       )}
+      {message.response_mode === "sources" && message.citations.length > 0 && (
+        <RelatedSources
+          citations={message.citations}
+          onOpenTask={onOpenTask}
+          onShowContent={onShowContent}
+        />
+      )}
     </div>
   );
+}
+
+function RelatedSources({
+  citations,
+  onOpenTask,
+  onShowContent,
+}: {
+  citations: ChatCitation[];
+  onOpenTask: (taskId: string) => void;
+  onShowContent: (cite: ChatCitation) => void;
+}) {
+  return (
+    <div className="space-y-1.5 pt-1">
+      <div className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Related sources
+      </div>
+      <div className="space-y-1.5">
+        {citations.map((cite) => (
+          <SearchResultRow
+            key={cite.tag}
+            hit={citationToHit(cite)}
+            onOpenTask={onOpenTask}
+            onShowContent={() => onShowContent(cite)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function citationToHit(cite: ChatCitation): SearchHit {
+  return {
+    type:
+      cite.type === "task" ||
+      cite.type === "input" ||
+      cite.type === "note" ||
+      cite.type === "document" ||
+      cite.type === "drive"
+        ? cite.type
+        : "document",
+    id: cite.id,
+    title: cite.title,
+    snippet: cite.snippet,
+    url: cite.url,
+    task_id: cite.task_id,
+    source: cite.source,
+    sender: cite.sender,
+    status: cite.status,
+    ts: cite.ts,
+    score: 0,
+  };
 }
 
 function ToolChip({ trace }: { trace: ChatToolTrace }) {
