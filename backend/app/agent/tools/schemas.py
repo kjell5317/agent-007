@@ -621,3 +621,44 @@ CHAT_TOOLS = [
         },
     },
 ]
+
+
+# Notion (read-only) — appended to CHAT_TOOLS by the runner only when a Notion
+# workspace is connected, so the model never sees a tool that would just fail.
+# Both proxy to Notion's hosted MCP server; there are no write tools, so chat
+# can read the workspace but never mutate it.
+NOTION_CHAT_TOOLS = [
+    {
+        "name": "notion_search",
+        "description": (
+            "Search the user's connected Notion workspace by keyword or meaning "
+            "and return matching pages and databases (title, URL, id, snippet). "
+            "Read-only. Use for questions about the user's Notion notes, docs, or "
+            "wiki content; follow up with `notion_fetch` to read a result in full."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for in Notion."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "notion_fetch",
+        "description": (
+            "Read the full content of a single Notion page or database by its id "
+            "or URL — use the id/URL from a `notion_search` result. Read-only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Notion page/database id or URL (from a notion_search result).",
+                },
+            },
+            "required": ["id"],
+        },
+    },
+]

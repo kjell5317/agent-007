@@ -17,6 +17,12 @@ from typing import ClassVar, TypeVar
 
 
 @dataclass
+class OAuthAuthorization:
+    url: str
+    context: dict | None = None
+
+
+@dataclass
 class TokenBundle:
     access_token: str
     refresh_token: str | None
@@ -34,17 +40,37 @@ class OAuthProvider(ABC):
     def authorize_url(self, state: str, redirect_uri: str) -> str:
         """Return the URL to redirect the user to for consent."""
 
+    async def authorize(self, state: str, redirect_uri: str) -> OAuthAuthorization:
+        """Build an authorization redirect and optional transient callback context."""
+        return OAuthAuthorization(url=self.authorize_url(state, redirect_uri))
+
     @abstractmethod
     async def exchange_code(self, code: str, redirect_uri: str) -> TokenBundle:
         """Exchange an authorization code for tokens."""
+
+    async def exchange_code_with_context(
+        self, code: str, redirect_uri: str, context: dict | None
+    ) -> TokenBundle:
+        """Exchange a code using transient state saved during authorization."""
+        return await self.exchange_code(code, redirect_uri)
 
     @abstractmethod
     async def refresh(self, refresh_token: str) -> TokenBundle:
         """Refresh an access token."""
 
+    async def refresh_with_context(
+        self, refresh_token: str, context: dict | None
+    ) -> TokenBundle:
+        """Refresh an access token using persisted provider metadata when needed."""
+        return await self.refresh(refresh_token)
+
     @abstractmethod
     async def identify(self, access_token: str) -> str:
         """Return a stable per-account key (email, user id, workspace id, ...)."""
+
+    async def identify_with_context(self, access_token: str, context: dict | None) -> str:
+        """Return a stable account key using provider metadata when needed."""
+        return await self.identify(access_token)
 
     # TODO: token revocation hook
     # TODO: scope negotiation per source need (least-privilege per integration)

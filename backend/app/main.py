@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 # Side-effect imports register OAuth providers and ingestion sources via their
 # @register_* decorators. Add a new provider/source = add a new import here.
 import app.auth.google  # noqa: F401
+import app.auth.notion_mcp  # noqa: F401
 import app.auth.slack  # noqa: F401
 import app.services.input.gmail  # noqa: F401
 import app.services.input.kotx  # noqa: F401

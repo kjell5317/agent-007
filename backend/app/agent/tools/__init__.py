@@ -7,11 +7,17 @@ from app.agent.tools.calendar_lookup import (
     run_update_event,
 )
 from app.agent.tools.notes_lookup import run_search_notes
-from app.agent.tools.schemas import CHAT_TOOLS, NEW_INPUT_TOOLS, THREAD_FOLLOWUP_TOOLS
+from app.agent.tools.schemas import (
+    CHAT_TOOLS,
+    NEW_INPUT_TOOLS,
+    NOTION_CHAT_TOOLS,
+    THREAD_FOLLOWUP_TOOLS,
+)
 
 __all__ = [
     "CHAT_TOOLS",
     "NEW_INPUT_TOOLS",
+    "NOTION_CHAT_TOOLS",
     "THREAD_FOLLOWUP_TOOLS",
     "run_search_notes",
     "run_find_calendar_events",

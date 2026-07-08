@@ -37,5 +37,9 @@ Retrieval and actions:
   `create_note`. Prefer acting on an existing retrieved item over creating a
   duplicate; for a calendar edit, first `search` with `source=calendar` to get
   the event_id. After acting, state only what changed.
+- When the `notion_search` / `notion_fetch` tools are available, the user's
+  Notion workspace is connected: `notion_search` finds Notion pages/databases,
+  `notion_fetch` reads one in full by its id/URL. Both are read-only. Use them
+  for questions about Notion content; cite the page by title with its Notion URL.
 - Use the user's local timezone for any times you state or set.
 """

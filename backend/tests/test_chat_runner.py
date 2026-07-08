@@ -82,6 +82,7 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
     monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
 
     events: list[tuple[str, dict]] = []
 
@@ -149,6 +150,7 @@ async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
     monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
     monkeypatch.setattr(chat_runner, "get_drive_file", fake_get_drive_file)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
 
     events: list[tuple[str, dict]] = []
 
@@ -164,6 +166,71 @@ async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
     assert any(e == "tool_call" and d.get("name") == "tool_limit" for e, d in events)
     tokens = "".join(d["text"] for e, d in events if e == "token")
     assert "Couldn't read that file." in tokens
+
+
+@pytest.mark.asyncio
+async def test_notion_tools_exposed_when_connected_and_dispatch(monkeypatch):
+    # Connected → the two read-only Notion tools are offered; the model calls
+    # notion_search and its result reaches the next turn as a tool message.
+    scripted = [
+        _resp(tool_calls=(ToolCall(id="1", name="notion_search", input={"query": "roadmap"}),)),
+        _resp(text="The roadmap lives in Notion."),
+    ]
+    seen = {"tool_names": None, "search_query": None}
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        seen["tool_names"] = {t["name"] for t in tools}
+        resp = scripted.pop(0)
+        if resp.text:
+            await on_delta(resp.text)
+        return resp
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return []
+
+    async def fake_notion_search(session, query):
+        seen["search_query"] = query
+        return "Notion: 'Roadmap' — https://notion.so/roadmap"
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: True)
+    monkeypatch.setattr(chat_runner.notion_mcp, "notion_search", fake_notion_search)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="where is the roadmap?")], emit=emit)
+
+    assert {"notion_search", "notion_fetch"} <= seen["tool_names"]
+    assert seen["search_query"] == "roadmap"
+    tool_events = [d for e, d in events if e == "tool_call"]
+    assert tool_events and tool_events[0]["name"] == "notion_search"
+    assert tool_events[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_notion_tools_absent_when_disconnected(monkeypatch):
+    seen = {"tool_names": set()}
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        seen["tool_names"] = {t["name"] for t in tools}
+        await on_delta("no notion")
+        return _resp(text="no notion")
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return []
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+
+    await run_chat(object(), [ChatTurn(role="user", content="hi")], emit=_noop_emit)
+
+    assert "notion_search" not in seen["tool_names"]
+    assert "notion_fetch" not in seen["tool_names"]
 
 
 @pytest.mark.asyncio
