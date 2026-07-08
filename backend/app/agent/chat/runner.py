@@ -36,17 +36,19 @@ from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.prompts import CHAT_SYSTEM_PROMPT
 from app.agent.tools import (
     CHAT_TOOLS,
+    GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
     run_create_event,
     run_delete_event,
     run_update_event,
 )
+from app import observability as obs
 from app.config import get_settings
 from app.db.clients import notes as notes_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.search import SearchHit
 from app.db.schemas.task import TaskCreate
-from app.services import notion_mcp
+from app.services import github, notion_mcp
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
 from app.services.search.drive import get_drive_file
@@ -204,66 +206,86 @@ def _context_block(
     return "\n".join(lines)
 
 
-async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> None:
+async def run_chat(
+    session: Session, turns: list[ChatTurn], *, emit: Emit, session_id: str | None = None
+) -> None:
     settings = get_settings()
     history = turns[-settings.search_chat_history_messages :]
     last_user_idx = _last_user_index(history)
     query = history[last_user_idx].content if last_user_idx is not None else ""
     response_mode = classify_response_mode(query)
 
-    cites = Citations()
-    # Same retrieval path as the `search` tool (local + calendar + Drive), so the
-    # up-front context and a manual re-query behave identically. `retrieve` is
-    # resilient — a failing backend degrades to [] rather than sinking the answer.
-    entries = cites.add(await retrieve(session, query))
-    await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
-    await emit("response_mode", {"response_mode": response_mode})
+    # Root span groups every LLM turn + tool call of this answer into one named,
+    # session-scoped trace. `session_id` (the conversation id) lets the Langfuse
+    # Sessions view stitch multi-turn conversations back together.
+    answer_parts: list[str] = []
+    with obs.root_span("chat-response", session_id=session_id, tags=["chat"]) as span:
+        obs.set_trace_io(input=query)
 
-    context = _context_block(settings.user_timezone, entries, response_mode)
-    messages = _build_messages(history, last_user_idx, context)
+        cites = Citations()
+        # Same retrieval path as the `search` tool (local + calendar + Drive), so the
+        # up-front context and a manual re-query behave identically. `retrieve` is
+        # resilient — a failing backend degrades to [] rather than sinking the answer.
+        entries = cites.add(await retrieve(session, query))
+        await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
+        await emit("response_mode", {"response_mode": response_mode})
 
-    # Notion's read-only tools only appear when a workspace is connected, so the
-    # model never sees a tool that would just fail with "not connected".
-    tools = CHAT_TOOLS + (NOTION_CHAT_TOOLS if notion_mcp.is_connected(session) else [])
+        context = _context_block(settings.user_timezone, entries, response_mode)
+        messages = _build_messages(history, last_user_idx, context)
 
-    async def on_delta(text: str) -> None:
-        await emit("token", {"text": text})
+        # Optional integrations expose their read-only tools only when connected, so
+        # the model never sees a tool that would just fail with "not connected".
+        tools = list(CHAT_TOOLS)
+        if notion_mcp.is_connected(session):
+            tools += NOTION_CHAT_TOOLS
+        if github.is_connected():
+            tools += GITHUB_CHAT_TOOLS
 
-    for _ in range(settings.search_chat_max_iterations):
-        resp = await stream_chat(
-            messages,
-            settings,
-            system_prompt=CHAT_SYSTEM_PROMPT,
-            tools=tools,
-            on_delta=on_delta,
-        )
-        if not resp.tool_calls:
-            break
-        messages.append(assistant_message(resp))
-        for tc in resp.tool_calls:
-            result_text, trace = await _dispatch(session, cites, tc, settings, emit)
-            await emit("tool_call", trace)
-            messages.append(tool_result_message(tc, result_text))
-    else:
-        # Iterations exhausted while the model was still calling tools — surface
-        # that, then force a final tool-less answer so the user always gets a
-        # response instead of a bubble that just stops after the last tool call.
-        await emit(
-            "tool_call",
-            _trace(
-                "tool_limit",
-                purpose="Reached tool limit",
-                summary=f"Stopped after {settings.search_chat_max_iterations} tool steps.",
-                status="failed",
-            ),
-        )
-        await stream_chat(
-            messages,
-            settings,
-            system_prompt=CHAT_SYSTEM_PROMPT,
-            tools=[],
-            on_delta=on_delta,
-        )
+        async def on_delta(text: str) -> None:
+            answer_parts.append(text)
+            await emit("token", {"text": text})
+
+        for _ in range(settings.search_chat_max_iterations):
+            resp = await stream_chat(
+                messages,
+                settings,
+                system_prompt=CHAT_SYSTEM_PROMPT,
+                tools=tools,
+                on_delta=on_delta,
+                name="chat-turn",
+            )
+            if not resp.tool_calls:
+                break
+            messages.append(assistant_message(resp))
+            for tc in resp.tool_calls:
+                result_text, trace = await _dispatch(session, cites, tc, settings, emit)
+                await emit("tool_call", trace)
+                messages.append(tool_result_message(tc, result_text))
+        else:
+            # Iterations exhausted while the model was still calling tools — surface
+            # that, then force a final tool-less answer so the user always gets a
+            # response instead of a bubble that just stops after the last tool call.
+            await emit(
+                "tool_call",
+                _trace(
+                    "tool_limit",
+                    purpose="Reached tool limit",
+                    summary=f"Stopped after {settings.search_chat_max_iterations} tool steps.",
+                    status="failed",
+                ),
+            )
+            await stream_chat(
+                messages,
+                settings,
+                system_prompt=CHAT_SYSTEM_PROMPT,
+                tools=[],
+                on_delta=on_delta,
+                name="chat-final",
+            )
+
+        answer = "".join(answer_parts)
+        obs.set_trace_io(output=answer)
+        span.update(output=answer)
 
     await emit("done", {})
 
@@ -413,6 +435,15 @@ async def _dispatch(
             ref = str(tin.get("id") or "").strip()
             out = await notion_mcp.notion_fetch(session, ref)
             return out, _trace(name, purpose=f"notion fetch: {ref}"[:80], summary=out)
+
+        if name == "github_search":
+            query = str(tin.get("query") or "").strip()
+            out = await github.search_issues(query)
+            return out, _trace(name, purpose=f"github search: {query}"[:80], summary=out)
+
+        if name == "github_my_work":
+            out = await github.my_work()
+            return out, _trace(name, purpose="github my work", summary=out)
 
         return f"unknown tool: {name}", _trace(name, purpose=name, summary="unknown tool", status="failed")
     except Exception as exc:  # noqa: BLE001 — one bad tool must not kill the chat

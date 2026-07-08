@@ -102,6 +102,7 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
     monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
 
     events: list[tuple[str, dict]] = []
 
@@ -202,6 +203,7 @@ async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
     monkeypatch.setattr(chat_runner, "get_drive_file", fake_get_drive_file)
     monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
 
     events: list[tuple[str, dict]] = []
 
@@ -247,6 +249,7 @@ async def test_notion_tools_exposed_when_connected_and_dispatch(monkeypatch):
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
     monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: True)
     monkeypatch.setattr(chat_runner.notion_mcp, "notion_search", fake_notion_search)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
 
     events: list[tuple[str, dict]] = []
 
@@ -277,11 +280,79 @@ async def test_notion_tools_absent_when_disconnected(monkeypatch):
     monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
     monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
 
     await run_chat(object(), [ChatTurn(role="user", content="hi")], emit=_noop_emit)
 
     assert "notion_search" not in seen["tool_names"]
     assert "notion_fetch" not in seen["tool_names"]
+
+
+@pytest.mark.asyncio
+async def test_github_tools_exposed_when_connected_and_dispatch(monkeypatch):
+    # Connected → github tools offered; the model calls github_search and its
+    # result reaches the next turn. Notion is off to isolate the github path.
+    scripted = [
+        _resp(tool_calls=(ToolCall(id="1", name="github_search", input={"query": "is:open"}),)),
+        _resp(text="You have one open PR."),
+    ]
+    seen = {"tool_names": None, "query": None}
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        seen["tool_names"] = {t["name"] for t in tools}
+        resp = scripted.pop(0)
+        if resp.text:
+            await on_delta(resp.text)
+        return resp
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return []
+
+    async def fake_search_issues(query):
+        seen["query"] = query
+        return "[acme/widgets#7] Fix (issue, open, by me) — https://github.com/acme/widgets/issues/7"
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: True)
+    monkeypatch.setattr(chat_runner.github, "search_issues", fake_search_issues)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="my open github?")], emit=emit)
+
+    assert {"github_search", "github_my_work"} <= seen["tool_names"]
+    assert seen["query"] == "is:open"
+    tool_events = [d for e, d in events if e == "tool_call"]
+    assert tool_events and tool_events[0]["name"] == "github_search"
+    assert tool_events[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_github_tools_absent_when_disconnected(monkeypatch):
+    seen = {"tool_names": set()}
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        seen["tool_names"] = {t["name"] for t in tools}
+        await on_delta("no gh")
+        return _resp(text="no gh")
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return []
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    await run_chat(object(), [ChatTurn(role="user", content="hi")], emit=_noop_emit)
+
+    assert "github_search" not in seen["tool_names"]
+    assert "github_my_work" not in seen["tool_names"]
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from haystack.tools import Tool
 from haystack.utils import Secret
 from haystack_integrations.components.generators.anthropic import AnthropicChatGenerator
 
+from app import observability as obs
 from app.config import Settings
 
 log = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ async def chat(
     system_prompt: str,
     tools: list[dict[str, Any]],
     force_tool: str | None = None,
+    name: str = "llm-call",
 ) -> LLMResponse:
     """Call the configured Haystack chat backend and normalize its response."""
     provider = settings.effective_llm_provider
@@ -117,15 +119,16 @@ async def chat(
     if force_tool:
         generation_kwargs["tool_choice"] = _tool_choice(provider, force_tool)
 
-    result = await generator.run_async(
-        messages=_to_haystack_messages(system_prompt, messages),
-        tools=[_to_haystack_tool(tool) for tool in tools],
+    return await _invoke(
+        generator,
+        system_prompt=system_prompt,
+        messages=messages,
+        tools=tools,
         generation_kwargs=generation_kwargs,
+        provider=provider,
+        model=model,
+        name=name,
     )
-    replies = result.get("replies") or []
-    if not replies:
-        raise RuntimeError("LLM provider returned no replies")
-    return _from_haystack_reply(replies[0], provider=provider, model=model)
 
 
 async def stream_chat(
@@ -136,6 +139,7 @@ async def stream_chat(
     tools: list[dict[str, Any]],
     on_delta: Callable[[str], Awaitable[None]],
     max_tokens: int = 1500,
+    name: str = "llm-call",
 ) -> LLMResponse:
     """Like `chat`, but streams text deltas to `on_delta` as they arrive. The
     provider still assembles the full reply (text + tool calls), which is
@@ -149,16 +153,106 @@ async def stream_chat(
         if chunk.content:
             await on_delta(chunk.content)
 
-    result = await generator.run_async(
-        messages=_to_haystack_messages(system_prompt, messages),
-        tools=[_to_haystack_tool(tool) for tool in tools],
+    return await _invoke(
+        generator,
+        system_prompt=system_prompt,
+        messages=messages,
+        tools=tools,
         generation_kwargs={"max_tokens": max_tokens, "temperature": TEMPERATURE},
+        provider=provider,
+        model=model,
+        name=name,
         streaming_callback=_callback,
     )
-    replies = result.get("replies") or []
-    if not replies:
-        raise RuntimeError("LLM provider returned no replies")
-    return _from_haystack_reply(replies[0], provider=provider, model=model)
+
+
+async def _invoke(
+    generator,
+    *,
+    system_prompt: str,
+    messages: list[LLMMessage],
+    tools: list[dict[str, Any]],
+    generation_kwargs: dict[str, Any],
+    provider: str,
+    model: str,
+    name: str,
+    streaming_callback: Callable[[StreamingChunk], Awaitable[None]] | None = None,
+) -> LLMResponse:
+    """Run one Haystack generation, wrapped in a Langfuse generation observation
+    (a no-op when tracing is disabled). Input is set explicitly to the chat
+    messages only — never the raw settings/kwargs — so API keys can't leak."""
+    run_kwargs: dict[str, Any] = {
+        "messages": _to_haystack_messages(system_prompt, messages),
+        "tools": [_to_haystack_tool(tool) for tool in tools],
+        "generation_kwargs": generation_kwargs,
+    }
+    if streaming_callback is not None:
+        run_kwargs["streaming_callback"] = streaming_callback
+
+    with obs.generation(
+        name,
+        model=model,
+        input=_obs_input(system_prompt, messages),
+        metadata={"provider": provider, "tools": [tool["name"] for tool in tools]},
+    ) as gen:
+        result = await generator.run_async(**run_kwargs)
+        replies = result.get("replies") or []
+        if not replies:
+            raise RuntimeError("LLM provider returned no replies")
+        resp = _from_haystack_reply(replies[0], provider=provider, model=model)
+        gen.update(
+            output=_obs_output(resp),
+            usage_details=_usage_details(resp.usage),
+            metadata={"stop_reason": resp.stop_reason},
+        )
+        return resp
+
+
+def _obs_input(system_prompt: str, messages: list[LLMMessage]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    out.extend(_obs_message(message) for message in messages)
+    return out
+
+
+def _obs_message(message: LLMMessage) -> dict[str, Any]:
+    if message.role == "tool" and message.tool_result is not None:
+        return {
+            "role": "tool",
+            "tool": message.tool_result.tool_call.name,
+            "content": message.tool_result.content,
+        }
+    out: dict[str, Any] = {"role": message.role}
+    if message.text:
+        out["content"] = message.text
+    if message.tool_calls:
+        out["tool_calls"] = [{"name": c.name, "input": c.input} for c in message.tool_calls]
+    return out
+
+
+def _obs_output(response: LLMResponse) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if response.text:
+        out["text"] = response.text
+    if response.tool_calls:
+        out["tool_calls"] = [{"name": c.name, "input": c.input} for c in response.tool_calls]
+    return out
+
+
+def _usage_details(usage: dict[str, Any]) -> dict[str, int]:
+    """Map Haystack/Anthropic token counts onto Langfuse's usage keys (input/
+    output/total) so cost is auto-calculated from the model name."""
+    out: dict[str, int] = {}
+    for src, dst in (
+        ("prompt_tokens", "input"),
+        ("input_tokens", "input"),
+        ("completion_tokens", "output"),
+        ("output_tokens", "output"),
+        ("total_tokens", "total"),
+    ):
+        value = usage.get(src)
+        if isinstance(value, int) and dst not in out:
+            out[dst] = value
+    return out
 
 
 def _build_generator(settings: Settings):

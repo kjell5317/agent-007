@@ -30,6 +30,7 @@ from app.api import (
     tasks,
     webhooks,
 )
+from app import observability
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 from app.services.task import queue as task_queue
@@ -63,11 +64,13 @@ async def _lifespan(_app: FastAPI):
     finally:
         await cron.stop()
         await task_queue.stop()
+        observability.shutdown()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     _configure_logging(settings.log_level)
+    observability.init_langfuse(settings)
     app = FastAPI(
         title="Task Agent",
         version="0.1.0",

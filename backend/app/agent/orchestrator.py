@@ -31,6 +31,7 @@ from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
+from app import observability as obs
 from app.agent.input.runner import run_new_input_agent
 from app.agent.kotx.runner import run_kotx_transition
 from app.agent.retrieval import precedent_query_text, search_raw_inputs
@@ -64,6 +65,31 @@ def _strongest_by_cosine(hits: Iterable[SimilarInput]) -> SimilarInput | None:
 
 
 async def process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
+    """Trace-wrap `_process_raw_input` in one named root span so every LLM call
+    and sub-step of triaging this input groups into a single filterable trace.
+    Same-thread inputs share a Langfuse session via the thread id."""
+    if not obs.enabled():
+        return await _process_raw_input(session, raw_input_id)
+
+    # Cheap: within this session the impl's own `.get` hits the identity map.
+    raw = raw_inputs.get(session, raw_input_id)
+    source = getattr(raw, "source", None)
+    thread_id = (getattr(raw, "source_metadata", None) or {}).get("thread_id") if raw else None
+    with obs.root_span(
+        "input-triage",
+        session_id=str(thread_id) if thread_id else None,
+        tags=[source] if source else None,
+    ) as span:
+        obs.set_trace_io(
+            input={"source": source, "content": (getattr(raw, "content", "") or "")[:2000]}
+        )
+        result = await _process_raw_input(session, raw_input_id)
+        obs.set_trace_io(output=result)
+        span.update(output=result)
+        return result
+
+
+async def _process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
     """Run the agent over one raw input and persist the outcome."""
     raw = raw_inputs.get(session, raw_input_id)
     if raw is None:

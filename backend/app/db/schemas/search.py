@@ -49,6 +49,9 @@ class ChatMessageIn(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessageIn]
+    # Optional: the persisted conversation id. Threaded to Langfuse as the trace
+    # `session_id` so multi-turn conversations group in the Sessions view.
+    conversation_id: str | None = None
 
 
 # --- Persisted conversations (recent-chats list + reload) ---------------------
