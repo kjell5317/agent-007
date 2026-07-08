@@ -48,7 +48,8 @@ from app.db.schemas.search import SearchHit
 from app.db.schemas.task import TaskCreate
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
-from app.services.search.drive import search_drive
+from app.services.search.drive import get_drive_file, search_drive
+from app.services.search.filters import Filters
 from app.services.search.retrieve import retrieve_local
 
 log = logging.getLogger(__name__)
@@ -248,7 +249,16 @@ async def _dispatch(
     try:
         if name == "search":
             q = str(tin.get("query") or "").strip()
-            hits = await retrieve_local(session, q, limit=settings.search_chat_local_limit)
+            filters = Filters(
+                source=(str(tin["source"]).lower() if tin.get("source") else None),
+                label=(str(tin["label"]) if tin.get("label") else None),
+                status=(str(tin["status"]) if tin.get("status") else None),
+                before=(str(tin["before"]) if tin.get("before") else None),
+                after=(str(tin["after"]) if tin.get("after") else None),
+            )
+            hits = await retrieve_local(
+                session, q, limit=settings.search_chat_local_limit, filters=filters
+            )
             new = cites.add(hits)
             if new:
                 await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
@@ -257,6 +267,14 @@ async def _dispatch(
                 f"search results for '{q}':\n{body}",
                 _trace(name, purpose=f"search: {q}", summary=f"{len(new)} new hits"),
             )
+
+        if name == "get_drive_file":
+            out = await get_drive_file(
+                session,
+                str(tin.get("file_id") or ""),
+                max_chars=settings.search_drive_file_max_chars,
+            )
+            return out, _trace(name, purpose="read drive file", summary=out)
 
         if name == "find_calendar_events":
             out = await run_find_calendar_events(

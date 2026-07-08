@@ -445,15 +445,51 @@ CHAT_TOOLS = [
             "Retrieve more from the user's tasks, inbox, notes and calendar by "
             "hybrid semantic + keyword match. The top results for the user's "
             "latest message are ALREADY in context — only call this for a "
-            "follow-up that needs different keywords, or to dig deeper. Returns "
-            "hits with citation tags."
+            "follow-up that needs different keywords, or to dig deeper. Optional "
+            "metadata filters narrow the results. Returns hits with citation tags."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "What to look up."}
+                "query": {"type": "string", "description": "What to look up."},
+                "source": {
+                    "type": "string",
+                    "description": (
+                        "Restrict to one origin: an input source (gmail/slack/…) "
+                        "or a document provider (calendar/drive/…)."
+                    ),
+                },
+                "label": {"type": "string", "description": "Restrict tasks to this label."},
+                "status": {
+                    "type": "string",
+                    "description": "Restrict to a lifecycle status (open/closed/not_task/event).",
+                },
+                "before": {
+                    "type": "string",
+                    "description": "Only items before this date (YYYY-MM-DD, exclusive).",
+                },
+                "after": {
+                    "type": "string",
+                    "description": "Only items on/after this date (YYYY-MM-DD, inclusive).",
+                },
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "get_drive_file",
+        "description": (
+            "Read the text content of a Google Drive file by its id (from a "
+            "[D#] Drive result). Use when the answer needs what's inside the "
+            "file, not just its title. Google Docs/Slides return text, Sheets "
+            "return CSV; binary files (PDF, images) can't be read."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "Drive file id."}
+            },
+            "required": ["file_id"],
         },
     },
     {

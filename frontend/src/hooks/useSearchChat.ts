@@ -1,14 +1,29 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { ChatCitation, ChatMessage, ChatToolTrace } from "@/lib/types";
 
 const HISTORY = 5;
+const STORAGE_KEY = "search-chat-history";
+const STORE_MAX = 40;
 
 interface SearchChat {
   messages: ChatMessage[];
   streaming: boolean;
   send: (text: string) => void;
   reset: () => void;
+}
+
+function loadStored(): ChatMessage[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Clear any spinner left over from a message that was mid-stream on unload.
+    return parsed.map((m: ChatMessage) => ({ ...m, pending: false }));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -18,9 +33,21 @@ interface SearchChat {
  * while one is in flight is ignored; `reset` aborts and clears.
  */
 export function useSearchChat(): SearchChat {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(loadStored);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Persist the conversation so reopening the view shows the last chat. Skip
+  // while streaming — the transient token updates would thrash localStorage;
+  // the final state persists once streaming settles.
+  useEffect(() => {
+    if (streaming) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-STORE_MAX)));
+    } catch {
+      // storage full / unavailable — history just won't persist this session
+    }
+  }, [messages, streaming]);
 
   // Mutate the trailing (assistant) message in place.
   const patchLast = useCallback((patch: (m: ChatMessage) => ChatMessage) => {
@@ -37,6 +64,11 @@ export function useSearchChat(): SearchChat {
     abortRef.current = null;
     setMessages([]);
     setStreaming(false);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
   }, []);
 
   const send = useCallback(

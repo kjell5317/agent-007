@@ -38,12 +38,12 @@ export function App() {
   const tasksActive = view === "tasks";
   const inboxActive = view === "mail";
 
-  // Back / Escape out of the mail or search overlay. Resetting the chat means
-  // re-entering search starts a fresh conversation.
+  // Back / Escape out of the mail or search overlay. The chat conversation is
+  // kept (persisted) so re-opening search shows the last chat; "New chat"
+  // inside the panel clears it.
   const leaveOverlay = useCallback(() => {
     setView("tasks");
-    chat.reset();
-  }, [chat.reset]);
+  }, []);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -333,6 +333,7 @@ export function App() {
             messages={chat.messages}
             streaming={chat.streaming}
             onOpenTask={openTask}
+            onNewChat={chat.reset}
           />
         ) : (
           <TasksPanel
@@ -356,7 +357,12 @@ export function App() {
         />
       )}
       {view === "search" ? (
-        <ChatComposer onSend={chat.send} streaming={chat.streaming} onClose={leaveOverlay} />
+        <ChatComposer
+          onSend={chat.send}
+          streaming={chat.streaming}
+          onClose={leaveOverlay}
+          onOpenTask={openTask}
+        />
       ) : (
         <Composer onCreated={refresh} onOpenTask={openTask} />
       )}

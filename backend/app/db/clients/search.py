@@ -272,9 +272,19 @@ def suggest(
 # Rank Fusion — the same rank-based fusion the precedent/notes/calendar lookups
 # use, generalized across all four corpora. Each corpus contributes its own
 # index-backed top-`pool` (vector or FTS), the two sides are globally re-ranked,
-# then fused; a second pass resolves display fields. `tasks` has no embedding
-# column, so it rides the keyword side only — semantically-close tasks still
-# surface through their linked input hits.
+# then fused; a second pass resolves display fields.
+#
+# What is embedded per corpus (the vector side; same Gemini space):
+#   • raw_inputs — "from: <sender>[ in <channel>]" + subject + body[:1500]
+#     (app.services.input.embedding.candidate_query_text), embedded at ingest.
+#   • notes      — the note text (app.db.clients.notes / notes_lookup.save_notes).
+#   • documents  — provider-specific; calendar = summary + location + description
+#     (app.services.calendar.cache._content).
+#   • tasks      — NOT embedded (no embedding column). Tasks ride the keyword
+#     side only; semantically-close tasks still surface via their linked inputs.
+# The keyword side (FTS) matches each table's generated `tsv`: tasks =
+# title+description+label, raw_inputs = subject+from+channel+content, notes =
+# content, documents = title+snippet+content.
 NOTE = "note"
 
 # Per-corpus id column, used both for the FTS/vector pools and the display fetch.
@@ -296,8 +306,34 @@ _NOTE_DISPLAY = {
 
 _RETRIEVE_POOL = 40
 
+# Optional metadata filters, threaded per corpus. Each is a pass-through when its
+# bind is NULL, so the SQL stays a single constant. `source` maps to an input's
+# source / a document's provider; `label`/`status` are task/input concepts;
+# `before`/`after` bound each corpus's recency anchor.
+_F_INPUT = (
+    " AND char_length(coalesce(r.content,'')) >= :min_input_chars"
+    " AND (:f_source IS NULL OR r.source = :f_source)"
+    " AND (:f_status IS NULL OR r.status = :f_status)"
+    " AND (:f_before IS NULL OR r.received_at < CAST(:f_before AS timestamptz))"
+    " AND (:f_after IS NULL OR r.received_at >= CAST(:f_after AS timestamptz))"
+)
+_F_TASK = (
+    " AND (:f_label IS NULL OR lower(t.label) = lower(:f_label))"
+    " AND (:f_before IS NULL OR t.updated_at < CAST(:f_before AS timestamptz))"
+    " AND (:f_after IS NULL OR t.updated_at >= CAST(:f_after AS timestamptz))"
+)
+_F_NOTE = (
+    " AND (:f_before IS NULL OR n.created_at < CAST(:f_before AS timestamptz))"
+    " AND (:f_after IS NULL OR n.created_at >= CAST(:f_after AS timestamptz))"
+)
+_F_DOC = (
+    " AND (:f_source IS NULL OR d.provider = :f_source)"
+    " AND (:f_before IS NULL OR d.starts_at < CAST(:f_before AS timestamptz))"
+    " AND (:f_after IS NULL OR d.starts_at >= CAST(:f_after AS timestamptz))"
+)
+
 _HYBRID_SQL = text(
-    """
+    f"""
     WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),
     vec AS (
         SELECT id, type, row_number() OVER (ORDER BY dist) AS rnk
@@ -306,17 +342,17 @@ _HYBRID_SQL = text(
                     r.embedding <=> CAST(:emb AS vector) AS dist
                FROM raw_inputs r
               WHERE :emb IS NOT NULL AND r.embedding IS NOT NULL
-                AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'
+                AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'{_F_INPUT}
               ORDER BY r.embedding <=> CAST(:emb AS vector) LIMIT :pool)
             UNION ALL
             (SELECT n.id::text, 'note', n.embedding <=> CAST(:emb AS vector)
                FROM notes n
-              WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL
+              WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL{_F_NOTE}
               ORDER BY n.embedding <=> CAST(:emb AS vector) LIMIT :pool)
             UNION ALL
             (SELECT d.id::text, 'document', d.embedding <=> CAST(:emb AS vector)
                FROM documents d
-              WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'kotx'
+              WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'kotx'{_F_DOC}
               ORDER BY d.embedding <=> CAST(:emb AS vector) LIMIT :pool)
         ) v
         ORDER BY dist LIMIT :pool
@@ -325,20 +361,21 @@ _HYBRID_SQL = text(
         SELECT id, type, row_number() OVER (ORDER BY rank DESC) AS rnk
         FROM (
             (SELECT t.id::text AS id, 'task' AS type, ts_rank_cd(t.tsv, q.tsq) AS rank
-               FROM tasks t, q WHERE q.tsq @@ t.tsv
+               FROM tasks t, q WHERE q.tsq @@ t.tsv{_F_TASK}
               ORDER BY ts_rank_cd(t.tsv, q.tsq) DESC LIMIT :pool)
             UNION ALL
             (SELECT r.id::text, 'input', ts_rank_cd(r.tsv, q.tsq)
                FROM raw_inputs r, q
-              WHERE q.tsq @@ r.tsv AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'
+              WHERE q.tsq @@ r.tsv AND r.processed_at IS NOT NULL
+                AND r.status <> 'duplicate'{_F_INPUT}
               ORDER BY ts_rank_cd(r.tsv, q.tsq) DESC LIMIT :pool)
             UNION ALL
             (SELECT n.id::text, 'note', ts_rank_cd(n.tsv, q.tsq)
-               FROM notes n, q WHERE q.tsq @@ n.tsv
+               FROM notes n, q WHERE q.tsq @@ n.tsv{_F_NOTE}
               ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC LIMIT :pool)
             UNION ALL
             (SELECT d.id::text, 'document', ts_rank_cd(d.tsv, q.tsq)
-               FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'kotx'
+               FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'kotx'{_F_DOC}
               ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC LIMIT :pool)
         ) k
         ORDER BY rank DESC LIMIT :pool
@@ -351,7 +388,15 @@ _HYBRID_SQL = text(
     )
     SELECT type, id, rrf FROM fused ORDER BY rrf DESC LIMIT :k
     """
-).bindparams(bindparam("emb", type_=String()), bindparam("raw_q", type_=String()))
+).bindparams(
+    bindparam("emb", type_=String()),
+    bindparam("raw_q", type_=String()),
+    bindparam("f_source", type_=String()),
+    bindparam("f_label", type_=String()),
+    bindparam("f_status", type_=String()),
+    bindparam("f_before", type_=String()),
+    bindparam("f_after", type_=String()),
+)
 
 
 def _display_branch(corpus: str) -> dict[str, str]:
@@ -395,17 +440,36 @@ def hybrid_search(
     embedding: list[float] | None,
     raw_text: str,
     k: int,
+    min_input_chars: int = 0,
+    source: str | None = None,
+    label: str | None = None,
+    status: str | None = None,
+    before: str | None = None,
+    after: str | None = None,
 ) -> list[SuggestHit]:
     """Top-k hits across tasks / inputs / notes / documents by hybrid similarity
     + keyword (RRF over pgvector and Postgres FTS). `embedding=None` (embeddings
-    unconfigured) degrades to keyword-only. Hits carry the RRF score and come
-    back in fused-rank order."""
+    unconfigured) degrades to keyword-only. Optional metadata filters
+    (`source`/`label`/`status`/`before`/`after`) narrow the pool like the
+    stage-1 filter tokens; inputs under `min_input_chars` are excluded. Hits
+    carry the RRF score and come back in fused-rank order."""
     emb_literal = (
         "[" + ",".join(repr(float(x)) for x in embedding) + "]" if embedding else None
     )
     ranked = session.execute(
         _HYBRID_SQL,
-        {"emb": emb_literal, "raw_q": raw_text or "", "pool": _RETRIEVE_POOL, "k": k},
+        {
+            "emb": emb_literal,
+            "raw_q": raw_text or "",
+            "pool": _RETRIEVE_POOL,
+            "k": k,
+            "min_input_chars": min_input_chars,
+            "f_source": source,
+            "f_label": label,
+            "f_status": status,
+            "f_before": before,
+            "f_after": after,
+        },
     ).all()
     if not ranked:
         return []

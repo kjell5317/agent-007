@@ -1,10 +1,15 @@
+import { ListTodo } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { ChatCitation } from "@/lib/types";
 
 // A small inline renderer for streamed assistant text. Unlike the block-level
-// Markdown component, this keeps citation chips ([T1]) inline mid-sentence and
+// Markdown component, this keeps citation chips ([T1]) and widgets inline, and
 // resolves them to their retrieved hit (open a task, or the source URL).
+//
+// Widgets the model emits (no tool call needed):
+//   • task:{<id>}  → a clickable task card, resolved from the cited hits.
+//   • loc:{<place>} → a Google Maps link.
 
 interface Rule {
   re: RegExp;
@@ -13,12 +18,37 @@ interface Rule {
 
 interface Ctx {
   byTag: Map<string, ChatCitation>;
+  byTaskId: Map<string, ChatCitation>;
   onOpenTask: (taskId: string) => void;
 }
 
+function mapsUrl(place: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
+}
+
 const RULES: Rule[] = [
-  // Markdown link — checked before the citation rule so `[x](url)` never reads
-  // as a citation.
+  {
+    re: /task:\{([^}]+)\}/,
+    render: (m, key, ctx) => <TaskCard key={key} taskId={m[1].trim()} ctx={ctx} />,
+  },
+  {
+    re: /loc:\{([^}]+)\}/,
+    render: (m, key) => {
+      const place = m[1].trim();
+      return (
+        <a
+          key={key}
+          href={mapsUrl(place)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary underline underline-offset-2"
+        >
+          {place}
+        </a>
+      );
+    },
+  },
+  // Markdown link — before the citation rule so `[x](url)` never reads as one.
   {
     re: /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/,
     render: (m, key) => (
@@ -99,6 +129,27 @@ function CitationChip({ tag, ctx }: { tag: string; ctx: Ctx }) {
   );
 }
 
+function TaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
+  const cite = ctx.byTaskId.get(taskId);
+  const title = cite?.title ?? "Open task";
+  const status = cite?.status ?? null;
+  return (
+    <button
+      type="button"
+      onClick={() => ctx.onOpenTask(taskId)}
+      className="my-1 inline-flex max-w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-left align-middle text-sm shadow-sm transition-colors hover:border-primary/40 hover:bg-accent"
+    >
+      <ListTodo className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{title}</span>
+      {status && (
+        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+          {status}
+        </span>
+      )}
+    </button>
+  );
+}
+
 export function AssistantContent({
   content,
   citations,
@@ -108,7 +159,13 @@ export function AssistantContent({
   citations: ChatCitation[];
   onOpenTask: (taskId: string) => void;
 }) {
-  const ctx: Ctx = { byTag: new Map(citations.map((c) => [c.tag, c])), onOpenTask };
+  const byTaskId = new Map<string, ChatCitation>();
+  for (const c of citations) {
+    if (c.type === "task") byTaskId.set(c.id, c);
+    if (c.task_id) byTaskId.set(c.task_id, c);
+  }
+  const ctx: Ctx = { byTag: new Map(citations.map((c) => [c.tag, c])), byTaskId, onOpenTask };
+
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let key = 0;
@@ -139,5 +196,5 @@ export function AssistantContent({
     );
     i++;
   }
-  return <div className="space-y-2 break-words text-sm leading-relaxed">{blocks}</div>;
+  return <div className="space-y-2 break-words text-[15px] leading-relaxed">{blocks}</div>;
 }

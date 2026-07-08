@@ -46,19 +46,22 @@ def test_citations_tagging_dedupes_and_prefixes_by_type():
 
 @pytest.mark.asyncio
 async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
-    # One local hit, no Drive.
-    async def fake_local(session, query, *, limit):
-        return [_hit("task", "abc", "Buy milk", task_id="abc", status="open")]
-
     async def fake_drive(query, *, k, timeout):
         return []
 
-    # The model first calls `search`, then answers citing the new hit.
+    # The model first calls `search` (with metadata filters), then answers.
     scripted = [
-        _resp(tool_calls=(ToolCall(id="1", name="search", input={"query": "groceries"}),)),
+        _resp(
+            tool_calls=(
+                ToolCall(
+                    id="1",
+                    name="search",
+                    input={"query": "groceries", "source": "Gmail", "status": "open"},
+                ),
+            )
+        ),
         _resp(text="You have one open task [T1]."),
     ]
-    search_hits = [_hit("input", "raw1", "Grocery email", task_id=None)]
 
     async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
         resp = scripted.pop(0)
@@ -66,22 +69,19 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
             await on_delta(resp.text)
         return resp
 
-    async def fake_search_tool(session, query, *, limit):
-        return search_hits
-
-    monkeypatch.setattr(chat_runner, "retrieve_local", fake_local)
     monkeypatch.setattr(chat_runner, "_retrieve_drive", fake_drive)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
 
-    # The `search` tool path re-calls retrieve_local; point it at the tool hits
-    # after the initial retrieval has run.
-    calls = {"n": 0}
+    # First call = initial retrieval (no filters); second = the `search` tool,
+    # whose Filters we capture to assert the tool forwards metadata filters.
+    calls: dict = {"n": 0, "tool_filters": None}
 
-    async def local_router(session, query, *, limit):
+    async def local_router(session, query, *, limit, filters=None):
         calls["n"] += 1
-        return await (fake_local if calls["n"] == 1 else fake_search_tool)(
-            session, query, limit=limit
-        )
+        if calls["n"] == 1:
+            return [_hit("task", "abc", "Buy milk", task_id="abc", status="open")]
+        calls["tool_filters"] = filters
+        return [_hit("input", "raw1", "Grocery email", task_id=None)]
 
     monkeypatch.setattr(chat_runner, "retrieve_local", local_router)
 
@@ -106,6 +106,11 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     # The search tool emitted a second citations event with a fresh tag.
     tool_events = [d for e, d in events if e == "tool_call"]
     assert tool_events and tool_events[0]["name"] == "search"
+
+    # Metadata filters were forwarded (source lower-cased, status passed through).
+    assert calls["tool_filters"] is not None
+    assert calls["tool_filters"].source == "gmail"
+    assert calls["tool_filters"].status == "open"
 
     # The answer text was streamed.
     tokens = "".join(d["text"] for e, d in events if e == "token")

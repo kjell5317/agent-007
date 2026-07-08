@@ -11,20 +11,38 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.clients import search as search_client
 from app.db.schemas.search import SearchHit
 from app.services.input.embedding import embed
+from app.services.search.filters import Filters
 from app.services.source_url import source_url_for_raw_input
 
 
-async def retrieve_local(session: Session, query: str, *, limit: int) -> list[SearchHit]:
+async def retrieve_local(
+    session: Session, query: str, *, limit: int, filters: Filters | None = None
+) -> list[SearchHit]:
     """Top hits across tasks / inputs / notes / documents by hybrid similarity +
-    keyword. Embeddings unconfigured → keyword-only (embed returns None)."""
+    keyword. Embeddings unconfigured → keyword-only (embed returns None). Inputs
+    shorter than `search_min_input_chars` are excluded; `filters` narrows by
+    source/label/status/date like the stage-1 filter tokens."""
     query = (query or "").strip()
     if not query:
         return []
+    filters = filters or Filters()
     embedding = await embed(query)
-    raw = search_client.hybrid_search(session, embedding=embedding, raw_text=query, k=limit)
+    raw = search_client.hybrid_search(
+        session,
+        embedding=embedding,
+        raw_text=query,
+        k=limit,
+        min_input_chars=get_settings().search_min_input_chars,
+        source=filters.source,
+        label=filters.label,
+        status=filters.status,
+        before=filters.before,
+        after=filters.after,
+    )
     hits = [SearchHit.build(h) for h in raw]
     _attach_input_source_urls(session, hits)
     return hits

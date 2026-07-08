@@ -47,6 +47,36 @@ class DriveClient:
             resp.raise_for_status()
             return resp.json().get("files", [])
 
+    async def file_text(self, file_id: str, *, max_chars: int) -> str:
+        """Plain-text content of a Drive file. Google-native docs are exported
+        (Docs/Slides → text, Sheets → CSV); text/* files are read directly;
+        anything else (PDF, images, binaries) can't be extracted here."""
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            meta = await client.get(
+                f"{_BASE}/{file_id}", params={"fields": "id,name,mimeType,webViewLink"}
+            )
+            meta.raise_for_status()
+            info = meta.json()
+            mime = info.get("mimeType") or ""
+            name = info.get("name") or file_id
+
+            if mime.startswith("application/vnd.google-apps."):
+                export_mime = "text/csv" if "spreadsheet" in mime else "text/plain"
+                resp = await client.get(
+                    f"{_BASE}/{file_id}/export", params={"mimeType": export_mime}
+                )
+            elif mime.startswith("text/") or mime in ("application/json", "application/xml"):
+                resp = await client.get(f"{_BASE}/{file_id}", params={"alt": "media"})
+            else:
+                link = info.get("webViewLink") or ""
+                return f"'{name}' is a {mime} file; text can't be extracted. Open it: {link}"
+
+            resp.raise_for_status()
+            body = resp.text
+            clipped = body[:max_chars]
+            suffix = "\n…(truncated)" if len(body) > max_chars else ""
+            return f"'{name}':\n{clipped}{suffix}"
+
 
 def _escape(query: str) -> str:
     """Escape a term for a Drive `q` string literal (single-quoted)."""
@@ -70,6 +100,20 @@ async def _search(session: Session, query: str, k: int) -> list[SearchHit]:
     token = await get_fresh_google_token(session)
     files = await DriveClient(token.access_token).search(query, limit=k)
     return [_to_hit(f) for f in files]
+
+
+async def get_drive_file(session: Session, file_id: str, *, max_chars: int) -> str:
+    """Text content of one Drive file for the agent. Friendly message (never an
+    exception) on a bad id, missing grant, or unextractable type."""
+    file_id = (file_id or "").strip()
+    if not file_id:
+        return "get_drive_file: a `file_id` is required."
+    try:
+        token = await get_fresh_google_token(session)
+        return await DriveClient(token.access_token).file_text(file_id, max_chars=max_chars)
+    except (GoogleTokenError, httpx.HTTPError) as exc:
+        log.info("get_drive_file failed · %s: %s", type(exc).__name__, exc)
+        return f"get_drive_file: couldn't read that file ({type(exc).__name__})."
 
 
 def _to_hit(f: dict) -> SearchHit:

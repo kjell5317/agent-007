@@ -107,6 +107,22 @@ they land (no SSE needed).
   cache semantically ("Team offsite" matches "Offsite planning").
 - be careful to don't create too many embeddings calls.
 
+### What is embedded per table
+
+The vector side of every hybrid lookup shares one Gemini space. Embedded text by
+table (keyword/FTS side in parentheses — the generated `tsv` column):
+
+| Table | Embedded text (vector) | FTS `tsv` (keyword) |
+|---|---|---|
+| `raw_inputs` | `from: <sender>[ in <channel>]` + `subject` + `body[:1500]` (`services/input/embedding.candidate_query_text`) | subject + from + channel + content |
+| `notes` | the note `content` | content |
+| `documents` (calendar) | `summary` + `location` + `description` (`services/calendar/cache._content`) | title + snippet + content |
+| `tasks` | **not embedded** — no embedding column | title + description + label |
+
+So `tasks` participate keyword-only; a semantically-close task still surfaces via
+its linked input hits. Chat retrieval also drops inputs shorter than
+`SEARCH_MIN_INPUT_CHARS` (bare "ok"/empty replies) as a metadata-style filter.
+
 ## Stage 3 — chat / "ask" mode
 
 Separate affordance from the search box. An agent loop (same runner
