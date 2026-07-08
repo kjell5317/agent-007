@@ -27,6 +27,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.agent import process_raw_input
+from app.config import get_settings
 from app.db.clients import raw_inputs
 from app.db.models.raw_input import RawInput
 from app.db.schemas.raw_input import RawInputCreate
@@ -35,6 +36,15 @@ from app.services.input.embedding import candidate_query_text, embed
 from app.services.notify import notify_error
 
 log = logging.getLogger(__name__)
+
+
+def _below_min_chars(envelope: RawInputCreate) -> bool:
+    """Whether an envelope's cleaned content is below the noise floor and should
+    be dropped at ingestion. kotx transitions are short + structured and handled
+    deterministically, so the floor never applies to them."""
+    if envelope.source == "kotx":
+        return False
+    return len((envelope.content or "").strip()) < get_settings().min_input_chars
 
 
 async def drain(source, session: Session) -> dict:
@@ -66,6 +76,19 @@ async def drain(source, session: Session) -> dict:
                 envelope.external_id,
                 f" subject={subject!r}" if subject else "",
             )
+
+            # Drop noise below the character floor before it's ever persisted,
+            # embedded, or shown to the agent — the cleaned content is what the
+            # preprocessors already produced.
+            if _below_min_chars(envelope):
+                summary["skipped"] += 1
+                log.debug(
+                    "skip · below min chars · %s external_id=%s len=%d",
+                    envelope.source,
+                    envelope.external_id,
+                    len((envelope.content or "").strip()),
+                )
+                continue
 
             raw = await create_raw_input(session, envelope)
 

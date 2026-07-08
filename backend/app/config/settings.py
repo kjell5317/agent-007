@@ -77,9 +77,12 @@ class Settings(BaseSettings):
     search_drive_timeout_seconds: float = 4.0
     search_chat_max_iterations: int = 4
     search_chat_history_messages: int = 5
-    # Inputs shorter than this (chars) are noise (bare "ok", empty replies) and
-    # are excluded from chat retrieval like a metadata filter.
-    search_min_input_chars: int = 20
+    # Inputs whose cleaned content is shorter than this (chars) are noise (bare
+    # "ok", "thanks", empty replies). They're skipped entirely at ingestion (the
+    # preprocessing boundary in `input.create.drain`, kotx excepted) so they're
+    # never stored or run through the agent, and the chat retrieval applies the
+    # same floor as a defensive filter.
+    min_input_chars: int = 20
     # Cap on Drive file text handed to the model by `get_drive_file`.
     search_drive_file_max_chars: int = 6000
 

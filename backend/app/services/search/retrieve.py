@@ -59,7 +59,7 @@ async def retrieve(
             embedding=embedding,
             raw_text=query,
             k=settings.search_chat_local_limit,
-            min_input_chars=settings.search_min_input_chars,
+            min_input_chars=settings.min_input_chars,
             source=source,
             label=filters.label,
             status=filters.status,
