@@ -1,4 +1,11 @@
-import type { Label, RawInput, SearchHit, Task } from "./types";
+import type {
+  ChatCitation,
+  ChatToolTrace,
+  Label,
+  RawInput,
+  SearchHit,
+  Task,
+} from "./types";
 
 class ApiError extends Error {
   status: number;
@@ -116,6 +123,8 @@ export const api = {
       `/search/suggest?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
 
+  chatStream,
+
   listLabels: () => request<Label[]>("/labels"),
 
   getPoints: () => request<{ total: number }>("/points"),
@@ -139,6 +148,80 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 };
+
+export interface ChatStreamHandlers {
+  onCitations: (items: ChatCitation[]) => void;
+  onToken: (text: string) => void;
+  onTool: (trace: ChatToolTrace) => void;
+  onError: (message: string) => void;
+}
+
+// POST the conversation and consume the SSE response (`citations` / `token` /
+// `tool_call` / `error` / `done`). EventSource is GET-only, so we read the
+// body stream ourselves. Resolves when the stream ends (or aborts).
+async function chatStream(
+  messages: { role: string; content: string }[],
+  signal: AbortSignal,
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  const res = await fetch("/search/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new ApiError(res.status, res.statusText, await res.text().catch(() => null));
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line; process each complete one.
+    for (;;) {
+      const sep = /\r?\n\r?\n/.exec(buffer);
+      if (!sep) break;
+      const frame = buffer.slice(0, sep.index);
+      buffer = buffer.slice(sep.index + sep[0].length);
+      dispatchFrame(frame, handlers);
+    }
+  }
+}
+
+function dispatchFrame(frame: string, h: ChatStreamHandlers): void {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith(":")) continue; // comment / keep-alive ping
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+  }
+  if (dataLines.length === 0) return;
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(dataLines.join("\n"));
+  } catch {
+    return;
+  }
+  switch (event) {
+    case "citations":
+      h.onCitations((data.items as ChatCitation[]) ?? []);
+      break;
+    case "token":
+      h.onToken((data.text as string) ?? "");
+      break;
+    case "tool_call":
+      h.onTool(data as unknown as ChatToolTrace);
+      break;
+    case "error":
+      h.onError((data.message as string) ?? "Something went wrong");
+      break;
+    // "done" needs no payload handling — the stream simply ends after it.
+  }
+}
 
 export interface AppSettings {
   auto_poll_enabled: boolean;

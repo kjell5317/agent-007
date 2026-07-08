@@ -7,6 +7,7 @@ The DB-facing UNION SQL is in `app.db.clients.search`.
 """
 
 from app.services.search.filters import Filters, build_tsquery, corpus_restriction, parse_query
+from app.services.search.retrieve import retrieve_local
 from app.services.search.suggest import run_suggest
 
 __all__ = [
@@ -14,5 +15,6 @@ __all__ = [
     "build_tsquery",
     "corpus_restriction",
     "parse_query",
+    "retrieve_local",
     "run_suggest",
 ]

@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
-import { SearchBar } from "@/components/search/SearchBar";
-import { SearchPanel } from "@/components/search/SearchPanel";
+import { ChatComposer } from "@/components/search/ChatComposer";
+import { ChatPanel } from "@/components/search/ChatPanel";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
 import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
+import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
 import { clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
@@ -19,7 +20,7 @@ export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
   const [view, setView] = useState<"tasks" | "mail" | "search">("tasks");
-  const [searchQuery, setSearchQuery] = useState("");
+  const chat = useSearchChat();
   const mailOpen = view === "mail";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
@@ -37,13 +38,12 @@ export function App() {
   const tasksActive = view === "tasks";
   const inboxActive = view === "mail";
 
-  // Back / Escape / result-click out of the mail or search overlay. Clearing
-  // the query means re-entering search starts fresh rather than re-streaming
-  // the last one.
+  // Back / Escape out of the mail or search overlay. Resetting the chat means
+  // re-entering search starts a fresh conversation.
   const leaveOverlay = useCallback(() => {
     setView("tasks");
-    setSearchQuery("");
-  }, []);
+    chat.reset();
+  }, [chat.reset]);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -329,7 +329,11 @@ export function App() {
             onOpenTask={openTask}
           />
         ) : view === "search" ? (
-          <SearchPanel query={searchQuery} onOpenTask={openTask} />
+          <ChatPanel
+            messages={chat.messages}
+            streaming={chat.streaming}
+            onOpenTask={openTask}
+          />
         ) : (
           <TasksPanel
             tasks={tasks}
@@ -352,7 +356,7 @@ export function App() {
         />
       )}
       {view === "search" ? (
-        <SearchBar value={searchQuery} onChange={setSearchQuery} onClose={leaveOverlay} />
+        <ChatComposer onSend={chat.send} streaming={chat.streaming} onClose={leaveOverlay} />
       ) : (
         <Composer onCreated={refresh} onOpenTask={openTask} />
       )}

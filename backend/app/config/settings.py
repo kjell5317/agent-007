@@ -67,6 +67,17 @@ class Settings(BaseSettings):
     # on backspace/retype, so even a few seconds spares the DB per keystroke.
     search_suggest_cache_ttl_seconds: float = 90.0
 
+    # Chat / "ask" mode (stage 2+3). Retrieval-first: each turn injects the top
+    # hybrid hits (local + Drive) into the LLM context. `history_messages` caps
+    # how many prior turns travel with the request; `max_iterations` bounds the
+    # tool loop before a final answer; `drive_timeout` is the per-request Drive
+    # federation budget (past it, Drive results are dropped, never blocking).
+    search_chat_local_limit: int = 12
+    search_chat_drive_limit: int = 5
+    search_drive_timeout_seconds: float = 4.0
+    search_chat_max_iterations: int = 4
+    search_chat_history_messages: int = 5
+
     # Calendar semantic lookup (`find_calendar_events` query mode): how many
     # nearest cached events to return, and the minimum cosine similarity a match
     # must clear. Raise the floor for stricter dedup (fewer, more certain hits);

@@ -63,6 +63,40 @@ export interface SearchHit {
   score: number;
 }
 
+// Chat / "ask" mode. A citation is a retrieved hit the answer can reference by
+// its `tag` (e.g. "T1"); `type` widens SearchHitType with "drive".
+export interface ChatCitation {
+  tag: string;
+  type: string;
+  id: string;
+  title: string;
+  snippet: string | null;
+  url: string | null;
+  task_id: string | null;
+  source: string | null;
+  sender: string | null;
+  status: string | null;
+  ts: string | null;
+}
+
+export interface ChatToolTrace {
+  name: string;
+  status: "success" | "failed";
+  purpose: string;
+  result_summary: string;
+  changed_state: boolean;
+  artifact_refs: string[];
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  citations: ChatCitation[];
+  tools: ChatToolTrace[];
+  // Assistant message still streaming (spinner until the first token lands).
+  pending: boolean;
+}
+
 export interface RawInput {
   id: string;
   source: string;

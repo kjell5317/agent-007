@@ -26,6 +26,7 @@ from app.db.clients import documents as documents_store
 from app.services.calendar.events import (
     PROP_KIND,
     create_event,
+    delete_event,
     get_event,
     is_commute_event,
     is_managed_event,
@@ -247,6 +248,37 @@ async def run_update_event(
         ),
         updated.id,
     )
+
+
+async def run_delete_event(session: Session, *, event_id: str) -> tuple[str, str | None]:
+    """Delete a non-managed event; return (message_for_llm, deleted_event_id_or_None).
+    Task/commute events are planner-managed and refused, mirroring `run_update_event`."""
+    settings = get_settings()
+    calendar_id = (settings.google_calendar_id or "").strip()
+    if not calendar_id:
+        return "delete_event: no calendar configured — nothing deleted.", None
+
+    event_id = (event_id or "").strip()
+    if not event_id or any(ch.isspace() for ch in event_id) or "/" in event_id:
+        return "delete_event: `event_id` must be a valid calendar event id.", None
+
+    existing = await get_event(session, calendar_id=calendar_id, event_id=event_id)
+    if is_managed_event(existing):
+        kind = (
+            "task"
+            if is_task_event(existing)
+            else "commute"
+            if is_commute_event(existing)
+            else "managed"
+        )
+        return (
+            f"delete_event: {kind} calendar events are managed by the task planner; "
+            "use `update_task` to close a task instead.",
+            None,
+        )
+
+    await delete_event(session, calendar_id=calendar_id, event_id=event_id)
+    return f"delete_event: deleted '{existing.summary}'.", event_id
 
 
 def _parse_optional_datetime(value: str | None, tz: ZoneInfo) -> datetime | bool | None:

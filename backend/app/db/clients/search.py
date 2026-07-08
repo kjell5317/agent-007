@@ -263,3 +263,163 @@ def suggest(
         )
         for r in rows
     ]
+
+
+# --- Stage 2: cross-corpus hybrid retrieval (RRF) -----------------------------
+#
+# Unlike stage-1 suggest (a prefix-tsquery UNION for typeahead), stage-2 fuses a
+# pgvector nearest-neighbour ranking with a Postgres FTS ranking via Reciprocal
+# Rank Fusion — the same rank-based fusion the precedent/notes/calendar lookups
+# use, generalized across all four corpora. Each corpus contributes its own
+# index-backed top-`pool` (vector or FTS), the two sides are globally re-ranked,
+# then fused; a second pass resolves display fields. `tasks` has no embedding
+# column, so it rides the keyword side only — semantically-close tasks still
+# surface through their linked input hits.
+NOTE = "note"
+
+# Per-corpus id column, used both for the FTS/vector pools and the display fetch.
+_ID_COL = {TASK: "t.id", INPUT: "r.id", NOTE: "n.id", DOCUMENT: "d.id"}
+
+# Display branch for notes (not part of the stage-1 UNION — notes aren't
+# navigable there). Task link comes from the source input when it has one.
+_NOTE_DISPLAY = {
+    "from": "notes n LEFT JOIN raw_inputs nr ON nr.id = n.source_raw_input_id",
+    "ts": "n.created_at",
+    "select": (
+        "'note' AS type, n.id::text AS id, "
+        "left(coalesce(n.content,''), 80) AS title, "
+        "left(coalesce(n.content,''), 240) AS snippet, NULL::text AS url, "
+        "nr.task_id::text AS task_id, 'note'::text AS source, "
+        "nr.source_metadata->>'from' AS sender, 'note'::text AS status"
+    ),
+}
+
+_RETRIEVE_POOL = 40
+
+_HYBRID_SQL = text(
+    """
+    WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),
+    vec AS (
+        SELECT id, type, row_number() OVER (ORDER BY dist) AS rnk
+        FROM (
+            (SELECT r.id::text AS id, 'input' AS type,
+                    r.embedding <=> CAST(:emb AS vector) AS dist
+               FROM raw_inputs r
+              WHERE :emb IS NOT NULL AND r.embedding IS NOT NULL
+                AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'
+              ORDER BY r.embedding <=> CAST(:emb AS vector) LIMIT :pool)
+            UNION ALL
+            (SELECT n.id::text, 'note', n.embedding <=> CAST(:emb AS vector)
+               FROM notes n
+              WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL
+              ORDER BY n.embedding <=> CAST(:emb AS vector) LIMIT :pool)
+            UNION ALL
+            (SELECT d.id::text, 'document', d.embedding <=> CAST(:emb AS vector)
+               FROM documents d
+              WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'kotx'
+              ORDER BY d.embedding <=> CAST(:emb AS vector) LIMIT :pool)
+        ) v
+        ORDER BY dist LIMIT :pool
+    ),
+    kw AS (
+        SELECT id, type, row_number() OVER (ORDER BY rank DESC) AS rnk
+        FROM (
+            (SELECT t.id::text AS id, 'task' AS type, ts_rank_cd(t.tsv, q.tsq) AS rank
+               FROM tasks t, q WHERE q.tsq @@ t.tsv
+              ORDER BY ts_rank_cd(t.tsv, q.tsq) DESC LIMIT :pool)
+            UNION ALL
+            (SELECT r.id::text, 'input', ts_rank_cd(r.tsv, q.tsq)
+               FROM raw_inputs r, q
+              WHERE q.tsq @@ r.tsv AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'
+              ORDER BY ts_rank_cd(r.tsv, q.tsq) DESC LIMIT :pool)
+            UNION ALL
+            (SELECT n.id::text, 'note', ts_rank_cd(n.tsv, q.tsq)
+               FROM notes n, q WHERE q.tsq @@ n.tsv
+              ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC LIMIT :pool)
+            UNION ALL
+            (SELECT d.id::text, 'document', ts_rank_cd(d.tsv, q.tsq)
+               FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'kotx'
+              ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC LIMIT :pool)
+        ) k
+        ORDER BY rank DESC LIMIT :pool
+    ),
+    fused AS (
+        SELECT coalesce(vec.id, kw.id) AS id, coalesce(vec.type, kw.type) AS type,
+               coalesce(1.0 / (60 + vec.rnk), 0.0)
+                 + coalesce(1.0 / (60 + kw.rnk), 0.0) AS rrf
+        FROM vec FULL OUTER JOIN kw ON vec.id = kw.id AND vec.type = kw.type
+    )
+    SELECT type, id, rrf FROM fused ORDER BY rrf DESC LIMIT :k
+    """
+).bindparams(bindparam("emb", type_=String()), bindparam("raw_q", type_=String()))
+
+
+def _display_branch(corpus: str) -> dict[str, str]:
+    if corpus == NOTE:
+        return _NOTE_DISPLAY
+    return _BRANCHES[corpus]
+
+
+def _load_display(session: Session, corpus: str, ids: list[str]) -> list[SuggestHit]:
+    """Resolve display fields for the winning ids of one corpus, reusing the
+    stage-1 select fragments so a hit reads identically to a suggest row."""
+    b = _display_branch(corpus)
+    sql = text(
+        f"SELECT type, id, title, snippet, url, task_id, source, sender, status, ts FROM ("
+        f"SELECT {b['select']}, {b['ts']} AS ts FROM {b['from']} "
+        f"WHERE {_ID_COL[corpus]}::text = ANY(:ids)"
+        f") x"
+    )
+    rows = session.execute(sql, {"ids": ids}).all()
+    return [
+        SuggestHit(
+            type=r.type,
+            id=r.id,
+            title=r.title or "",
+            snippet=r.snippet,
+            url=r.url,
+            task_id=r.task_id,
+            source=r.source,
+            sender=r.sender,
+            status=r.status,
+            ts=r.ts,
+            score=0.0,
+        )
+        for r in rows
+    ]
+
+
+def hybrid_search(
+    session: Session,
+    *,
+    embedding: list[float] | None,
+    raw_text: str,
+    k: int,
+) -> list[SuggestHit]:
+    """Top-k hits across tasks / inputs / notes / documents by hybrid similarity
+    + keyword (RRF over pgvector and Postgres FTS). `embedding=None` (embeddings
+    unconfigured) degrades to keyword-only. Hits carry the RRF score and come
+    back in fused-rank order."""
+    emb_literal = (
+        "[" + ",".join(repr(float(x)) for x in embedding) + "]" if embedding else None
+    )
+    ranked = session.execute(
+        _HYBRID_SQL,
+        {"emb": emb_literal, "raw_q": raw_text or "", "pool": _RETRIEVE_POOL, "k": k},
+    ).all()
+    if not ranked:
+        return []
+
+    order = {(r.type, r.id): i for i, r in enumerate(ranked)}
+    rrf = {(r.type, r.id): float(r.rrf) for r in ranked}
+    ids_by_type: dict[str, list[str]] = {}
+    for r in ranked:
+        ids_by_type.setdefault(r.type, []).append(r.id)
+
+    hits: list[SuggestHit] = []
+    for corpus, ids in ids_by_type.items():
+        for hit in _load_display(session, corpus, ids):
+            hit.score = rrf[(corpus, hit.id)]
+            hits.append(hit)
+    hits.sort(key=lambda h: order[(h.type, h.id)])
+    return hits

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -39,3 +40,12 @@ class SearchHit(BaseModel):
 
 class SuggestResponse(BaseModel):
     hits: list[SearchHit]
+
+
+class ChatMessageIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessageIn]

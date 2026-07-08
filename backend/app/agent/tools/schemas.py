@@ -400,3 +400,161 @@ THREAD_FOLLOWUP_TOOLS = [
         },
     },
 ]
+
+
+# --- Chat / "ask" mode --------------------------------------------------------
+#
+# The chat agent answers questions over the user's tasks/inbox/notes/calendar/
+# Drive (retrieved hits are injected up front) and can act on any of them. Unlike
+# the input flows there is no terminal tool — the runner loops until the model
+# stops calling tools and returns a final answer. `search` is the multi-query
+# fallback for when the injected context misses.
+
+# Chat create_task: `label` optional (the user rarely names one; the agent may
+# pick a fitting one). `notes` is dropped — chat has a dedicated `create_note`.
+_CHAT_CREATE_TASK_PROPS = {
+    k: v for k, v in _CREATE_TASK_PROPS.items() if k not in ("notes", "label")
+}
+if _update_label:
+    _CHAT_CREATE_TASK_PROPS["label"] = _update_label
+
+_CHAT_UPDATE_TASK_PROPS = {
+    "task_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Id of the task to change — from the retrieved results.",
+    },
+    **{k: v for k, v in _UPDATE_TASK_PROPS.items() if k != "notes"},
+}
+
+_EVENT_TIME_PROPS = {
+    "summary": {"type": "string", "description": "Event title."},
+    "start": {
+        "type": "string",
+        "description": "ISO 8601 start. Use the user's local zone unless another is named.",
+    },
+    "end": {"type": "string", "description": "ISO 8601 end. Must be after start."},
+    "description": {"type": "string"},
+    "location": {"type": "string"},
+}
+
+CHAT_TOOLS = [
+    {
+        "name": "search",
+        "description": (
+            "Retrieve more from the user's tasks, inbox, notes and calendar by "
+            "hybrid semantic + keyword match. The top results for the user's "
+            "latest message are ALREADY in context — only call this for a "
+            "follow-up that needs different keywords, or to dig deeper. Returns "
+            "hits with citation tags."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look up."}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "find_calendar_events",
+        "description": (
+            "Find events on the user's calendar by meaning (`query`) and/or a "
+            "`time_min`/`time_max` window. Call before `update_event`/"
+            "`delete_event` to get the `event_id`, or before `create_event` to "
+            "avoid duplicates."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "time_min": {"type": "string", "description": "ISO 8601 window start."},
+                "time_max": {"type": "string", "description": "ISO 8601 window end."},
+            },
+        },
+    },
+    {
+        "name": "create_task",
+        "description": "Create a new task for the user.",
+        "parameters": {
+            "type": "object",
+            "properties": _CHAT_CREATE_TASK_PROPS,
+            "required": ["title", "estimation", "due_date"],
+        },
+    },
+    {
+        "name": "update_task",
+        "description": (
+            "Edit a task and/or drive its lifecycle: set `status=closed` to close "
+            "(open/close a task) or `status=open` to reopen a closed one. Include "
+            "only the fields that change. When reopening a task whose due_date is "
+            "in the past, set a new future due_date."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": _CHAT_UPDATE_TASK_PROPS,
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "create_event",
+        "description": (
+            "Add an event to the user's primary calendar. Check "
+            "`find_calendar_events` first to avoid duplicating one."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": _EVENT_TIME_PROPS,
+            "required": ["summary", "start"],
+        },
+    },
+    {
+        "name": "update_event",
+        "description": (
+            "Patch an existing non-managed calendar event. Use `update_task` for "
+            "task-related changes. Pass the `event_id` from `find_calendar_events`."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                **{k: v for k, v in _EVENT_TIME_PROPS.items() if k != "summary"},
+                "summary": {"type": "string", "description": "Updated event title."},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
+        "name": "delete_event",
+        "description": (
+            "Delete (close) a non-managed calendar event. Task and commute events "
+            "are managed by the planner and cannot be deleted here — use "
+            "`update_task` to close a task. Pass the `event_id` from "
+            "`find_calendar_events`."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"event_id": {"type": "string"}},
+            "required": ["event_id"],
+        },
+    },
+    {
+        "name": "create_note",
+        "description": (
+            "Save a short, self-contained fact to long-term memory (someone's "
+            "role, an account number, a policy, a recurring context). Future "
+            "agent runs retrieve these. Use when the user asks you to remember "
+            "something."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The fact to remember; must stand on its own.",
+                }
+            },
+            "required": ["content"],
+        },
+    },
+]

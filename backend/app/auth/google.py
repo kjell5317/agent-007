@@ -28,6 +28,8 @@ DEFAULT_SCOPES = [
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+    # Drive read-only powers the chat/search federated Drive lookup.
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
 # The Google Health API refuses any token that also carries non-health scopes,

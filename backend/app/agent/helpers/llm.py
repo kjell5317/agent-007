@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal
+
+from haystack.dataclasses import StreamingChunk
 
 from haystack.dataclasses import ChatMessage, ToolCall as HaystackToolCall
 from haystack.tools import Tool
@@ -118,6 +121,39 @@ async def chat(
         messages=_to_haystack_messages(system_prompt, messages),
         tools=[_to_haystack_tool(tool) for tool in tools],
         generation_kwargs=generation_kwargs,
+    )
+    replies = result.get("replies") or []
+    if not replies:
+        raise RuntimeError("LLM provider returned no replies")
+    return _from_haystack_reply(replies[0], provider=provider, model=model)
+
+
+async def stream_chat(
+    messages: list[LLMMessage],
+    settings: Settings,
+    *,
+    system_prompt: str,
+    tools: list[dict[str, Any]],
+    on_delta: Callable[[str], Awaitable[None]],
+    max_tokens: int = 1500,
+) -> LLMResponse:
+    """Like `chat`, but streams text deltas to `on_delta` as they arrive. The
+    provider still assembles the full reply (text + tool calls), which is
+    normalized and returned once the stream completes — so the tool loop reads
+    tool calls exactly as in the non-streaming path."""
+    provider = settings.effective_llm_provider
+    model = settings.effective_llm_model
+    generator = _build_generator(settings)
+
+    async def _callback(chunk: StreamingChunk) -> None:
+        if chunk.content:
+            await on_delta(chunk.content)
+
+    result = await generator.run_async(
+        messages=_to_haystack_messages(system_prompt, messages),
+        tools=[_to_haystack_tool(tool) for tool in tools],
+        generation_kwargs={"max_tokens": max_tokens, "temperature": TEMPERATURE},
+        streaming_callback=_callback,
     )
     replies = result.get("replies") or []
     if not replies:
