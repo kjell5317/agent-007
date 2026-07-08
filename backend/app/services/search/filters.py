@@ -38,7 +38,7 @@ _STATUS_ALIASES = {
 _TASK = "task"
 _INPUT = "input"
 _DOCUMENT = "document"
-ALL_CORPORA = frozenset({_TASK, "note", _INPUT, _DOCUMENT})
+ALL_CORPORA = frozenset({_TASK, _INPUT, _DOCUMENT})
 
 
 @dataclass(frozen=True)

@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { CalendarDays, FileText, Inbox, ListTodo, StickyNote } from "lucide-react";
 import { toast } from "sonner";
+import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import type { SearchHit, SearchHitType } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 interface Props {
   onCreated: () => Promise<void> | void;
@@ -20,23 +19,12 @@ const SUGGEST_DEBOUNCE_MS = 150;
 // excluded server-side (their task already shows), so keep to these three.
 const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "input", "document"]);
 
-const TYPE_ICON: Record<SearchHitType, typeof Inbox> = {
-  task: ListTodo,
-  input: Inbox,
-  note: StickyNote,
-  document: FileText,
-};
-
-function hitIcon(hit: SearchHit) {
-  if (hit.type === "document" && hit.source === "calendar") return CalendarDays;
-  return TYPE_ICON[hit.type];
-}
-
 export function Composer({ onCreated, onOpenTask }: Props) {
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [suggestions, setSuggestions] = useState<SearchHit[]>([]);
   const [dismissed, setDismissed] = useState(false);
+  const listRef = useRef<HTMLUListElement>(null);
   // Stop in-flight polls when the component unmounts.
   const activePolls = useRef<Set<PollHandle>>(new Set());
 
@@ -74,11 +62,12 @@ export function Composer({ onCreated, onOpenTask }: Props) {
 
   const showSuggestions = !dismissed && value.trim().length >= 1 && suggestions.length > 0;
 
-  const openHit = (hit: SearchHit) => {
-    setDismissed(true);
-    if (hit.task_id) onOpenTask(hit.task_id);
-    else if (hit.url) window.open(hit.url, "_blank", "noopener,noreferrer");
-  };
+  // Best result sits at the bottom (nearest the input); keep it in view when
+  // the list overflows and has to scroll.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [suggestions, showSuggestions]);
 
   const trackPoll = (rawInputId: string, toastId: string | number) => {
     let handle: PollHandle | null = null;
@@ -126,56 +115,41 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     <div className="fixed inset-x-0 bottom-0 z-40">
       {showSuggestions && (
         <div className="mx-auto max-w-2xl px-3">
+          {/* Elevated panel so the suggestions read as a distinct surface
+              floating above the task list; cards inside are separated by gaps. */}
           <ul
-            className="mb-2 max-h-[45dvh] overflow-y-auto overscroll-contain rounded-xl border bg-card shadow-lg"
+            ref={listRef}
+            className="mb-2 max-h-[45dvh] space-y-1.5 overflow-y-auto overscroll-contain rounded-2xl border bg-background/95 p-2 shadow-2xl backdrop-blur"
             role="listbox"
           >
-            {suggestions.map((hit) => {
-              const Icon = hitIcon(hit);
-              return (
-                <li key={`${hit.type}:${hit.id}`}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={false}
-                    // Fire before the input's blur so the click isn't lost.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => openHit(hit)}
-                    className="flex w-full items-center gap-3 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">
-                        {hit.title || "Untitled"}
-                      </span>
-                      {hit.snippet && (
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {hit.snippet}
-                        </span>
-                      )}
-                    </span>
-                    <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                      {hit.source ?? hit.type}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+            {/* Reversed: best match is rendered last so it sits at the bottom,
+                closest to the input. */}
+            {[...suggestions].reverse().map((hit) => (
+              <li key={`${hit.type}:${hit.id}`} role="option" aria-selected={false}>
+                <SearchResultRow
+                  hit={hit}
+                  onOpenTask={onOpenTask}
+                  onActivate={() => setDismissed(true)}
+                  preventBlur
+                />
+              </li>
+            ))}
           </ul>
         </div>
       )}
       <form
         onSubmit={submit}
         autoComplete="off"
-        className={cn(
-          "border-t bg-card pb-[env(safe-area-inset-bottom)]",
-          "shadow-[0_-4px_14px_rgba(15,23,42,0.06)] dark:shadow-[0_-4px_18px_rgba(0,0,0,0.35)]",
-        )}
+        className="border-t bg-card pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_14px_rgba(15,23,42,0.06)] dark:shadow-[0_-4px_18px_rgba(0,0,0,0.35)]"
       >
         <div className="mx-auto flex max-w-2xl items-center gap-2 px-3 py-2.5">
           <Input
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            onFocus={() => {
+              // Re-show suggestions when returning to a field that still has text.
+              if (value.trim().length >= 1) setDismissed(false);
+            }}
             onBlur={() => window.setTimeout(() => setDismissed(true), 100)}
             placeholder="Add a task…"
             enterKeyHint="send"

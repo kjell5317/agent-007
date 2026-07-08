@@ -40,7 +40,6 @@ def run_suggest(session: Session, query: str, *, limit: int | None = None) -> li
     hits = search_client.suggest(
         session,
         tsquery=build_tsquery(text),
-        raw_text=text,
         branches=branches,
         limit=limit,
         half_life_days=settings.search_recency_half_life_days,

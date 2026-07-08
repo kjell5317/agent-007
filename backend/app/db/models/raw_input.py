@@ -59,13 +59,16 @@ class RawInput(Base):
 
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
-    # Keyword side of the hybrid precedent lookup (subject + content), generated
-    # in the DB; read-only here.
+    # Keyword side of suggest + the hybrid precedent lookup (subject + sender +
+    # channel + content), generated in the DB; read-only here.
     tsv: Mapped[str | None] = mapped_column(
         TSVECTOR,
         Computed(
             "to_tsvector('english', "
-            "coalesce(source_metadata->>'subject', '') || ' ' || coalesce(content, ''))",
+            "coalesce(source_metadata->>'subject', '') || ' ' || "
+            "coalesce(source_metadata->>'from', '') || ' ' || "
+            "coalesce(source_metadata->>'channel_name', '') || ' ' || "
+            "coalesce(content, ''))",
             persisted=True,
         ),
         nullable=True,

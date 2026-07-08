@@ -53,8 +53,12 @@ export interface SearchHit {
   // clicking either opens that task.
   task_id: string | null;
   // Unified origin: input source (gmail/slack/…) or document provider
-  // (calendar/…). Null for tasks and notes.
+  // (calendar/…); for tasks, the source of their most recent input.
   source: string | null;
+  // Sender of the (last, for tasks) input; null for documents/manual.
+  sender: string | null;
+  // Lifecycle status: task/input status, or "event" for calendar documents.
+  status: string | null;
   ts: string | null;
   score: number;
 }

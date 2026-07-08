@@ -51,3 +51,10 @@ class Task(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    # NOTE: a generated `tsv` column (title + description + label) exists in the
+    # DB for stage-1 suggest (migration 0023) but is deliberately NOT mapped
+    # here: it's DB-only, referenced by raw SQL in app.db.clients.search. Mapping
+    # it would either force it into ORM INSERTs (Postgres rejects writes to a
+    # generated column) or break the sqlite-backed unit tests that create this
+    # table (sqlite has no TSVECTOR / to_tsvector).
