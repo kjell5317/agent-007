@@ -142,9 +142,9 @@ function AssistantBubble({
       {streaming && message.content && (
         <span className="inline-block h-3 w-1.5 animate-pulse rounded-sm bg-muted-foreground align-middle" />
       )}
-      {message.response_mode === "sources" && message.citations.length > 0 && (
+      {message.response_mode === "sources" && (
         <RelatedSources
-          citations={message.citations}
+          sources={orderedCitedSources(message.content, message.citations)}
           onOpenTask={onOpenTask}
           onShowContent={onShowContent}
         />
@@ -153,22 +153,43 @@ function AssistantBubble({
   );
 }
 
+// Only the sources the agent actually cited, in the order it cited them — the
+// agent curates which sources surface and their ranking, rather than dumping the
+// whole retrieval.
+function orderedCitedSources(content: string, citations: ChatCitation[]): ChatCitation[] {
+  const byTag = new Map(citations.map((c) => [c.tag, c]));
+  const seen = new Set<string>();
+  const out: ChatCitation[] = [];
+  for (const m of content.matchAll(/\[([A-Z]\d+(?:\s*,\s*[A-Z]\d+)*)\]/g)) {
+    for (const raw of m[1].split(",")) {
+      const tag = raw.trim();
+      const cite = byTag.get(tag);
+      if (cite && !seen.has(tag)) {
+        seen.add(tag);
+        out.push(cite);
+      }
+    }
+  }
+  return out;
+}
+
 function RelatedSources({
-  citations,
+  sources,
   onOpenTask,
   onShowContent,
 }: {
-  citations: ChatCitation[];
+  sources: ChatCitation[];
   onOpenTask: (taskId: string) => void;
   onShowContent: (cite: ChatCitation) => void;
 }) {
+  if (sources.length === 0) return null;
   return (
     <div className="space-y-1.5 pt-1">
       <div className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         Related sources
       </div>
       <div className="space-y-1.5">
-        {citations.map((cite) => (
+        {sources.map((cite) => (
           <SearchResultRow
             key={cite.tag}
             hit={citationToHit(cite)}

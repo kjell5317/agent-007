@@ -161,7 +161,8 @@ async def test_source_mode_emits_metadata_and_prompt_context(monkeypatch):
     assert events[1] == ("response_mode", {"response_mode": "sources"})
     assert events[0][1]["items"][0]["tag"] == "I1"
     assert "Response mode: sources" in seen["latest_user"]
-    assert "Do not write a document/source list" in seen["latest_user"]
+    # Sources are agent-curated: one card per cited item, in cited order.
+    assert "in the order you cite it" in seen["latest_user"]
 
 
 def test_context_line_surfaces_action_ids():
@@ -376,7 +377,32 @@ async def test_update_event_delete_routes_to_delete(monkeypatch):
         ToolCall(id="1", name="update_event", input={"event_id": "e1", "delete": True}),
         get_settings(),
         _noop_emit,
+        set(),
     )
     assert called == {"del": 1, "upd": 0}
     assert trace["purpose"] == "delete event"
     assert trace["changed_state"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_short_circuits_already_retrieved_query(monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_retrieve(session, query, *, filters=None):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    # The up-front context already ran this query with no filters.
+    searched = {chat_runner._search_sig("financial spreadsheet", chat_runner.Filters())}
+
+    text, trace = await chat_runner._search(
+        object(), Citations(), {"query": "financial spreadsheet"}, _noop_emit, searched
+    )
+    assert calls["n"] == 0  # served from context, no re-retrieval
+    assert "already retrieved" in text
+    assert trace["name"] == "search"
+
+    # A different query is not a repeat — it retrieves.
+    await chat_runner._search(object(), Citations(), {"query": "budget"}, _noop_emit, searched)
+    assert calls["n"] == 1

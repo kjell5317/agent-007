@@ -182,9 +182,11 @@ def _mode_instruction(mode: ResponseMode) -> str:
             "Response mode: sources\n"
             "The latest user input is a keyword-style source discovery query. "
             "Give a one- or two-sentence summary of the strongest signal from the "
-            "retrieved context. Cite only the few items you mention inline. Do not "
-            "write a document/source list; the UI will show related source cards "
-            "from the citation payload."
+            "retrieved context. The UI shows a related-source card for EACH item "
+            "you cite, in the order you cite it, and nothing else — so you choose "
+            "which sources surface and their ranking. Cite the relevant items "
+            "inline, most relevant first; cite nothing if none are relevant. Do "
+            "not write your own document/source list."
         )
     return (
         "Response mode: answer\n"
@@ -223,6 +225,10 @@ async def run_chat(
         obs.set_trace_io(input=query)
 
         cites = Citations()
+        # The up-front retrieval below runs `query` with no filters; record its
+        # signature so an identical `search` tool call short-circuits instead of
+        # re-hitting the DB/Drive and burning a turn on results already in context.
+        searched: set[str] = {_search_sig(query, Filters())}
         # Same retrieval path as the `search` tool (local + calendar + Drive), so the
         # up-front context and a manual re-query behave identically. `retrieve` is
         # resilient — a failing backend degrades to [] rather than sinking the answer.
@@ -258,7 +264,7 @@ async def run_chat(
                 break
             messages.append(assistant_message(resp))
             for tc in resp.tool_calls:
-                result_text, trace = await _dispatch(session, cites, tc, settings, emit)
+                result_text, trace = await _dispatch(session, cites, tc, settings, emit, searched)
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
         else:
@@ -334,7 +340,7 @@ def _trace(
 
 
 async def _dispatch(
-    session: Session, cites: Citations, tc: ToolCall, settings, emit: Emit
+    session: Session, cites: Citations, tc: ToolCall, settings, emit: Emit, searched: set[str]
 ) -> tuple[str, dict[str, Any]]:
     """Run one tool call. Returns (text_for_llm, trace). Tool errors degrade to
     a failed trace + explanatory text rather than aborting the chat."""
@@ -342,7 +348,7 @@ async def _dispatch(
     tin = tc.input or {}
     try:
         if name == "search":
-            return await _search(session, cites, tin, emit)
+            return await _search(session, cites, tin, emit, searched)
 
         if name == "list_tasks":
             hits = list_tasks(
@@ -454,8 +460,23 @@ async def _dispatch(
         )
 
 
+def _search_sig(query: str, filters: Filters) -> str:
+    """Stable key for a retrieval (query + filters), so an identical repeat is
+    detectable. The up-front context is one such retrieval."""
+    return "|".join(
+        [
+            (query or "").strip().lower(),
+            filters.source or "",
+            filters.label or "",
+            filters.status or "",
+            filters.before or "",
+            filters.after or "",
+        ]
+    )
+
+
 async def _search(
-    session: Session, cites: Citations, tin: dict[str, Any], emit: Emit
+    session: Session, cites: Citations, tin: dict[str, Any], emit: Emit, searched: set[str]
 ) -> tuple[str, dict[str, Any]]:
     """The multi-query retrieval tool — the same `retrieve` path as the up-front
     context. `source` routes the fan-out (`drive`/`calendar` = that API only,
@@ -469,6 +490,20 @@ async def _search(
         before=(str(tin["before"]) if tin.get("before") else None),
         after=(str(tin["after"]) if tin.get("after") else None),
     )
+    sig = _search_sig(q, filters)
+    if sig in searched:
+        # Already retrieved this exact query/filters (often the up-front context).
+        # Skip the round-trip and steer the model back to the context it has.
+        return (
+            f"'{q}' was already retrieved — those results are in the context "
+            "above. Answer from them; don't repeat the same search.",
+            _trace(
+                "search",
+                purpose=f"search: {q}"[:80],
+                summary="already retrieved — served from context",
+            ),
+        )
+    searched.add(sig)
     hits = await retrieve(session, q, filters=filters)
     new = cites.add(hits)
     if new:

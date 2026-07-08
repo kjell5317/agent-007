@@ -26,6 +26,25 @@ log = logging.getLogger(__name__)
 _BASE = "https://www.googleapis.com/drive/v3/files"
 _FIELDS = "files(id,name,mimeType,modifiedTime,webViewLink)"
 
+# Search surfaces documents a person actually reads — Docs/Sheets/Slides, PDFs,
+# and Office files. An allowlist (rather than a code-extension blocklist) keeps
+# out source code, Apps Script, images, archives, and other binaries by default.
+_USEFUL_MIME_TYPES = (
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/rtf",
+    "text/markdown",
+)
+_MIME_CLAUSE = "(" + " or ".join(f"mimeType = '{m}'" for m in _USEFUL_MIME_TYPES) + ")"
+
 
 class DriveClient:
     """Authenticated Drive API client for a single account (mirrors GmailClient)."""
@@ -37,7 +56,7 @@ class DriveClient:
     async def search(
         self, query: str, *, limit: int, after: str | None = None, before: str | None = None
     ) -> list[dict]:
-        clauses = [f"fullText contains '{_escape(query)}'", "trashed = false"]
+        clauses = [f"fullText contains '{_escape(query)}'", "trashed = false", _MIME_CLAUSE]
         if after:
             clauses.append(f"modifiedTime >= '{_rfc3339(after)}'")
         if before:

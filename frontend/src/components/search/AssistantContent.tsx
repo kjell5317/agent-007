@@ -27,6 +27,10 @@ interface Ctx {
   byTag: Map<string, ChatCitation>;
   byTaskId: Map<string, ChatCitation>;
   suppressedTags: Set<string>;
+  // Normalized titles of tasks shown as cards. The card already shows the
+  // title, so a standalone line repeating it (the model often emits the widget
+  // AND the title) is dropped.
+  cardedTitles: Set<string>;
   onOpenTask: (taskId: string) => void;
   // Reveal a citation's content when it has no navigable target (notes, or an
   // input without a source link).
@@ -34,6 +38,22 @@ interface Ctx {
 }
 
 const TASK_WIDGET = /task:\{([^}]+)\}/;
+
+// Normalize for title-equality: strip markdown bold, surrounding markup, and
+// trailing sentence punctuation; lowercase; collapse whitespace.
+function normalizeTitle(text: string): string {
+  return text
+    .replace(/\*\*/g, "")
+    .replace(/[.,;:]+$/, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isDuplicateTitle(text: string, ctx: Ctx): boolean {
+  const n = normalizeTitle(text);
+  return n.length > 0 && ctx.cardedTitles.has(n);
+}
 
 function mapsUrl(place: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
@@ -153,6 +173,8 @@ function renderTaskLine(text: string, prefix: string, ctx: Ctx): ReactNode[] {
 function pushText(out: ReactNode[], text: string, key: string, ctx: Ctx): void {
   const trimmed = text.trim();
   if (!trimmed || /^[\s.,;:—–-]+$/.test(trimmed)) return;
+  // The adjacent card already shows this title — don't repeat it as text.
+  if (isDuplicateTitle(text, ctx)) return;
   out.push(
     <p key={key} className="whitespace-pre-wrap">
       {renderInline(text, key, ctx)}
@@ -260,15 +282,20 @@ export function AssistantContent({
   );
   // A citation pointing at a carded task is redundant with the card, so hide it.
   const suppressedTags = new Set<string>();
+  const cardedTitles = new Set<string>();
   for (const c of citations) {
     const target = c.task_id ?? (c.type === "task" ? c.id : null);
-    if (target && cardedTaskIds.has(target)) suppressedTags.add(c.tag);
+    if (target && cardedTaskIds.has(target)) {
+      suppressedTags.add(c.tag);
+      if (c.title) cardedTitles.add(normalizeTitle(c.title));
+    }
   }
 
   const ctx: Ctx = {
     byTag: new Map(citations.map((c) => [c.tag, c])),
     byTaskId,
     suppressedTags,
+    cardedTitles,
     onOpenTask,
     onShowContent,
   };
@@ -291,18 +318,27 @@ export function AssistantContent({
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i]) && !TASK_WIDGET.test(lines[i]))
         items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
-      blocks.push(
-        <ul key={key++} className="list-disc space-y-1 pl-5">
-          {items.map((it, j) => (
-            <li key={j}>{renderInline(it, `ul${key}-${j}`, ctx)}</li>
-          ))}
-        </ul>,
-      );
+      // Drop items that just repeat a carded task's title.
+      const kept = items.filter((it) => !isDuplicateTitle(it, ctx));
+      if (kept.length > 0) {
+        blocks.push(
+          <ul key={key++} className="list-disc space-y-1 pl-5">
+            {kept.map((it, j) => (
+              <li key={j}>{renderInline(it, `ul${key}-${j}`, ctx)}</li>
+            ))}
+          </ul>,
+        );
+      }
       continue;
     }
     if (hasTask) {
       // Drop any leading bullet marker; the card stands on its own.
       blocks.push(...renderTaskLine(line.replace(/^\s*[-*]\s+/, ""), `tl${key++}`, ctx));
+      i++;
+      continue;
+    }
+    // A standalone line that just repeats a carded task's title is redundant.
+    if (isDuplicateTitle(line, ctx)) {
       i++;
       continue;
     }

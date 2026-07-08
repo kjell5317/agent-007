@@ -672,12 +672,14 @@ GITHUB_CHAT_TOOLS = [
         "name": "github_search",
         "description": (
             "Search the user's GitHub issues and pull requests with GitHub's "
-            "issue-search syntax (keywords plus qualifiers). Read-only. Examples: "
-            "`is:open assignee:@me`, `is:pr review-requested:@me`, "
-            "`repo:owner/name is:issue label:bug`, `author:@me is:open`, "
-            "`involves:@me updated:>2026-06-01`. Returns matching issues/PRs with "
-            "repo, number, state, author, and URL. Use `github_my_work` instead "
-            "for the plain 'what's assigned to me / awaiting my review' question."
+            "issue-search syntax (keywords plus qualifiers). Read-only, and "
+            "automatically restricted to repositories the user contributes to "
+            "(owns, collaborates on, or is an org member of) — no need to add a "
+            "repo/owner scope yourself. Examples: `is:open assignee:@me`, "
+            "`is:pr review-requested:@me`, `is:issue label:bug`, `author:@me "
+            "is:open`, `involves:@me updated:>2026-06-01`. Returns matching "
+            "issues/PRs with repo, number, state, author, and URL. Use "
+            "`github_my_work` for the plain 'assigned to me / awaiting my review'."
         ),
         "parameters": {
             "type": "object",
