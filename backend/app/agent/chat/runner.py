@@ -48,7 +48,7 @@ from app.services.input.embedding import embed
 from app.services.plan import schedule_task
 from app.services.search.drive import get_drive_file
 from app.services.search.filters import Filters
-from app.services.search.retrieve import retrieve
+from app.services.search.retrieve import list_tasks, retrieve
 
 log = logging.getLogger(__name__)
 
@@ -249,6 +249,23 @@ async def _dispatch(
     try:
         if name == "search":
             return await _search(session, cites, tin, emit)
+
+        if name == "list_tasks":
+            hits = list_tasks(
+                session,
+                status=str(tin.get("status") or "open"),
+                due_after=(str(tin["due_after"]) if tin.get("due_after") else None),
+                due_before=(str(tin["due_before"]) if tin.get("due_before") else None),
+                label=(str(tin["label"]) if tin.get("label") else None),
+            )
+            new = cites.add(hits)
+            if new:
+                await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
+            body = "\n".join(_context_line(tag, h) for tag, h in new) or "no matching tasks"
+            return (
+                f"tasks:\n{body}",
+                _trace(name, purpose="list tasks", summary=f"{len(new)} tasks"),
+            )
 
         if name == "get_drive_file":
             file_id = str(tin.get("file_id") or "")

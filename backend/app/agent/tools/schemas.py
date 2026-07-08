@@ -489,6 +489,38 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "list_tasks",
+        "description": (
+            "List the user's tasks by status and/or due-date window — the right "
+            "tool for agenda questions like 'what are today's todos', 'what's "
+            "overdue', or 'what's due this week'. Needs no keywords (use `search` "
+            "for content matches). Returns tasks ordered soonest-first, each "
+            "with a citation tag. Compute the dates from the current time."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["open", "closed"],
+                    "description": "Which lifecycle to list. Defaults to open.",
+                },
+                "due_after": {
+                    "type": "string",
+                    "description": "Only tasks due/scheduled on or after this date (YYYY-MM-DD).",
+                },
+                "due_before": {
+                    "type": "string",
+                    "description": (
+                        "Only tasks due/scheduled before this date (YYYY-MM-DD, "
+                        "exclusive). For 'today' pass tomorrow's date."
+                    ),
+                },
+                "label": {"type": "string", "description": "Restrict to this label."},
+            },
+        },
+    },
+    {
         "name": "get_drive_file",
         "description": (
             "Read the text content of a Google Drive file. Use when the answer "

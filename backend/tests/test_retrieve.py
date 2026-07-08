@@ -10,12 +10,14 @@ import zipfile
 import pytest
 
 import importlib
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from app.db.clients.documents import CalendarMatch
 from app.db.clients.search import SuggestHit
 from app.services.search.extract import extract_text
 from app.services.search.filters import Filters
-from app.services.search.retrieve import retrieve
+from app.services.search.retrieve import list_tasks, retrieve
 
 # The package re-exports the `retrieve` function, shadowing the submodule as an
 # attribute — grab the module itself so monkeypatch targets its bindings.
@@ -96,6 +98,39 @@ async def test_specific_input_source_runs_local_only(monkeypatch):
     _patch_backends(monkeypatch, calls)
     await retrieve(object(), "invoice", filters=Filters(source="gmail"))
     assert (calls["local"], calls["cal"], calls["drive"]) == (1, 0, 0)
+
+
+def _task(id_, title, *, due=None, scheduled=None, label=None):
+    return SimpleNamespace(
+        id=id_, title=title, description=None, link=None, label=label,
+        due_date=due, scheduled_date=scheduled,
+    )
+
+
+def test_list_tasks_filters_by_due_window(monkeypatch):
+    rows = [
+        (_task("t1", "Today", due=datetime(2026, 7, 8, 12, tzinfo=timezone.utc)), "open"),
+        (_task("t2", "Tomorrow", due=datetime(2026, 7, 9, 12, tzinfo=timezone.utc)), "open"),
+        (_task("t3", "No date"), "open"),
+    ]
+    monkeypatch.setattr(
+        retrieve_mod.tasks_store, "list_", lambda session, *, status, limit: rows
+    )
+    hits = list_tasks(object(), status="open", due_after="2026-07-08", due_before="2026-07-09")
+    assert [h.id for h in hits] == ["t1"]
+    assert hits[0].type == "task" and hits[0].task_id == "t1"
+
+
+def test_list_tasks_no_window_returns_all_with_label_filter(monkeypatch):
+    rows = [
+        (_task("t1", "Uni thing", label="Uni"), "open"),
+        (_task("t2", "Work thing", label="Work"), "open"),
+    ]
+    monkeypatch.setattr(
+        retrieve_mod.tasks_store, "list_", lambda session, *, status, limit: rows
+    )
+    assert [h.id for h in list_tasks(object(), status="open")] == ["t1", "t2"]
+    assert [h.id for h in list_tasks(object(), status="open", label="uni")] == ["t1"]
 
 
 def test_extract_text_from_ooxml_docx():

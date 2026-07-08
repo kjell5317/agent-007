@@ -16,12 +16,15 @@ appear exactly once.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.clients import documents as documents_store
 from app.db.clients import search as search_client
+from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.schemas.search import SearchHit
 from app.services.input.embedding import embed
@@ -96,6 +99,65 @@ async def retrieve(
         )
 
     return hits
+
+
+def list_tasks(
+    session: Session,
+    *,
+    status: str = "open",
+    due_after: str | None = None,
+    due_before: str | None = None,
+    label: str | None = None,
+    limit: int = 25,
+) -> list[SearchHit]:
+    """Structured task listing for agenda questions ("today's todos", "overdue",
+    "due this week") — no keywords needed, unlike hybrid `retrieve`. Filters by
+    derived status + a window on each task's effective date (scheduled_date, else
+    due_date), ordered soonest-first, and returns citeable task hits."""
+    tz = ZoneInfo(get_settings().user_timezone)
+    lo = _day_bound(due_after, tz)
+    hi = _day_bound(due_before, tz)
+    want_label = (label or "").strip().lower() or None
+
+    out: list[SearchHit] = []
+    for task, derived in tasks_store.list_(session, status=status, limit=200):
+        if want_label and (task.label or "").lower() != want_label:
+            continue
+        eff = task.scheduled_date or task.due_date
+        if lo is not None and (eff is None or eff < lo):
+            continue
+        if hi is not None and (eff is None or eff >= hi):
+            continue
+        out.append(
+            SearchHit(
+                type="task",
+                id=str(task.id),
+                title=task.title,
+                snippet=(task.description or "")[:200] or None,
+                url=task.link,
+                task_id=str(task.id),
+                source=task.label,
+                sender=None,
+                status=derived,
+                ts=eff,
+                score=1.0,
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _day_bound(value: str | None, tz: ZoneInfo) -> datetime | None:
+    """Parse a `YYYY-MM-DD` (or full ISO) boundary into a tz-aware datetime for
+    comparison against stored timestamps."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=tz) if dt.tzinfo is None else dt
 
 
 def _calendar_hits(
