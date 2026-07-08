@@ -1,6 +1,8 @@
 import { CalendarDays, FileText, Inbox, ListTodo } from "lucide-react";
 import type { ComponentType } from "react";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { fmtWhen } from "@/lib/dates";
+import { badgeKindLabel } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
 import type { SearchHit, SearchHitType } from "@/lib/types";
 
@@ -16,15 +18,18 @@ function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {
   return TYPE_ICON[hit.type] ?? Inbox;
 }
 
-// A distinct tint per status so the badge reads at a glance.
-const STATUS_STYLE: Record<string, string> = {
-  open: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  closed: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300",
-  done: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300",
-  not_task: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300",
-  duplicate: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  processing: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
-  event: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+// Reuse the inbox status badges verbatim; `event`/`processing` have no inbox
+// variant, so fall back to a muted pill.
+const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
+  open: "open",
+  closed: "closed",
+  not_task: "not_task",
+  duplicate: "duplicate",
+  reopened: "reopened",
+  updated: "updated",
+  no_change: "no_change",
+  event: "muted",
+  processing: "muted",
 };
 
 // "Alice <a@x.com>" → "Alice" (mirrors lib/inbox senderName, which needs a
@@ -35,12 +40,16 @@ function displaySender(from: string): string {
   return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
 }
 
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
 // Second line under the title: sender · date · source (whichever exist).
 function metaLine(hit: SearchHit): string {
   return [
     hit.sender ? displaySender(hit.sender) : null,
     hit.ts ? fmtWhen(hit.ts) : null,
-    hit.source,
+    hit.source ? capitalize(hit.source) : null,
   ]
     .map((p) => (p ?? "").trim())
     .filter(Boolean)
@@ -86,7 +95,7 @@ export function SearchResultRow({
           : "cursor-default",
       )}
     >
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      <Icon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{hit.title || "Untitled"}</span>
         {meta && (
@@ -94,14 +103,9 @@ export function SearchResultRow({
         )}
       </span>
       {hit.status && (
-        <span
-          className={cn(
-            "mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
-            STATUS_STYLE[hit.status] ?? "bg-secondary text-muted-foreground",
-          )}
-        >
-          {hit.status.replace(/_/g, " ")}
-        </span>
+        <Badge variant={STATUS_VARIANT[hit.status] ?? "muted"} className="mt-0.5 shrink-0">
+          {badgeKindLabel(hit.status)}
+        </Badge>
       )}
     </button>
   );

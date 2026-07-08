@@ -116,10 +116,11 @@ export function Composer({ onCreated, onOpenTask }: Props) {
       {showSuggestions && (
         <div className="mx-auto max-w-2xl px-3">
           {/* Elevated panel so the suggestions read as a distinct surface
-              floating above the task list; cards inside are separated by gaps. */}
+              floating above the task list; solid (opaque) background + border,
+              cards inside separated by gaps. */}
           <ul
             ref={listRef}
-            className="mb-2 max-h-[45dvh] space-y-1.5 overflow-y-auto overscroll-contain rounded-2xl border bg-background/95 p-2 shadow-2xl backdrop-blur"
+            className="mb-2 max-h-[calc(100dvh-5rem)] space-y-1.5 overflow-y-auto overscroll-contain rounded-2xl border-2 border-border bg-background p-2 shadow-2xl sm:max-h-[45dvh]"
             role="listbox"
           >
             {/* Reversed: best match is rendered last so it sits at the bottom,

@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # searches above: live search wants recent items to surface, not near-flat
     # decay. Note the formula is exp(-age/days), not a true half-life.
     search_recency_half_life_days: float = 100
-    search_suggest_limit: int = 5
+    search_suggest_limit: int = 8
     # In-process TTL cache over suggest results. Short: the same query re-fires
     # on backspace/retype, so even a few seconds spares the DB per keystroke.
     search_suggest_cache_ttl_seconds: float = 90.0

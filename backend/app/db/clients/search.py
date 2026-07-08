@@ -168,6 +168,10 @@ def _filters_sql(
         # input's `source` column and the document's `provider` column.
         if source is not None:
             parts.append("r.source = :source")
+        # `is:processing` / `is:event` filter inputs by their raw status
+        # (the corpus router only sends non-task statuses here).
+        if status is not None:
+            parts.append("r.status = :status")
         # Distinct on the task: an input folded into a task is represented by
         # that task's row, so drop it (many inputs → one task, shown once).
         # Only when the task branch is present to stand in for it — otherwise

@@ -40,6 +40,17 @@ _INPUT = "input"
 _DOCUMENT = "document"
 ALL_CORPORA = frozenset({_TASK, _INPUT, _DOCUMENT})
 
+# `is:<status>` routes to whatever carries that status. open/closed/not_task are
+# task lifecycle; `processing` is an in-flight input; `event` is a calendar
+# document (or the input that created one). Unknown → tasks.
+_STATUS_CORPORA: dict[str, frozenset[str]] = {
+    "open": frozenset({_TASK}),
+    "closed": frozenset({_TASK}),
+    "not_task": frozenset({_TASK}),
+    "processing": frozenset({_INPUT}),
+    "event": frozenset({_DOCUMENT, _INPUT}),
+}
+
 
 @dataclass(frozen=True)
 class Filters:
@@ -106,11 +117,14 @@ def build_tsquery(text: str) -> str:
 def corpus_restriction(filters: Filters) -> frozenset[str] | None:
     """Which corpora a set of filters limits results to, or None for all.
 
-    `source:` spans both origin-bearing corpora (inputs + documents); `is:` and
-    `label:` are task concepts — naming one narrows the UNION to it."""
+    `source:` spans both origin-bearing corpora (inputs + documents); `label:`
+    is a task concept; `is:` routes by which corpus carries that status
+    (see `_STATUS_CORPORA`)."""
     restrict: set[str] = set()
     if filters.source:
         restrict.update((_INPUT, _DOCUMENT))
-    if filters.status or filters.label:
+    if filters.label:
         restrict.add(_TASK)
+    if filters.status:
+        restrict.update(_STATUS_CORPORA.get(filters.status, frozenset({_TASK})))
     return frozenset(restrict) or None

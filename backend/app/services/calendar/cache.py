@@ -10,10 +10,13 @@ Two entry points keep the cache current:
     so an event the agent just created is searchable immediately, not a sync
     cycle later.
 
-Commute legs are skipped — they're ephemeral planner artifacts, not something
-worth embedding or surfacing in a calendar search. Past events are kept (no
-time-based eviction). Embeddings are only recomputed when an event's text
-actually changed, so re-syncs and time-only edits don't burn embedding calls.
+Our own managed events are skipped — task mirrors (`kind=task`) are already
+represented in search by their task, and commute legs are ephemeral planner
+artifacts; caching either would duplicate a task as a calendar event. Real
+events (agent invitations, externally-created events) are cached. Past events
+are kept (no time-based eviction). Embeddings are only recomputed when an
+event's text actually changed, so re-syncs and time-only edits don't burn
+embedding calls.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.db.clients import documents as documents_store
 from app.services.calendar.client import CalendarEvent
-from app.services.calendar.events import is_commute_event
+from app.services.calendar.events import is_managed_event
 from app.services.input.embedding import embed
 
 log = logging.getLogger(__name__)
@@ -116,7 +119,13 @@ async def cache_calendar_events(
     discovery pass that called it)."""
     upserted = embedded = forgotten = 0
     for event in active:
-        if is_commute_event(event):
+        if is_managed_event(event):
+            # Never cache our own task/commute mirrors, and evict any cached
+            # before this rule existed (the daily baseline re-surfaces them).
+            if documents_store.delete(
+                session, provider="calendar", external_id=_external_id(event)
+            ):
+                forgotten += 1
             continue
         try:
             if await cache_one_event(session, event):
@@ -137,8 +146,11 @@ async def write_through_event(event: CalendarEvent) -> None:
 
     Runs in its own session so it never touches the caller's transaction, and
     swallows failures — discovery re-caches within a minute if this misses.
-    Commute legs are skipped (planner noise)."""
-    if is_commute_event(event):
+    Our own managed events (task mirrors + commute legs) are never cached — a
+    task isn't duplicated as a calendar event — and any stale cache row is
+    evicted (e.g. a task mirror cached before this rule, now being patched)."""
+    if is_managed_event(event):
+        forget_event(event.calendar_id, event.id)
         return
     session = SessionLocal()
     try:
