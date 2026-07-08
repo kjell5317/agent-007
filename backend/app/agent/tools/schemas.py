@@ -491,15 +491,22 @@ CHAT_TOOLS = [
     {
         "name": "get_drive_file",
         "description": (
-            "Read the text content of a Google Drive file by its id (from a "
-            "[D#] Drive result). Use when the answer needs what's inside the "
-            "file, not just its title. Google Docs/Slides return text, Sheets "
-            "return CSV; binary files (PDF, images) can't be read."
+            "Read the text content of a Google Drive file. Use when the answer "
+            "needs what's inside the file, not just its title. Google Docs/"
+            "Slides/Sheets and PDFs/Office files return text; images can't be "
+            "read."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "file_id": {"type": "string", "description": "Drive file id."}
+                "file_id": {
+                    "type": "string",
+                    "description": (
+                        "The Drive file id — use the `[file_id=…]` value shown on "
+                        "the Drive result, NOT the `[D#]` citation tag or the "
+                        "file's name."
+                    ),
+                }
             },
             "required": ["file_id"],
         },

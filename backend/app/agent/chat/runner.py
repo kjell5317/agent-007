@@ -118,10 +118,13 @@ def _context_line(tag: str, h: SearchHit) -> str:
         line += f" — {h.snippet[:200]}"
     if h.task_id:
         line += f" [task_id={h.task_id}]"
-    # Calendar hits carry the event id (their hit id) so the agent can pass it
-    # straight to update_event.
+    # Calendar / Drive hits carry the id the action tools need (event_id →
+    # update_event, file_id → get_drive_file). Surfacing it stops the model
+    # guessing the tag or title as the id.
     elif h.type == "document" and h.source == "calendar":
         line += f" [event_id={h.id}]"
+    elif h.type == "drive":
+        line += f" [file_id={h.id}]"
     return line
 
 
@@ -169,6 +172,26 @@ async def run_chat(session: Session, turns: list[ChatTurn], *, emit: Emit) -> No
             result_text, trace = await _dispatch(session, cites, tc, settings, emit)
             await emit("tool_call", trace)
             messages.append(tool_result_message(tc, result_text))
+    else:
+        # Iterations exhausted while the model was still calling tools — surface
+        # that, then force a final tool-less answer so the user always gets a
+        # response instead of a bubble that just stops after the last tool call.
+        await emit(
+            "tool_call",
+            _trace(
+                "tool_limit",
+                purpose="Reached tool limit",
+                summary=f"Stopped after {settings.search_chat_max_iterations} tool steps.",
+                status="failed",
+            ),
+        )
+        await stream_chat(
+            messages,
+            settings,
+            system_prompt=CHAT_SYSTEM_PROMPT,
+            tools=[],
+            on_delta=on_delta,
+        )
 
     await emit("done", {})
 

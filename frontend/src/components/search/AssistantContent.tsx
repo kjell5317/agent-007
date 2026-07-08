@@ -20,6 +20,9 @@ interface Ctx {
   byTag: Map<string, ChatCitation>;
   byTaskId: Map<string, ChatCitation>;
   onOpenTask: (taskId: string) => void;
+  // Reveal a citation's content when it has no navigable target (notes, or an
+  // input without a source link).
+  onShowContent: (cite: ChatCitation) => void;
 }
 
 function mapsUrl(place: string): string {
@@ -64,8 +67,18 @@ const RULES: Rule[] = [
     ),
   },
   {
-    re: /\[([A-Z]\d+)\]/,
-    render: (m, key, ctx) => <CitationChip key={key} tag={m[1]} ctx={ctx} />,
+    // One or more tags in a single bracket, e.g. [N2] or [N2, N4] → a chip each.
+    re: /\[([A-Z]\d+(?:\s*,\s*[A-Z]\d+)*)\]/,
+    render: (m, key, ctx) => {
+      const tags = m[1].split(",").map((t) => t.trim()).filter(Boolean);
+      return (
+        <span key={key} className="whitespace-nowrap">
+          {tags.map((t, j) => (
+            <CitationChip key={j} tag={t} ctx={ctx} />
+          ))}
+        </span>
+      );
+    },
   },
   {
     re: /`([^`]+)`/,
@@ -105,21 +118,23 @@ function renderInline(text: string, prefix: string, ctx: Ctx): ReactNode[] {
 function CitationChip({ tag, ctx }: { tag: string; ctx: Ctx }) {
   const cite = ctx.byTag.get(tag);
   const openTask = cite?.task_id ?? (cite?.type === "task" ? cite.id : null);
-  const openUrl = cite?.url ?? null;
-  const clickable = Boolean(openTask || openUrl);
+  const openUrl = openTask ? null : (cite?.url ?? null);
+  const canShow = Boolean(cite && (openTask || openUrl || cite.snippet));
   const activate = () => {
+    if (!cite) return;
     if (openTask) ctx.onOpenTask(openTask);
     else if (openUrl) window.open(openUrl, "_blank", "noopener,noreferrer");
+    else ctx.onShowContent(cite);
   };
   return (
     <button
       type="button"
-      disabled={!clickable}
-      onClick={clickable ? activate : undefined}
+      disabled={!canShow}
+      onClick={canShow ? activate : undefined}
       title={cite?.title ?? tag}
       className={cn(
         "mx-0.5 inline-flex h-4 translate-y-[-1px] items-center rounded px-1 align-middle text-[10px] font-semibold",
-        clickable
+        canShow
           ? "cursor-pointer bg-primary/15 text-primary hover:bg-primary/25"
           : "cursor-default bg-muted text-muted-foreground",
       )}
@@ -154,17 +169,24 @@ export function AssistantContent({
   content,
   citations,
   onOpenTask,
+  onShowContent,
 }: {
   content: string;
   citations: ChatCitation[];
   onOpenTask: (taskId: string) => void;
+  onShowContent: (cite: ChatCitation) => void;
 }) {
   const byTaskId = new Map<string, ChatCitation>();
   for (const c of citations) {
     if (c.type === "task") byTaskId.set(c.id, c);
     if (c.task_id) byTaskId.set(c.task_id, c);
   }
-  const ctx: Ctx = { byTag: new Map(citations.map((c) => [c.tag, c])), byTaskId, onOpenTask };
+  const ctx: Ctx = {
+    byTag: new Map(citations.map((c) => [c.tag, c])),
+    byTaskId,
+    onOpenTask,
+    onShowContent,
+  };
 
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];

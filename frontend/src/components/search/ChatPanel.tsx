@@ -1,9 +1,10 @@
 import { Check, Loader2, MessageSquare, Wrench, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AssistantContent } from "@/components/search/AssistantContent";
+import { Modal } from "@/components/ui/modal";
 import { fmtWhen } from "@/lib/dates";
 import { cn } from "@/lib/utils";
-import type { ChatMessage, ChatSummary, ChatToolTrace } from "@/lib/types";
+import type { ChatCitation, ChatMessage, ChatSummary, ChatToolTrace } from "@/lib/types";
 
 export function ChatPanel({
   messages,
@@ -19,6 +20,8 @@ export function ChatPanel({
   onLoadChat: (id: string) => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  // A citation with no navigable target (note / url-less input) opens here.
+  const [preview, setPreview] = useState<ChatCitation | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages]);
@@ -38,11 +41,48 @@ export function ChatPanel({
             message={m}
             streaming={streaming && i === messages.length - 1}
             onOpenTask={onOpenTask}
+            onShowContent={setPreview}
           />
         ),
       )}
       <div ref={bottomRef} />
+      <CitationModal cite={preview} onClose={() => setPreview(null)} onOpenTask={onOpenTask} />
     </div>
+  );
+}
+
+function CitationModal({
+  cite,
+  onClose,
+  onOpenTask,
+}: {
+  cite: ChatCitation | null;
+  onClose: () => void;
+  onOpenTask: (taskId: string) => void;
+}) {
+  if (!cite) return null;
+  const openTask = cite.task_id ?? (cite.type === "task" ? cite.id : null);
+  return (
+    <Modal open onClose={onClose} title={cite.title || "Source"}>
+      <div className="space-y-3">
+        <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
+          {cite.snippet || "No preview available."}
+        </p>
+        {(openTask || cite.url) && (
+          <button
+            type="button"
+            onClick={() => {
+              if (openTask) onOpenTask(openTask);
+              else if (cite.url) window.open(cite.url, "_blank", "noopener,noreferrer");
+              onClose();
+            }}
+            className="text-sm font-medium text-primary hover:underline"
+          >
+            {openTask ? "Open task" : "Open source"}
+          </button>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -60,10 +100,12 @@ function AssistantBubble({
   message,
   streaming,
   onOpenTask,
+  onShowContent,
 }: {
   message: ChatMessage;
   streaming: boolean;
   onOpenTask: (taskId: string) => void;
+  onShowContent: (cite: ChatCitation) => void;
 }) {
   const showTyping = message.pending && !message.content;
   return (
@@ -86,6 +128,7 @@ function AssistantBubble({
             content={message.content}
             citations={message.citations}
             onOpenTask={onOpenTask}
+            onShowContent={onShowContent}
           />
         )
       )}

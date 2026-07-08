@@ -111,6 +111,61 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     assert "one open task" in tokens
 
 
+def test_context_line_surfaces_action_ids():
+    drive = chat_runner._context_line(
+        "D1", _hit("drive", "real-file-id", "Pitch", source="drive", status="drive")
+    )
+    assert "[file_id=real-file-id]" in drive
+    cal = chat_runner._context_line(
+        "E1", _hit("document", "ev123", "Standup", source="calendar", status="event")
+    )
+    assert "[event_id=ev123]" in cal
+
+
+@pytest.mark.asyncio
+async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
+    max_iter = get_settings().search_chat_max_iterations
+    calls = {"tool_turns": 0, "toolless": 0}
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return []
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        # The forced final turn is called with no tools — answer instead of loop.
+        if not tools:
+            calls["toolless"] += 1
+            await on_delta("Couldn't read that file.")
+            return _resp(text="Couldn't read that file.")
+        calls["tool_turns"] += 1
+        return _resp(
+            tool_calls=(
+                ToolCall(id=str(calls["tool_turns"]), name="get_drive_file", input={"file_id": "x"}),
+            )
+        )
+
+    async def fake_get_drive_file(session, file_id, *, max_chars):
+        return "get_drive_file: couldn't read that file."
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "get_drive_file", fake_get_drive_file)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="read the deck")], emit=emit)
+
+    assert calls["tool_turns"] == max_iter  # every iteration kept calling tools
+    assert calls["toolless"] == 1  # then one forced, tool-less answer
+    assert events[-1][0] == "done"
+    # A limit indicator is surfaced before the forced answer.
+    assert any(e == "tool_call" and d.get("name") == "tool_limit" for e, d in events)
+    tokens = "".join(d["text"] for e, d in events if e == "token")
+    assert "Couldn't read that file." in tokens
+
+
 @pytest.mark.asyncio
 async def test_update_event_delete_routes_to_delete(monkeypatch):
     called = {"del": 0, "upd": 0}
