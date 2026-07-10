@@ -91,7 +91,6 @@ export function InboxPanel({
               .filter((member) => unseenInputIds.has(member.id))
               .map((member) => member.id)}
             onVisible={onInputsVisible}
-            onOpenTask={onOpenTask}
           />
         ),
       )}

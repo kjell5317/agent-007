@@ -35,7 +35,6 @@ interface Props {
   onChanged: () => Promise<void> | void;
   unseenMemberIds: string[];
   onVisible: (ids: string[]) => void;
-  onOpenTask: (id: string) => void;
 }
 
 export function InboxGroup({
@@ -43,7 +42,6 @@ export function InboxGroup({
   onChanged,
   unseenMemberIds,
   onVisible,
-  onOpenTask,
 }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -147,21 +145,9 @@ export function InboxGroup({
 
   const Chevron = open ? ChevronDown : ChevronRight;
 
-  // Clicking the card opens the group's task modal; expansion lives on the
-  // chevron. Task-less groups do nothing.
-  const groupTaskId =
-    (liveTask ?? closedTask ?? members.find((m) => m.task_id))?.task_id ?? null;
-
   return (
     <Card ref={cardRef} className={cn(cardBorderClass)}>
-      <CardContent
-        className={cn(groupTaskId && "cursor-pointer")}
-        onClick={(e) => {
-          if (!groupTaskId) return;
-          if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          onOpenTask(groupTaskId);
-        }}
-      >
+      <CardContent>
         <div className="flex items-center gap-2">
           {action ? (
             <ActionButton {...action} disabled={busy} />
@@ -175,19 +161,23 @@ export function InboxGroup({
                 {group.title}
               </div>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              {activeRun ? (
-                <InputStatusBadge input={activeRun} />
-              ) : taskBadge ? (
-                <Badge variant={taskBadge}>{taskBadge}</Badge>
-              ) : (
-                <InputStatusBadge input={newest} />
-              )}
-              <span className="truncate font-medium">{sendersLabel}</span>
+            <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              <span className="shrink-0">
+                {activeRun ? (
+                  <InputStatusBadge input={activeRun} />
+                ) : taskBadge ? (
+                  <Badge variant={taskBadge}>{taskBadge}</Badge>
+                ) : (
+                  <InputStatusBadge input={newest} />
+                )}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {sendersLabel}
+              </span>
               <MetaDot />
-              <span className="font-medium">{fmtWhen(newest.received_at)}</span>
-              <MetaDot />
-              <span className="font-medium">{members.length} messages</span>
+              <span className="shrink-0 font-medium">
+                {fmtWhen(newest.received_at)}
+              </span>
             </div>
           </div>
 
@@ -220,13 +210,14 @@ export function InboxGroup({
 
 function GroupMember({ data }: { data: RawInput }) {
   const [open, setOpen] = useState(false);
-  const MemberChevron = open ? ChevronDown : ChevronRight;
   const header = (
     <>
       <span className="min-w-0 flex-1 truncate text-sm">
         {senderName(data)}
       </span>
-      <InputStatusBadge input={data} />
+      <span className="shrink-0">
+        <InputStatusBadge input={data} />
+      </span>
       <span className="shrink-0 text-xs text-muted-foreground">
         {fmtWhen(data.received_at)}
       </span>
@@ -236,7 +227,7 @@ function GroupMember({ data }: { data: RawInput }) {
   if (!hasInputDetails(data)) {
     return (
       <div className="rounded-md border bg-muted/30">
-        <div className="flex w-full items-center gap-2 px-2 py-1.5 text-left">
+        <div className="flex w-full min-w-0 items-center gap-2 overflow-hidden px-2 py-1.5 text-left">
           {header}
         </div>
       </div>
@@ -248,10 +239,9 @@ function GroupMember({ data }: { data: RawInput }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
+        className="flex w-full min-w-0 items-center gap-2 overflow-hidden px-2 py-1.5 text-left"
       >
         {header}
-        <MemberChevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
       <Collapsible open={open}>
         <div className="space-y-3 border-t px-2 pb-2 pt-2 text-sm">

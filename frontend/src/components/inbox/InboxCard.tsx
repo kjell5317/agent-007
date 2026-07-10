@@ -129,19 +129,22 @@ export function InboxCard({
         ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
         : null;
 
-  const expandable = hasInputDetails(data);
-  const Chevron = open ? ChevronDown : ChevronRight;
+  const expandable = !data.task_id && hasInputDetails(data);
 
-  // Clicking the card opens the linked task's modal; expansion lives on the
-  // chevron. Inputs without a task do nothing.
+  // Linked inputs open their task. Unlinked inputs use the card body as their
+  // details toggle when there is anything to show.
   return (
     <Card ref={cardRef} className={cn(cardBorderClass)}>
       <CardContent
-        className={cn(data.task_id && "cursor-pointer")}
+        className={cn((data.task_id || expandable) && "cursor-pointer")}
         onClick={(e) => {
-          if (!data.task_id) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          onOpenTask(data.task_id);
+          if (data.task_id) {
+            onOpenTask(data.task_id);
+            return;
+          }
+          if (!expandable) return;
+          setOpen((v) => !v);
         }}
       >
         <div className="flex items-center gap-2">
@@ -159,25 +162,17 @@ export function InboxCard({
                 {title}
               </div>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              <InputStatusBadge input={data} />
-              <span className="truncate font-medium">{senderName(data)}</span>
+            <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              <span className="shrink-0">
+                <InputStatusBadge input={data} />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {senderName(data)}
+              </span>
               <MetaDot />
-              <span className="font-medium">{when}</span>
+              <span className="shrink-0 font-medium">{when}</span>
             </div>
           </div>
-
-          {expandable && (
-            <button
-              type="button"
-              aria-label={open ? "Collapse details" : "Expand details"}
-              title={open ? "Collapse details" : "Expand details"}
-              onClick={() => setOpen((v) => !v)}
-              className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Chevron className="h-4 w-4" />
-            </button>
-          )}
         </div>
 
         {expandable && (
@@ -198,7 +193,7 @@ export function InboxCard({
 // Separator between meta labels — keeps the gaps legible.
 export function MetaDot() {
   return (
-    <span aria-hidden className="text-muted-foreground">
+    <span aria-hidden className="shrink-0 text-muted-foreground">
       •
     </span>
   );
