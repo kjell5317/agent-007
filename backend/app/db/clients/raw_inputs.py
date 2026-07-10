@@ -132,7 +132,14 @@ def list_grouped(
 
 
 def count_since(session: Session, ts: datetime) -> int:
-    """Count raw inputs received after `ts` for the unread badge.
+    """Count raw inputs whose agent decision landed after `ts` — the unread badge.
+
+    Keyed on `processed_at` (when the item was ingested and decided), not
+    `received_at`: gmail/slack now carry the message's *original* time in
+    `received_at`, so a freshly-polled but old message has a past `received_at`
+    and would never trip the badge. `processed_at` is when it actually surfaced
+    in the inbox. In-flight items (processed_at IS NULL) fail the `> ts`
+    comparison and don't count until their run finalizes.
 
     Manual entries are excluded — the user just created them via POST /tasks,
     they don't need a notification badge about their own creation. The inbox
@@ -140,7 +147,7 @@ def count_since(session: Session, ts: datetime) -> int:
     """
     stmt = (
         select(func.count(RawInput.id))
-        .where(RawInput.received_at > ts, RawInput.source != "manual")
+        .where(RawInput.processed_at > ts, RawInput.source != "manual")
     )
     return int(session.execute(stmt).scalar_one() or 0)
 
