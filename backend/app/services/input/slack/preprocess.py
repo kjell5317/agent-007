@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 MAX_BODY_CHARS = 8000
@@ -60,6 +61,7 @@ class PreprocessResult:
     body: str
     metadata: dict[str, Any] = field(default_factory=dict)
     truncated: bool = False
+    received_at: datetime | None = None
 
 
 def preprocess_message(
@@ -107,7 +109,24 @@ def preprocess_message(
         "is_dm": is_dm,
         "directed_at_me": directed,
     }
-    return PreprocessResult(body=text, metadata=metadata, truncated=truncated)
+    return PreprocessResult(
+        body=text,
+        metadata=metadata,
+        truncated=truncated,
+        received_at=_received_at(raw_message),
+    )
+
+
+def _received_at(raw_message: dict) -> datetime | None:
+    """A Slack message `ts` is epoch-seconds (with microseconds) of when it was
+    posted — its identity and its original time."""
+    ts = raw_message.get("ts")
+    if not ts:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+    except (ValueError, TypeError):
+        return None
 
 
 def _append_workspace_name(sender: str | None, workspace_name: str | None) -> str | None:

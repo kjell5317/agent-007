@@ -132,6 +132,7 @@ class SlackSource(IngestionSource):
                         source="slack",
                         external_id=f"{channel_id}:{ts}",
                         content=result.body,
+                        received_at=result.received_at,
                         source_metadata={
                             "account": self.account_key,
                             "truncated": result.truncated,

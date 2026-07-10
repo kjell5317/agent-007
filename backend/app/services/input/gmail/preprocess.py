@@ -22,6 +22,7 @@ import base64
 import binascii
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from email.utils import getaddresses
 from typing import Any
 
@@ -73,6 +74,7 @@ class PreprocessResult:
     body: str
     metadata: dict[str, Any] = field(default_factory=dict)
     truncated: bool = False
+    received_at: datetime | None = None
 
 
 def preprocess_message(
@@ -126,7 +128,25 @@ def preprocess_message(
         "directed_at_me": _directed_at_me(headers, account_email),
     }
     _apply_github_identity(metadata, headers)
-    return PreprocessResult(body=body, metadata=metadata, truncated=truncated)
+    return PreprocessResult(
+        body=body,
+        metadata=metadata,
+        truncated=truncated,
+        received_at=_received_at(raw_message),
+    )
+
+
+def _received_at(raw_message: dict) -> datetime | None:
+    """Gmail's `internalDate` is epoch-ms UTC of when the mailbox received the
+    message — the canonical received time, always present and unambiguous
+    (unlike the sender-supplied `Date` header)."""
+    raw = raw_message.get("internalDate")
+    if not raw:
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
+    except (ValueError, TypeError):
+        return None
 
 
 # GitHub notification emails get a canonical cross-source thread key so they

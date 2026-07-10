@@ -39,7 +39,7 @@ BOOTSTRAP_QUERY = "in:inbox newer_than:1d"
 # (incl. self-cc), DRAFT is unfinished, SPAM/TRASH are obvious. The history
 # API surfaces all of these as `messagesAdded` events, so we filter here
 # rather than at the search-query level (which only applies on bootstrap).
-SKIP_LABELS = frozenset({"DRAFT", "SPAM", "TRASH", "SENT"})
+SKIP_LABELS = frozenset({"DRAFT", "SPAM", "TRASH", "SENT", "CATEGORY_PROMOTIONS"})
 
 
 @register_source("gmail")
@@ -75,6 +75,7 @@ class GmailSource(IngestionSource):
                 source="gmail",
                 external_id=message_id,
                 content=result.body,
+                received_at=result.received_at,
                 source_metadata={
                     "account": self.account_key,
                     "truncated": result.truncated,

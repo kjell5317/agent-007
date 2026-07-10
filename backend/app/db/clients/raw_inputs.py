@@ -30,6 +30,10 @@ def create(session: Session, payload: RawInputCreate) -> RawInput:
         content=payload.content,
         source_metadata=payload.source_metadata,
     )
+    # Leave received_at unset when the source has no original time, so the
+    # column's server_default (now()) captures insert time as before.
+    if payload.received_at is not None:
+        row.received_at = payload.received_at
     session.add(row)
     session.flush()
     return row

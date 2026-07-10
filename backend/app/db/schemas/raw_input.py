@@ -17,6 +17,10 @@ class RawInputCreate(BaseModel):
     )
     content: str
     source_metadata: dict = Field(default_factory=dict)
+    received_at: datetime | None = Field(
+        None,
+        description="Original message time (email/Slack). None falls back to the DB insert time.",
+    )
 
 
 class RawInputRead(BaseModel):
