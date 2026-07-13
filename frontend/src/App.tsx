@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { PointsPanel } from "@/components/points/PointsPanel";
 import { ChatComposer } from "@/components/search/ChatComposer";
 import { ChatPanel } from "@/components/search/ChatPanel";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
@@ -19,7 +20,9 @@ import type { Task } from "@/lib/types";
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
-  const [view, setView] = useState<"tasks" | "mail" | "search">("tasks");
+  const [view, setView] = useState<"tasks" | "mail" | "search" | "points">(
+    "tasks",
+  );
   const chat = useSearchChat();
   const mailOpen = view === "mail";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -38,12 +41,14 @@ export function App() {
   const tasksActive = view === "tasks";
   const inboxActive = view === "mail";
 
-  // Back / Escape out of the mail or search overlay. The chat conversation is
-  // kept (persisted) so re-opening search shows the last chat; "New chat"
-  // inside the panel clears it.
-  const leaveOverlay = useCallback(() => {
+  const openTasksView = useCallback(() => {
     setView("tasks");
   }, []);
+
+  const openSearchView = useCallback(() => {
+    chat.newChat();
+    setView("search");
+  }, [chat]);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -311,15 +316,12 @@ export function App() {
       <Topbar
         theme={theme}
         onThemeChange={setTheme}
-        mode={view === "tasks" ? "normal" : view}
+        view={view}
         unreadInbox={unreadInbox}
+        onTasksOpen={openTasksView}
         onMailOpen={() => setView("mail")}
-        onSearchOpen={() => {
-          chat.newChat();
-          setView("search");
-        }}
-        onBack={leaveOverlay}
-        onNewChat={chat.newChat}
+        onSearchOpen={openSearchView}
+        onPointsOpen={() => setView("points")}
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
         {view === "mail" ? (
@@ -340,6 +342,8 @@ export function App() {
             recent={chat.recent}
             onLoadChat={chat.loadChat}
           />
+        ) : view === "points" ? (
+          <PointsPanel onOpenTask={openTask} />
         ) : (
           <TasksPanel
             tasks={tasks}
@@ -365,12 +369,12 @@ export function App() {
         <ChatComposer
           onSend={chat.send}
           streaming={chat.streaming}
-          onClose={leaveOverlay}
+          onClose={openTasksView}
           onOpenTask={openTask}
         />
-      ) : (
+      ) : view === "tasks" ? (
         <Composer onCreated={refresh} onOpenTask={openTask} />
-      )}
+      ) : null}
       <Toaster />
     </div>
   );

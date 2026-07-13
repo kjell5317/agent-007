@@ -267,6 +267,7 @@ export interface PointsLogEntry {
   source: string;
   reason: string;
   caller: string | null;
+  task_id: string | null;
   created_at: string;
 }
 
@@ -274,6 +275,7 @@ export interface PointsLog {
   entries: PointsLogEntry[];
   count: number;
   last_seen_at: string;
+  has_more: boolean;
 }
 
 export interface PointsLogSeen {
