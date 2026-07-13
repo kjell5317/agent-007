@@ -13,7 +13,6 @@ import {
   ActionButton,
   hasInputDetails,
   InputBody,
-  MetaDot,
 } from "@/components/inbox/InboxCard";
 import { InputStatusBadge } from "@/components/runs/RunStatusBadge";
 import { useInboxActions } from "@/components/inbox/useInboxActions";
@@ -174,7 +173,6 @@ export function InboxGroup({
               <span className="min-w-0 flex-1 truncate font-medium">
                 {sendersLabel}
               </span>
-              <MetaDot />
               <span className="shrink-0 font-medium">
                 {fmtWhen(newest.received_at)}
               </span>
