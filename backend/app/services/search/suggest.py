@@ -25,10 +25,20 @@ _CACHE_MAX = 512
 _cache: dict[str, tuple[float, list[SearchHit]]] = {}
 
 
-def run_suggest(session: Session, query: str, *, limit: int | None = None) -> list[SearchHit]:
+def run_suggest(
+    session: Session,
+    query: str,
+    *,
+    limit: int | None = None,
+    types: frozenset[str] | None = None,
+) -> list[SearchHit]:
+    """Stage-1 suggestions. `types` restricts the corpora searched (the task
+    composer asks for tasks + documents only); it intersects with any corpus
+    restriction the filter tokens imply, so an empty intersection yields no hits."""
     settings = get_settings()
     limit = limit or settings.search_suggest_limit
-    key = f"{query.strip().lower()}|{limit}"
+    types_key = ",".join(sorted(types)) if types else "all"
+    key = f"{query.strip().lower()}|{limit}|{types_key}"
 
     now = time.monotonic()
     cached = _cache.get(key)
@@ -37,25 +47,40 @@ def run_suggest(session: Session, query: str, *, limit: int | None = None) -> li
 
     text, filters = parse_query(query)
     branches = corpus_restriction(filters) or ALL_CORPORA
-    hits = search_client.suggest(
-        session,
-        tsquery=build_tsquery(text),
-        branches=branches,
-        limit=limit,
-        half_life_days=settings.search_recency_half_life_days,
-        source=filters.source,
-        label=filters.label,
-        status=filters.status,
-        before=filters.before,
-        after=filters.after,
-    )
-    result = [SearchHit.build(h) for h in hits]
-    _attach_input_source_urls(session, result)
+    if types is not None:
+        branches = frozenset(branches & types)
+
+    if branches:
+        hits = search_client.suggest(
+            session,
+            tsquery=build_tsquery(text),
+            branches=branches,
+            limit=limit,
+            half_life_days=settings.search_recency_half_life_days,
+            source=filters.source,
+            label=filters.label,
+            status=filters.status,
+            before=filters.before,
+            after=filters.after,
+        )
+        result = [SearchHit.build(h) for h in hits]
+        result = _drop_documents_shadowed_by_tasks(result)
+        _attach_input_source_urls(session, result)
+    else:
+        result = []
 
     if len(_cache) >= _CACHE_MAX:
         _cache.clear()
     _cache[key] = (now + settings.search_suggest_cache_ttl_seconds, result)
     return result
+
+
+def _drop_documents_shadowed_by_tasks(hits: list[SearchHit]) -> list[SearchHit]:
+    """A document linked to a task that also matched (a kotx brief whose task is
+    already in the results) is the same destination twice — keep the task, drop
+    the document. A brief whose task didn't match still surfaces on its own."""
+    task_ids = {h.id for h in hits if h.type == "task"}
+    return [h for h in hits if not (h.type == "document" and h.task_id in task_ids)]
 
 
 def _attach_input_source_urls(session: Session, hits: list[SearchHit]) -> None:

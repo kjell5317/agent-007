@@ -42,11 +42,12 @@ def _content(event: CalendarEvent) -> str:
 
 
 def _snippet(event: CalendarEvent) -> str | None:
-    if event.location:
-        return event.location
-    if event.description:
-        return event.description[:200]
-    return None
+    # Display/preview text (chat context + citations). The location lives in
+    # `content` for search; the snippet leads with the title (the summary) and a
+    # truncated description so a preview reads like the event, not its address.
+    parts = [event.summary, (event.description or "")[:200]]
+    snippet = " — ".join(p.strip() for p in parts if p and p.strip())
+    return snippet or None
 
 
 def _metadata(event: CalendarEvent) -> dict:

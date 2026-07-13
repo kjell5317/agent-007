@@ -6,9 +6,12 @@ import { api } from "@/lib/api";
 import type { SearchHit, SearchHitType } from "@/lib/types";
 
 const SUGGEST_DEBOUNCE_MS = 150;
-// Mirror the task composer: jump to existing tasks / calendar events / source
-// inputs. Notes aren't navigable and kotx docs are excluded server-side.
-const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "input", "document"]);
+// Mirror the task composer: suggest existing tasks (→ modal) and documents
+// (calendar events → calendar, kotx briefs → their task). Inputs and notes are
+// out. The server restricts to these via `types` so the limit isn't spent on
+// other corpora.
+const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "document"]);
+const SUGGEST_TYPES: readonly SearchHitType[] = ["task", "document"];
 
 export function ChatComposer({
   onSend,
@@ -36,7 +39,7 @@ export function ChatComposer({
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const { hits } = await api.suggest(q, 8);
+        const { hits } = await api.suggest(q, 8, SUGGEST_TYPES);
         if (cancelled) return;
         setSuggestions(hits.filter((h) => SUGGESTIBLE.has(h.type)).slice(0, 6));
         setDismissed(false);

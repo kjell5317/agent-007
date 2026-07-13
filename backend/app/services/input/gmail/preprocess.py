@@ -4,7 +4,7 @@ The Gmail API returns a deeply nested resource (`users.messages.get`, format=ful
 with base64url-encoded bodies and MIME parts. The agent expects compact, plain
 text plus per-source metadata. This module performs the conversion:
 
-  1. Walk MIME parts; prefer `text/plain`, fall back to `text/html`.
+  1. Walk MIME parts; prefer `text/html` (→ Markdown), fall back to `text/plain`.
   2. Convert HTML → Markdown (BeautifulSoup) — headings, lists, links,
      emphasis and blockquotes survive as CommonMark the UI can render.
   3. Strip quoted replies (`>`, "On <date> ... wrote:", "----- Original Message -----").
@@ -95,15 +95,18 @@ def preprocess_message(
     headers = _index_headers(payload.get("headers") or [])
 
     plain, html = _extract_bodies(payload)
-    body = plain if plain else (_html_to_markdown(html) if html else "")
+    # Build the body from the HTML part — links, headings, lists and emphasis
+    # survive as Markdown the UI renders. Fall back to text/plain only when
+    # there is no HTML, or it renders to nothing (empty skeleton / all images).
+    body = (_html_to_markdown(html) if html else "") or plain
 
     body = _strip_quoted_replies(body)
     body = _strip_signature(body)
     body = _collapse_whitespace(body)
 
-    # URL extraction from body text covers the common case. For HTML-only links
-    # (e.g. GitHub's "View it on GitHub" anchor that doesn't appear in the
-    # plain-text alternative) we additionally scan <a href> in the HTML part.
+    # URLs in the Markdown body cover the common case. Anchors whose text was
+    # empty or dropped (icons, tracking pixels) leave no inline URL behind, so
+    # also scan <a href> in the raw HTML part.
     urls = _extract_urls(body)
     if html:
         urls = _merge_urls(urls, _extract_html_hrefs(html))

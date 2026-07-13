@@ -32,6 +32,7 @@ from app.db.schemas.search import (
     SuggestResponse,
 )
 from app.services.search import run_suggest
+from app.services.search.filters import ALL_CORPORA
 
 log = logging.getLogger(__name__)
 
@@ -40,27 +41,43 @@ router = APIRouter(prefix="/search", tags=["search"])
 _MAX_LIMIT = 25
 
 
+def _parse_types(types: str | None) -> frozenset[str] | None:
+    """`?types=task,document` → the corpus set to restrict to, or None for all.
+    Unknown corpora are ignored; an all-unknown value falls back to all."""
+    if not types:
+        return None
+    requested = {t.strip().lower() for t in types.split(",") if t.strip()}
+    return frozenset(requested & ALL_CORPORA) or None
+
+
 @router.get("/suggest", response_model=SuggestResponse)
 async def suggest(
     q: str = Query("", max_length=256),
     limit: int | None = Query(None, ge=1, le=_MAX_LIMIT),
+    types: str | None = Query(None, max_length=64),
     session: Session = Depends(get_session),
 ) -> SuggestResponse:
-    return SuggestResponse(hits=run_suggest(session, q, limit=limit))
+    return SuggestResponse(hits=run_suggest(session, q, limit=limit, types=_parse_types(types)))
 
 
 @router.get("/stream")
 async def stream(
     q: str = Query("", max_length=256),
     limit: int | None = Query(None, ge=1, le=_MAX_LIMIT),
+    types: str | None = Query(None, max_length=64),
 ) -> EventSourceResponse:
+    branches = _parse_types(types)
+
     # A fresh session per stream: the request-scoped `get_session` dependency
     # would be torn down before the async generator drains. The query is fast
     # and runs off the event loop in a threadpool.
     def compute() -> list[str]:
         session = SessionLocal()
         try:
-            return [hit.model_dump_json() for hit in run_suggest(session, q, limit=limit)]
+            return [
+                hit.model_dump_json()
+                for hit in run_suggest(session, q, limit=limit, types=branches)
+            ]
         finally:
             session.close()
 

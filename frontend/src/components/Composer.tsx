@@ -14,10 +14,12 @@ interface Props {
 
 const SUGGEST_DEBOUNCE_MS = 150;
 // The composer helps you jump to something that already exists instead of
-// creating a duplicate: existing tasks (→ modal), calendar events (→ calendar)
-// and source inputs (→ their source). Notes aren't navigable and kotx docs are
-// excluded server-side (their task already shows), so keep to these three.
-const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "input", "document"]);
+// creating a duplicate: existing tasks (→ modal) and documents (calendar events
+// → calendar, kotx briefs → their task). Inputs and notes are out — you're
+// adding a task, so only task-shaped destinations are useful here. The server
+// restricts to these via `types` so the limit isn't spent on other corpora.
+const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "document"]);
+const SUGGEST_TYPES: readonly SearchHitType[] = ["task", "document"];
 
 export function Composer({ onCreated, onOpenTask }: Props) {
   const [value, setValue] = useState("");
@@ -46,7 +48,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const { hits } = await api.suggest(q, 8);
+        const { hits } = await api.suggest(q, 8, SUGGEST_TYPES);
         if (cancelled) return;
         setSuggestions(hits.filter((h) => SUGGESTIBLE.has(h.type)).slice(0, 6));
         setDismissed(false);

@@ -7,6 +7,7 @@ import type {
   Label,
   RawInput,
   SearchHit,
+  SearchHitType,
   Task,
 } from "./types";
 
@@ -121,10 +122,11 @@ export const api = {
   markInputsSeen: () =>
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 
-  suggest: (q: string, limit = 8) =>
-    request<{ hits: SearchHit[] }>(
-      `/search/suggest?q=${encodeURIComponent(q)}&limit=${limit}`,
-    ),
+  suggest: (q: string, limit = 8, types?: readonly SearchHitType[]) => {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    if (types && types.length) params.set("types", types.join(","));
+    return request<{ hits: SearchHit[] }>(`/search/suggest?${params}`);
+  },
 
   chatStream,
 

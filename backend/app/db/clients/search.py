@@ -92,14 +92,23 @@ _BRANCHES: dict[str, dict[str, str]] = {
         ),
     },
     DOCUMENT: {
-        "from": "documents d",
+        # kotx docs are content-for-context but not distinct: link them to their
+        # task (join on kotx_task_id, same as the stage-2 display) so a hit opens
+        # the task, and `_drop_documents_shadowed_by_tasks` can dedup it against a
+        # task row that also matched. Calendar rows have no such task (kt is NULL).
+        "from": (
+            "documents d LEFT JOIN tasks kt ON kt.kotx_task_id = "
+            "CASE WHEN d.provider = 'kotx' AND d.external_id ~ '^[0-9]+$' "
+            "THEN d.external_id::int END"
+        ),
         "fts": "d.tsv",
         "ts": "coalesce(d.starts_at, d.updated_at, now())",
         "select": (
             "'document' AS type, d.id::text AS id, d.title AS title, "
-            "coalesce(d.snippet, left(coalesce(d.content,''), 200)) AS snippet, d.url AS url, "
-            "NULL::text AS task_id, d.provider AS source, "
-            "NULL::text AS sender, 'event'::text AS status"
+            "coalesce(d.snippet, left(coalesce(d.content,''), 200)) AS snippet, "
+            "coalesce(kt.link, d.url) AS url, kt.id::text AS task_id, "
+            "d.provider AS source, NULL::text AS sender, "
+            "CASE WHEN d.provider = 'calendar' THEN 'event'::text END AS status"
         ),
     },
 }
@@ -179,9 +188,6 @@ def _filters_sql(
         if exclude_linked_inputs:
             parts.append("r.task_id IS NULL")
     if corpus == DOCUMENT:
-        # kotx documents are always tied to a task, and that task already shows
-        # (distinct) — so they never surface as their own hit.
-        parts.append("d.provider <> 'kotx'")
         if source is not None:
             parts.append("d.provider = :source")
     return "".join(f" AND {p}" for p in parts)

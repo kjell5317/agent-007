@@ -1,6 +1,9 @@
 import base64
+import os
 
-from app.services.input.gmail.preprocess import _html_to_markdown, preprocess_message
+os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
+
+from app.services.input.gmail.preprocess import _html_to_markdown, preprocess_message  # noqa: E402
 
 
 def _b64url(text: str) -> str:
@@ -81,7 +84,7 @@ def test_html_signature_is_stripped_after_markdown_conversion():
     assert not result.body.rstrip().endswith("--")
 
 
-def test_preprocess_prefers_plain_text_over_html():
+def test_preprocess_builds_markdown_from_html_over_plain_text():
     raw = {
         "threadId": "t1",
         "payload": {
@@ -94,5 +97,22 @@ def test_preprocess_prefers_plain_text_over_html():
         },
     }
     result = preprocess_message(raw)
-    assert result.body == "just plain text"
-    assert "**" not in result.body
+    # The HTML alternative is the richer source, so it wins and becomes Markdown.
+    assert result.body == "**bold html**"
+
+
+def test_preprocess_falls_back_to_plain_text_when_html_is_empty():
+    raw = {
+        "threadId": "t1",
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [{"name": "Subject", "value": "Hi"}],
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": _b64url("real plain content")}},
+                {"mimeType": "text/html", "body": {"data": _b64url("<style>p{color:red}</style>")}},
+            ],
+        },
+    }
+    result = preprocess_message(raw)
+    # HTML that renders to nothing must not blank out a body plain text has.
+    assert result.body == "real plain content"
