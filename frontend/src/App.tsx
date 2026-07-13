@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
@@ -8,7 +7,6 @@ import { ChatPanel } from "@/components/search/ChatPanel";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
@@ -47,11 +45,17 @@ export function App() {
   const tasksActive = view === "tasks";
   const inboxActive = view === "mail";
 
-  const selectTab = useCallback((next: string) => {
-    const tab = next === "chat" ? "chat" : "tasks";
-    lastTabRef.current = tab;
-    setView(tab);
-  }, []);
+  // Selecting the Chat tab always starts a fresh conversation (the persisted
+  // last chat is still reachable via its recent-chats list in the empty state).
+  const selectTab = useCallback(
+    (next: string) => {
+      const tab = next === "chat" ? "chat" : "tasks";
+      lastTabRef.current = tab;
+      if (tab === "chat") chat.newChat();
+      setView(tab);
+    },
+    [chat],
+  );
 
   // Back / Escape out of the mail or points overlay, returning to whichever tab
   // was last active.
@@ -346,30 +350,17 @@ export function App() {
           <PointsPanel onOpenTask={openTask} />
         ) : (
           <Tabs value={view} onValueChange={selectTab}>
-            <div className="mb-4 flex items-center gap-2">
-              <TabsList className="grid h-10 flex-1 grid-cols-2">
-                <TabsTrigger value="tasks">
-                  Tasks
-                  {tasks.length > 0 && (
-                    <span className="ml-1.5 text-xs text-muted-foreground">
-                      {tasks.length}
-                    </span>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="chat">Chat</TabsTrigger>
-              </TabsList>
-              {view === "chat" && chat.messages.length > 0 && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => chat.newChat()}
-                  className="shrink-0 gap-1.5"
-                >
-                  <Plus className="h-4 w-4" />
-                  New chat
-                </Button>
-              )}
-            </div>
+            <TabsList className="mb-4 grid h-10 w-full grid-cols-2">
+              <TabsTrigger value="tasks">
+                Tasks
+                {tasks.length > 0 && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">
+                    {tasks.length}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="chat">Chat</TabsTrigger>
+            </TabsList>
             <TabsContent value="tasks">
               <TasksPanel
                 tasks={tasks}

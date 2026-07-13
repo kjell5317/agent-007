@@ -38,6 +38,9 @@ interface Ctx {
 }
 
 const TASK_WIDGET = /task:\{([^}]+)\}/;
+const HEADING = /^(#{1,6})\s+(.+)$/;
+const BULLET = /^\s*[-*]\s+/;
+const ORDERED = /^\s*\d+\.\s+/;
 
 // Normalize for title-equality: strip markdown bold, surrounding markup, and
 // trailing sentence punctuation; lowercase; collapse whitespace.
@@ -121,6 +124,13 @@ const RULES: Rule[] = [
   {
     re: /\*\*([^*]+)\*\*/,
     render: (m, key) => <strong key={key}>{m[1]}</strong>,
+  },
+  {
+    // Italic: a single *…* that isn't bold. Bold (**…**) always matches at a
+    // lower index, so it wins the earliest-match tiebreak; requiring a
+    // non-space first char keeps stray asterisks ("2 * 3") from emphasizing.
+    re: /\*([^*\s][^*\n]*?)\*/,
+    render: (m, key) => <em key={key}>{m[1]}</em>,
   },
 ];
 
@@ -310,23 +320,49 @@ export function AssistantContent({
       i++;
       continue;
     }
-    const isBullet = /^\s*[-*]\s+/.test(line);
     const hasTask = TASK_WIDGET.test(line);
-    // Bullet run — but only lines without a task widget; a widget breaks out
-    // into its own block card below.
-    if (isBullet && !hasTask) {
+    // Heading (`## …`) — a compact bold line; inline markup inside still renders.
+    const heading = !hasTask ? HEADING.exec(line) : null;
+    if (heading) {
+      if (!isDuplicateTitle(heading[2], ctx)) {
+        blocks.push(
+          <p
+            key={key++}
+            className={cn(
+              "font-semibold",
+              heading[1].length <= 2 ? "text-base" : "text-sm",
+            )}
+          >
+            {renderInline(heading[2], `h${key}`, ctx)}
+          </p>,
+        );
+      }
+      i++;
+      continue;
+    }
+    // List runs — bullet (`-`/`*`) or ordered (`1.`), but only lines without a
+    // task widget; a widget breaks out into its own block card below.
+    const listMarker = BULLET.test(line) ? BULLET : ORDERED.test(line) ? ORDERED : null;
+    if (listMarker && !hasTask) {
       const items: string[] = [];
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i]) && !TASK_WIDGET.test(lines[i]))
-        items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
+      while (i < lines.length && listMarker.test(lines[i]) && !TASK_WIDGET.test(lines[i]))
+        items.push(lines[i++].replace(listMarker, ""));
       // Drop items that just repeat a carded task's title.
       const kept = items.filter((it) => !isDuplicateTitle(it, ctx));
       if (kept.length > 0) {
+        const ListTag = listMarker === ORDERED ? "ol" : "ul";
         blocks.push(
-          <ul key={key++} className="list-disc space-y-1 pl-5">
+          <ListTag
+            key={key++}
+            className={cn(
+              "space-y-1 pl-5",
+              listMarker === ORDERED ? "list-decimal" : "list-disc",
+            )}
+          >
             {kept.map((it, j) => (
-              <li key={j}>{renderInline(it, `ul${key}-${j}`, ctx)}</li>
+              <li key={j}>{renderInline(it, `li${key}-${j}`, ctx)}</li>
             ))}
-          </ul>,
+          </ListTag>,
         );
       }
       continue;
