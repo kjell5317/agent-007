@@ -169,16 +169,18 @@ async def get_drive_file(session: Session, file_id: str, *, max_chars: int) -> s
 
 
 def _to_hit(f: dict) -> SearchHit:
+    label = _mime_label(f.get("mimeType"))
     return SearchHit(
         type="drive",
         id=str(f.get("id") or ""),
         title=f.get("name") or "(untitled)",
-        snippet=_mime_label(f.get("mimeType")),
+        snippet=label,
         url=f.get("webViewLink"),
         source="drive",
         status="drive",
         ts=_parse_ts(f.get("modifiedTime")),
         score=0.0,
+        meta={"mime": label} if label else None,
     )
 
 

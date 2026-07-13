@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     search_drive_timeout_seconds: float = 4.0
     search_chat_max_iterations: int = 4
     search_chat_history_messages: int = 5
+    # Per-source drill-down tool limits. `messages` searches the raw_inputs
+    # mirror (gmail/slack); `contacts` federates live to the Google People API
+    # (same timeout budget as Drive, so a slow contacts call can't block).
+    search_chat_messages_limit: int = 8
+    search_chat_contacts_limit: int = 8
+    search_contacts_timeout_seconds: float = 4.0
     # Inputs whose cleaned content is shorter than this (chars) are noise (bare
     # "ok", "thanks", empty replies). They're skipped entirely at ingestion (the
     # preprocessing boundary in `input.create.drain`, kotx excepted) so they're

@@ -360,71 +360,108 @@ _F_DOC = (
     " AND (:f_after IS NULL OR d.starts_at >= CAST(:f_after AS timestamptz))"
 )
 
-_HYBRID_SQL = text(
-    f"""
-    WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),
-    vec AS (
-        SELECT id, type, row_number() OVER (ORDER BY dist) AS rnk
-        FROM (
-            (SELECT r.id::text AS id, 'input' AS type,
-                    r.embedding <=> CAST(:emb AS vector) AS dist
-               FROM raw_inputs r
-              WHERE :emb IS NOT NULL AND r.embedding IS NOT NULL
-                AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'{_F_INPUT}
-              ORDER BY r.embedding <=> CAST(:emb AS vector) LIMIT :pool)
-            UNION ALL
-            (SELECT n.id::text, 'note', n.embedding <=> CAST(:emb AS vector)
-               FROM notes n
-              WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL{_F_NOTE}
-              ORDER BY n.embedding <=> CAST(:emb AS vector) LIMIT :pool)
-            UNION ALL
-            (SELECT d.id::text, 'document', d.embedding <=> CAST(:emb AS vector)
-               FROM documents d
-              WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'calendar'{_F_DOC}
-              ORDER BY d.embedding <=> CAST(:emb AS vector) LIMIT :pool)
-        ) v
-        ORDER BY dist LIMIT :pool
+# Per-corpus retrieval branches. `_VEC_*` are the embedded corpora (pgvector
+# nearest-neighbour); `_KW_*` the keyword corpora (FTS ts_rank). Tasks are
+# keyword-only (no embedding column), so they appear in `_KW_*` alone. The two
+# sides fuse via RRF, so a subset of corpora still ranks correctly — the builder
+# below drops any branch not in the requested `corpora`.
+# Every branch aliases all three output columns (id / type / metric) so the
+# UNION column names hold no matter which branch lands first in a corpora subset.
+_VEC_BRANCH = {
+    INPUT: (
+        "(SELECT r.id::text AS id, 'input' AS type,\n"
+        "        r.embedding <=> CAST(:emb AS vector) AS dist\n"
+        "   FROM raw_inputs r\n"
+        "  WHERE :emb IS NOT NULL AND r.embedding IS NOT NULL\n"
+        f"    AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'{_F_INPUT}\n"
+        "  ORDER BY r.embedding <=> CAST(:emb AS vector) LIMIT :pool)"
     ),
-    kw AS (
-        SELECT id, type, row_number() OVER (ORDER BY rank DESC) AS rnk
-        FROM (
-            (SELECT t.id::text AS id, 'task' AS type, ts_rank_cd(t.tsv, q.tsq) AS rank
-               FROM tasks t, q WHERE q.tsq @@ t.tsv{_F_TASK}
-              ORDER BY ts_rank_cd(t.tsv, q.tsq) DESC LIMIT :pool)
-            UNION ALL
-            (SELECT r.id::text, 'input', ts_rank_cd(r.tsv, q.tsq)
-               FROM raw_inputs r, q
-              WHERE q.tsq @@ r.tsv AND r.processed_at IS NOT NULL
-                AND r.status <> 'duplicate'{_F_INPUT}
-              ORDER BY ts_rank_cd(r.tsv, q.tsq) DESC LIMIT :pool)
-            UNION ALL
-            (SELECT n.id::text, 'note', ts_rank_cd(n.tsv, q.tsq)
-               FROM notes n, q WHERE q.tsq @@ n.tsv{_F_NOTE}
-              ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC LIMIT :pool)
-            UNION ALL
-            (SELECT d.id::text, 'document', ts_rank_cd(d.tsv, q.tsq)
-               FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'calendar'{_F_DOC}
-              ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC LIMIT :pool)
-        ) k
-        ORDER BY rank DESC LIMIT :pool
+    NOTE: (
+        "(SELECT n.id::text AS id, 'note' AS type, n.embedding <=> CAST(:emb AS vector) AS dist\n"
+        "   FROM notes n\n"
+        f"  WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL{_F_NOTE}\n"
+        "  ORDER BY n.embedding <=> CAST(:emb AS vector) LIMIT :pool)"
     ),
-    fused AS (
-        SELECT coalesce(vec.id, kw.id) AS id, coalesce(vec.type, kw.type) AS type,
-               coalesce(1.0 / (60 + vec.rnk), 0.0)
-                 + coalesce(1.0 / (60 + kw.rnk), 0.0) AS rrf
-        FROM vec FULL OUTER JOIN kw ON vec.id = kw.id AND vec.type = kw.type
+    DOCUMENT: (
+        "(SELECT d.id::text AS id, 'document' AS type, d.embedding <=> CAST(:emb AS vector) AS dist\n"
+        "   FROM documents d\n"
+        f"  WHERE :emb IS NOT NULL AND d.embedding IS NOT NULL AND d.provider <> 'calendar'{_F_DOC}\n"
+        "  ORDER BY d.embedding <=> CAST(:emb AS vector) LIMIT :pool)"
+    ),
+}
+_KW_BRANCH = {
+    TASK: (
+        "(SELECT t.id::text AS id, 'task' AS type, ts_rank_cd(t.tsv, q.tsq) AS rank\n"
+        f"   FROM tasks t, q WHERE q.tsq @@ t.tsv{_F_TASK}\n"
+        "  ORDER BY ts_rank_cd(t.tsv, q.tsq) DESC LIMIT :pool)"
+    ),
+    INPUT: (
+        "(SELECT r.id::text AS id, 'input' AS type, ts_rank_cd(r.tsv, q.tsq) AS rank\n"
+        "   FROM raw_inputs r, q\n"
+        "  WHERE q.tsq @@ r.tsv AND r.processed_at IS NOT NULL\n"
+        f"    AND r.status <> 'duplicate'{_F_INPUT}\n"
+        "  ORDER BY ts_rank_cd(r.tsv, q.tsq) DESC LIMIT :pool)"
+    ),
+    NOTE: (
+        "(SELECT n.id::text AS id, 'note' AS type, ts_rank_cd(n.tsv, q.tsq) AS rank\n"
+        f"   FROM notes n, q WHERE q.tsq @@ n.tsv{_F_NOTE}\n"
+        "  ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC LIMIT :pool)"
+    ),
+    DOCUMENT: (
+        "(SELECT d.id::text AS id, 'document' AS type, ts_rank_cd(d.tsv, q.tsq) AS rank\n"
+        f"   FROM documents d, q WHERE q.tsq @@ d.tsv AND d.provider <> 'calendar'{_F_DOC}\n"
+        "  ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC LIMIT :pool)"
+    ),
+}
+_EMPTY_CTE = "{name} AS (SELECT NULL::text AS id, NULL::text AS type, NULL::bigint AS rnk WHERE false)"
+
+
+def _cte(name: str, members: list[str], order_by: str) -> str:
+    if not members:
+        return _EMPTY_CTE.format(name=name)
+    union = "\n            UNION ALL\n".join(members)
+    return (
+        f"{name} AS (SELECT id, type, row_number() OVER (ORDER BY {order_by}) AS rnk\n"
+        f"    FROM (\n{union}\n    ) x ORDER BY {order_by} LIMIT :pool)"
     )
-    SELECT type, id, rrf FROM fused ORDER BY rrf DESC LIMIT :k
-    """
-).bindparams(
-    bindparam("emb", type_=String()),
-    bindparam("raw_q", type_=String()),
-    bindparam("f_source", type_=String()),
-    bindparam("f_label", type_=String()),
-    bindparam("f_status", type_=String()),
-    bindparam("f_before", type_=String()),
-    bindparam("f_after", type_=String()),
-)
+
+
+# Cache one compiled statement per corpora combination — the SQL and its bind
+# declarations are fixed once the corpora set is chosen.
+_HYBRID_SQL_CACHE: dict[frozenset[str], object] = {}
+
+
+def _hybrid_sql(corpora: frozenset[str]):
+    cached = _HYBRID_SQL_CACHE.get(corpora)
+    if cached is not None:
+        return cached
+    vec_members = [_VEC_BRANCH[c] for c in (INPUT, NOTE, DOCUMENT) if c in corpora]
+    kw_members = [_KW_BRANCH[c] for c in (TASK, INPUT, NOTE, DOCUMENT) if c in corpora]
+    sql = (
+        "WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),\n"
+        + _cte("vec", vec_members, "dist") + ",\n"
+        + _cte("kw", kw_members, "rank DESC") + ",\n"
+        "fused AS (SELECT coalesce(vec.id, kw.id) AS id, coalesce(vec.type, kw.type) AS type,\n"
+        "       coalesce(1.0 / (60 + vec.rnk), 0.0) + coalesce(1.0 / (60 + kw.rnk), 0.0) AS rrf\n"
+        "  FROM vec FULL OUTER JOIN kw ON vec.id = kw.id AND vec.type = kw.type)\n"
+        "SELECT type, id, rrf FROM fused ORDER BY rrf DESC LIMIT :k"
+    )
+    # Declare only the string binds that actually appear, or SQLAlchemy rejects
+    # the construct. `raw_q` is always in the `q` CTE; the `_F_*` filters and
+    # `:emb` come and go with the corpora set.
+    binds = [bindparam("raw_q", type_=String()), bindparam("f_before", type_=String()),
+             bindparam("f_after", type_=String())]
+    if vec_members:
+        binds.append(bindparam("emb", type_=String()))
+    if INPUT in corpora or DOCUMENT in corpora:
+        binds.append(bindparam("f_source", type_=String()))
+    if TASK in corpora:
+        binds.append(bindparam("f_label", type_=String()))
+    if INPUT in corpora:
+        binds.append(bindparam("f_status", type_=String()))
+    clause = text(sql).bindparams(*binds)
+    _HYBRID_SQL_CACHE[corpora] = clause
+    return clause
 
 
 def _display_branch(corpus: str) -> dict[str, str]:
@@ -470,6 +507,7 @@ def hybrid_search(
     embedding: list[float] | None,
     raw_text: str,
     k: int,
+    corpora: frozenset[str] | None = None,
     min_input_chars: int = 0,
     source: str | None = None,
     label: str | None = None,
@@ -477,30 +515,35 @@ def hybrid_search(
     before: str | None = None,
     after: str | None = None,
 ) -> list[SuggestHit]:
-    """Top-k hits across tasks / inputs / notes / documents by hybrid similarity
-    + keyword (RRF over pgvector and Postgres FTS). `embedding=None` (embeddings
-    unconfigured) degrades to keyword-only. Optional metadata filters
-    (`source`/`label`/`status`/`before`/`after`) narrow the pool like the
-    stage-1 filter tokens; inputs under `min_input_chars` are excluded. Hits
-    carry the RRF score and come back in fused-rank order."""
+    """Top-k hits across the requested `corpora` (default all of tasks / inputs
+    / notes / documents) by hybrid similarity + keyword (RRF over pgvector and
+    Postgres FTS). `embedding=None` (embeddings unconfigured) degrades to
+    keyword-only. Optional metadata filters (`source`/`label`/`status`/`before`/
+    `after`) narrow the pool like the stage-1 filter tokens; inputs under
+    `min_input_chars` are excluded. Hits carry the RRF score and come back in
+    fused-rank order."""
+    corpora = corpora or ALL_CORPORA
     emb_literal = (
         "[" + ",".join(repr(float(x)) for x in embedding) + "]" if embedding else None
     )
-    ranked = session.execute(
-        _HYBRID_SQL,
-        {
-            "emb": emb_literal,
-            "raw_q": raw_text or "",
-            "pool": _RETRIEVE_POOL,
-            "k": k,
-            "min_input_chars": min_input_chars,
-            "f_source": source,
-            "f_label": label,
-            "f_status": status,
-            "f_before": before,
-            "f_after": after,
-        },
-    ).all()
+    # Only pass binds the compiled statement for these corpora actually declares.
+    params: dict[str, object] = {
+        "raw_q": raw_text or "",
+        "pool": _RETRIEVE_POOL,
+        "k": k,
+        "f_before": before,
+        "f_after": after,
+    }
+    if {INPUT, NOTE, DOCUMENT} & corpora:
+        params["emb"] = emb_literal
+    if {INPUT, DOCUMENT} & corpora:
+        params["f_source"] = source
+    if TASK in corpora:
+        params["f_label"] = label
+    if INPUT in corpora:
+        params["f_status"] = status
+        params["min_input_chars"] = min_input_chars
+    ranked = session.execute(_hybrid_sql(corpora), params).all()
     if not ranked:
         return []
 

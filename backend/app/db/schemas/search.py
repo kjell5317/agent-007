@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -9,8 +9,8 @@ from app.db.clients.search import SuggestHit
 
 
 class SearchHit(BaseModel):
-    type: str  # task | input | document
-    id: str
+    type: str  # task | input | note | document | drive | contact
+    id: str  # the source_id an action/get tool consumes (task_id, file_id, event_id, …)
     title: str
     snippet: str | None = None
     url: str | None = None
@@ -20,6 +20,10 @@ class SearchHit(BaseModel):
     status: str | None = None  # task/input status, or 'event' for documents
     ts: datetime | None = None
     score: float
+    # Source-specific extras surfaced to the agent in the uniform context record
+    # (calendar time, drive mime type, contact emails/phones). Not every source
+    # sets it; the renderer skips it when empty.
+    meta: dict[str, Any] | None = None
 
     @classmethod
     def build(cls, hit: SuggestHit) -> "SearchHit":

@@ -1,11 +1,17 @@
 """Chat / ask-mode agent (docs/search-plan.md stage 3).
 
-Retrieval-first and fast: every user turn injects the top hybrid hits (local +
-Drive) into context up front — the model answers from them without a tool
-round-trip. The same hits are exposed via citation tags, and `search` /
-`find_calendar_events` remain as multi-query drill-down tools. A full agent
-loop lets the model call any action tool (create/update/close tasks, events,
-notes) then answer; unlike the input flows there is no single terminal tool.
+Retrieval-first and fast: every user turn injects the top local hits (tasks +
+notes) into context up front — the model answers from them without a tool
+round-trip. Those hits are exposed via citation tags. Every other source is a
+dedicated drill-down tool (`messages_search`, `calendar_search`, `drive_search`,
+`contacts_search`, `tasks_search`, `search_notes`, plus GitHub/Notion), so the
+model routes to the one source a question needs rather than fanning out blindly.
+A full agent loop lets it call any action tool (create/update/close tasks,
+events, notes) then answer; unlike the input flows there is no terminal tool.
+
+Every search path returns `SearchHit`s that render into one uniform context
+record (`type · sim · date · id · meta — content`), so results read identically
+whatever source they came from.
 
 The runner is transport-agnostic: it pushes structured events (`citations`,
 `response_mode`, `token`, `tool_call`, `done`) to an `emit` callback that the
@@ -19,6 +25,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
 from sqlalchemy.orm import Session
@@ -51,18 +58,24 @@ from app.db.schemas.task import TaskCreate
 from app.services import github, notion_mcp
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
-from app.services.search.drive import get_drive_file
-from app.services.search.filters import Filters
-from app.services.search.retrieve import list_tasks, retrieve
+from app.services.search.contacts import search_contacts
+from app.services.search.drive import get_drive_file, search_drive
+from app.services.search.retrieve import (
+    find_tasks,
+    retrieve,
+    search_calendar,
+    search_messages,
+    search_notes,
+)
 
 log = logging.getLogger(__name__)
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 ResponseMode = Literal["sources", "answer"]
 
-# Citation tag prefixes by hit type. "D" = document (kotx/GitHub issues, etc.),
-# kept distinct from "E" = calendar event so a document isn't read as an event;
-# "G" = Google Drive file.
+# Citation tag prefixes by hit type. "E" = calendar event (a document with
+# source=calendar); "G" = Google Drive file; "C" = contact. "D" is kept for any
+# non-calendar document.
 _TAG_PREFIX = {
     "task": "T",
     "input": "I",
@@ -70,6 +83,7 @@ _TAG_PREFIX = {
     "document": "D",
     "calendar": "E",
     "drive": "G",
+    "contact": "C",
 }
 
 
@@ -96,7 +110,7 @@ class Citations:
             if key in self._seen:
                 continue
             self._seen.add(key)
-            prefix = _TAG_PREFIX.get(h.type, "R")
+            prefix = _tag_prefix(h)
             self._counts[prefix] = self._counts.get(prefix, 0) + 1
             entry = (f"{prefix}{self._counts[prefix]}", h)
             self._entries.append(entry)
@@ -104,36 +118,70 @@ class Citations:
         return new
 
 
+def _tag_prefix(h: SearchHit) -> str:
+    # Calendar events are documents with source=calendar; tag them "E" (event),
+    # distinct from a plain "D" document, matching the prompt's citation legend.
+    if h.type == "document" and h.source == "calendar":
+        return "E"
+    return _TAG_PREFIX.get(h.type, "R")
+
+
 def _sse_item(tag: str, h: SearchHit) -> dict[str, Any]:
     return {"tag": tag, **h.model_dump(mode="json")}
 
 
 def _context_line(tag: str, h: SearchHit) -> str:
-    head = f"[{tag}] {h.type}"
-    if h.status and h.status != h.type and h.status != "drive":
-        head += f"/{h.status}"
-    meta: list[str] = []
-    if h.sender:
-        meta.append(f"from {h.sender}")
-    if h.source and h.source != h.type:
-        meta.append(h.source)
+    """One hit as the uniform context record every source shares:
+    `[tag] type · sim · date · id=<source_id> · <meta> — title — content`.
+
+    `id=` is always the source_id a get/act tool consumes for THIS item
+    (task_id, event_id, file_id, note id, message id, contact resourceName);
+    a linked task shows separately as `task=<id>` for the task widget."""
+    meta = h.meta or {}
+    seg: list[str] = [h.type]
+    if "similarity" in meta:
+        seg.append(f"sim={meta['similarity']:.2f}")
     if h.ts:
-        meta.append(h.ts.date().isoformat())
-    line = f"{head}: {h.title or '(untitled)'}"
-    if meta:
-        line += " (" + ", ".join(meta) + ")"
-    if h.snippet:
+        seg.append(h.ts.date().isoformat())
+    seg.append(f"id={h.id}")
+    # Origin + lifecycle, when they add information beyond the type itself.
+    if h.source and h.source not in (h.type, "note", "drive", "contact", "contacts"):
+        seg.append(h.source)
+    if h.status and h.status not in (h.type, "note", "drive", "contact", "event"):
+        seg.append(h.status)
+    if h.sender:
+        seg.append(f"from {h.sender}")
+    # Source-specific extras.
+    if meta.get("start"):
+        seg.append(_clock(meta["start"]))
+    if meta.get("location"):
+        seg.append(f"@ {meta['location']}")
+    if meta.get("mime"):
+        seg.append(str(meta["mime"]))
+    for field in ("emails", "phones"):
+        if meta.get(field):
+            seg.append(", ".join(meta[field]))
+    if h.task_id and h.task_id != h.id:
+        seg.append(f"task={h.task_id}")
+
+    line = f"[{tag}] " + " · ".join(seg) + f" — {h.title or '(untitled)'}"
+    # Append the snippet as content unless it just repeats something already in
+    # the segments (drive mime label, calendar location, contact details).
+    if (
+        h.snippet
+        and h.snippet != h.title
+        and h.type not in ("drive", "contact")
+        and h.snippet != meta.get("location")
+    ):
         line += f" — {h.snippet[:200]}"
-    if h.task_id:
-        line += f" [task_id={h.task_id}]"
-    # Calendar / Drive hits carry the id the action tools need (event_id →
-    # update_event, file_id → get_drive_file). Surfacing it stops the model
-    # guessing the tag or title as the id.
-    elif h.type == "document" and h.source == "calendar":
-        line += f" [event_id={h.id}]"
-    elif h.type == "drive":
-        line += f" [file_id={h.id}]"
     return line
+
+
+def _clock(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%H:%M")
+    except (ValueError, TypeError):
+        return str(iso)
 
 
 _QUESTION_PREFIX_RE = re.compile(
@@ -225,13 +273,10 @@ async def run_chat(
         obs.set_trace_io(input=query)
 
         cites = Citations()
-        # The up-front retrieval below runs `query` with no filters; record its
-        # signature so an identical `search` tool call short-circuits instead of
-        # re-hitting the DB/Drive and burning a turn on results already in context.
-        searched: set[str] = {_search_sig(query, Filters())}
-        # Same retrieval path as the `search` tool (local + calendar + Drive), so the
-        # up-front context and a manual re-query behave identically. `retrieve` is
-        # resilient — a failing backend degrades to [] rather than sinking the answer.
+        # Fast local pre-injection: the top tasks + notes for this message, no
+        # external calls. Everything else is a per-source tool the model calls on
+        # demand. `retrieve` degrades to [] on an embed failure rather than sinking
+        # the answer; a repeated tool search is harmless (citation dedup drops it).
         entries = cites.add(await retrieve(session, query))
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
         await emit("response_mode", {"response_mode": response_mode})
@@ -264,7 +309,7 @@ async def run_chat(
                 break
             messages.append(assistant_message(resp))
             for tc in resp.tool_calls:
-                result_text, trace = await _dispatch(session, cites, tc, settings, emit, searched)
+                result_text, trace = await _dispatch(session, cites, tc, settings, emit)
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
         else:
@@ -339,33 +384,86 @@ def _trace(
     }
 
 
+async def _emit_search(
+    cites: Citations, emit: Emit, hits: list[SearchHit], *, name: str, purpose: str
+) -> tuple[str, dict[str, Any]]:
+    """Register hits, stream their citations, and format the shared uniform
+    record. One path for every per-source search tool, so results read
+    identically whatever source they came from."""
+    new = cites.add(hits)
+    if new:
+        await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
+    body = "\n".join(_context_line(tag, h) for tag, h in new) or "no matches"
+    return f"{purpose}:\n{body}", _trace(name, purpose=purpose[:80], summary=f"{len(new)} hits")
+
+
+def _opt(tin: dict[str, Any], key: str) -> str | None:
+    return str(tin[key]) if tin.get(key) else None
+
+
 async def _dispatch(
-    session: Session, cites: Citations, tc: ToolCall, settings, emit: Emit, searched: set[str]
+    session: Session, cites: Citations, tc: ToolCall, settings, emit: Emit
 ) -> tuple[str, dict[str, Any]]:
     """Run one tool call. Returns (text_for_llm, trace). Tool errors degrade to
     a failed trace + explanatory text rather than aborting the chat."""
     name = tc.name
     tin = tc.input or {}
+    q = str(tin.get("query") or "")
     try:
-        if name == "search":
-            return await _search(session, cites, tin, emit, searched)
-
-        if name == "list_tasks":
-            hits = list_tasks(
+        if name == "tasks_search":
+            hits = await find_tasks(
                 session,
-                status=str(tin.get("status") or "open"),
-                due_after=(str(tin["due_after"]) if tin.get("due_after") else None),
-                due_before=(str(tin["due_before"]) if tin.get("due_before") else None),
-                label=(str(tin["label"]) if tin.get("label") else None),
+                query=_opt(tin, "query"),
+                status=_opt(tin, "status"),
+                label=_opt(tin, "label"),
+                due_after=_opt(tin, "due_after"),
+                due_before=_opt(tin, "due_before"),
             )
-            new = cites.add(hits)
-            if new:
-                await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
-            body = "\n".join(_context_line(tag, h) for tag, h in new) or "no matching tasks"
-            return (
-                f"tasks:\n{body}",
-                _trace(name, purpose="list tasks", summary=f"{len(new)} tasks"),
+            purpose = f"tasks: {q}" if q else "list tasks"
+            return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
+
+        if name == "search_notes":
+            hits = await search_notes(session, q)
+            return await _emit_search(cites, emit, hits, name=name, purpose=f"notes: {q}")
+
+        if name == "messages_search":
+            hits = await search_messages(
+                session,
+                q,
+                source=(_opt(tin, "source") or "").lower() or None,
+                before=_opt(tin, "before"),
+                after=_opt(tin, "after"),
             )
+            return await _emit_search(cites, emit, hits, name=name, purpose=f"messages: {q}")
+
+        if name == "calendar_search":
+            hits = await search_calendar(
+                session,
+                query=_opt(tin, "query"),
+                time_min=_opt(tin, "time_min"),
+                time_max=_opt(tin, "time_max"),
+            )
+            return await _emit_search(cites, emit, hits, name=name, purpose="calendar")
+
+        if name == "drive_search":
+            hits = await search_drive(
+                session,
+                q,
+                k=settings.search_chat_drive_limit,
+                timeout=settings.search_drive_timeout_seconds,
+                after=_opt(tin, "after"),
+                before=_opt(tin, "before"),
+            )
+            return await _emit_search(cites, emit, hits, name=name, purpose=f"drive: {q}")
+
+        if name == "contacts_search":
+            hits = await search_contacts(
+                session,
+                q,
+                k=settings.search_chat_contacts_limit,
+                timeout=settings.search_contacts_timeout_seconds,
+            )
+            return await _emit_search(cites, emit, hits, name=name, purpose=f"contacts: {q}")
 
         if name == "get_drive_file":
             file_id = str(tin.get("file_id") or "")
@@ -458,61 +556,6 @@ async def _dispatch(
             f"{name} failed: {exc}",
             _trace(name, purpose=name, summary=str(exc), status="failed"),
         )
-
-
-def _search_sig(query: str, filters: Filters) -> str:
-    """Stable key for a retrieval (query + filters), so an identical repeat is
-    detectable. The up-front context is one such retrieval."""
-    return "|".join(
-        [
-            (query or "").strip().lower(),
-            filters.source or "",
-            filters.label or "",
-            filters.status or "",
-            filters.before or "",
-            filters.after or "",
-        ]
-    )
-
-
-async def _search(
-    session: Session, cites: Citations, tin: dict[str, Any], emit: Emit, searched: set[str]
-) -> tuple[str, dict[str, Any]]:
-    """The multi-query retrieval tool — the same `retrieve` path as the up-front
-    context. `source` routes the fan-out (`drive`/`calendar` = that API only,
-    another source narrows the local search, none = everything); the metadata
-    filters apply across every backend."""
-    q = str(tin.get("query") or "").strip()
-    filters = Filters(
-        source=(str(tin["source"]).lower() if tin.get("source") else None),
-        label=(str(tin["label"]) if tin.get("label") else None),
-        status=(str(tin["status"]) if tin.get("status") else None),
-        before=(str(tin["before"]) if tin.get("before") else None),
-        after=(str(tin["after"]) if tin.get("after") else None),
-    )
-    sig = _search_sig(q, filters)
-    if sig in searched:
-        # Already retrieved this exact query/filters (often the up-front context).
-        # Skip the round-trip and steer the model back to the context it has.
-        return (
-            f"'{q}' was already retrieved — those results are in the context "
-            "above. Answer from them; don't repeat the same search.",
-            _trace(
-                "search",
-                purpose=f"search: {q}"[:80],
-                summary="already retrieved — served from context",
-            ),
-        )
-    searched.add(sig)
-    hits = await retrieve(session, q, filters=filters)
-    new = cites.add(hits)
-    if new:
-        await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
-    body = "\n".join(_context_line(tag, h) for tag, h in new) or "no new matches"
-    return (
-        f"search results for '{q}':\n{body}",
-        _trace("search", purpose=f"search: {q}"[:80], summary=f"{len(new)} new hits"),
-    )
 
 
 async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:

@@ -404,11 +404,12 @@ THREAD_FOLLOWUP_TOOLS = [
 
 # --- Chat / "ask" mode --------------------------------------------------------
 #
-# The chat agent answers questions over the user's tasks/inbox/notes/calendar/
-# Drive (retrieved hits are injected up front) and can act on any of them. Unlike
-# the input flows there is no terminal tool — the runner loops until the model
-# stops calling tools and returns a final answer. `search` is the multi-query
-# fallback for when the injected context misses.
+# The chat agent answers questions over the user's data and can act on it.
+# The top tasks + notes for the latest message are injected up front; every
+# other source is a dedicated search tool the agent calls when the question
+# needs it (one source per tool — no blended fan-out). Unlike the input flows
+# there is no terminal tool — the runner loops until the model stops calling
+# tools and returns a final answer.
 
 # Chat create_task: `label` optional (the user rarely names one; the agent may
 # pick a fitting one). `notes` is dropped — chat has a dedicated `create_note`.
@@ -440,84 +441,165 @@ _EVENT_TIME_PROPS = {
 
 CHAT_TOOLS = [
     {
-        "name": "search",
+        "name": "tasks_search",
         "description": (
-            "Retrieve more by hybrid semantic + keyword match. The top results "
-            "for the user's latest message are ALREADY in context — only call "
-            "this for a follow-up needing different keywords or a deeper dig. "
-            "With no `source` it searches everything: tasks, inbox, notes, "
-            "calendar events and Google Drive. The `source` filter narrows the "
-            "backend: `drive` = Drive files only, `calendar` = calendar events "
-            "only (each carries an event id for `update_event`), or an input "
-            "source (gmail/slack/…) to restrict the local search. The "
-            "`label`/`status`/`after`/`before` filters apply across all "
-            "backends. Returns hits with citation tags."
+            "The user's own tasks (their to-do list). Two modes: pass a `query` "
+            "to keyword-match task title/description/label (ranked by relevance); "
+            "OR omit `query` and pass a `status` and/or a `due_after`/`due_before` "
+            "window to list tasks soonest-first — the reliable path for agenda "
+            "questions like 'today's todos', 'what's overdue', 'due this week' "
+            "(keyword search misses those, since task text rarely says 'today'). "
+            "`status`/`label` narrow either mode. Returns task hits with citation "
+            "tags. The top tasks for the latest message are already in context."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "What to look up."},
-                "source": {
+                "query": {
                     "type": "string",
-                    "description": (
-                        "Backend / origin filter: `drive` (Drive files only), "
-                        "`calendar` (calendar API only), or an input source "
-                        "(gmail/slack/…) to restrict the local search."
-                    ),
+                    "description": "Keywords to match against tasks. Omit to list by status/date.",
                 },
-                "label": {"type": "string", "description": "Restrict tasks to this label."},
                 "status": {
                     "type": "string",
-                    "description": "Restrict to a lifecycle status (open/closed/not_task/event).",
+                    "enum": ["open", "closed", "not_task"],
+                    "description": "Restrict to a lifecycle status. Listing defaults to open.",
+                },
+                "label": {"type": "string", "description": "Restrict to this label."},
+                "due_after": {
+                    "type": "string",
+                    "description": (
+                        "List only tasks due/scheduled on or after this date "
+                        "(YYYY-MM-DD). Listing mode only."
+                    ),
+                },
+                "due_before": {
+                    "type": "string",
+                    "description": (
+                        "List only tasks due/scheduled before this date (YYYY-MM-DD, "
+                        "exclusive; for 'today' pass tomorrow's date). Listing mode only."
+                    ),
+                },
+            },
+        },
+    },
+    {
+        "name": "search_notes",
+        "description": (
+            "Search the user's saved notes — the agent's long-term memory of "
+            "standalone facts (someone's role, an account number, a policy, a "
+            "recurring context). Semantic match. Use for 'what did I save/note "
+            "about X', or to recall a fact you might have recorded earlier. This "
+            "is the app's own memory, NOT the user's Notion workspace (use "
+            "`notion_search` for that)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to recall."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "messages_search",
+        "description": (
+            "Search messages the user received — ingested Gmail email and Slack "
+            "messages — by meaning and keyword. Use to find what someone sent "
+            "('the email about the lease', 'what did Anna say about the demo'). "
+            "Optionally restrict to one `source` and/or a date window. Returns "
+            "message hits with citation tags."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for in messages."},
+                "source": {
+                    "type": "string",
+                    "enum": ["gmail", "slack"],
+                    "description": "Restrict to one message source. Omit to search both.",
                 },
                 "before": {
                     "type": "string",
-                    "description": (
-                        "Only items before this date (YYYY-MM-DD, exclusive); for "
-                        "`source=calendar` it's the window end."
-                    ),
+                    "description": "Only messages before this date (YYYY-MM-DD, exclusive).",
                 },
                 "after": {
                     "type": "string",
-                    "description": (
-                        "Only items on/after this date (YYYY-MM-DD, inclusive); for "
-                        "`source=calendar` it's the window start."
-                    ),
+                    "description": "Only messages on/after this date (YYYY-MM-DD, inclusive).",
                 },
             },
             "required": ["query"],
         },
     },
     {
-        "name": "list_tasks",
+        "name": "calendar_search",
         "description": (
-            "List the user's tasks by status and/or due-date window — the right "
-            "tool for agenda questions like 'what are today's todos', 'what's "
-            "overdue', or 'what's due this week'. Needs no keywords (use `search` "
-            "for content matches). Returns tasks ordered soonest-first, each "
-            "with a citation tag. Compute the dates from the current time."
+            "Find events on the user's calendar — meetings, appointments, talks. "
+            "Two combinable modes: pass a `query` to match upcoming events by "
+            "meaning ('team offsite' finds 'Q3 offsite planning'), and/or a "
+            "`time_min`/`time_max` window to list what's scheduled in that range "
+            "(use the window for 'what's on my calendar tomorrow'). Each hit "
+            "carries an event id for `update_event`. For the user's to-do items "
+            "use `tasks_search`, not this."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "status": {
+                "query": {
                     "type": "string",
-                    "enum": ["open", "closed"],
-                    "description": "Which lifecycle to list. Defaults to open.",
+                    "description": "Free-text event description, matched semantically.",
                 },
-                "due_after": {
+                "time_min": {
                     "type": "string",
-                    "description": "Only tasks due/scheduled on or after this date (YYYY-MM-DD).",
+                    "description": "ISO 8601 / YYYY-MM-DD start of the window (inclusive).",
                 },
-                "due_before": {
+                "time_max": {
                     "type": "string",
-                    "description": (
-                        "Only tasks due/scheduled before this date (YYYY-MM-DD, "
-                        "exclusive). For 'today' pass tomorrow's date."
-                    ),
+                    "description": "ISO 8601 / YYYY-MM-DD end of the window (exclusive).",
                 },
-                "label": {"type": "string", "description": "Restrict to this label."},
             },
+        },
+    },
+    {
+        "name": "drive_search",
+        "description": (
+            "Search the user's Google Drive for documents — Google Docs/Sheets/"
+            "Slides, PDFs, and Office files (reference material, not tasks). "
+            "Returns file titles with a `[file_id=…]`; follow up with "
+            "`get_drive_file` to read one's contents."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Full-text query for Drive files."},
+                "before": {
+                    "type": "string",
+                    "description": "Only files modified before this date (YYYY-MM-DD, exclusive).",
+                },
+                "after": {
+                    "type": "string",
+                    "description": "Only files modified on/after this date (YYYY-MM-DD, inclusive).",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "contacts_search",
+        "description": (
+            "Look up a person in the user's Google Contacts — returns names with "
+            "their email addresses and phone numbers. Use when the user asks for "
+            "someone's contact details ('what's Anna's email', 'phone number for "
+            "the plumber') or you need an address to act on."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A name or contact detail to search for.",
+                },
+            },
+            "required": ["query"],
         },
     },
     {
@@ -569,8 +651,8 @@ CHAT_TOOLS = [
     {
         "name": "create_event",
         "description": (
-            "Add an event to the user's primary calendar. Run `search` with "
-            "`source=calendar` first to avoid duplicating one."
+            "Add an event to the user's primary calendar. Run `calendar_search` "
+            "first to avoid duplicating one."
         ),
         "parameters": {
             "type": "object",
@@ -585,7 +667,7 @@ CHAT_TOOLS = [
             "fields, or set `delete=true` to remove it (the single edit/delete "
             "tool, like `update_task`'s `status`). Task and commute events are "
             "planner-managed — use `update_task` for those. Get the `event_id` "
-            "from `search` with `source=calendar`."
+            "from `calendar_search`."
         ),
         "parameters": {
             "type": "object",

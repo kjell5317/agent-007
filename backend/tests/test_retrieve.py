@@ -1,6 +1,6 @@
-"""Unified retrieve() routing (DB-free): source picks the backends and the
-before/after filters reach the calendar + Drive API calls. Plus the rich-file
-text extractor."""
+"""Per-source retrieval (DB-free): the up-front `retrieve` pre-injects tasks +
+notes only, and each drill-down path (`search_messages`, `search_calendar`,
+`search_tasks`) targets its own corpus/backend. Plus the rich-file extractor."""
 
 from __future__ import annotations
 
@@ -16,34 +16,93 @@ from types import SimpleNamespace
 from app.db.clients.documents import CalendarMatch
 from app.db.clients.search import SuggestHit
 from app.services.search.extract import extract_text
-from app.services.search.filters import Filters
-from app.services.search.retrieve import list_tasks, retrieve
+from app.services.search.retrieve import (
+    find_tasks,
+    list_tasks,
+    retrieve,
+    search_messages,
+    search_tasks,
+)
 
-# The package re-exports the `retrieve` function, shadowing the submodule as an
-# attribute — grab the module itself so monkeypatch targets its bindings.
+# The package re-exports the functions, shadowing the submodule as an attribute —
+# grab the module itself so monkeypatch targets its bindings.
 retrieve_mod = importlib.import_module("app.services.search.retrieve")
 
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def _suggest(type_: str, id_: str) -> SuggestHit:
+def _suggest(type_: str, id_: str, *, status: str | None = None) -> SuggestHit:
     return SuggestHit(
         type=type_, id=id_, title="t", snippet=None, url=None, task_id=None,
-        source=None, sender=None, status=None, ts=None, score=1.0,
+        source=None, sender=None, status=status, ts=None, score=1.0,
     )
 
 
-def _patch_backends(monkeypatch, calls):
+def _patch_hybrid(monkeypatch, calls, rows=None):
     async def fake_embed(text, **kw):
         return [0.1, 0.2, 0.3, 0.4]
 
     def fake_hybrid(session, **kw):
-        calls["local"] += 1
-        return [_suggest("task", "t1")]
+        calls.append(kw)
+        return rows if rows is not None else [_suggest("task", "t1")]
+
+    monkeypatch.setattr(retrieve_mod, "embed", fake_embed)
+    monkeypatch.setattr(retrieve_mod.search_client, "hybrid_search", fake_hybrid)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_preinjects_tasks_and_notes_only(monkeypatch):
+    calls: list[dict] = []
+    _patch_hybrid(monkeypatch, calls)
+    # A calendar/drive backend call here would be a regression — retrieve must
+    # not fan out. Point them at raisers so any call blows up the test.
+    monkeypatch.setattr(
+        retrieve_mod.documents_store, "search_calendar_semantic",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("calendar called")),
+    )
+    hits = await retrieve(object(), "standup")
+    assert len(calls) == 1
+    assert calls[0]["corpora"] == frozenset({"task", "note"})
+    assert [h.id for h in hits] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_search_messages_restricts_to_inputs_with_filters(monkeypatch):
+    calls: list[dict] = []
+    _patch_hybrid(monkeypatch, calls, rows=[_suggest("input", "i1")])
+    monkeypatch.setattr(retrieve_mod, "_attach_input_source_urls", lambda s, h: None)
+    hits = await search_messages(object(), "invoice", source="gmail", before="2026-08-01")
+    assert calls[0]["corpora"] == frozenset({"input"})
+    assert calls[0]["source"] == "gmail"
+    assert calls[0]["before"] == "2026-08-01"
+    assert [h.id for h in hits] == ["i1"]
+
+
+@pytest.mark.asyncio
+async def test_search_tasks_keyword_only_with_status_postfilter(monkeypatch):
+    calls: list[dict] = []
+    _patch_hybrid(
+        monkeypatch, calls,
+        rows=[_suggest("task", "t1", status="open"), _suggest("task", "t2", status="closed")],
+    )
+    hits = await search_tasks(object(), "report", label="uni", status="open")
+    assert calls[0]["corpora"] == frozenset({"task"})
+    assert calls[0]["label"] == "uni"
+    # Tasks are keyword-only — no embedding is passed.
+    assert calls[0]["embedding"] is None
+    # `status` is derived, so it's a post-filter on the resolved hits.
+    assert [h.id for h in hits] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_search_calendar_query_mode_carries_event_id(monkeypatch):
+    async def fake_embed(text, **kw):
+        return [0.1, 0.2, 0.3, 0.4]
+
+    seen = {}
 
     def fake_cal(session, **kw):
-        calls["cal"] += 1
-        calls["cal_kw"] = kw
+        seen.update(kw)
         return [
             CalendarMatch(
                 event_id="e1", calendar_id=None, summary="Standup", location=None,
@@ -51,53 +110,36 @@ def _patch_backends(monkeypatch, calls):
             )
         ]
 
-    async def fake_drive(session, query, *, k, timeout, after=None, before=None):
-        calls["drive"] += 1
-        calls["drive_after"], calls["drive_before"] = after, before
+    monkeypatch.setattr(retrieve_mod, "embed", fake_embed)
+    monkeypatch.setattr(retrieve_mod.documents_store, "search_calendar_semantic", fake_cal)
+    hits = await retrieve_mod.search_calendar(object(), query="standup", time_max="2026-08-01")
+    assert seen["time_max"] == "2026-08-01"
+    assert [(h.type, h.id, h.source) for h in hits] == [("document", "e1", "calendar")]
+
+
+@pytest.mark.asyncio
+async def test_find_tasks_routes_query_to_keyword_and_empty_to_listing(monkeypatch):
+    seen = {}
+
+    async def fake_search(session, query, *, label=None, status=None):
+        seen["mode"] = "search"
+        seen["query"] = query
         return []
 
-    monkeypatch.setattr(retrieve_mod, "embed", fake_embed)
-    monkeypatch.setattr(retrieve_mod.search_client, "hybrid_search", fake_hybrid)
-    monkeypatch.setattr(retrieve_mod.documents_store, "search_calendar_semantic", fake_cal)
-    monkeypatch.setattr(retrieve_mod, "search_drive", fake_drive)
+    def fake_list(session, *, status, due_after, due_before, label):
+        seen["mode"] = "list"
+        seen["status"] = status
+        return []
 
+    monkeypatch.setattr(retrieve_mod, "search_tasks", fake_search)
+    monkeypatch.setattr(retrieve_mod, "list_tasks", fake_list)
 
-@pytest.mark.asyncio
-async def test_no_source_fans_out_to_all_backends(monkeypatch):
-    calls = {"local": 0, "cal": 0, "drive": 0}
-    _patch_backends(monkeypatch, calls)
-    hits = await retrieve(object(), "standup")
-    assert (calls["local"], calls["cal"], calls["drive"]) == (1, 1, 1)
-    # Calendar hit carries the event id (so update_event can use it).
-    assert any(h.type == "document" and h.id == "e1" for h in hits)
+    await find_tasks(object(), query="groceries")
+    assert seen["mode"] == "search" and seen["query"] == "groceries"
 
-
-@pytest.mark.asyncio
-async def test_source_calendar_runs_calendar_only_with_window(monkeypatch):
-    calls = {"local": 0, "cal": 0, "drive": 0}
-    _patch_backends(monkeypatch, calls)
-    await retrieve(object(), "dentist", filters=Filters(source="calendar", after="2026-07-01"))
-    assert (calls["local"], calls["cal"], calls["drive"]) == (0, 1, 0)
-    # before/after reach the calendar API as the time window.
-    assert calls["cal_kw"]["time_min"] == "2026-07-01"
-
-
-@pytest.mark.asyncio
-async def test_source_drive_runs_drive_only_with_window(monkeypatch):
-    calls = {"local": 0, "cal": 0, "drive": 0}
-    _patch_backends(monkeypatch, calls)
-    await retrieve(object(), "budget", filters=Filters(source="drive", before="2026-08-01"))
-    assert (calls["local"], calls["cal"], calls["drive"]) == (0, 0, 1)
-    # before/after reach the Drive API call.
-    assert calls["drive_before"] == "2026-08-01"
-
-
-@pytest.mark.asyncio
-async def test_specific_input_source_runs_local_only(monkeypatch):
-    calls = {"local": 0, "cal": 0, "drive": 0}
-    _patch_backends(monkeypatch, calls)
-    await retrieve(object(), "invoice", filters=Filters(source="gmail"))
-    assert (calls["local"], calls["cal"], calls["drive"]) == (1, 0, 0)
+    # No query → listing, defaulting to open.
+    await find_tasks(object(), due_before="2026-07-09")
+    assert seen["mode"] == "list" and seen["status"] == "open"
 
 
 def _task(id_, title, *, due=None, scheduled=None, label=None):

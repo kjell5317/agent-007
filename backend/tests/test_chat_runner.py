@@ -69,19 +69,19 @@ def test_classify_response_mode_examples(text, mode):
 
 @pytest.mark.asyncio
 async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
-    # Model calls `search` (with filters), then answers. run_chat and the tool
-    # share one `retrieve`; capture the tool call's filters to prove they thread.
+    # Pre-injection loads tasks + notes; the model then drills into messages via
+    # `messages_search` and answers. Capture the tool args to prove they thread.
     scripted = [
         _resp(
             tool_calls=(
                 ToolCall(
                     id="1",
-                    name="search",
-                    input={"query": "groceries", "source": "Gmail", "status": "open"},
+                    name="messages_search",
+                    input={"query": "groceries", "source": "Gmail", "after": "2026-07-01"},
                 ),
             )
         ),
-        _resp(text="You have one open task [T1]."),
+        _resp(text="You have one open task [T1] and a grocery email [I1]."),
     ]
 
     async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
@@ -90,16 +90,17 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
             await on_delta(resp.text)
         return resp
 
-    calls = {"n": 0, "tool_filters": None}
+    tool_args = {}
 
-    async def fake_retrieve(session, query, *, filters=None):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return [_hit("task", "abc", "Buy milk", task_id="abc", status="open")]
-        calls["tool_filters"] = filters
-        return [_hit("input", "raw1", "Grocery email", task_id=None)]
+    async def fake_retrieve(session, query):
+        return [_hit("task", "abc", "Buy milk", task_id="abc", status="open")]
+
+    async def fake_search_messages(session, query, *, source=None, before=None, after=None):
+        tool_args.update(query=query, source=source, before=before, after=after)
+        return [_hit("input", "raw1", "Grocery email", task_id=None, source="gmail")]
 
     monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "search_messages", fake_search_messages)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
     monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
     monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
@@ -123,12 +124,15 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     assert events[1][1]["response_mode"] == "answer"
 
     tool_events = [d for e, d in events if e == "tool_call"]
-    assert tool_events and tool_events[0]["name"] == "search"
+    assert tool_events and tool_events[0]["name"] == "messages_search"
 
-    # Metadata filters forwarded to the shared retrieve (source lower-cased).
-    assert calls["tool_filters"] is not None
-    assert calls["tool_filters"].source == "gmail"
-    assert calls["tool_filters"].status == "open"
+    # Tool args forwarded (source lower-cased by the dispatcher).
+    assert tool_args == {
+        "query": "groceries",
+        "source": "gmail",
+        "before": None,
+        "after": "2026-07-01",
+    }
 
     tokens = "".join(d["text"] for e, d in events if e == "token")
     assert "one open task" in tokens
@@ -166,14 +170,25 @@ async def test_source_mode_emits_metadata_and_prompt_context(monkeypatch):
 
 
 def test_context_line_surfaces_action_ids():
+    # The uniform record exposes the source_id as `id=` — the value get_drive_file
+    # / update_event consume — for every source, replacing the old per-type tags.
     drive = chat_runner._context_line(
-        "D1", _hit("drive", "real-file-id", "Pitch", source="drive", status="drive")
+        "G1", _hit("drive", "real-file-id", "Pitch", source="drive", status="drive")
     )
-    assert "[file_id=real-file-id]" in drive
+    assert "[G1] drive" in drive and "id=real-file-id" in drive
     cal = chat_runner._context_line(
         "E1", _hit("document", "ev123", "Standup", source="calendar", status="event")
     )
-    assert "[event_id=ev123]" in cal
+    assert "[E1]" in cal and "id=ev123" in cal
+
+
+def test_context_line_shows_similarity_and_linked_task():
+    hit = _hit(
+        "note", "n1", "VAT id is DE123", source="note", status="note",
+        task_id="task-9", meta={"similarity": 0.82},
+    )
+    line = chat_runner._context_line("N1", hit)
+    assert "sim=0.82" in line and "id=n1" in line and "task=task-9" in line
 
 
 @pytest.mark.asyncio
@@ -377,7 +392,6 @@ async def test_update_event_delete_routes_to_delete(monkeypatch):
         ToolCall(id="1", name="update_event", input={"event_id": "e1", "delete": True}),
         get_settings(),
         _noop_emit,
-        set(),
     )
     assert called == {"del": 1, "upd": 0}
     assert trace["purpose"] == "delete event"
@@ -385,24 +399,27 @@ async def test_update_event_delete_routes_to_delete(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_short_circuits_already_retrieved_query(monkeypatch):
-    calls = {"n": 0}
+async def test_per_source_search_emits_citations_and_uniform_record(monkeypatch):
+    async def fake_search_messages(session, query, *, source=None, before=None, after=None):
+        return [_hit("input", "raw1", "Grocery email", task_id="abc", source="gmail", sender="Anna")]
 
-    async def fake_retrieve(session, query, *, filters=None):
-        calls["n"] += 1
-        return []
+    monkeypatch.setattr(chat_runner, "search_messages", fake_search_messages)
 
-    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
-    # The up-front context already ran this query with no filters.
-    searched = {chat_runner._search_sig("financial spreadsheet", chat_runner.Filters())}
+    emitted: list[tuple[str, dict]] = []
 
-    text, trace = await chat_runner._search(
-        object(), Citations(), {"query": "financial spreadsheet"}, _noop_emit, searched
+    async def emit(event, data):
+        emitted.append((event, data))
+
+    text, trace = await chat_runner._dispatch(
+        object(),
+        Citations(),
+        ToolCall(id="1", name="messages_search", input={"query": "groceries"}),
+        get_settings(),
+        emit,
     )
-    assert calls["n"] == 0  # served from context, no re-retrieval
-    assert "already retrieved" in text
-    assert trace["name"] == "search"
-
-    # A different query is not a repeat — it retrieves.
-    await chat_runner._search(object(), Citations(), {"query": "budget"}, _noop_emit, searched)
-    assert calls["n"] == 1
+    # A citation is streamed for the hit, and the tool text carries the uniform
+    # record: the citation tag, the source_id, and the linked task id.
+    assert emitted and emitted[0][0] == "citations"
+    assert emitted[0][1]["items"][0]["tag"] == "I1"
+    assert trace["name"] == "messages_search"
+    assert "[I1]" in text and "id=raw1" in text and "task=abc" in text
