@@ -105,6 +105,7 @@ def envelope_for_transition(task: dict, doc: str | None = None) -> RawInputCreat
             "kotx_proposes": task.get("proposes"),
             "kotx_status": task.get("status"),
             "state_reason": task.get("stateReason"),
+            "trigger_reason": task.get("triggerReason"),
             "repo": repo,
             "subject_type": task.get("subjectType"),
             "subject_number": number,

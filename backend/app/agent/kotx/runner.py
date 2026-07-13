@@ -34,6 +34,7 @@ from app.services.notify import (
     ACTION_KOTX_APPROVE,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
+    DROP_LEADING_ACTION,
     clear_task_notification,
     notify_kotx_confirm_merge,
     notify_kotx_open_pr,
@@ -95,6 +96,7 @@ async def _run_transition(session: Session, raw) -> dict:
     kotx_id = int(meta["kotx_task_id"])
     repo = str(meta.get("repo") or "")
     number = int(meta.get("subject_number") or 0)
+    trigger_reason = str(meta.get("trigger_reason") or "").strip()
 
     trace: dict[str, Any] = {
         "outcome": None,
@@ -104,6 +106,11 @@ async def _run_transition(session: Session, raw) -> dict:
         "kotx_state": state,
         "kotx_kind": kind,
     }
+    # kotx now ships why a transition fired ("review requested", "new comment on
+    # PR", …). Surface it as the trace reason so kotx rows carry a reason in the
+    # inbox just like the other sources, rather than being the mute exception.
+    if trigger_reason:
+        trace["reason"] = trigger_reason
 
     task, matched_by = _match_task(session, meta, kotx_id, repo, number)
     if task is not None and task.kotx_task_id != kotx_id:
@@ -132,7 +139,7 @@ async def _run_transition(session: Session, raw) -> dict:
         # Informational transition (drafting/queued/running/…) with no task
         # yet — keep it visible in the inbox, but it is not actionable.
         trace["outcome"] = "not_task"
-        trace["reason"] = f"kotx {kind} is {state}; nothing to do yet"
+        trace.setdefault("reason", f"kotx {kind} is {state}; nothing to do yet")
         raw_inputs.finalize(session, raw.id, status="not_task", agent_trace=trace)
         session.commit()
         return trace
@@ -210,8 +217,9 @@ async def _sync_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> No
 
 
 def _kotx_primary_action(meta: dict) -> dict[str, str] | None:
-    """The action button that replaces "Done" on a kotx task's first (scheduled)
-    notification, chosen by the current transition."""
+    """The leading button on a kotx task's first (scheduled) notification,
+    chosen by the current transition: a run action that replaces "Done", or
+    `DROP_LEADING_ACTION` to drop it (review, which has no meaningful "Done")."""
     kind = meta.get("kotx_kind")
     state = meta.get("kotx_state")
     if kind == "implement" and state == "draft":
@@ -220,6 +228,11 @@ def _kotx_primary_action(meta: dict) -> dict[str, str] | None:
         if meta.get("kotx_proposes") == "merge":
             return {"action": ACTION_KOTX_MERGE, "title": "Merge"}
         return {"action": ACTION_KOTX_APPROVE, "title": "Open PR"}
+    if kind == "review" and state == "awaiting_approval":
+        # A review completes by posting the review (comment/approve) in the app,
+        # so a notification "Done" — which closes the task, discards the run, and
+        # awards points — is just a confusing alias for "Dismiss". Drop it.
+        return DROP_LEADING_ACTION
     return None
 
 

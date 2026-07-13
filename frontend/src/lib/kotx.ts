@@ -41,6 +41,9 @@ export interface KotxTask {
   assigned?: string[];
   assignees?: string[];
   triggeredBy: string | null;
+  // Human-readable why the task appeared/refreshed ("review requested", "new
+  // comment on PR", "manual run", …). Displayed verbatim.
+  triggerReason: string | null;
   outcome: string | null;
   attempt: number;
   startedAt: string | null;

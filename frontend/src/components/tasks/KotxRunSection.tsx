@@ -353,23 +353,18 @@ export function KotxRunSection({
 
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {approvedBy && (
+          {approvedBy ? (
             <span title={approvedBy}>
               Approved by:{" "}
               <span className="font-medium text-foreground">{approvedBy}</span>
             </span>
-          )}
+          ) : reviewAssignee ? (
+            <span className="font-medium text-foreground" title={reviewAssignee}>
+              {reviewAssignee}
+            </span>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center justify-end gap-3">
-          {reviewAssignee && (
-            <div
-              className="max-w-40 truncate text-xs text-muted-foreground"
-              title={reviewAssignee}
-            >
-              Assignee:{" "}
-              <span className="font-medium text-foreground">{reviewAssignee}</span>
-            </div>
-          )}
           <div className="flex items-center justify-end gap-2">
             {!editing && content !== null && view === "primary" && canEditPrimary && (
               <Button
@@ -470,7 +465,17 @@ export function KotxRunSection({
                     size="sm"
                     onClick={() =>
                       withBusy(
-                        () => kotx.approve(task.id),
+                        async () => {
+                          // Approve is always a clean, bodyless approval: never
+                          // submit REVIEW.md as the review body. Clearing it
+                          // first makes kotx approve with no comment even when
+                          // the run drafted text (use Comment to post that
+                          // text). "Open PR" approves a PR proposal, not a
+                          // review, so it's left untouched.
+                          if (task.proposes === "review")
+                            await kotx.putReview(task.id, "");
+                          await kotx.approve(task.id);
+                        },
                         task.proposes === "pr" ? "PR opened" : "Approved",
                         true,
                       )

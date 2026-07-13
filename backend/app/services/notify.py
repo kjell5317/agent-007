@@ -155,20 +155,31 @@ def _warning_actions() -> list[dict[str, str]]:
     ]
 
 
+# Sentinel for `notify_task_created(primary_action=…)`: drop the leading "Done"
+# button outright instead of replacing it. A kotx review task uses this — a
+# review completes by posting the review (comment/approve) in the app, never
+# from the notification, so "Done" would only be a points-awarding alias for
+# "Dismiss". Compared by identity, so callers must pass this exact object.
+DROP_LEADING_ACTION: dict[str, str] = {}
+
+
 async def notify_task_created(
     task, *, start: datetime, end: datetime, primary_action: dict[str, str] | None = None
 ) -> None:
     """A new task was extracted and given a calendar slot.
 
     `primary_action` swaps the leading "Done" button for a task-specific action
-    (kotx tasks put "Start"/"Open PR"/… here) while keeping Dismiss + Reschedule
-    — so a kotx task's first notification is the normal scheduled one with only
-    that button changed."""
+    (kotx tasks put "Start"/"Open PR"/… here), or `DROP_LEADING_ACTION` removes
+    it entirely (kotx review tasks, which have no "Done"). Dismiss + Reschedule
+    are always kept — so a kotx task's first notification is the normal
+    scheduled one with only that leading button changed."""
     parts = [f"Scheduled {_fmt_range(start, end)}"]
     if task.due_date:
         parts.append(f"Due {_fmt_when(to_user_tz(task.due_date))}")
     actions = _task_actions()
-    if primary_action is not None:
+    if primary_action is DROP_LEADING_ACTION:
+        actions = actions[1:]
+    elif primary_action is not None:
         actions = [primary_action, *actions[1:]]
     await notify(
         title=f"{_short_title(task)}",

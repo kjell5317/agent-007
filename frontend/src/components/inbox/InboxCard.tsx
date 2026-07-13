@@ -227,14 +227,13 @@ export function ActionButton({
 }
 
 // Mirrors InputBody's render conditions — cards skip the dropdown (and the
-// modal skips the body block) when nothing would show. kotx transitions omit
-// the reason: it's deterministic boilerplate ("… nothing to do yet").
+// modal skips the body block) when nothing would show.
 export function hasInputDetails(data: RawInput): boolean {
   if (hasSourceContentDetails(data)) return true;
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
   if (!trace) return false;
   return (
-    Boolean(trace.reason && !isKotxRun(data)) ||
+    Boolean(trace.reason) ||
     trace.currentTask.length > 0 ||
     trace.evidence.length > 0 ||
     trace.tools.length > 0
@@ -254,7 +253,7 @@ export function InputBody({ data }: { data: RawInput }) {
           </div>
         </Section>
       )}
-      {trace?.reason && !isKotxRun(data) && (
+      {trace?.reason && (
         <Section title="Reason">
           <Markdown content={trace.reason} className="text-xs" />
         </Section>

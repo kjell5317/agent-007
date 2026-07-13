@@ -56,6 +56,7 @@ def test_envelope_carries_github_thread_key_and_dedup_id():
     env = envelope_for_transition(
         _kotx_task(
             stateReason="waiting for user approval",
+            triggerReason="assigned to issue",
             assigned=["", "octocat"],
         ),
         doc="# TASK\ndo the thing",
@@ -66,6 +67,7 @@ def test_envelope_carries_github_thread_key_and_dedup_id():
     assert env.source_metadata["thread_id"] == "github:owner/repo#31"
     assert env.source_metadata["kotx_task_id"] == 42
     assert env.source_metadata["state_reason"] == "waiting for user approval"
+    assert env.source_metadata["trigger_reason"] == "assigned to issue"
     assert env.source_metadata["assignee"] == "octocat"
     assert env.content == "# TASK\ndo the thing"
     assert "kotx implement" not in env.content
@@ -435,6 +437,30 @@ async def test_unmatched_resolve_conflict_transition_is_visible_as_not_task(monk
     assert trace["outcome"] == "not_task"
     assert trace["reason"] == "kotx resolve_conflict is running; nothing to do yet"
     assert finalized["status"] == "not_task"
+
+
+@pytest.mark.asyncio
+async def test_trigger_reason_becomes_trace_reason(monkeypatch):
+    monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None
+    )
+    monkeypatch.setattr(
+        kotx_runner.tasks, "github_link_candidates", lambda s, r, n: []
+    )
+    monkeypatch.setattr(
+        kotx_runner.raw_inputs, "finalize", lambda session, raw_id, **kw: None
+    )
+
+    session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
+    trace = await kotx_runner.run_kotx_transition(
+        session, _raw(_meta(state="running", triggerReason="new comment on PR"))
+    )
+
+    # The kotx-shipped trigger reason wins over the informational boilerplate,
+    # so the inbox row carries a meaningful reason like every other source.
+    assert trace["outcome"] == "not_task"
+    assert trace["reason"] == "new comment on PR"
 
 
 @pytest.mark.asyncio
@@ -926,7 +952,7 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
 
 
 @pytest.mark.asyncio
-async def test_review_task_creation_keeps_done_as_scheduled_primary_action(
+async def test_review_task_creation_drops_done_from_scheduled_notification(
     monkeypatch, kotx_prompts
 ):
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
@@ -961,7 +987,9 @@ async def test_review_task_creation_keeps_done_as_scheduled_primary_action(
 
     assert trace["outcome"] == "task_created"
     assert kotx_prompts == []
-    assert scheduled["primary_action"] is None
+    # Review has no meaningful "Done", so its scheduled notification drops the
+    # leading button rather than swapping it (implement) or keeping "Done".
+    assert scheduled["primary_action"] is kotx_runner.DROP_LEADING_ACTION
 
 
 @pytest.mark.asyncio
@@ -1102,6 +1130,24 @@ async def test_scheduled_notification_keeps_done_without_action(monkeypatch):
     await notify_svc.notify_task_created(task, start=start, end=end)
 
     assert captured["actions"][0]["action"] == notify_svc.ACTION_CLOSE_TASK
+
+
+@pytest.mark.asyncio
+async def test_scheduled_notification_drops_done_for_review(monkeypatch):
+    captured = _capture_notify(monkeypatch)
+    task = SimpleNamespace(id=uuid.uuid4(), title="#31 Review", due_date=None)
+    start = datetime(2026, 7, 4, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
+
+    await notify_svc.notify_task_created(
+        task, start=start, end=end, primary_action=notify_svc.DROP_LEADING_ACTION
+    )
+
+    # "Done" is gone (it aliased "Dismiss" for a review); Dismiss + Reschedule stay.
+    assert [a["action"] for a in captured["actions"]] == [
+        notify_svc.ACTION_DISMISS_TASK,
+        notify_svc.ACTION_RESCHEDULE_TASK,
+    ]
 
 
 @pytest.mark.asyncio
