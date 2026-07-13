@@ -169,10 +169,11 @@ export function InboxCard({
               <span className="min-w-0 flex-1 truncate font-medium">
                 {senderName(data)}
               </span>
-              <MetaDot />
               <span className="shrink-0 font-medium">{when}</span>
             </div>
           </div>
+
+          <div aria-hidden className="h-6 w-6 shrink-0" />
         </div>
 
         {expandable && (
