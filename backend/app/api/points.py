@@ -48,6 +48,7 @@ class PointsLogEntryRead(BaseModel):
     source: str
     reason: str
     caller: str | None
+    task_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -55,6 +56,7 @@ class PointsLogRead(BaseModel):
     entries: list[PointsLogEntryRead]
     count: int
     last_seen_at: datetime
+    has_more: bool
 
 
 class PointsLogSeenRead(BaseModel):
@@ -83,7 +85,8 @@ def get_points(session: Session = Depends(get_session)) -> TotalRead:
 # The log is a history, not an unread feed: viewing it (mark_seen) must not
 # empty it, and a process restart (which resets the in-memory watermark) must
 # not hide older entries. The watermark only drives `count` — the unseen
-# badge — while the entries pad out to at least this many recent rows.
+# badge. We fetch one extra row for explicit `has_more` pagination while keeping
+# the default response padded to a useful minimum.
 MIN_LOG_ENTRIES = 10
 
 
@@ -96,12 +99,14 @@ def get_points_log(
     _check_access(request)
     unseen = points_store.count_since(session, state.last_seen_points_log_at)
     entries = points_store.list_recent(
-        session, limit=min(max(MIN_LOG_ENTRIES, unseen), limit)
+        session, limit=min(max(MIN_LOG_ENTRIES, limit) + 1, 201)
     )
+    has_more = len(entries) > limit
     return PointsLogRead(
-        entries=[_log_entry(e) for e in entries],
+        entries=[_log_entry(e) for e in entries[:limit]],
         count=unseen,
         last_seen_at=state.last_seen_points_log_at,
+        has_more=has_more,
     )
 
 
@@ -143,6 +148,7 @@ def _log_entry(entry: PointsEntry) -> PointsLogEntryRead:
         source=entry.source,
         reason=_reason_for(entry),
         caller=_caller_for(entry),
+        task_id=entry.task_id,
         created_at=entry.created_at,
     )
 

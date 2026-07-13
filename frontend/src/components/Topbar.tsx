@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut, Mail, Plus, Search } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { CircleUser, ExternalLink, ListTodo, LogOut, Mail, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, type PointsLogEntry } from "@/lib/api";
+import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
 import type { ThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -26,22 +23,6 @@ function formatPoints(n: number): string {
   return String(Math.round(n));
 }
 
-function formatSignedPoints(n: number): string {
-  if (n === 0) return formatPoints(0);
-  return `${n > 0 ? "+" : "−"}${formatPoints(Math.abs(n))}`;
-}
-
-function formatLogTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
-}
-
 // Minimal invented points glyph — a four-point sparkle.
 function PointsIcon({ className }: { className?: string }) {
   return (
@@ -59,27 +40,26 @@ function PointsIcon({ className }: { className?: string }) {
 export function Topbar({
   theme,
   onThemeChange,
-  mode = "normal",
+  view,
   unreadInbox = 0,
+  onTasksOpen,
   onMailOpen,
   onSearchOpen,
-  onBack,
-  onNewChat,
+  onPointsOpen,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
-  mode?: "normal" | "mail" | "search";
+  view: "tasks" | "mail" | "search" | "points";
   unreadInbox?: number;
+  onTasksOpen: () => void;
   onMailOpen?: () => void;
   onSearchOpen?: () => void;
-  onBack?: () => void;
-  onNewChat?: () => void;
+  onPointsOpen?: () => void;
 }) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
   const [points, setPoints] = useState<number | null>(null);
-  const [pointsOpen, setPointsOpen] = useState(false);
   // A short-lived "+N / −N" burst keyed by a counter so each change replays
   // the float + pop animation even when the same delta repeats.
   const [flash, setFlash] = useState<{ key: number; delta: number } | null>(
@@ -200,364 +180,108 @@ export function Topbar({
           }
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
-        {mode !== "normal" ? (
-          <div className="flex items-center gap-2">
-            {mode === "search" && (
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={onNewChat}
-                aria-label="New chat"
-                title="New chat"
+        <NavButton
+          active={view === "tasks"}
+          onClick={onTasksOpen}
+          label="Tasks"
+          title="Tasks"
+        >
+          <ListTodo className="h-5 w-5" />
+        </NavButton>
+        <NavButton
+          active={view === "search"}
+          onClick={onSearchOpen}
+          label="Search"
+          title="Search"
+        >
+          <Search className="h-5 w-5" />
+        </NavButton>
+        <NavButton
+          active={view === "mail"}
+          onClick={onMailOpen}
+          label={unreadInbox > 0 ? `Inbox, ${unreadInbox} unread` : "Inbox"}
+          title="Inbox"
+          className="relative"
+        >
+          <Mail className="h-5 w-5" />
+          {unreadInbox > 0 && (
+            <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-emerald-500" />
+          )}
+        </NavButton>
+        {points != null && (
+          <div className="relative">
+            <NavButton
+              active={view === "points"}
+              onClick={onPointsOpen}
+              label="Points"
+              title="Points"
+              className="gap-1.5 tabular-nums"
+            >
+              <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
+              <span
+                key={flash?.key ?? "idle"}
+                className={cn("inline-block", flash && "animate-points-pop")}
               >
-                <Plus className="h-5 w-5" />
-              </Button>
-            )}
-            <Button onClick={onBack}>Back</Button>
-          </div>
-        ) : (
-          <>
-            {points != null && (
-              <div className="relative">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setPointsOpen(true)}
-                  className="gap-1.5 tabular-nums"
-                  title="Adjust points"
-                >
-                  <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
-                  <span
-                    key={flash?.key ?? "idle"}
-                    className={cn(
-                      "inline-block",
-                      flash && "animate-points-pop",
-                    )}
-                  >
-                    {formatPoints(points)}
-                  </span>
-                </Button>
-                {flash && (
-                  <span
-                    key={flash.key}
-                    onAnimationEnd={() => setFlash(null)}
-                    className={cn(
-                      "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
-                      flash.delta >= 0
-                        ? "text-emerald-500"
-                        : "text-destructive",
-                    )}
-                  >
-                    {flash.delta >= 0 ? "+" : "−"}
-                    {formatPoints(Math.abs(flash.delta))}
-                  </span>
+                {formatPoints(points)}
+              </span>
+            </NavButton>
+            {flash && (
+              <span
+                key={flash.key}
+                onAnimationEnd={() => setFlash(null)}
+                className={cn(
+                  "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
+                  flash.delta >= 0 ? "text-emerald-500" : "text-destructive",
                 )}
-              </div>
+              >
+                {flash.delta >= 0 ? "+" : "−"}
+                {formatPoints(Math.abs(flash.delta))}
+              </span>
             )}
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onSearchOpen}
-              aria-label="Search"
-              title="Search"
-            >
-              <Search className="h-5 w-5" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={onMailOpen}
-              aria-label={
-                unreadInbox > 0
-                  ? `Open mail, ${unreadInbox} unread`
-                  : "Open mail"
-              }
-              title="Mail"
-              className="relative"
-            >
-              <Mail className="h-5 w-5" />
-              {unreadInbox > 0 && (
-                <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-emerald-500" />
-              )}
-            </Button>
-            {email && (
-              <AccountMenu
-                email={email}
-                autoPoll={autoPoll}
-                theme={theme}
-                onToggleAutoPoll={toggleAutoPoll}
-                onThemeChange={onThemeChange}
-                onLogout={logout}
-              />
-            )}
-          </>
+          </div>
+        )}
+        {email && (
+          <AccountMenu
+            email={email}
+            autoPoll={autoPoll}
+            theme={theme}
+            onToggleAutoPoll={toggleAutoPoll}
+            onThemeChange={onThemeChange}
+            onLogout={logout}
+          />
         )}
       </div>
-      <PointsModal
-        open={pointsOpen}
-        onClose={() => setPointsOpen(false)}
-        total={points}
-        onTotal={setPoints}
-      />
     </header>
   );
 }
 
-function PointsModal({
-  open,
-  onClose,
-  total,
-  onTotal,
+function NavButton({
+  active,
+  label,
+  title,
+  children,
+  className,
+  onClick,
 }: {
-  open: boolean;
-  onClose: () => void;
-  total: number | null;
-  onTotal: (total: number) => void;
+  active: boolean;
+  label: string;
+  title: string;
+  children: ReactNode;
+  className?: string;
+  onClick?: () => void;
 }) {
-  const [amount, setAmount] = useState("");
-  const [reason, setReason] = useState("");
-  const [tab, setTab] = useState("adjust");
-  const [logEntries, setLogEntries] = useState<PointsLogEntry[]>([]);
-  const [logCount, setLogCount] = useState(0);
-  const [logSeenBefore, setLogSeenBefore] = useState<string | null>(null);
-  const [logLoaded, setLogLoaded] = useState(false);
-  const [logBusy, setLogBusy] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const resetLog = () => {
-    setTab("adjust");
-    setLogEntries([]);
-    setLogCount(0);
-    setLogSeenBefore(null);
-    setLogLoaded(false);
-    setLogBusy(false);
-  };
-
-  const close = () => {
-    resetLog();
-    onClose();
-  };
-
-  // Load the log (entries + unseen count + watermark) as soon as the modal
-  // opens, so the Log tab's unseen badge is populated before that tab is
-  // opened — the same way the inbox fills its unread badge before you enter
-  // the mail view. Don't rely on finally() to clear busy: setLogLoaded
-  // re-runs this effect and its cleanup flips `cancelled`, so a deferred
-  // reset would be skipped and the spinner would hang.
-  useEffect(() => {
-    if (!open || logLoaded) return;
-    let cancelled = false;
-    setLogBusy(true);
-    api
-      .getPointsLog()
-      .then((res) => {
-        if (cancelled) return;
-        setLogEntries(res.entries);
-        setLogCount(res.count);
-        setLogSeenBefore(res.last_seen_at);
-        setLogLoaded(true);
-        setLogBusy(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLogBusy(false);
-        toast.error(`Failed to load log: ${(err as Error).message}`);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [logLoaded, open]);
-
-  // Switching to the Log tab counts as viewing it: clear the unseen badge and
-  // advance the server watermark, mirroring how opening the inbox resets its
-  // unread count. The green per-entry dots stay (they key off the watermark
-  // fetched on open) so you can still see what's new for this viewing.
-  useEffect(() => {
-    if (!open || tab !== "log" || logCount === 0) return;
-    setLogCount(0);
-    void api.markPointsLogSeen();
-  }, [logCount, open, tab]);
-
-  const apply = async (sign: 1 | -1) => {
-    // Points are whole numbers — round the entered amount before applying.
-    const magnitude = Math.round(Math.abs(Number(amount)));
-    if (!Number.isFinite(magnitude) || magnitude === 0) {
-      toast.error("Enter a non-zero amount.");
-      return;
-    }
-    const delta = sign * magnitude;
-    setBusy(true);
-    try {
-      const cleanReason = reason.trim();
-      const res = await api.adjustPoints(delta, {
-        caller: "Manual",
-        ...(cleanReason ? { reason: cleanReason } : {}),
-      });
-      onTotal(res.total);
-      const s = delta >= 0 ? "+" : "";
-      toast.success(`${s}${formatPoints(delta)} points`);
-      setAmount("");
-      setReason("");
-      close();
-    } catch (err) {
-      toast.error(`Failed: ${(err as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <Modal
-      open={open}
-      onClose={close}
-      title="Adjust points"
-      className="max-w-md"
+    <Button
+      size="icon"
+      variant={active ? "secondary" : "ghost"}
+      onClick={onClick}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      title={title}
+      className={className}
     >
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="mb-4 grid w-full grid-cols-2">
-          <TabsTrigger value="adjust">Adjust</TabsTrigger>
-          <TabsTrigger value="log">
-            Log
-            {logCount > 0 && (
-              <span className="ml-2 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-                {logCount}
-              </span>
-            )}
-          </TabsTrigger>
-        </TabsList>
-        {/* Fixed-height body so switching tabs keeps the modal the same size
-            (the Adjust form is short; the Log list is tall and variable).
-            overflow-hidden lives on the log panel (below), not here: the
-            Adjust inputs' focus ring extends past their box and a clip on this
-            shared wrapper would cut it off.
-            `data-[state=active]:flex` (not a bare `flex`): Radix keeps the
-            inactive panel mounted with the `hidden` attribute, and a bare
-            `flex` utility would override `[hidden]{display:none}`, leaving the
-            hidden panel taking flex space. Gating the display on the active
-            state lets `hidden` win for the inactive panel. */}
-        <div className="flex h-80 flex-col">
-          <TabsContent
-            value="adjust"
-            className="mt-0 flex-1 flex-col justify-center data-[state=active]:flex"
-          >
-            {total != null && (
-              <div className="mb-4 text-center">
-                <span className="text-4xl font-bold tabular-nums">
-                  {formatPoints(total)}
-                </span>
-                <span className="ml-1 text-sm text-muted-foreground">
-                  points
-                </span>
-              </div>
-            )}
-            <Input
-              type="number"
-              inputMode="numeric"
-              min="0"
-              step="1"
-              autoFocus
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="Amount"
-              aria-label="Amount"
-              className="mb-3"
-            />
-            <Input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              maxLength={128}
-              placeholder="Reason"
-              aria-label="Reason"
-              className="mb-3"
-            />
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                className="flex-1"
-                disabled={busy}
-                onClick={() => apply(-1)}
-              >
-                − Subtract
-              </Button>
-              <Button
-                className="flex-1"
-                disabled={busy}
-                onClick={() => apply(1)}
-              >
-                + Add
-              </Button>
-            </div>
-          </TabsContent>
-          <TabsContent
-            value="log"
-            className="mt-0 min-h-0 flex-1 flex-col overflow-hidden data-[state=active]:flex"
-          >
-            <div
-              className={cn(
-                "min-h-0 flex-1 overflow-y-auto",
-                logEntries.length > 0 && "[scrollbar-gutter:stable]",
-              )}
-            >
-              {logBusy ? (
-                <div className="py-8 text-center text-sm text-muted-foreground">
-                  Loading...
-                </div>
-              ) : logEntries.length === 0 ? (
-                <div className="py-8 text-center text-sm text-muted-foreground">
-                  No point changes yet.
-                </div>
-              ) : (
-                <div className="divide-y pr-4">
-                  {logEntries.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          {logSeenBefore != null &&
-                            new Date(entry.created_at).getTime() >
-                              new Date(logSeenBefore).getTime() && (
-                              <span
-                                aria-label="Unseen"
-                                title="Unseen"
-                                className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                              />
-                            )}
-                          <div className="min-w-0 flex-1 truncate text-sm font-medium">
-                            {entry.reason}
-                          </div>
-                        </div>
-                        <div className="mt-0.5 flex min-w-0 gap-2 text-xs text-muted-foreground">
-                          <span className="shrink-0">
-                            {formatLogTime(entry.created_at)}
-                          </span>
-                          {entry.caller && (
-                            <span className="min-w-0 truncate">
-                              {entry.caller}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div
-                        className={cn(
-                          "self-center text-sm font-semibold tabular-nums",
-                          entry.amount >= 0
-                            ? "text-emerald-500"
-                            : "text-destructive",
-                        )}
-                      >
-                        {formatSignedPoints(entry.amount)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </TabsContent>
-        </div>
-      </Tabs>
-    </Modal>
+      {children}
+    </Button>
   );
 }
 

@@ -108,12 +108,14 @@ def test_points_log_keeps_history_and_counts_unseen(monkeypatch):
 
     assert log.count == 1
     assert log.last_seen_at == checkpoint
+    assert log.has_more is False
     # The log is a history padded to MIN_LOG_ENTRIES — seen entries stay
     # visible; only `count` reflects the watermark.
     assert [entry.id for entry in log.entries] == [after_seen.id, before_seen.id]
     assert log.entries[0].amount == -3
     assert log.entries[0].reason == "New change"
     assert log.entries[0].caller == "Manual"
+    assert log.entries[0].task_id is None
 
     seen = points_api.mark_points_log_seen(SimpleNamespace(session={}), session=session)
 
@@ -122,6 +124,63 @@ def test_points_log_keeps_history_and_counts_unseen(monkeypatch):
     after = points_api.get_points_log(SimpleNamespace(session={}), session=session)
     assert after.count == 0
     assert [entry.id for entry in after.entries] == [after_seen.id, before_seen.id]
+
+
+def test_points_log_paginates_and_serializes_task_id(monkeypatch):
+    session = _sqlite_session()
+    _open_access(monkeypatch)
+    old = points_store.add_entry(
+        session,
+        source="manual",
+        section="Manual",
+        action_name="Old change",
+        factor=1,
+        quantity=1,
+        amount=1,
+    )
+    task_id = uuid.uuid4()
+    task = points_store.add_entry(
+        session,
+        source="task",
+        action_name="Finish report",
+        task_id=task_id,
+        factor=1,
+        quantity=10,
+        amount=10,
+    )
+    newest = points_store.add_entry(
+        session,
+        source="manual",
+        section="Manual",
+        action_name="Newest change",
+        factor=-2,
+        quantity=1,
+        amount=-2,
+    )
+    old.created_at = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    task.created_at = datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc)
+    newest.created_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    session.commit()
+
+    log = points_api.get_points_log(
+        SimpleNamespace(session={}),
+        limit=2,
+        session=session,
+    )
+
+    assert log.has_more is True
+    assert [entry.id for entry in log.entries] == [newest.id, task.id]
+    assert log.entries[1].task_id == task_id
+    assert log.entries[1].reason == "Finish report"
+
+    all_rows = points_api.get_points_log(
+        SimpleNamespace(session={}),
+        limit=3,
+        session=session,
+    )
+
+    assert all_rows.has_more is False
+    assert [entry.id for entry in all_rows.entries] == [newest.id, task.id, old.id]
 
 
 @pytest.mark.asyncio
