@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { CircleUser, ExternalLink, ListTodo, LogOut, Mail, Search } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CircleUser, ExternalLink, LogOut, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -40,21 +40,19 @@ function PointsIcon({ className }: { className?: string }) {
 export function Topbar({
   theme,
   onThemeChange,
-  view,
+  mode = "normal",
   unreadInbox = 0,
-  onTasksOpen,
   onMailOpen,
-  onSearchOpen,
   onPointsOpen,
+  onBack,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
-  view: "tasks" | "mail" | "search" | "points";
+  mode?: "normal" | "mail" | "points";
   unreadInbox?: number;
-  onTasksOpen: () => void;
   onMailOpen?: () => void;
-  onSearchOpen?: () => void;
   onPointsOpen?: () => void;
+  onBack?: () => void;
 }) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
@@ -180,108 +178,78 @@ export function Topbar({
           }
         />
         <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
-        <NavButton
-          active={view === "tasks"}
-          onClick={onTasksOpen}
-          label="Tasks"
-          title="Tasks"
-        >
-          <ListTodo className="h-5 w-5" />
-        </NavButton>
-        <NavButton
-          active={view === "search"}
-          onClick={onSearchOpen}
-          label="Search"
-          title="Search"
-        >
-          <Search className="h-5 w-5" />
-        </NavButton>
-        <NavButton
-          active={view === "mail"}
-          onClick={onMailOpen}
-          label={unreadInbox > 0 ? `Inbox, ${unreadInbox} unread` : "Inbox"}
-          title="Inbox"
-          className="relative"
-        >
-          <Mail className="h-5 w-5" />
-          {unreadInbox > 0 && (
-            <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-emerald-500" />
-          )}
-        </NavButton>
-        {points != null && (
-          <div className="relative">
-            <NavButton
-              active={view === "points"}
-              onClick={onPointsOpen}
-              label="Points"
-              title="Points"
-              className="gap-1.5 tabular-nums"
-            >
-              <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
-              <span
-                key={flash?.key ?? "idle"}
-                className={cn("inline-block", flash && "animate-points-pop")}
-              >
-                {formatPoints(points)}
-              </span>
-            </NavButton>
-            {flash && (
-              <span
-                key={flash.key}
-                onAnimationEnd={() => setFlash(null)}
-                className={cn(
-                  "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
-                  flash.delta >= 0 ? "text-emerald-500" : "text-destructive",
+        {mode !== "normal" ? (
+          <Button onClick={onBack}>Back</Button>
+        ) : (
+          <>
+            {points != null && (
+              <div className="relative">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onPointsOpen}
+                  className="gap-1.5 tabular-nums"
+                  title="Points"
+                >
+                  <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
+                  <span
+                    key={flash?.key ?? "idle"}
+                    className={cn(
+                      "inline-block",
+                      flash && "animate-points-pop",
+                    )}
+                  >
+                    {formatPoints(points)}
+                  </span>
+                </Button>
+                {flash && (
+                  <span
+                    key={flash.key}
+                    onAnimationEnd={() => setFlash(null)}
+                    className={cn(
+                      "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
+                      flash.delta >= 0
+                        ? "text-emerald-500"
+                        : "text-destructive",
+                    )}
+                  >
+                    {flash.delta >= 0 ? "+" : "−"}
+                    {formatPoints(Math.abs(flash.delta))}
+                  </span>
                 )}
-              >
-                {flash.delta >= 0 ? "+" : "−"}
-                {formatPoints(Math.abs(flash.delta))}
-              </span>
+              </div>
             )}
-          </div>
-        )}
-        {email && (
-          <AccountMenu
-            email={email}
-            autoPoll={autoPoll}
-            theme={theme}
-            onToggleAutoPoll={toggleAutoPoll}
-            onThemeChange={onThemeChange}
-            onLogout={logout}
-          />
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onMailOpen}
+              aria-label={
+                unreadInbox > 0
+                  ? `Open mail, ${unreadInbox} unread`
+                  : "Open mail"
+              }
+              title="Mail"
+              className="relative"
+            >
+              <Mail className="h-5 w-5" />
+              {unreadInbox > 0 && (
+                <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-emerald-500" />
+              )}
+            </Button>
+            {email && (
+              <AccountMenu
+                email={email}
+                autoPoll={autoPoll}
+                theme={theme}
+                onToggleAutoPoll={toggleAutoPoll}
+                onThemeChange={onThemeChange}
+                onLogout={logout}
+              />
+            )}
+          </>
         )}
       </div>
     </header>
-  );
-}
-
-function NavButton({
-  active,
-  label,
-  title,
-  children,
-  className,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  title: string;
-  children: ReactNode;
-  className?: string;
-  onClick?: () => void;
-}) {
-  return (
-    <Button
-      size="icon"
-      variant={active ? "secondary" : "ghost"}
-      onClick={onClick}
-      aria-label={label}
-      aria-current={active ? "page" : undefined}
-      title={title}
-      className={className}
-    >
-      {children}
-    </Button>
   );
 }
 

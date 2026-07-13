@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
@@ -7,6 +8,8 @@ import { ChatPanel } from "@/components/search/ChatPanel";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
@@ -20,9 +23,12 @@ import type { Task } from "@/lib/types";
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
-  const [view, setView] = useState<"tasks" | "mail" | "search" | "points">(
+  // "tasks" / "chat" are the two tabs of the main view; "mail" / "points" are
+  // overlays reached from the topbar (Back returns to the last active tab).
+  const [view, setView] = useState<"tasks" | "chat" | "mail" | "points">(
     "tasks",
   );
+  const lastTabRef = useRef<"tasks" | "chat">("tasks");
   const chat = useSearchChat();
   const mailOpen = view === "mail";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -41,14 +47,17 @@ export function App() {
   const tasksActive = view === "tasks";
   const inboxActive = view === "mail";
 
-  const openTasksView = useCallback(() => {
-    setView("tasks");
+  const selectTab = useCallback((next: string) => {
+    const tab = next === "chat" ? "chat" : "tasks";
+    lastTabRef.current = tab;
+    setView(tab);
   }, []);
 
-  const openSearchView = useCallback(() => {
-    chat.newChat();
-    setView("search");
-  }, [chat]);
+  // Back / Escape out of the mail or points overlay, returning to whichever tab
+  // was last active.
+  const leaveOverlay = useCallback(() => {
+    setView(lastTabRef.current);
+  }, []);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -316,12 +325,11 @@ export function App() {
       <Topbar
         theme={theme}
         onThemeChange={setTheme}
-        view={view}
+        mode={view === "mail" || view === "points" ? view : "normal"}
         unreadInbox={unreadInbox}
-        onTasksOpen={openTasksView}
         onMailOpen={() => setView("mail")}
-        onSearchOpen={openSearchView}
         onPointsOpen={() => setView("points")}
+        onBack={leaveOverlay}
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
         {view === "mail" ? (
@@ -334,26 +342,55 @@ export function App() {
             onInputsVisible={markInputsVisible}
             onOpenTask={openTask}
           />
-        ) : view === "search" ? (
-          <ChatPanel
-            messages={chat.messages}
-            streaming={chat.streaming}
-            onOpenTask={openTask}
-            recent={chat.recent}
-            onLoadChat={chat.loadChat}
-          />
         ) : view === "points" ? (
           <PointsPanel onOpenTask={openTask} />
         ) : (
-          <TasksPanel
-            tasks={tasks}
-            kotxTasks={kotxTasks}
-            onChanged={refresh}
-            onKotxChanged={runs.refresh}
-            onTaskOpen={openTask}
-            unseenTaskIds={unseenTaskIds}
-            onTaskVisible={markTaskVisible}
-          />
+          <Tabs value={view} onValueChange={selectTab}>
+            <div className="mb-4 flex items-center gap-2">
+              <TabsList className="grid h-10 flex-1 grid-cols-2">
+                <TabsTrigger value="tasks">
+                  Tasks
+                  {tasks.length > 0 && (
+                    <span className="ml-1.5 text-xs text-muted-foreground">
+                      {tasks.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="chat">Chat</TabsTrigger>
+              </TabsList>
+              {view === "chat" && chat.messages.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => chat.newChat()}
+                  className="shrink-0 gap-1.5"
+                >
+                  <Plus className="h-4 w-4" />
+                  New chat
+                </Button>
+              )}
+            </div>
+            <TabsContent value="tasks">
+              <TasksPanel
+                tasks={tasks}
+                kotxTasks={kotxTasks}
+                onChanged={refresh}
+                onKotxChanged={runs.refresh}
+                onTaskOpen={openTask}
+                unseenTaskIds={unseenTaskIds}
+                onTaskVisible={markTaskVisible}
+              />
+            </TabsContent>
+            <TabsContent value="chat">
+              <ChatPanel
+                messages={chat.messages}
+                streaming={chat.streaming}
+                onOpenTask={openTask}
+                recent={chat.recent}
+                onLoadChat={chat.loadChat}
+              />
+            </TabsContent>
+          </Tabs>
         )}
       </main>
       {selectedTask && (
@@ -365,11 +402,11 @@ export function App() {
           onKotxChanged={runs.refresh}
         />
       )}
-      {view === "search" ? (
+      {view === "chat" ? (
         <ChatComposer
           onSend={chat.send}
           streaming={chat.streaming}
-          onClose={openTasksView}
+          onClose={() => selectTab("tasks")}
           onOpenTask={openTask}
         />
       ) : view === "tasks" ? (

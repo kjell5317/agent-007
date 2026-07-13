@@ -170,7 +170,7 @@ function PointsCard({
       )}
     >
       <CardContent
-        className={cn(clickable && "cursor-pointer")}
+        className={cn("p-4", clickable && "cursor-pointer")}
         onClick={() => {
           if (entry.task_id) onOpenTask(entry.task_id);
         }}
