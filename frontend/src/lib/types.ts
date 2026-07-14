@@ -77,6 +77,25 @@ export interface ChatCitation {
   sender: string | null;
   status: string | null;
   ts: string | null;
+  // Source-specific extras the citation widgets render (contact emails/phones/
+  // birthday/address/org, event start/location, drive mime). Absent for hits
+  // that set no extras.
+  meta?: ChatCitationMeta | null;
+}
+
+export interface ChatCitationMeta {
+  emails?: string[];
+  phones?: string[];
+  addresses?: string[];
+  org?: string;
+  birthday?: string;
+  relations?: string[];
+  start?: string;
+  end?: string;
+  location?: string;
+  mime?: string;
+  similarity?: number;
+  [k: string]: unknown;
 }
 
 export interface ChatToolTrace {
@@ -91,14 +110,11 @@ export interface ChatToolTrace {
   artifact_refs: string[];
 }
 
-export type ChatResponseMode = "sources" | "answer";
-
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations: ChatCitation[];
   tools: ChatToolTrace[];
-  response_mode?: ChatResponseMode;
   // Assistant message still streaming (spinner until the first token lands).
   pending: boolean;
 }

@@ -83,6 +83,16 @@
 .animate-points-pop { animation: points-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .animate-points-float { animation: points-float 0.9s ease-out forwards; }
 
+/* Streaming caret: a text-height bar that blinks like a terminal cursor,
+   sitting inline at the end of the answer as it streams. */
+@keyframes caret-blink {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+.animate-caret-blink { animation: caret-blink 1.05s steps(1, end) infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .animate-points-pop, .animate-points-float { animation: none; }
+  .animate-caret-blink { animation: none; opacity: 1; }
 }

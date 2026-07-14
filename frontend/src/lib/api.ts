@@ -1,7 +1,6 @@
 import type {
   ChatCitation,
   ChatMessage,
-  ChatResponseMode,
   ChatSummary,
   ChatToolTrace,
   Label,
@@ -174,16 +173,14 @@ export const api = {
 
 export interface ChatStreamHandlers {
   onCitations: (items: ChatCitation[]) => void;
-  onResponseMode: (mode: ChatResponseMode) => void;
   onToken: (text: string) => void;
   onTool: (trace: ChatToolTrace) => void;
   onError: (message: string) => void;
 }
 
-// POST the conversation and consume the SSE response (`citations` /
-// `response_mode` / `token` / `tool_call` / `error` / `done`). EventSource is
-// GET-only, so we read the body stream ourselves. Resolves when the stream ends
-// (or aborts).
+// POST the conversation and consume the SSE response (`citations` / `token` /
+// `tool_call` / `error` / `done`). EventSource is GET-only, so we read the body
+// stream ourselves. Resolves when the stream ends (or aborts).
 async function chatStream(
   messages: { role: string; content: string }[],
   signal: AbortSignal,
@@ -235,11 +232,6 @@ function dispatchFrame(frame: string, h: ChatStreamHandlers): void {
     case "citations":
       h.onCitations((data.items as ChatCitation[]) ?? []);
       break;
-    case "response_mode": {
-      const mode = data.response_mode;
-      if (mode === "sources" || mode === "answer") h.onResponseMode(mode);
-      break;
-    }
     case "token":
       h.onToken((data.text as string) ?? "");
       break;

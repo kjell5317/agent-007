@@ -1,23 +1,47 @@
-import { useCallback, useEffect, useState } from "react";
-import type { ReactNode } from "react";
-import { ListTodo } from "lucide-react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+import type { ComponentType, ReactNode } from "react";
+import {
+  BookOpen,
+  CalendarDays,
+  Cake,
+  ExternalLink,
+  FileText,
+  ListTodo,
+  Mail,
+  MapPin,
+  Phone,
+  UserRound,
+} from "lucide-react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { api } from "@/lib/api";
+import { fmtWhen } from "@/lib/dates";
 import { subscribeEvents } from "@/lib/events";
 import { cn } from "@/lib/utils";
-import type { ChatCitation, Task } from "@/lib/types";
+import type { ChatCitation, ChatCitationMeta, Task } from "@/lib/types";
 
 // A small inline renderer for streamed assistant text. Unlike the block-level
-// Markdown component, this keeps citation chips ([T1]) and widgets inline, and
-// resolves them to their retrieved hit (open a task, or the source URL).
+// Markdown component, this keeps citation chips ([T1]) and inline widgets
+// (loc:{}, Notion links) inline, and pulls card widgets out to their own block.
 //
-// Widgets the model emits (no tool call needed):
-//   • task:{<id>}  → a full task card (the same one the task view renders),
-//     pulled block-level out of the text flow and fetched by id.
-//   • loc:{<place>} → a Google Maps link.
+// Card widgets the model emits (no tool call needed), rendered block-level so
+// they never split a sentence:
+//   • task:{<id>}     → a full task card (fetched live by id)
+//   • contact:{<C#>}  → a contact card (from the cited hit)
+//   • event:{<E#>}    → a calendar-event card
+//   • doc:{<D#|G#>}   → a document / Drive file card
+// Inline widgets:
+//   • loc:{<place>}   → a Google Maps link
+//   • a notion.so link → a Notion page chip
 //
-// A task shown as a card makes its own citation redundant, so any citation
-// chip pointing at a carded task is suppressed.
+// An item shown as a widget makes its own citation chip redundant, so a chip
+// pointing at it is suppressed.
 
 interface Rule {
   re: RegExp;
@@ -28,7 +52,7 @@ interface Ctx {
   byTag: Map<string, ChatCitation>;
   byTaskId: Map<string, ChatCitation>;
   suppressedTags: Set<string>;
-  // Normalized titles of tasks shown as cards. The card already shows the
+  // Normalized titles of items shown as cards. The card already shows the
   // title, so a standalone line repeating it (the model often emits the widget
   // AND the title) is dropped.
   cardedTitles: Set<string>;
@@ -38,7 +62,11 @@ interface Ctx {
   onShowContent: (cite: ChatCitation) => void;
 }
 
-const TASK_WIDGET = /task:\{([^}]+)\}/;
+type WidgetKind = "task" | "contact" | "event" | "doc";
+
+// Card widgets, pulled to their own block. `loc:` stays inline (a map link).
+const BLOCK_WIDGET = /(task|contact|event|doc):\{([^}]+)\}/;
+const BLOCK_WIDGET_G = /(task|contact|event|doc):\{([^}]+)\}/g;
 const HEADING = /^(#{1,6})\s+(.+)$/;
 const BULLET = /^\s*[-*]\s+/;
 const ORDERED = /^\s*\d+\.\s+/;
@@ -63,8 +91,12 @@ function mapsUrl(place: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
 }
 
-// Inline rules. The task widget is handled at block level (a card is a block
-// element and can't live inside a <p>), so it is intentionally absent here.
+function isNotionUrl(url: string): boolean {
+  return /^https?:\/\/([a-z0-9-]+\.)*(notion\.so|notion\.site)\//i.test(url);
+}
+
+// Inline rules. Card widgets are handled at block level (a card can't live
+// inside a <p>), so they are intentionally absent here.
 const RULES: Rule[] = [
   {
     re: /loc:\{([^}]+)\}/,
@@ -84,19 +116,28 @@ const RULES: Rule[] = [
     },
   },
   // Markdown link — before the citation rule so `[x](url)` never reads as one.
+  // A Notion link renders as a compact page chip instead of a bare link.
   {
     re: /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/,
-    render: (m, key) => (
-      <a
-        key={key}
-        href={m[2]}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary underline underline-offset-2"
-      >
-        {m[1]}
-      </a>
-    ),
+    render: (m, key) =>
+      isNotionUrl(m[2]) ? (
+        <NotionChip key={key} href={m[2]} label={m[1]} />
+      ) : (
+        <a
+          key={key}
+          href={m[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary underline underline-offset-2"
+        >
+          {m[1]}
+        </a>
+      ),
+  },
+  // A bare Notion URL (no markdown link wrapper).
+  {
+    re: /(https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site)\/[^\s)]+)/i,
+    render: (m, key) => <NotionChip key={key} href={m[1]} label="Notion page" />,
   },
   {
     // One or more tags in a single bracket, e.g. [N2] or [N2, N4] → a chip each.
@@ -156,29 +197,60 @@ function renderInline(text: string, prefix: string, ctx: Ctx): ReactNode[] {
   return out;
 }
 
-// Split a line into text runs (rendered inline in a <p>) and task cards
-// (rendered as block elements). Text runs that are empty or only leftover
-// punctuation — e.g. a stray "." after a suppressed citation — are dropped so
-// a card isn't trailed by a fragment.
-function renderTaskLine(text: string, prefix: string, ctx: Ctx): ReactNode[] {
+// A blinking caret appended to the end of the streaming answer.
+function Caret() {
+  return (
+    <span
+      aria-hidden
+      className="animate-caret-blink ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[0.15em] rounded-[1px] bg-foreground/70 align-baseline"
+    />
+  );
+}
+
+// A line that holds one or more card widgets. The widgets are pulled out to
+// their own blocks so they never land in the middle of a text block; the
+// surrounding text renders as a single paragraph BEFORE them.
+function renderWidgetLine(text: string, prefix: string, ctx: Ctx): ReactNode[] {
   const out: ReactNode[] = [];
-  let rest = text;
-  let i = 0;
-  while (rest) {
-    const m = TASK_WIDGET.exec(rest);
-    if (!m) {
-      pushText(out, rest, `${prefix}-${i++}`, ctx);
-      break;
-    }
-    if (m.index > 0) pushText(out, rest.slice(0, m.index), `${prefix}-${i++}`, ctx);
+  const widgets: { kind: WidgetKind; value: string }[] = [];
+  let stripped = "";
+  let last = 0;
+  for (const m of text.matchAll(BLOCK_WIDGET_G)) {
+    stripped += text.slice(last, m.index);
+    widgets.push({ kind: m[1] as WidgetKind, value: m[2].trim() });
+    last = (m.index ?? 0) + m[0].length;
+  }
+  stripped += text.slice(last);
+
+  pushText(out, stripped, `${prefix}-t`, ctx);
+  widgets.forEach((w, j) => {
     out.push(
-      <div key={`${prefix}-${i++}`} className="my-1.5">
-        <ChatTaskCard taskId={m[1].trim()} ctx={ctx} />
+      <div key={`${prefix}-w${j}`} className="my-1.5">
+        {renderWidget(w, ctx)}
       </div>,
     );
-    rest = rest.slice(m.index + m[0].length);
-  }
+  });
   return out;
+}
+
+// The value inside a widget token. The model is told to pass an `id` for tasks
+// and a `[C#]`-style tag for the rest; tolerate stray brackets/spaces either way.
+function widgetKey(value: string): string {
+  return value.replace(/[[\]\s]/g, "");
+}
+
+function renderWidget(w: { kind: WidgetKind; value: string }, ctx: Ctx): ReactNode {
+  const key = widgetKey(w.value);
+  if (w.kind === "task") {
+    // Prefer a real id; if the model passed a citation tag, resolve it.
+    const cite = ctx.byTag.get(key);
+    return <ChatTaskCard taskId={cite ? (cite.task_id ?? cite.id) : key} ctx={ctx} />;
+  }
+  const cite = ctx.byTag.get(key);
+  if (!cite) return <FallbackChip label={key} />;
+  if (w.kind === "contact") return <ContactCard cite={cite} />;
+  if (w.kind === "event") return <EventCard cite={cite} ctx={ctx} />;
+  return <DocCard cite={cite} ctx={ctx} />;
 }
 
 function pushText(out: ReactNode[], text: string, key: string, ctx: Ctx): void {
@@ -219,6 +291,150 @@ function CitationChip({ tag, ctx }: { tag: string; ctx: Ctx }) {
     >
       {tag}
     </button>
+  );
+}
+
+// --- Citation card widgets ---------------------------------------------------
+
+function citeMeta(cite: ChatCitation): ChatCitationMeta {
+  return (cite.meta ?? {}) as ChatCitationMeta;
+}
+
+// Shared shell: an icon, a title, optional detail rows, and (when the citation
+// has a URL) an open-in-new affordance. The whole card opens the source.
+function WidgetShell({
+  Icon,
+  title,
+  href,
+  onActivate,
+  children,
+}: {
+  Icon: ComponentType<{ className?: string }>;
+  title: string;
+  href?: string | null;
+  onActivate?: () => void;
+  children?: ReactNode;
+}) {
+  const clickable = Boolean(href || onActivate);
+  const activate = () => {
+    if (href) window.open(href, "_blank", "noopener,noreferrer");
+    else onActivate?.();
+  };
+  return (
+    <div
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? activate : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                activate();
+              }
+            }
+          : undefined
+      }
+      className={cn(
+        "flex max-w-full items-start gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+        clickable && "cursor-pointer hover:border-primary/40 hover:bg-accent",
+      )}
+    >
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
+          {href && <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({
+  Icon,
+  children,
+}: {
+  Icon: ComponentType<{ className?: string }>;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Icon className="h-3 w-3 shrink-0" />
+      <span className="min-w-0 truncate">{children}</span>
+    </div>
+  );
+}
+
+function ContactCard({ cite }: { cite: ChatCitation }) {
+  const meta = citeMeta(cite);
+  const emails = meta.emails ?? [];
+  const phones = meta.phones ?? [];
+  const address = meta.addresses?.[0];
+  return (
+    <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url}>
+      {meta.org && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.org}</div>}
+      {emails.length > 0 && <DetailRow Icon={Mail}>{emails.join(", ")}</DetailRow>}
+      {phones.length > 0 && <DetailRow Icon={Phone}>{phones.join(", ")}</DetailRow>}
+      {meta.birthday && <DetailRow Icon={Cake}>{meta.birthday}</DetailRow>}
+      {address && <DetailRow Icon={MapPin}>{address}</DetailRow>}
+    </WidgetShell>
+  );
+}
+
+function EventCard({ cite, ctx }: { cite: ChatCitation; ctx: Ctx }) {
+  const meta = citeMeta(cite);
+  const when = fmtWhen(meta.start ?? cite.ts ?? null);
+  const location = meta.location ?? null;
+  const onActivate = cite.url ? undefined : () => ctx.onShowContent(cite);
+  return (
+    <WidgetShell
+      Icon={CalendarDays}
+      title={cite.title || "Event"}
+      href={cite.url}
+      onActivate={onActivate}
+    >
+      {when && <DetailRow Icon={CalendarDays}>{when}</DetailRow>}
+      {location && <DetailRow Icon={MapPin}>{location}</DetailRow>}
+    </WidgetShell>
+  );
+}
+
+function DocCard({ cite, ctx }: { cite: ChatCitation; ctx: Ctx }) {
+  const meta = citeMeta(cite);
+  const onActivate = cite.url ? undefined : () => ctx.onShowContent(cite);
+  return (
+    <WidgetShell Icon={FileText} title={cite.title || "Document"} href={cite.url} onActivate={onActivate}>
+      {meta.mime && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.mime}</div>}
+    </WidgetShell>
+  );
+}
+
+// Inline Notion page chip — a compact link, since Notion references usually sit
+// mid-sentence rather than on their own line.
+function NotionChip({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 align-middle text-[13px] font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-accent"
+    >
+      <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
+      <span className="truncate">{label}</span>
+    </a>
+  );
+}
+
+// Widget whose citation couldn't be resolved (dropped tag) — keep the reference
+// visible rather than rendering nothing.
+function FallbackChip({ label }: { label: string }) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+      <FileText className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </div>
   );
 }
 
@@ -327,37 +543,55 @@ function apiStatus(e: unknown): number | null {
 export function AssistantContent({
   content,
   citations,
+  caret = false,
   onOpenTask,
   onShowContent,
 }: {
   content: string;
   citations: ChatCitation[];
+  // Append a blinking caret to the end of the answer while it streams.
+  caret?: boolean;
   onOpenTask: (taskId: string) => void;
   onShowContent: (cite: ChatCitation) => void;
 }) {
+  const byTag = new Map(citations.map((c) => [c.tag, c]));
   const byTaskId = new Map<string, ChatCitation>();
   for (const c of citations) {
     if (c.type === "task") byTaskId.set(c.id, c);
     if (c.task_id) byTaskId.set(c.task_id, c);
   }
 
-  // Every task rendered as a card in this message.
-  const cardedTaskIds = new Set(
-    [...content.matchAll(/task:\{([^}]+)\}/g)].map((m) => m[1].trim()),
-  );
-  // A citation pointing at a carded task is redundant with the card, so hide it.
+  // Every widget rendered as a card in this message. Resolve each to the task
+  // id / citation tag it cards, tolerating a tag passed where an id was asked.
+  const cardedTaskIds = new Set<string>();
+  const cardedTags = new Set<string>();
+  for (const m of content.matchAll(BLOCK_WIDGET_G)) {
+    const kind = m[1] as WidgetKind;
+    const key = widgetKey(m[2]);
+    if (kind === "task") {
+      const cite = byTag.get(key);
+      cardedTaskIds.add(cite ? (cite.task_id ?? cite.id) : key);
+      if (cite) cardedTags.add(cite.tag); // also drop the [T#] chip for it
+    } else {
+      cardedTags.add(key);
+    }
+  }
+
+  // A citation shown as a card widget is redundant with the card, so hide its
+  // inline chip and drop any line that just repeats its title.
   const suppressedTags = new Set<string>();
   const cardedTitles = new Set<string>();
   for (const c of citations) {
     const target = c.task_id ?? (c.type === "task" ? c.id : null);
-    if (target && cardedTaskIds.has(target)) {
+    const carded = cardedTags.has(c.tag) || (target != null && cardedTaskIds.has(target));
+    if (carded) {
       suppressedTags.add(c.tag);
       if (c.title) cardedTitles.add(normalizeTitle(c.title));
     }
   }
 
   const ctx: Ctx = {
-    byTag: new Map(citations.map((c) => [c.tag, c])),
+    byTag,
     byTaskId,
     suppressedTags,
     cardedTitles,
@@ -375,9 +609,9 @@ export function AssistantContent({
       i++;
       continue;
     }
-    const hasTask = TASK_WIDGET.test(line);
+    const hasWidget = BLOCK_WIDGET.test(line);
     // Heading (`## …`) — a compact bold line; inline markup inside still renders.
-    const heading = !hasTask ? HEADING.exec(line) : null;
+    const heading = !hasWidget ? HEADING.exec(line) : null;
     if (heading) {
       if (!isDuplicateTitle(heading[2], ctx)) {
         blocks.push(
@@ -396,13 +630,13 @@ export function AssistantContent({
       continue;
     }
     // List runs — bullet (`-`/`*`) or ordered (`1.`), but only lines without a
-    // task widget; a widget breaks out into its own block card below.
+    // card widget; a widget breaks out into its own block below.
     const listMarker = BULLET.test(line) ? BULLET : ORDERED.test(line) ? ORDERED : null;
-    if (listMarker && !hasTask) {
+    if (listMarker && !hasWidget) {
       const items: string[] = [];
-      while (i < lines.length && listMarker.test(lines[i]) && !TASK_WIDGET.test(lines[i]))
+      while (i < lines.length && listMarker.test(lines[i]) && !BLOCK_WIDGET.test(lines[i]))
         items.push(lines[i++].replace(listMarker, ""));
-      // Drop items that just repeat a carded task's title.
+      // Drop items that just repeat a carded item's title.
       const kept = items.filter((it) => !isDuplicateTitle(it, ctx));
       if (kept.length > 0) {
         const ListTag = listMarker === ORDERED ? "ol" : "ul";
@@ -422,13 +656,13 @@ export function AssistantContent({
       }
       continue;
     }
-    if (hasTask) {
+    if (hasWidget) {
       // Drop any leading bullet marker; the card stands on its own.
-      blocks.push(...renderTaskLine(line.replace(/^\s*[-*]\s+/, ""), `tl${key++}`, ctx));
+      blocks.push(...renderWidgetLine(line.replace(/^\s*[-*]\s+/, ""), `wl${key++}`, ctx));
       i++;
       continue;
     }
-    // A standalone line that just repeats a carded task's title is redundant.
+    // A standalone line that just repeats a carded item's title is redundant.
     if (isDuplicateTitle(line, ctx)) {
       i++;
       continue;
@@ -440,5 +674,24 @@ export function AssistantContent({
     );
     i++;
   }
+
+  if (caret) appendCaret(blocks);
+
   return <div className="space-y-2 break-words text-[15px] leading-relaxed">{blocks}</div>;
+}
+
+// Attach the streaming caret inline to the final text block (a <p>, incl.
+// headings). Falls back to its own line after a non-text block (list/card).
+function appendCaret(blocks: ReactNode[]): void {
+  const last = blocks[blocks.length - 1];
+  if (isValidElement(last) && last.type === "p") {
+    const kids = Children.toArray((last.props as { children?: ReactNode }).children);
+    blocks[blocks.length - 1] = cloneElement(last, undefined, ...kids, <Caret key="caret" />);
+  } else {
+    blocks.push(
+      <p key="caret" className="whitespace-pre-wrap">
+        <Caret />
+      </p>,
+    );
+  }
 }

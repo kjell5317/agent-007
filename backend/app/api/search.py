@@ -94,8 +94,8 @@ async def stream(
 async def chat(body: ChatRequest) -> EventSourceResponse:
     """Stage-2/3 chatbot search over SSE. Each user turn injects the top hybrid
     hits (local + Drive) as context and the agent answers, citing hits and
-    calling action tools. Events: `citations`, `response_mode`, `token`,
-    `tool_call`, `done`, `error`. A fresh session per stream (the
+    calling action tools. Events: `citations`, `token`, `tool_call`, `done`,
+    `error`. A fresh session per stream (the
     request-scoped one would be torn down before the generator drains)."""
     turns = [
         ChatTurn(role=m.role, content=m.content) for m in body.messages if m.content.strip()

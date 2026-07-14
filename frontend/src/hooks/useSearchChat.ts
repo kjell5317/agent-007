@@ -3,7 +3,6 @@ import { api } from "@/lib/api";
 import type {
   ChatCitation,
   ChatMessage,
-  ChatResponseMode,
   ChatSummary,
   ChatToolTrace,
 } from "@/lib/types";
@@ -128,7 +127,6 @@ export function useSearchChat(): SearchChat {
         content: "",
         citations: [],
         tools: [],
-        response_mode: undefined,
         pending: true,
       };
       const history = [...messages, user];
@@ -143,8 +141,6 @@ export function useSearchChat(): SearchChat {
         .chatStream(wire, controller.signal, {
           onCitations: (items: ChatCitation[]) =>
             patchLast((m) => ({ ...m, citations: dedupeTags([...m.citations, ...items]) })),
-          onResponseMode: (mode: ChatResponseMode) =>
-            patchLast((m) => ({ ...m, response_mode: mode })),
           onToken: (t: string) =>
             patchLast((m) => ({ ...m, content: m.content + t, pending: false })),
           onTool: (trace: ChatToolTrace) =>

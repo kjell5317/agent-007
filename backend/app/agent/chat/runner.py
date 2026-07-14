@@ -14,8 +14,7 @@ record (`type · sim · date · id · meta — content`), so results read identi
 whatever source they came from.
 
 The runner is transport-agnostic: it pushes structured events (`citations`,
-`response_mode`, `token`, `tool_call`, `done`) to an `emit` callback that the
-SSE endpoint drains.
+`token`, `tool_call`, `done`) to an `emit` callback that the SSE endpoint drains.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -72,7 +71,9 @@ from app.services.search.retrieve import (
 log = logging.getLogger(__name__)
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
-ResponseMode = Literal["sources", "answer"]
+
+# Truncation width for the query echoed on a tool-call chip in the UI.
+_CHIP_QUERY_MAX = 48
 
 # Citation tag prefixes by hit type. "E" = calendar event (a document with
 # source=calendar); "G" = Google Drive file; "C" = contact. "D" is kept for any
@@ -167,9 +168,13 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
         seg.append(f"@ {meta['location']}")
     if meta.get("mime"):
         seg.append(str(meta["mime"]))
-    for field in ("emails", "phones"):
+    for field in ("emails", "phones", "addresses"):
         if meta.get(field):
             seg.append(", ".join(meta[field]))
+    if meta.get("org"):
+        seg.append(str(meta["org"]))
+    if meta.get("birthday"):
+        seg.append(f"born {meta['birthday']}")
     if h.task_id and h.task_id != h.id:
         seg.append(f"task={h.task_id}")
 
@@ -206,71 +211,23 @@ def _clock(iso: str, zone: ZoneInfo) -> str:
     return dt.strftime("%H:%M")
 
 
-_QUESTION_PREFIX_RE = re.compile(
-    r"^(what|what's|whats|when|where|who|whose|why|how|which|is|are|am|was|were|"
-    r"do|does|did|can|could|should|would|will|has|have|had|any)\b",
-    re.I,
-)
-_COMMAND_PREFIX_RE = re.compile(
-    r"^(create|add|make|update|edit|change|close|complete|finish|reopen|delete|remove|"
-    r"reschedule|schedule|move|set|save|remember|note|list|show|tell|give|find|search|"
-    r"look up|open|read|summarize|summarise|draft|send)\b",
-    re.I,
-)
-_AGENDA_RE = re.compile(
-    r"\b(todo|todos|task|tasks|due|overdue|agenda|calendar|schedule)\b.*\b(today|tomorrow|"
-    r"week|month|morning|afternoon|evening)\b|\b(today|tomorrow|week|month|morning|"
-    r"afternoon|evening)\b.*\b(todo|todos|task|tasks|due|overdue|agenda|calendar|schedule)\b",
-    re.I,
-)
+def _chip_query(query: str | None) -> str:
+    """Collapse and truncate a tool's query for the chip label so a long query
+    never blows out the chip; every tool with a query echoes it this way."""
+    q = " ".join((query or "").split())
+    return q if len(q) <= _CHIP_QUERY_MAX else q[: _CHIP_QUERY_MAX - 1].rstrip() + "…"
 
 
-def classify_response_mode(text: str) -> ResponseMode:
-    """Classify a chat turn before prompting so source discovery is deterministic."""
-    q = " ".join(text.strip().split())
-    if not q:
-        return "answer"
-    if "?" in q or _QUESTION_PREFIX_RE.search(q):
-        return "answer"
-    if _COMMAND_PREFIX_RE.search(q):
-        return "answer"
-    if _AGENDA_RE.search(q):
-        return "answer"
-    # Terse keyword searches, tags, and comma-separated phrases should surface
-    # related source cards instead of trying to synthesize an agenda-style answer.
-    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_@./#:-]*", q)
-    if len(words) <= 4:
-        return "sources"
-    if "," in q and len(words) <= 8:
-        return "sources"
-    return "answer"
+def _purpose(verb: str, query: str | None, *, fallback: str | None = None) -> str:
+    """`<verb>: <truncated query>` when a query is present, else `verb` (or an
+    explicit `fallback`)."""
+    q = _chip_query(query)
+    return f"{verb}: {q}" if q else (fallback or verb)
 
 
-def _mode_instruction(mode: ResponseMode) -> str:
-    if mode == "sources":
-        return (
-            "Response mode: sources\n"
-            "The latest user input is a keyword-style source discovery query. "
-            "Give a one- or two-sentence summary of the strongest signal from the "
-            "retrieved context. The UI shows a related-source card for EACH item "
-            "you cite, in the order you cite it, and nothing else — so you choose "
-            "which sources surface and their ranking. Cite the relevant items "
-            "inline, most relevant first; cite nothing if none are relevant. Do "
-            "not write your own document/source list."
-        )
-    return (
-        "Response mode: answer\n"
-        "The latest user input is a question or command. Answer or act directly, "
-        "concisely, with inline citations for facts. Do not offer a related-source "
-        "list unless the user explicitly asks for sources."
-    )
-
-
-def _context_block(
-    tz: str, entries: list[tuple[str, SearchHit]], mode: ResponseMode
-) -> str:
+def _context_block(tz: str, entries: list[tuple[str, SearchHit]]) -> str:
     zone = ZoneInfo(tz)
-    lines = [f"Current time: {now_iso(tz)}", _mode_instruction(mode), ""]
+    lines = [f"Current time: {now_iso(tz)}", ""]
     if entries:
         lines.append("Retrieved context (cite items with their bracketed tag):")
         lines.extend(_context_line(tag, h, zone) for tag, h in entries)
@@ -286,7 +243,6 @@ async def run_chat(
     history = turns[-settings.search_chat_history_messages :]
     last_user_idx = _last_user_index(history)
     query = history[last_user_idx].content if last_user_idx is not None else ""
-    response_mode = classify_response_mode(query)
 
     # Root span groups every LLM turn + tool call of this answer into one named,
     # session-scoped trace. `session_id` (the conversation id) lets the Langfuse
@@ -302,9 +258,8 @@ async def run_chat(
         # the answer; a repeated tool search is harmless (citation dedup drops it).
         entries = cites.add(await retrieve(session, query))
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
-        await emit("response_mode", {"response_mode": response_mode})
 
-        context = _context_block(settings.user_timezone, entries, response_mode)
+        context = _context_block(settings.user_timezone, entries)
         messages = _build_messages(history, last_user_idx, context)
 
         # Optional integrations expose their read-only tools only when connected, so
@@ -452,12 +407,12 @@ async def _dispatch(
                 due_after=_opt(tin, "due_after"),
                 due_before=_opt(tin, "due_before"),
             )
-            purpose = f"tasks: {q}" if q else "list tasks"
+            purpose = _purpose("tasks", q, fallback="list tasks")
             return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
 
         if name == "search_notes":
             hits = await search_notes(session, q)
-            return await _emit_search(cites, emit, hits, name=name, purpose=f"notes: {q}")
+            return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("notes", q))
 
         if name == "messages_search":
             hits = await search_messages(
@@ -467,7 +422,7 @@ async def _dispatch(
                 before=_opt(tin, "before"),
                 after=_opt(tin, "after"),
             )
-            return await _emit_search(cites, emit, hits, name=name, purpose=f"messages: {q}")
+            return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("messages", q))
 
         if name == "calendar_search":
             hits = await search_calendar(
@@ -476,7 +431,8 @@ async def _dispatch(
                 time_min=_opt(tin, "time_min"),
                 time_max=_opt(tin, "time_max"),
             )
-            return await _emit_search(cites, emit, hits, name=name, purpose="calendar")
+            purpose = _purpose("calendar", _opt(tin, "query"), fallback="calendar")
+            return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
 
         if name == "drive_search":
             hits = await search_drive(
@@ -487,7 +443,7 @@ async def _dispatch(
                 after=_opt(tin, "after"),
                 before=_opt(tin, "before"),
             )
-            return await _emit_search(cites, emit, hits, name=name, purpose=f"drive: {q}")
+            return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("drive", q))
 
         if name == "contacts_search":
             hits = await search_contacts(
@@ -496,7 +452,7 @@ async def _dispatch(
                 k=settings.search_chat_contacts_limit,
                 timeout=settings.search_contacts_timeout_seconds,
             )
-            return await _emit_search(cites, emit, hits, name=name, purpose=f"contacts: {q}")
+            return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("contacts", q))
 
         if name == "get_drive_file":
             file_id = str(tin.get("file_id") or "")
@@ -506,7 +462,7 @@ async def _dispatch(
             # The output leads with the file's name in quotes; show it on the chip.
             name_match = re.match(r"^'([^']+)'", out)
             label = name_match.group(1) if name_match else (file_id or "drive file")
-            return out, _trace(name, purpose=f"read {label}"[:80], summary=out)
+            return out, _trace(name, purpose=f"read {_chip_query(label)}", summary=out)
 
         if name == "create_task":
             return await _create_task(session, tin)
@@ -566,17 +522,17 @@ async def _dispatch(
         if name == "notion_search":
             query = str(tin.get("query") or "").strip()
             out = await notion_mcp.notion_search(session, query)
-            return out, _trace(name, purpose=f"notion search: {query}"[:80], summary=out)
+            return out, _trace(name, purpose=_purpose("notion", query), summary=out)
 
         if name == "notion_fetch":
             ref = str(tin.get("id") or "").strip()
             out = await notion_mcp.notion_fetch(session, ref)
-            return out, _trace(name, purpose=f"notion fetch: {ref}"[:80], summary=out)
+            return out, _trace(name, purpose=_purpose("notion fetch", ref), summary=out)
 
         if name == "github_search":
             query = str(tin.get("query") or "").strip()
             out = await github.search_issues(query)
-            return out, _trace(name, purpose=f"github search: {query}"[:80], summary=out)
+            return out, _trace(name, purpose=_purpose("github", query), summary=out)
 
         if name == "github_my_work":
             out = await github.my_work()

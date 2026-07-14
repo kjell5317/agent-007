@@ -55,21 +55,6 @@ def test_citations_tagging_dedupes_and_prefixes_by_type():
     assert [tag for tag, _ in typed] == ["D1", "E1"]
 
 
-@pytest.mark.parametrize(
-    ("text", "mode"),
-    [
-        ("rent invoice", "sources"),
-        ("project alpha", "sources"),
-        ("uni deadline", "sources"),
-        ("what is due today?", "answer"),
-        ("create a task to call Alice tomorrow", "answer"),
-        ("today tasks", "answer"),
-    ],
-)
-def test_classify_response_mode_examples(text, mode):
-    assert chat_runner.classify_response_mode(text) == mode
-
-
 @pytest.mark.asyncio
 async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     # Pre-injection loads tasks + notes; the model then drills into messages via
@@ -117,14 +102,12 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
     kinds = [e for e, _ in events]
     assert kinds[0] == "citations"
-    assert kinds[1] == "response_mode"
     assert kinds[-1] == "done"
     assert "tool_call" in kinds
     assert "token" in kinds
 
     assert events[0][1]["items"][0]["tag"] == "T1"
     assert events[0][1]["items"][0]["title"] == "Buy milk"
-    assert events[1][1]["response_mode"] == "answer"
 
     tool_events = [d for e, d in events if e == "tool_call"]
     assert tool_events and tool_events[0]["name"] == "messages_search"
@@ -151,7 +134,7 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_source_mode_emits_metadata_and_prompt_context(monkeypatch):
+async def test_emits_citations_and_injects_context(monkeypatch):
     seen = {"latest_user": ""}
 
     async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
@@ -173,12 +156,12 @@ async def test_source_mode_emits_metadata_and_prompt_context(monkeypatch):
 
     await run_chat(object(), [ChatTurn(role="user", content="rent invoice")], emit=emit)
 
-    assert events[0][0] == "citations"
-    assert events[1] == ("response_mode", {"response_mode": "sources"})
+    # No response_mode event any more: citations first, then straight to the answer.
+    assert [e for e, _ in events][:2] == ["citations", "token"]
     assert events[0][1]["items"][0]["tag"] == "I1"
-    assert "Response mode: sources" in seen["latest_user"]
-    # Sources are agent-curated: one card per cited item, in cited order.
-    assert "in the order you cite it" in seen["latest_user"]
+    # The retrieved context is appended to the latest user message.
+    assert "Retrieved context" in seen["latest_user"]
+    assert "[I1]" in seen["latest_user"]
 
 
 _TZ = ZoneInfo("Europe/Berlin")
@@ -195,6 +178,37 @@ def test_context_line_surfaces_action_ids():
         "E1", _hit("document", "ev123", "Standup", source="calendar", status="event"), _TZ
     )
     assert "[E1]" in cal and "id=ev123" in cal
+
+
+def test_context_line_surfaces_contact_birthday_and_address():
+    # Regression: birthday was fetched into meta but never rendered into the
+    # record, so the model couldn't answer "when is X's birthday".
+    hit = _hit(
+        "contact", "people/c1", "Anna Schmidt", source="contacts", status="contact",
+        meta={
+            "emails": ["anna@x.com"],
+            "phones": ["+49 170 1234567"],
+            "addresses": ["Hauptstr. 1, Berlin"],
+            "org": "Acme GmbH",
+            "birthday": "1990-03-14",
+        },
+    )
+    line = chat_runner._context_line("C1", hit, _TZ)
+    assert "born 1990-03-14" in line
+    assert "Hauptstr. 1, Berlin" in line
+    assert "Acme GmbH" in line
+    assert "anna@x.com" in line
+
+
+def test_chip_query_is_truncated():
+    short = chat_runner._chip_query("groceries")
+    assert short == "groceries"
+    long = chat_runner._chip_query("a" * 100)
+    assert long.endswith("…") and len(long) <= chat_runner._CHIP_QUERY_MAX
+    # A missing/blank query yields no echo (the verb stands alone via _purpose).
+    assert chat_runner._chip_query(None) == ""
+    assert chat_runner._purpose("calendar", None, fallback="calendar") == "calendar"
+    assert chat_runner._purpose("contacts", "Anna") == "contacts: Anna"
 
 
 def test_context_line_shows_similarity_and_linked_task():

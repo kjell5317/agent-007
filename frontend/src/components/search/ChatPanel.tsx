@@ -1,17 +1,11 @@
 import { Check, ChevronDown, Loader2, MessageSquare, Wrench, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AssistantContent } from "@/components/search/AssistantContent";
-import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Modal } from "@/components/ui/modal";
 import { fmtWhen } from "@/lib/dates";
 import { cn } from "@/lib/utils";
-import type {
-  ChatCitation,
-  ChatMessage,
-  ChatSummary,
-  ChatToolTrace,
-  SearchHit,
-} from "@/lib/types";
+import type { ChatCitation, ChatMessage, ChatSummary, ChatToolTrace } from "@/lib/types";
 
 export function ChatPanel({
   messages,
@@ -26,11 +20,31 @@ export function ChatPanel({
   recent: ChatSummary[];
   onLoadChat: (id: string) => void;
 }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
   // A citation with no navigable target (note / url-less input) opens here.
   const [preview, setPreview] = useState<ChatCitation | null>(null);
+  // Stick to the bottom as content streams in, unless the user scrolled up to
+  // read — then leave their position alone until the next turn.
+  const stick = useRef(true);
+  const prevLen = useRef(messages.length);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
+    const onScroll = () => {
+      const el = document.documentElement;
+      stick.current = el.scrollHeight - (window.scrollY + window.innerHeight) < 160;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const grew = messages.length !== prevLen.current;
+    prevLen.current = messages.length;
+    if (grew) stick.current = true; // a new turn always jumps to the bottom
+    if (!stick.current) return;
+    const id = requestAnimationFrame(() =>
+      window.scrollTo({ top: document.documentElement.scrollHeight }),
+    );
+    return () => cancelAnimationFrame(id);
   }, [messages]);
 
   if (messages.length === 0) {
@@ -52,7 +66,6 @@ export function ChatPanel({
           />
         ),
       )}
-      <div ref={bottomRef} />
       <CitationModal cite={preview} onClose={() => setPreview(null)} onOpenTask={onOpenTask} />
     </div>
   );
@@ -134,121 +147,97 @@ function AssistantBubble({
           <AssistantContent
             content={message.content}
             citations={message.citations}
+            caret={streaming}
             onOpenTask={onOpenTask}
             onShowContent={onShowContent}
           />
         )
       )}
-      {streaming && message.content && (
-        <span className="inline-block h-3 w-1.5 animate-pulse rounded-sm bg-muted-foreground align-middle" />
-      )}
-      {message.response_mode === "sources" && (
-        <RelatedSources
-          sources={orderedCitedSources(message.content, message.citations)}
-          onOpenTask={onOpenTask}
-          onShowContent={onShowContent}
-        />
-      )}
     </div>
   );
 }
 
-// Only the sources the agent actually cited, in the order it cited them — the
-// agent curates which sources surface and their ranking, rather than dumping the
-// whole retrieval.
-function orderedCitedSources(content: string, citations: ChatCitation[]): ChatCitation[] {
-  const byTag = new Map(citations.map((c) => [c.tag, c]));
-  const seen = new Set<string>();
-  const out: ChatCitation[] = [];
-  for (const m of content.matchAll(/\[([A-Z]\d+(?:\s*,\s*[A-Z]\d+)*)\]/g)) {
-    for (const raw of m[1].split(",")) {
-      const tag = raw.trim();
-      const cite = byTag.get(tag);
-      if (cite && !seen.has(tag)) {
-        seen.add(tag);
-        out.push(cite);
-      }
-    }
-  }
-  return out;
-}
-
-function RelatedSources({
-  sources,
-  onOpenTask,
-  onShowContent,
-}: {
-  sources: ChatCitation[];
-  onOpenTask: (taskId: string) => void;
-  onShowContent: (cite: ChatCitation) => void;
-}) {
-  if (sources.length === 0) return null;
-  return (
-    <div className="space-y-1.5 pt-1">
-      <div className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Related sources
-      </div>
-      <div className="space-y-1.5">
-        {sources.map((cite) => (
-          <SearchResultRow
-            key={cite.tag}
-            hit={citationToHit(cite)}
-            onOpenTask={onOpenTask}
-            onShowContent={() => onShowContent(cite)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function citationToHit(cite: ChatCitation): SearchHit {
-  return {
-    type:
-      cite.type === "task" ||
-      cite.type === "input" ||
-      cite.type === "note" ||
-      cite.type === "document" ||
-      cite.type === "drive"
-        ? cite.type
-        : "document",
-    id: cite.id,
-    title: cite.title,
-    snippet: cite.snippet,
-    url: cite.url,
-    task_id: cite.task_id,
-    source: cite.source,
-    sender: cite.sender,
-    status: cite.status,
-    ts: cite.ts,
-    score: 0,
-  };
+interface PanelPos {
+  left: number;
+  width: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
 }
 
 function ToolChip({ trace }: { trace: ChatToolTrace }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<PanelPos | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const failed = trace.status === "failed";
   const params =
     trace.params && Object.keys(trace.params).length > 0 ? trace.params : null;
   const result = trace.result?.trim() || null;
   const hasDetail = Boolean(params || result);
 
+  // Anchor the panel to the chip in viewport coordinates so it never gets
+  // clipped by a scrolling ancestor: flip above when there's no room below,
+  // and clamp within the viewport horizontally and in height.
+  const place = useCallback(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const margin = 12;
+    const gap = 6;
+    const maxH = 320;
+    const width = Math.min(320, window.innerWidth - margin * 2);
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - width - margin));
+    const spaceBelow = window.innerHeight - r.bottom;
+    const openUp = spaceBelow < 240 && r.top > spaceBelow;
+    const next: PanelPos = openUp
+      ? {
+          left,
+          width,
+          bottom: window.innerHeight - r.top + gap,
+          maxHeight: Math.min(maxH, r.top - gap - margin),
+        }
+      : {
+          left,
+          width,
+          top: r.bottom + gap,
+          maxHeight: Math.min(maxH, window.innerHeight - r.bottom - gap - margin),
+        };
+    setPos(next);
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
     };
+    const reposition = () => place();
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+    // Capture-phase scroll catches ancestor scroll containers too.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, place]);
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={btnRef}
         type="button"
         disabled={!hasDetail}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!hasDetail) return;
+          setOpen((v) => {
+            if (!v) place();
+            return !v;
+          });
+        }}
         title={trace.result_summary}
         className={cn(
           "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
@@ -259,7 +248,7 @@ function ToolChip({ trace }: { trace: ChatToolTrace }) {
         )}
       >
         <Wrench className="h-3 w-3" />
-        <span className="font-medium">{trace.purpose || trace.name}</span>
+        <span className="max-w-[16rem] truncate font-medium">{trace.purpose || trace.name}</span>
         {failed ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
         {hasDetail && (
           <ChevronDown
@@ -267,14 +256,29 @@ function ToolChip({ trace }: { trace: ChatToolTrace }) {
           />
         )}
       </button>
-      {open && hasDetail && (
-        <div className="absolute left-0 top-full z-20 mt-1 max-h-80 w-80 max-w-[min(24rem,85vw)] space-y-2.5 overflow-y-auto rounded-xl border bg-card p-3 text-xs shadow-lg">
-          <div className="font-mono text-[11px] text-muted-foreground">{trace.name}</div>
-          {params && <ToolDetailSection title="Parameters" body={JSON.stringify(params, null, 2)} />}
-          {result && <ToolDetailSection title="Result" body={result} />}
-        </div>
-      )}
-    </div>
+      {open &&
+        hasDetail &&
+        pos &&
+        createPortal(
+          <div
+            ref={panelRef}
+            style={{
+              position: "fixed",
+              left: pos.left,
+              top: pos.top,
+              bottom: pos.bottom,
+              width: pos.width,
+              maxHeight: pos.maxHeight,
+            }}
+            className="z-50 space-y-2.5 overflow-y-auto rounded-xl border bg-card p-3 text-xs shadow-lg"
+          >
+            <div className="font-mono text-[11px] text-muted-foreground">{trace.name}</div>
+            {params && <ToolDetailSection title="Parameters" body={JSON.stringify(params, null, 2)} />}
+            {result && <ToolDetailSection title="Result" body={result} />}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 

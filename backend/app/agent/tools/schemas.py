@@ -619,9 +619,11 @@ CHAT_TOOLS = [
         "name": "contacts_search",
         "description": (
             "Look up a person in the user's Google Contacts — returns names with "
-            "their email addresses and phone numbers. Use when the user asks for "
-            "someone's contact details ('what's Anna's email', 'phone number for "
-            "the plumber') or you need an address to act on."
+            "their email addresses, phone numbers, postal address, organization, "
+            "and birthday when set. Use when the user asks for someone's contact "
+            "details or personal facts ('what's Anna's email', 'when is Tom's "
+            "birthday', 'phone number for the plumber') or you need an address to "
+            "act on."
         ),
         "parameters": {
             "type": "object",
