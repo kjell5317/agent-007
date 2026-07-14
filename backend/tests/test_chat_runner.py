@@ -129,6 +129,15 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
     tool_events = [d for e, d in events if e == "tool_call"]
     assert tool_events and tool_events[0]["name"] == "messages_search"
 
+    # Chip-expandable detail: raw model input (pre-dispatch, so `Gmail` not yet
+    # lower-cased) plus the full result text the LLM saw.
+    assert tool_events[0]["params"] == {
+        "query": "groceries",
+        "source": "Gmail",
+        "after": "2026-07-01",
+    }
+    assert "Grocery email" in tool_events[0]["result"]
+
     # Tool args forwarded (source lower-cased by the dispatcher).
     assert tool_args == {
         "query": "groceries",
