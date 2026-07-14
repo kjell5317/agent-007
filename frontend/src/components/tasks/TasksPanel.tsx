@@ -3,19 +3,12 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { Collapsible } from "@/components/ui/collapsible";
 import { useLabels } from "@/hooks/useLabels";
-import { isOverdue, isToday } from "@/lib/dates";
+import { isOverdue, isToday, isTomorrow } from "@/lib/dates";
 import type { KotxTask } from "@/lib/kotx";
 import { labelChipClass, labelChipOutlineClass } from "@/lib/labels";
 import { compareTasks, taskGroupDate, type TaskSortMode } from "@/lib/tasks";
 import type { Label, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-function isMoreThanOneWeekAhead(iso: string | null): boolean {
-  if (!iso) return false;
-  return new Date(iso).getTime() > Date.now() + ONE_WEEK_MS;
-}
 
 interface Props {
   tasks: Task[];
@@ -40,32 +33,34 @@ export function TasksPanel({
   const [sortMode, setSortMode] = useState<TaskSortMode>("scheduled");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+  const [kotxOnly, setKotxOnly] = useState(false);
   const labels = useLabels();
   const kotxFor = (task: Task) =>
     task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
-  const [today, thisWeek, later] = useMemo(() => {
+  const [today, tomorrow, later] = useMemo(() => {
     const sorted = tasks
       .filter((task) => !selectedLabel || task.label === selectedLabel)
+      .filter((task) => !kotxOnly || task.kotx_task_id != null)
       .sort((a, b) => compareTasks(a, b, sortMode));
     const t: Task[] = [];
-    const w: Task[] = [];
+    const tm: Task[] = [];
     const l: Task[] = [];
     for (const task of sorted) {
       const groupDate = taskGroupDate(task, sortMode);
       if (groupDate && (isToday(groupDate) || isOverdue(groupDate))) {
         t.push(task);
-      } else if (isMoreThanOneWeekAhead(groupDate)) {
-        l.push(task);
+      } else if (isTomorrow(groupDate)) {
+        tm.push(task);
       } else {
-        w.push(task);
+        l.push(task);
       }
     }
-    return [t, w, l];
-  }, [selectedLabel, sortMode, tasks]);
+    return [t, tm, l];
+  }, [selectedLabel, kotxOnly, sortMode, tasks]);
 
   const groups = [
     { key: "today", title: "Today", tasks: today },
-    { key: "week", title: "This week", tasks: thisWeek },
+    { key: "tomorrow", title: "Tomorrow", tasks: tomorrow },
     { key: "later", title: "Later", tasks: later },
   ].filter((group) => group.tasks.length > 0);
   // The filter controls live on the first visible section's header, falling
@@ -89,7 +84,7 @@ export function TasksPanel({
     />
   );
 
-  const filterActive = Boolean(selectedLabel) || sortMode === "due";
+  const filterActive = Boolean(selectedLabel) || sortMode === "due" || kotxOnly;
   const filters = filtersOpen ? (
     <TaskFilters
       labels={labels}
@@ -98,6 +93,8 @@ export function TasksPanel({
       selectedLabel={selectedLabel}
       selectedLabelMeta={selectedLabelMeta}
       onSelectedLabelChange={setSelectedLabel}
+      kotxOnly={kotxOnly}
+      onKotxOnlyChange={setKotxOnly}
     />
   ) : null;
 
@@ -201,6 +198,8 @@ function TaskFilters({
   selectedLabel,
   selectedLabelMeta,
   onSelectedLabelChange,
+  kotxOnly,
+  onKotxOnlyChange,
 }: {
   labels: Label[];
   sortMode: TaskSortMode;
@@ -208,9 +207,12 @@ function TaskFilters({
   selectedLabel: string | null;
   selectedLabelMeta: Label | undefined;
   onSelectedLabelChange: (label: string | null) => void;
+  kotxOnly: boolean;
+  onKotxOnlyChange: (on: boolean) => void;
 }) {
   const nextSortMode: TaskSortMode = sortMode === "scheduled" ? "due" : "scheduled";
-  const nextSortLabel = sortMode === "scheduled" ? "By Due" : "By Scheduled";
+  // The badge shows the sort currently in effect; clicking it flips to the other.
+  const currentSortLabel = sortMode === "scheduled" ? "By Scheduled" : "By Due";
   const dueSortActive = sortMode === "due";
 
   const toggleLabel = (name: string) => {
@@ -219,6 +221,13 @@ function TaskFilters({
 
   const chipBase =
     "inline-flex h-7 items-center rounded-full border px-3 text-xs font-medium transition-colors";
+  const toggleChipClass = (active: boolean) =>
+    cn(
+      chipBase,
+      active
+        ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+        : "border-input text-muted-foreground hover:bg-accent hover:text-foreground",
+    );
 
   return (
     <div className="mb-3 flex flex-wrap gap-2 px-1">
@@ -226,14 +235,17 @@ function TaskFilters({
         type="button"
         aria-pressed={dueSortActive}
         onClick={() => onSortModeChange(nextSortMode)}
-        className={cn(
-          chipBase,
-          dueSortActive
-            ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
-            : "border-input text-muted-foreground hover:bg-accent hover:text-foreground",
-        )}
+        className={toggleChipClass(dueSortActive)}
       >
-        {nextSortLabel}
+        {currentSortLabel}
+      </button>
+      <button
+        type="button"
+        aria-pressed={kotxOnly}
+        onClick={() => onKotxOnlyChange(!kotxOnly)}
+        className={toggleChipClass(kotxOnly)}
+      >
+        kotx
       </button>
       {labels.map((label) => {
         const selected = selectedLabel === label.name;
