@@ -41,11 +41,20 @@ _NOTES_SCHEMA = {
     "type": "array",
     "items": {"type": "string"},
     "description": (
-        "Zero or more short, self-contained facts worth keeping as long-term "
+        "Zero or more durable, standalone facts worth keeping as long-term "
         "memory (someone's role, an account number, a reference, a policy, a "
-        "recurring context). Each entry must stand on its own without the "
-        "original input. Future runs retrieve these via `search_notes`. Only "
-        "save genuinely useful information; skip ephemeral content."
+        "recurring context). This memory is SHARED across every source and "
+        "project, so each note must stand on its own WITHOUT the original "
+        "input or its project context — a future run retrieves it with no idea "
+        "which input, repo, or project produced it. Anchor every fact to the "
+        "entity it is about: name the person, project, account, or repository. "
+        "For code/repo facts, name the repository (and the issue or PR when "
+        "relevant) — a bare command or path is meaningless out of context: "
+        "write \"the acme-web repo builds its frontend with `npm run build` in "
+        "frontend/\", not \"frontend validation via npm run build from "
+        "frontend/\". Prefer standalone facts over task-specific procedure. "
+        "Future runs retrieve these via `search_notes`. Only save genuinely "
+        "useful information; skip ephemeral content."
     ),
 }
 
@@ -686,9 +695,10 @@ CHAT_TOOLS = [
     {
         "name": "create_note",
         "description": (
-            "Save a short, self-contained fact to long-term memory (someone's "
-            "role, an account number, a policy, a recurring context). Future "
-            "agent runs retrieve these. Use when the user asks you to remember "
+            "Save a durable, standalone fact to long-term memory (someone's "
+            "role, an account number, a policy, a recurring context). This "
+            "memory is shared across every source and project. Future agent "
+            "runs retrieve these. Use when the user asks you to remember "
             "something."
         ),
         "parameters": {
@@ -696,7 +706,13 @@ CHAT_TOOLS = [
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The fact to remember; must stand on its own.",
+                    "description": (
+                        "The fact to remember. It must stand on its own without "
+                        "this conversation or its project context — anchor it to "
+                        "the person, project, account, or repository it is about "
+                        "(name the repo, and the issue/PR when relevant, for code "
+                        "facts), since it is retrieved across all projects."
+                    ),
                 }
             },
             "required": ["content"],

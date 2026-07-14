@@ -27,6 +27,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -130,20 +131,28 @@ def _sse_item(tag: str, h: SearchHit) -> dict[str, Any]:
     return {"tag": tag, **h.model_dump(mode="json")}
 
 
-def _context_line(tag: str, h: SearchHit) -> str:
+def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     """One hit as the uniform context record every source shares:
     `[tag] type · sim · date · id=<source_id> · <meta> — title — content`.
 
-    `id=` is always the source_id a get/act tool consumes for THIS item
-    (task_id, event_id, file_id, note id, message id, contact resourceName);
-    a linked task shows separately as `task=<id>` for the task widget."""
+    `id=` is the source_id a get/act tool consumes for THIS item (task_id,
+    event_id, file_id, message id, contact resourceName); a linked task shows
+    separately as `task=<id>` for the task widget. Notes omit `id=` — no tool
+    takes a note id, so it would only burn tokens; a note acts through its
+    `task=` link instead.
+
+    Times are rendered in the user's `zone` — the underlying timestamps are
+    UTC-aware, so an unconverted date/clock would read hours off (an 18:00
+    Berlin event as "16:00"), which the model then repeats to the user."""
     meta = h.meta or {}
     seg: list[str] = [h.type]
     if "similarity" in meta:
         seg.append(f"sim={meta['similarity']:.2f}")
     if h.ts:
-        seg.append(h.ts.date().isoformat())
-    seg.append(f"id={h.id}")
+        ts = h.ts.astimezone(zone) if h.ts.tzinfo else h.ts
+        seg.append(ts.date().isoformat())
+    if h.type != "note":
+        seg.append(f"id={h.id}")
     # Origin + lifecycle, when they add information beyond the type itself.
     if h.source and h.source not in (h.type, "note", "drive", "contact", "contacts"):
         seg.append(h.source)
@@ -153,7 +162,7 @@ def _context_line(tag: str, h: SearchHit) -> str:
         seg.append(f"from {h.sender}")
     # Source-specific extras.
     if meta.get("start"):
-        seg.append(_clock(meta["start"]))
+        seg.append(_clock(meta["start"], zone))
     if meta.get("location"):
         seg.append(f"@ {meta['location']}")
     if meta.get("mime"):
@@ -164,24 +173,37 @@ def _context_line(tag: str, h: SearchHit) -> str:
     if h.task_id and h.task_id != h.id:
         seg.append(f"task={h.task_id}")
 
-    line = f"[{tag}] " + " · ".join(seg) + f" — {h.title or '(untitled)'}"
-    # Append the snippet as content unless it just repeats something already in
-    # the segments (drive mime label, calendar location, contact details).
+    prefix = f"[{tag}] " + " · ".join(seg)
+    title = h.title or "(untitled)"
+    snippet = h.snippet
+    # Collapse title + snippet to one body when either already contains the
+    # other, so we never spend tokens on the same text twice. Notes are the
+    # guaranteed case: title=content[:80] and snippet=content[:200] are both
+    # prefixes of the same text, so we keep the fuller snippet and drop the
+    # redundant short title. Drive/contact snippets and a snippet equal to the
+    # location are already in the segments above, so they collapse to the title.
     if (
-        h.snippet
-        and h.snippet != h.title
-        and h.type not in ("drive", "contact")
-        and h.snippet != meta.get("location")
+        not snippet
+        or h.type in ("drive", "contact")
+        or snippet == meta.get("location")
+        or title.startswith(snippet)
     ):
-        line += f" — {h.snippet[:200]}"
-    return line
+        body = title
+    elif snippet.startswith(title):
+        body = snippet[:200]
+    else:
+        body = f"{title} — {snippet[:200]}"
+    return f"{prefix} — {body}"
 
 
-def _clock(iso: str) -> str:
+def _clock(iso: str, zone: ZoneInfo) -> str:
     try:
-        return datetime.fromisoformat(iso).strftime("%H:%M")
+        dt = datetime.fromisoformat(iso)
     except (ValueError, TypeError):
         return str(iso)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(zone)
+    return dt.strftime("%H:%M")
 
 
 _QUESTION_PREFIX_RE = re.compile(
@@ -247,10 +269,11 @@ def _mode_instruction(mode: ResponseMode) -> str:
 def _context_block(
     tz: str, entries: list[tuple[str, SearchHit]], mode: ResponseMode
 ) -> str:
+    zone = ZoneInfo(tz)
     lines = [f"Current time: {now_iso(tz)}", _mode_instruction(mode), ""]
     if entries:
         lines.append("Retrieved context (cite items with their bracketed tag):")
-        lines.extend(_context_line(tag, h) for tag, h in entries)
+        lines.extend(_context_line(tag, h, zone) for tag, h in entries)
     else:
         lines.append("Retrieved context: no matching items were found.")
     return "\n".join(lines)
@@ -310,6 +333,10 @@ async def run_chat(
             messages.append(assistant_message(resp))
             for tc in resp.tool_calls:
                 result_text, trace = await _dispatch(session, cites, tc, settings, emit)
+                # Surface the raw call + full result so the UI can expand a chip
+                # into params/result; result_summary stays the collapsed label.
+                trace["params"] = tc.input or {}
+                trace["result"] = result_text
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
         else:
@@ -379,6 +406,10 @@ def _trace(
         "status": status,
         "purpose": purpose,
         "result_summary": summary[:500],
+        # params/result are overwritten with the real call in the dispatch loop;
+        # these defaults keep the shape consistent for traces emitted directly.
+        "params": {},
+        "result": summary,
         "changed_state": changed_state,
         "artifact_refs": artifact_refs or [],
     }
@@ -393,7 +424,8 @@ async def _emit_search(
     new = cites.add(hits)
     if new:
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
-    body = "\n".join(_context_line(tag, h) for tag, h in new) or "no matches"
+    zone = ZoneInfo(get_settings().user_timezone)
+    body = "\n".join(_context_line(tag, h, zone) for tag, h in new) or "no matches"
     return f"{purpose}:\n{body}", _trace(name, purpose=purpose[:80], summary=f"{len(new)} hits")
 
 

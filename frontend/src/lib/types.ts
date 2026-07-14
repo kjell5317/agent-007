@@ -84,6 +84,9 @@ export interface ChatToolTrace {
   status: "success" | "failed";
   purpose: string;
   result_summary: string;
+  // Raw call input and full result text, expandable from the tool chip.
+  params?: Record<string, unknown>;
+  result?: string;
   changed_state: boolean;
   artifact_refs: string[];
 }

@@ -26,7 +26,7 @@ from app.db.schemas.search import SearchHit
 log = logging.getLogger(__name__)
 
 _SEARCH_URL = "https://people.googleapis.com/v1/people:searchContacts"
-_READ_MASK = "names,emailAddresses,phoneNumbers,organizations"
+_READ_MASK = "names,emailAddresses,phoneNumbers,organizations,addresses,birthdays,relations"
 
 
 class ContactsClient:
@@ -76,7 +76,21 @@ def _to_hit(person: dict) -> SearchHit:
     emails = [e["value"] for e in person.get("emailAddresses", []) if e.get("value")]
     phones = [p["value"] for p in person.get("phoneNumbers", []) if p.get("value")]
     org = _primary(person.get("organizations"), "name")
-    meta = {k: v for k, v in {"emails": emails, "phones": phones, "org": org}.items() if v}
+    addresses = [a["formattedValue"] for a in person.get("addresses", []) if a.get("formattedValue")]
+    birthday = _birthday(person.get("birthdays"))
+    relations = _relations(person.get("relations"))
+    meta = {
+        k: v
+        for k, v in {
+            "emails": emails,
+            "phones": phones,
+            "addresses": addresses,
+            "org": org,
+            "birthday": birthday,
+            "relations": relations,
+        }.items()
+        if v
+    }
     return SearchHit(
         type="contact",
         id=resource,
@@ -96,6 +110,32 @@ def _primary(items: list[dict] | None, field: str) -> str | None:
         if (item.get("metadata") or {}).get("primary"):
             return item.get(field)
     return (items or [{}])[0].get(field) if items else None
+
+
+def _birthday(items: list[dict] | None) -> str | None:
+    # People returns a google.type.Date whose `year` is often absent, plus an
+    # optional free-form `text`. Primary-first so an account birthday wins over
+    # a contact-entered one.
+    ordered = sorted(items or [], key=lambda i: not (i.get("metadata") or {}).get("primary"))
+    for item in ordered:
+        date = item.get("date") or {}
+        if date.get("month") and date.get("day"):
+            year, month, day = date.get("year"), date["month"], date["day"]
+            return f"{year:04d}-{month:02d}-{day:02d}" if year else f"{month:02d}-{day:02d}"
+        if item.get("text"):
+            return item["text"]
+    return None
+
+
+def _relations(items: list[dict] | None) -> list[str]:
+    out = []
+    for item in items or []:
+        person = item.get("person")
+        if not person:
+            continue
+        label = item.get("formattedType") or item.get("type")
+        out.append(f"{person} ({label})" if label else person)
+    return out
 
 
 def _web_url(resource: str) -> str | None:

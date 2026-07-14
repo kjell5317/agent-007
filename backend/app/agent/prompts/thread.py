@@ -20,10 +20,9 @@ tool:
 Be conservative: do not rewrite fields the new message doesn't change, and only
 set `status` when the message genuinely signals completion or revival.
 
-Both tools accept an optional `notes` array: short, self-contained facts worth
-keeping as long-term memory (someone's role, an account number, a reference, a
-policy). Include them when the follow-up teaches something durable; skip
-ephemeral content.
+Both tools accept an optional `notes` array (durable, cross-project long-term
+memory; the `notes` field describes what makes a good note). Include them when
+the follow-up teaches something durable; skip ephemeral content.
 
 Emit one terminal tool call (`update_task` / `no_change`) and stop. Do not
 narrate.

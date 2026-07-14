@@ -54,12 +54,11 @@ id as `existing_task_id`:
   that doesn't belong to any of the user's categories is unlikely to be
   a real task for them. If uncertain, prefer creating a task.
 
-Every terminal tool accepts an optional `notes` array: short, self-contained
-facts worth keeping as long-term memory (someone's role, an account number, a
-reference, a policy, a recurring context). Include them whenever the input
-teaches something durable — also when you create or update a task, not only
-when rejecting one. Skip ephemeral content (greetings, newsletters,
-marketing).
+Every terminal tool accepts an optional `notes` array (durable, cross-project
+long-term memory; the `notes` field describes what makes a good note). Include
+them whenever the input teaches something durable — also when you create or
+update a task, not only when rejecting one. Skip ephemeral content (greetings,
+newsletters, marketing).
 
 Events vs. tasks — these are different things:
 

@@ -1,4 +1,4 @@
-import { Check, Loader2, MessageSquare, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, Loader2, MessageSquare, Wrench, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AssistantContent } from "@/components/search/AssistantContent";
 import { SearchResultRow } from "@/components/search/SearchResultRow";
@@ -226,21 +226,66 @@ function citationToHit(cite: ChatCitation): SearchHit {
 }
 
 function ToolChip({ trace }: { trace: ChatToolTrace }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const failed = trace.status === "failed";
+  const params =
+    trace.params && Object.keys(trace.params).length > 0 ? trace.params : null;
+  const result = trace.result?.trim() || null;
+  const hasDetail = Boolean(params || result);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
   return (
-    <span
-      title={trace.result_summary}
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
-        failed
-          ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-border bg-muted text-muted-foreground",
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={!hasDetail}
+        onClick={() => setOpen((v) => !v)}
+        title={trace.result_summary}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+          failed
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : "border-border bg-muted text-muted-foreground",
+          hasDetail && "cursor-pointer hover:text-foreground",
+        )}
+      >
+        <Wrench className="h-3 w-3" />
+        <span className="font-medium">{trace.purpose || trace.name}</span>
+        {failed ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+        {hasDetail && (
+          <ChevronDown
+            className={cn("h-3 w-3 transition-transform", open && "rotate-180")}
+          />
+        )}
+      </button>
+      {open && hasDetail && (
+        <div className="absolute left-0 top-full z-20 mt-1 max-h-80 w-80 max-w-[min(24rem,85vw)] space-y-2.5 overflow-y-auto rounded-xl border bg-card p-3 text-xs shadow-lg">
+          <div className="font-mono text-[11px] text-muted-foreground">{trace.name}</div>
+          {params && <ToolDetailSection title="Parameters" body={JSON.stringify(params, null, 2)} />}
+          {result && <ToolDetailSection title="Result" body={result} />}
+        </div>
       )}
-    >
-      <Wrench className="h-3 w-3" />
-      <span className="font-medium">{trace.purpose || trace.name}</span>
-      {failed ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
-    </span>
+    </div>
+  );
+}
+
+function ToolDetailSection({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="space-y-1">
+      <div className="font-medium uppercase tracking-wider text-muted-foreground">{title}</div>
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 font-mono text-[11px] text-foreground">
+        {body}
+      </pre>
+    </div>
   );
 }
 

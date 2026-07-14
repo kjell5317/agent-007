@@ -3,6 +3,9 @@ sequence, citation tagging, tool dispatch, and the consolidated event tool."""
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from app.agent.chat import runner as chat_runner
@@ -169,15 +172,18 @@ async def test_source_mode_emits_metadata_and_prompt_context(monkeypatch):
     assert "in the order you cite it" in seen["latest_user"]
 
 
+_TZ = ZoneInfo("Europe/Berlin")
+
+
 def test_context_line_surfaces_action_ids():
     # The uniform record exposes the source_id as `id=` — the value get_drive_file
     # / update_event consume — for every source, replacing the old per-type tags.
     drive = chat_runner._context_line(
-        "G1", _hit("drive", "real-file-id", "Pitch", source="drive", status="drive")
+        "G1", _hit("drive", "real-file-id", "Pitch", source="drive", status="drive"), _TZ
     )
     assert "[G1] drive" in drive and "id=real-file-id" in drive
     cal = chat_runner._context_line(
-        "E1", _hit("document", "ev123", "Standup", source="calendar", status="event")
+        "E1", _hit("document", "ev123", "Standup", source="calendar", status="event"), _TZ
     )
     assert "[E1]" in cal and "id=ev123" in cal
 
@@ -187,8 +193,57 @@ def test_context_line_shows_similarity_and_linked_task():
         "note", "n1", "VAT id is DE123", source="note", status="note",
         task_id="task-9", meta={"similarity": 0.82},
     )
-    line = chat_runner._context_line("N1", hit)
-    assert "sim=0.82" in line and "id=n1" in line and "task=task-9" in line
+    line = chat_runner._context_line("N1", hit, _TZ)
+    # A note carries no actionable id of its own, so id= is omitted to save
+    # tokens — but similarity and the note's actionable handle (a linked task)
+    # still show.
+    assert "sim=0.82" in line and "task=task-9" in line
+    assert "id=n1" not in line
+
+
+def test_context_line_notes_omit_id_and_dont_duplicate_content():
+    # _note_hit sets title=content[:80] and snippet=content[:200] — both
+    # prefixes of the same text. The record must show that content once (fuller
+    # snippet) with no note id, not "id=… — <title> — <snippet>".
+    content = (
+        "Mert Ayvazoglu flagged an open issue around 'undefined columns from the "
+        "vendor search' in the lio-midterm-presentation Slack channel; a Notion "
+        "entry was created for it."
+    )
+    hit = _hit(
+        "note", "70cf1113", content[:80],
+        snippet=content[:200], source="note", status="note",
+    )
+    line = chat_runner._context_line("N4", hit, _TZ)
+    assert "id=70cf1113" not in line
+    body = line.split(" — ", 1)[1]
+    assert body == content[:200]
+    assert " — " not in body  # single body segment, no title/snippet repeat
+
+
+def test_context_line_renders_times_in_user_timezone():
+    # A calendar event's start/ts are stored UTC-aware; the record must render
+    # them in the user's zone. An unconverted 16:00Z would read "16:00" (and,
+    # near midnight, the wrong date) — the exact bug that had the agent tell the
+    # user "at 16:00" for an 18:00 Berlin event.
+    start = datetime(2026, 7, 14, 16, 0, tzinfo=ZoneInfo("UTC"))
+    hit = _hit(
+        "document", "ev1", "Aflatoun 1:1 Check In",
+        source="calendar", status="event", ts=start,
+        meta={"start": start.isoformat()},
+    )
+    line = chat_runner._context_line("E1", hit, _TZ)
+    assert "18:00" in line and "16:00" not in line
+
+    # Date must also roll to the local day — 23:30Z on the 14th is the 15th in
+    # Berlin (CEST, +02:00).
+    late = datetime(2026, 7, 14, 23, 30, tzinfo=ZoneInfo("UTC"))
+    late_hit = _hit(
+        "document", "ev2", "Late event",
+        source="calendar", status="event", ts=late, meta={"start": late.isoformat()},
+    )
+    late_line = chat_runner._context_line("E2", late_hit, _TZ)
+    assert "2026-07-15" in late_line and "01:30" in late_line
 
 
 @pytest.mark.asyncio

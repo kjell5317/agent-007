@@ -163,12 +163,7 @@ function PointsCard({
   const clickable = entry.task_id != null;
 
   return (
-    <Card
-      className={cn(
-        unseen && "border-emerald-500/70",
-        clickable && "transition-colors hover:border-primary/50",
-      )}
-    >
+    <Card className={cn(unseen && "border-emerald-500/70")}>
       <CardContent
         className={cn("p-4", clickable && "cursor-pointer")}
         onClick={() => {
@@ -178,13 +173,6 @@ function PointsCard({
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              {unseen && (
-                <span
-                  aria-label="Unseen"
-                  title="Unseen"
-                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                />
-              )}
               <div className="min-w-0 flex-1 truncate font-medium leading-snug">
                 {entry.reason}
               </div>

@@ -23,9 +23,8 @@ REQUIRED fields:
         plausibly fits, call `mark_not_task` instead.
 
 Optional: description, location (home is possible), link (most relevant
-source URL), notes (short, self-contained facts worth keeping as long-term
-memory — someone's role, an account number, a reference, a policy; skip
-ephemeral content).
+source URL), notes (durable, cross-project long-term memory; the `notes` field
+describes what makes a good note; skip ephemeral content).
 
 You also have one non-terminal tool:
 
