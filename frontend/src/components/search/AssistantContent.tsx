@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ListTodo } from "lucide-react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { api } from "@/lib/api";
+import { subscribeEvents } from "@/lib/events";
 import { cn } from "@/lib/utils";
 import type { ChatCitation, Task } from "@/lib/types";
 
@@ -228,16 +229,64 @@ function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
   const [task, setTask] = useState<Task | null>(null);
   const [failed, setFailed] = useState(false);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (opts: { background?: boolean } = {}) => {
     try {
-      setTask(await api.getTask(taskId));
-    } catch {
+      const next = await api.getTask(taskId);
+      setTask(next);
+      setFailed(false);
+    } catch (e) {
+      if (opts.background && apiStatus(e) !== 404) return;
+      setTask(null);
       setFailed(true);
     }
   }, [taskId]);
 
   useEffect(() => {
+    setTask(null);
+    setFailed(false);
     void refetch();
+  }, [refetch]);
+
+  useEffect(() => {
+    return subscribeEvents((event) => {
+      if (event.type === "task" && event.data.id === taskId) {
+        setTask(event.data);
+        setFailed(false);
+      } else if (event.type === "task_removed" && event.id === taskId) {
+        setTask(null);
+        setFailed(true);
+      }
+    });
+  }, [taskId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+
+    const safeRefetch = async () => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      try {
+        await refetch({ background: true });
+      } catch {
+        // `refetch` owns state reconciliation; foreground refreshes stay quiet.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") safeRefetch();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", safeRefetch);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", safeRefetch);
+    };
   }, [refetch]);
 
   if (failed) {
@@ -267,6 +316,12 @@ function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
       onOpen={ctx.onOpenTask}
     />
   );
+}
+
+function apiStatus(e: unknown): number | null {
+  if (!e || typeof e !== "object" || !("status" in e)) return null;
+  const status = (e as { status: unknown }).status;
+  return typeof status === "number" ? status : null;
 }
 
 export function AssistantContent({
