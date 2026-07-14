@@ -59,7 +59,7 @@ async def process_day_action(action_at: datetime) -> None:
         awake_minutes = await request_awake_minutes(session, now=action_at)
         penalty = max(0, awake_minutes)
         if penalty:
-            adjust_points(session, -penalty, caller="day", reason=f"awake {awake_minutes} min")
+            adjust_points(session, -penalty, caller="day", reason=f"Awake {awake_minutes} min")
         log.info(
             "notify action · day awake_minutes=%s points_deducted=%s",
             awake_minutes,

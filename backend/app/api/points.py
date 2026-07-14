@@ -14,6 +14,7 @@ so the secret never has to live in frontend code.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated
@@ -157,12 +158,24 @@ def _reason_for(entry: PointsEntry) -> str:
     action = (entry.action_name or "").strip()
     if entry.source == "manual":
         caller = (entry.section or "").strip()
-        return action or caller or "Manual adjustment"
+        return _generated_manual_reason(caller, action) or action or caller or "Manual adjustment"
     if entry.source == "task":
         return action or "Completed task"
     if entry.source == "penalty":
         return _penalty_reason(action, entry.period_key)
     return action or entry.source.replace("_", " ").title()
+
+
+def _generated_manual_reason(caller: str, action: str) -> str | None:
+    if caller == "day":
+        match = re.fullmatch(r"awake (\d+) min", action)
+        if match:
+            return f"Awake {match.group(1)} min"
+    if caller == "night":
+        match = re.fullmatch(r"(\d+) min under 8h", action)
+        if match:
+            return f"Under 8h by {match.group(1)} min"
+    return None
 
 
 def _caller_for(entry: PointsEntry) -> str | None:

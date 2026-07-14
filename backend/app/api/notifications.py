@@ -124,7 +124,7 @@ async def handle_action(
                     session,
                     -penalty,
                     caller="night",
-                    reason=f"{shortfall} min under 8h",
+                    reason=f"Under 8h by {shortfall} min",
                 )
         log.info(
             "notify action · Night minutes_until_prep=%s points_deducted=%s",
