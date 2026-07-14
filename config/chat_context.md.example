@@ -1,0 +1,26 @@
+<!--
+Personal routing hints for the chat/search agent.
+
+Copy this to `config/chat_context.md` (git-ignored) and edit it. Its contents are
+appended verbatim to the chat system prompt, under the prompt's reference to
+"routing hints at the end of this prompt". List which of YOUR projects and people
+live in which source so the agent picks the right tool instead of giving up.
+Keep it terse — it's read on every chat turn. Restart the backend after editing.
+-->
+
+# Personal routing hints
+
+When a question names one of these projects or people, search the mapped
+source(s) before saying you can't find it.
+
+## Projects → sources
+- **<Project A>** — Notion (documentation, meeting notes) · GitHub (code) · Drive (documents)
+- **<Project B>** — Drive (documents)
+- **<Project C>** — GitHub (code)
+
+## Source specifics
+- **Notion** — <which docs / workspaces live here>
+- **Drive** — <which folders / topics>
+- **GitHub** — <which repos / orgs>
+- **Calendar** — events; the source for any "when" / "where" question.
+- **Contacts** — birthdays, addresses, phone, and email.

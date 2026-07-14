@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     # Labels
     labels_config_path: str = "config/labels.toml"
 
+    # Personal, git-ignored routing hints appended to the chat/search system
+    # prompt (which of the user's projects/people live in which source). Missing
+    # file → base prompt only. See config/chat_context.md.example.
+    chat_context_path: str = "config/chat_context.md"
+
     # Points-per-estimated-minute awarded automatically when a non-kotx task is
     # completed (e.g. 0.2 → a 30-minute task earns 6 points). 0 disables it.
     # Kotx-linked completions use a fixed 0.1 factor.

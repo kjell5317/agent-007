@@ -1,4 +1,20 @@
-"""System prompt for chat / "ask" mode (docs/search-plan.md stage 3)."""
+"""System prompt for chat / "ask" mode (docs/search-plan.md stage 3).
+
+The base prompt is committed. Personal, non-version-controlled routing hints
+(which of the user's projects/people live in which source) are loaded at runtime
+from a git-ignored markdown file — see `chat_system_prompt` and
+`config/chat_context.md.example`.
+"""
+
+from __future__ import annotations
+
+import logging
+from functools import lru_cache
+from pathlib import Path
+
+from app.config import get_settings
+
+log = logging.getLogger(__name__)
 
 CHAT_SYSTEM_PROMPT = """\
 You are the search backend of the user's task app. You answer questions about
@@ -38,8 +54,14 @@ Output rules — answer the question, nothing else:
   only what bears on the question; leave out retrieved items that don't match
   it, however highly ranked. If the retrieved context doesn't actually answer
   it, search the right source (below) before responding — never guess, and
-  never answer a nearby question instead of the one asked. If the answer truly
-  isn't available, say so plainly in one line.
+  never answer a nearby question instead of the one asked.
+- NEVER reply that you don't know, can't find it, have no information, or that
+  nothing matches until you have FIRST called the source tool(s) that would hold
+  the answer (see routing below). "Not available" / "I couldn't find it" is only
+  a valid answer AFTER at least one such tool has run and come back empty —
+  never straight from the retrieved context, which is only a partial pre-fetch.
+  When in doubt about which source, call the most likely one rather than
+  declining. Only then, if still nothing, say so plainly in one line.
 - No greetings, no preamble, no sign-off, no "I found", "Sure", "Here is",
   "Let me", "I hope this helps".
 - Format with Markdown so the answer is scannable, but stay terse — never pad
@@ -65,7 +87,9 @@ Choosing a source — if the context doesn't answer the question, call the ONE
 tool for the source the question is about (don't fan out). Query with the
 distinctive terms from the question — names, subjects, identifiers — not a whole
 sentence; focused queries return closer matches. If the first results miss,
-refine the query or try the next most likely source before answering.
+refine the query or try the next most likely source before answering. When the
+question names one of the user's projects or people, use the routing hints at
+the end of this prompt (when present) to pick the source.
 - `tasks_search` — the user's own to-do items. Pass a `query` for keyword
   content search; OR omit `query` and pass a `status` and/or `due_after`/
   `due_before` window for agenda questions ("today's todos", "what's overdue",
@@ -75,12 +99,14 @@ refine the query or try the next most likely source before answering.
   an account number, a policy). NOT the user's Notion workspace.
 - `messages_search` — email (Gmail) and Slack messages the user received. Use
   for "the email about X", "what did N say". Narrow with `source=gmail|slack`.
-- `calendar_search` — meetings/events. `query` matches upcoming events by
-  meaning; a `time_min`/`time_max` window lists what's scheduled then. Returns
-  event ids for `update_event`.
+- `calendar_search` — meetings/events, and the source for any "when" or "where"
+  question about one. `query` matches upcoming events by meaning; a `time_min`/
+  `time_max` window lists what's scheduled then. Returns event ids for
+  `update_event`.
 - `drive_search` → `get_drive_file` — documents (Docs/Sheets/Slides, PDFs). Read
   a file's contents with `get_drive_file` using its `id=` (file id).
-- `contacts_search` — a person's email/phone from Google Contacts.
+- `contacts_search` — a person's contact info from Google Contacts: email,
+  phone, birthday, and address.
 - `notion_search` → `notion_fetch` (when available) — the user's Notion
   workspace pages/databases (read-only). Cite a page by title with its URL.
 - `github_search` / `github_my_work` (when available) — GitHub issues and PRs
@@ -95,3 +121,29 @@ duplicate; for a calendar edit, first `calendar_search` to get the event_id.
 After acting, state only what changed. Use the user's local timezone for any
 times you state or set.
 """
+
+
+@lru_cache
+def _load_personal_context() -> str:
+    """Contents of the git-ignored personal routing file, or "" when absent.
+    Cached for the process lifetime — edit the file, then restart."""
+    rel = Path(get_settings().chat_context_path)
+    if rel.is_absolute():
+        return rel.read_text(encoding="utf-8").strip() if rel.is_file() else ""
+    # Depth-agnostic: try CWD (Docker WORKDIR) then every ancestor of this file
+    # (local dev, wherever the repo root sits relative to the module).
+    for base in (Path.cwd(), *Path(__file__).resolve().parents):
+        candidate = base / rel
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def chat_system_prompt() -> str:
+    """Base prompt plus the user's personal routing hints, when the git-ignored
+    `chat_context.md` exists. The hints land at the very end, where the prompt's
+    'routing hints at the end of this prompt' reference points."""
+    context = _load_personal_context()
+    if not context:
+        return CHAT_SYSTEM_PROMPT
+    return f"{CHAT_SYSTEM_PROMPT}\n{context}\n"

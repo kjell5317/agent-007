@@ -59,7 +59,7 @@ async def process_day_action(action_at: datetime) -> None:
         awake_minutes = await request_awake_minutes(session, now=action_at)
         penalty = max(0, awake_minutes)
         if penalty:
-            adjust_points(session, -penalty, caller="day", reason=f"Awake {awake_minutes} min")
+            adjust_points(session, -penalty, caller="Day", reason=f"Awake {awake_minutes} min")
         log.info(
             "notify action · day awake_minutes=%s points_deducted=%s",
             awake_minutes,
@@ -73,11 +73,7 @@ def next_event_datetime_configured() -> bool:
     """Whether the HA input_datetime target has enough config to call."""
     s = get_settings()
     entity_id = (s.home_assistant_next_event_entity_id or "").strip()
-    return bool(
-        s.home_assistant_url
-        and s.home_assistant_token
-        and entity_id
-    )
+    return bool(s.home_assistant_url and s.home_assistant_token and entity_id)
 
 
 async def set_next_event_datetime(value: str) -> None:

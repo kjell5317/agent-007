@@ -123,7 +123,7 @@ async def handle_action(
                 adjust_points(
                     session,
                     -penalty,
-                    caller="night",
+                    caller="Night",
                     reason=f"Under 8h by {shortfall} min",
                 )
         log.info(

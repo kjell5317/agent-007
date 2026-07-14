@@ -41,7 +41,7 @@ from app.agent.helpers.llm import (
     user_message,
 )
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
-from app.agent.prompts import CHAT_SYSTEM_PROMPT
+from app.agent.prompts import chat_system_prompt
 from app.agent.tools import (
     CHAT_TOOLS,
     GITHUB_CHAT_TOOLS,
@@ -319,11 +319,12 @@ async def run_chat(
             answer_parts.append(text)
             await emit("token", {"text": text})
 
+        system_prompt = chat_system_prompt()
         for _ in range(settings.search_chat_max_iterations):
             resp = await stream_chat(
                 messages,
                 settings,
-                system_prompt=CHAT_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 tools=tools,
                 on_delta=on_delta,
                 name="chat-turn",
@@ -355,7 +356,7 @@ async def run_chat(
             await stream_chat(
                 messages,
                 settings,
-                system_prompt=CHAT_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 tools=[],
                 on_delta=on_delta,
                 name="chat-final",

@@ -603,7 +603,7 @@ async def test_process_day_action_deducts_awake_minutes_from_points(monkeypatch)
 
     assert sleeps == [home_assistant_service.DAY_HEALTH_SYNC_DELAY_S]
     assert events == ["sleep", "request"]
-    assert adjustments == [(-92, "day", "Awake 92 min")]
+    assert adjustments == [(-92, "Day", "Awake 92 min")]
     assert background_session.closed is True
 
 
@@ -677,7 +677,7 @@ async def test_night_action_docks_sleep_deficit_against_8h_target(monkeypatch):
         "minutes_until_prep": 474,
         "points_deducted": 3,
     }
-    assert adjustments == [(-3, "night", "Under 8h by 6 min")]
+    assert adjustments == [(-3, "Night", "Under 8h by 6 min")]
 
 
 @pytest.mark.asyncio

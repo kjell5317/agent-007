@@ -145,6 +145,53 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_extract_task_fields_harvest_notes_false_drops_notes(monkeypatch):
+    # kotx path: the create_task tool must not offer `notes`, and even if the
+    # model smuggles some in, they're never written to long-term memory.
+    captured: dict = {}
+    saved: list = []
+
+    async def fake_chat(messages, settings, *, system_prompt, tools, force_tool=None):
+        captured["tools"] = tools
+        return _response(
+            ToolCall(
+                id="create-1",
+                name="create_task",
+                input={
+                    "title": "Fix the parser",
+                    "estimation": 30,
+                    "due_date": "2026-07-02T09:00:00+00:00",
+                    "label": "code",
+                    "notes": ["refactored tokenizer", "uses regex X"],
+                },
+            )
+        )
+
+    async def fake_save_notes(_session, _raw_id, notes):
+        saved.append(notes)
+
+    monkeypatch.setattr(runner, "get_settings", lambda: SimpleNamespace(user_timezone="UTC"))
+    monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(runner, "save_notes", fake_save_notes)
+
+    raw = SimpleNamespace(
+        id="raw-1",
+        source="kotx",
+        source_metadata={},
+        content="TASK.md brief with lots of coding detail",
+        received_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+    )
+
+    payload = await runner.extract_task_fields(SimpleNamespace(), raw, harvest_notes=False)
+
+    create_tool = next(t for t in captured["tools"] if t["name"] == "create_task")
+    assert "notes" not in create_tool["parameters"]["properties"]
+    assert saved == []
+    assert "notes" not in payload
+    assert payload["title"] == "Fix the parser"
+
+
+@pytest.mark.asyncio
 async def test_extract_task_fields_renders_precedents_and_traces_evidence(monkeypatch):
     captured: dict[str, str] = {}
     task_id = "10000000-0000-0000-0000-000000000001"

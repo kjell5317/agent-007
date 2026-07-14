@@ -292,7 +292,9 @@ def _backfill_unlinked_thread_inputs(
 async def _create_task_from_brief(
     session: Session, raw, meta: dict, kotx_id: int
 ) -> Task:
-    payload = await extract_task_fields(session, raw)
+    # No note-harvesting: a kotx brief is TASK.md/REVIEW.md/PR coding detail,
+    # which would spam long-term memory with implementation minutiae.
+    payload = await extract_task_fields(session, raw, harvest_notes=False)
     repo = str(meta.get("repo") or "")
     label = _label_for_repo(repo)
     if label is None and payload.get("label"):

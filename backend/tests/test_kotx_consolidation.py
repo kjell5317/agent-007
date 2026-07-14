@@ -499,7 +499,7 @@ async def test_actionable_transition_backfills_preparing_thread_inputs(monkeypat
         kotx_runner.tasks, "github_link_candidates", lambda s, r, n: []
     )
 
-    async def fake_extract(session, raw):
+    async def fake_extract(session, raw, **kwargs):
         return {"estimation": 20, "due_date": None, "label": None}
 
     def fake_create(session, payload):
@@ -612,7 +612,10 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
         kotx_runner.tasks, "github_link_candidates", lambda s, r, n: []
     )
 
-    async def fake_extract(session, raw):
+    extract_kwargs = {}
+
+    async def fake_extract(session, raw, **kwargs):
+        extract_kwargs.update(kwargs)
         return {
             "title": "#31 Add a metadata index",
             "estimation": 20,
@@ -662,6 +665,9 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     assert created["scheduled"] is True
     # The first notification for a draft implement task swaps "Done" for "Start".
     assert created["primary_action"] == {"action": "KOTX_START", "title": "Start"}
+    # kotx briefs are coding detail — the extractor runs with note-harvesting off
+    # so it can't spam long-term memory.
+    assert extract_kwargs.get("harvest_notes") is False
     assert finalized["status"] == "open"
 
 
@@ -684,7 +690,7 @@ async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypat
     monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
     monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
 
-    async def fake_extract(session, raw):
+    async def fake_extract(session, raw, **kwargs):
         await asyncio.sleep(0)  # the yield point that opened the race
         return {"title": "t", "estimation": 20, "due_date": None, "label": None}
 
@@ -921,7 +927,7 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
     monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
     monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
 
-    async def fake_extract(session, raw):
+    async def fake_extract(session, raw, **kwargs):
         return {"estimation": 20, "due_date": None, "label": None}
 
     scheduled = {}
@@ -959,7 +965,7 @@ async def test_review_task_creation_drops_done_from_scheduled_notification(
     monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
     monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
 
-    async def fake_extract(session, raw):
+    async def fake_extract(session, raw, **kwargs):
         return {"estimation": 20, "due_date": None, "label": None}
 
     scheduled = {}

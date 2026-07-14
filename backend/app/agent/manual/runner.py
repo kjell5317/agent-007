@@ -44,12 +44,17 @@ async def extract_task_fields(
     context_inputs=(),
     precedent_candidates: list[SimilarInput] | None = None,
     include_trace: bool = False,
+    harvest_notes: bool = True,
 ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
     """Ask the LLM to extract task fields from a raw input.
 
     `context_inputs` are sibling raw_inputs from the same thread/follow-up
     group. When present, the agent sees the whole conversation (oldest first)
     and is told to produce ONE task capturing it.
+
+    `harvest_notes=False` drops the `notes` field so the agent can't write to
+    long-term memory — used for kotx briefs, whose coding details would only
+    spam the notes store.
 
     Multi-step loop so the model can call `search_notes` before finalizing
     with `create_task`. The last iteration forces `create_task` via tool_choice
@@ -59,6 +64,8 @@ async def extract_task_fields(
     precedent_candidates = precedent_candidates or []
     user_msg = _build_extract_message(session, raw, context_inputs, precedent_candidates)
     create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
+    if not harvest_notes:
+        create_tool = _without_notes(create_tool)
     search_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "search_notes")
     extract_tools = [search_tool, create_tool]
 
@@ -151,8 +158,11 @@ async def extract_task_fields(
     if "due_date" in payload:
         payload["due_date"] = normalize_agent_due_date(payload["due_date"])
     # Notes ride on `create_task` but aren't task fields — persist and strip
-    # them so callers can feed the payload straight into task creation.
-    await save_notes(session, raw.id, payload.pop("notes", None))
+    # them so callers can feed the payload straight into task creation. Skipped
+    # entirely when note-harvesting is off (kotx), where the field isn't offered.
+    notes = payload.pop("notes", None)
+    if harvest_notes:
+        await save_notes(session, raw.id, notes)
     # reason/confidence describe the decision, not the task — lift them onto the
     # trace and strip so they don't count as agent-extracted task fields.
     trace["reason"] = payload.pop("reason", None)
@@ -190,6 +200,14 @@ def _tool_purpose(name: str, tool_input: dict[str, Any]) -> str:
     if name == "create_task":
         return f"create task {_truncate_inline(str(tool_input.get('title') or ''), 80)}"
     return name
+
+
+def _without_notes(tool: dict[str, Any]) -> dict[str, Any]:
+    """A copy of a tool schema with its `notes` property removed, so the agent
+    is never offered a place to write long-term memory."""
+    params = tool["parameters"]
+    props = {k: v for k, v in params["properties"].items() if k != "notes"}
+    return {**tool, "parameters": {**params, "properties": props}}
 
 
 def _truncate_inline(value: str, limit: int) -> str:
