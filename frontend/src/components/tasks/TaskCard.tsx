@@ -3,6 +3,7 @@ import {
   Circle,
   CircleCheckBig,
   MapPin,
+  RotateCcw,
   Timer,
   Trash2,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import { api } from "@/lib/api";
 import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipClass } from "@/lib/labels";
+import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/lib/types";
 
@@ -58,11 +60,13 @@ export function TaskCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const metadataRef = useRef<HTMLDivElement>(null);
   const locationRef = useRef<HTMLSpanElement>(null);
+  const activeReopenPoll = useRef<PollHandle | null>(null);
   const lastMeasuredWidthRef = useRef<number | null>(null);
   const lastProbeKeyRef = useRef<string | null>(null);
   const labels = useLabels();
 
   const kotxAction = kotxTask ? actionHint(kotxTask) : null;
+  const canReopen = task.status !== "open" && task.kotx_task_id == null;
   const displayDate = task.due_date;
   const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
@@ -132,6 +136,18 @@ export function TaskCard({
   }, [onVisible, task.id, unseen]);
 
   useEffect(() => {
+    setCrossing(false);
+  }, [task.id, task.status]);
+
+  useEffect(
+    () => () => {
+      activeReopenPoll.current?.cancel();
+      activeReopenPoll.current = null;
+    },
+    [],
+  );
+
+  useEffect(() => {
     const metadata = metadataRef.current;
     if (!metadata || !displayLocation) return;
 
@@ -176,13 +192,14 @@ export function TaskCard({
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
+      setCrossing(false);
     }
   }
 
   // On kotx cards the check-off dismisses (discards the run — done is handled
   // through kotx), but keeps the same icon and animation as every other task.
   const crossOff = () => {
-    if (crossing || busy) return;
+    if (task.status !== "open" || crossing || busy) return;
     setCrossing(true);
     setTimeout(() => {
       if (kotxTask) {
@@ -201,6 +218,53 @@ export function TaskCard({
     }, CROSS_OFF_MS);
   };
 
+  async function reopenTask() {
+    if (busy) return;
+    setBusy(true);
+    const toastId = toast.loading("Re-opening task…", { duration: Infinity });
+
+    const clearPoll = () => {
+      activeReopenPoll.current = null;
+      toast.dismiss(toastId);
+    };
+
+    const finish = async () => {
+      clearPoll();
+      try {
+        toast.success("Task re-opened");
+        await onChanged();
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    try {
+      const { raw_input_id } = await api.reopenTask(task.id);
+      const handle = pollTaskCreation(raw_input_id, {
+        onSuccess: () => {
+          void finish();
+        },
+        onFailure: (message) => {
+          clearPoll();
+          toast.error(message);
+          setBusy(false);
+        },
+        onTimeout: () => {
+          clearPoll();
+          toast.error("Task is taking longer than expected");
+          setBusy(false);
+        },
+      });
+      activeReopenPoll.current = handle;
+    } catch (e) {
+      clearPoll();
+      toast.error((e as Error).message);
+      setBusy(false);
+    }
+  }
+
   return (
     <Card
       ref={cardRef}
@@ -218,24 +282,35 @@ export function TaskCard({
         }}
       >
         <div className="flex items-center gap-2">
-          <IconButton
-            label={
-              kotxTask
-                ? kotxTask.canDiscard
-                  ? "Dismiss run"
-                  : "Mark not a task"
-                : "Mark done"
-            }
-            disabled={busy || crossing}
-            onClick={crossOff}
-            className="text-muted-foreground hover:text-primary"
-          >
-            {crossing ? (
-              <CircleCheckBig className="h-5 w-5 text-primary" />
-            ) : (
-              <Circle className="h-5 w-5" />
-            )}
-          </IconButton>
+          {task.status === "open" ? (
+            <IconButton
+              label={
+                kotxTask
+                  ? kotxTask.canDiscard
+                    ? "Dismiss run"
+                    : "Mark not a task"
+                  : "Mark done"
+              }
+              disabled={busy || crossing}
+              onClick={crossOff}
+              className="text-muted-foreground hover:text-primary"
+            >
+              {crossing ? (
+                <CircleCheckBig className="h-5 w-5 text-primary" />
+              ) : (
+                <Circle className="h-5 w-5" />
+              )}
+            </IconButton>
+          ) : canReopen ? (
+            <IconButton
+              label="Re-open task"
+              disabled={busy}
+              onClick={reopenTask}
+              className="text-muted-foreground hover:text-primary"
+            >
+              <RotateCcw className="h-5 w-5" />
+            </IconButton>
+          ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
               <span
@@ -302,7 +377,7 @@ export function TaskCard({
                 {kotxAction}
               </Button>
             )
-          ) : (
+          ) : task.status === "open" ? (
             <IconButton
               label="Mark not a task"
               disabled={busy || crossing}
@@ -313,7 +388,7 @@ export function TaskCard({
             >
               <Trash2 className="h-4 w-4" />
             </IconButton>
-          )}
+          ) : null}
         </div>
       </CardContent>
 
