@@ -183,6 +183,55 @@ def test_points_log_paginates_and_serializes_task_id(monkeypatch):
     assert [entry.id for entry in all_rows.entries] == [newest.id, task.id, old.id]
 
 
+def test_points_log_formats_legacy_day_and_night_reasons(monkeypatch):
+    session = _sqlite_session()
+    _open_access(monkeypatch)
+    manual = points_store.add_entry(
+        session,
+        source="manual",
+        section="Manual",
+        action_name="awake 12 min",
+        factor=-12,
+        quantity=1,
+        amount=-12,
+    )
+    day = points_store.add_entry(
+        session,
+        source="manual",
+        section="day",
+        action_name="awake 92 min",
+        factor=-92,
+        quantity=1,
+        amount=-92,
+    )
+    night = points_store.add_entry(
+        session,
+        source="manual",
+        section="night",
+        action_name="6 min under 8h",
+        factor=-3,
+        quantity=1,
+        amount=-3,
+    )
+    manual.created_at = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    day.created_at = datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc)
+    night.created_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    session.commit()
+
+    log = points_api.get_points_log(
+        SimpleNamespace(session={}),
+        limit=3,
+        session=session,
+    )
+
+    assert [entry.reason for entry in log.entries] == [
+        "Under 8h by 6 min",
+        "Awake 92 min",
+        "awake 12 min",
+    ]
+    assert [entry.id for entry in log.entries] == [night.id, day.id, manual.id]
+
+
 @pytest.mark.asyncio
 async def test_close_task_awards_points_and_publishes_new_total(monkeypatch):
     session = _sqlite_session()
