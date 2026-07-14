@@ -601,13 +601,18 @@ function toolDisplay(
   hideResult?: boolean;
   hideConfidence?: boolean;
 } {
+  // Terminal decision tools carry reason/confidence, but the decision's rationale
+  // is surfaced once at the trace level (see InputBody's "Reason" section), so the
+  // per-tool copy is hidden here to avoid showing it twice.
   if (name === "create_task") {
     if (!input) return {};
     const fields = createTaskFields(input);
     return {
       inputFields: fields.length > 0 ? fields : undefined,
       hideInput: true,
+      hideReason: true,
       hideResult: true,
+      hideConfidence: true,
     };
   }
 
@@ -619,6 +624,7 @@ function toolDisplay(
       hideInput: true,
       hideReason: true,
       hideResult: true,
+      hideConfidence: true,
     };
   }
 

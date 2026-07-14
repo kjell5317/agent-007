@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import String, bindparam, text
+from sqlalchemy import Float, String, bindparam, text
 from sqlalchemy.orm import Session
 
 TASK = "task"
@@ -46,6 +46,9 @@ class SuggestHit:
     # Recency anchor shown as the date — the last input's time for tasks.
     ts: datetime | None
     score: float
+    # Genuine cosine for embedded corpora resolved via the vector side (notes
+    # today); None for keyword-only hits, which carry no meaningful cosine.
+    similarity: float | None = None
 
 
 # Per-corpus SQL fragments. `fts` is the stored, GIN-indexed tsvector column;
@@ -380,6 +383,7 @@ _VEC_BRANCH = {
         "(SELECT n.id::text AS id, 'note' AS type, n.embedding <=> CAST(:emb AS vector) AS dist\n"
         "   FROM notes n\n"
         f"  WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL{_F_NOTE}\n"
+        "    AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :note_min_sim\n"
         "  ORDER BY n.embedding <=> CAST(:emb AS vector) LIMIT :pool)"
     ),
     DOCUMENT: (
@@ -453,6 +457,8 @@ def _hybrid_sql(corpora: frozenset[str]):
              bindparam("f_after", type_=String())]
     if vec_members:
         binds.append(bindparam("emb", type_=String()))
+    if NOTE in corpora:
+        binds.append(bindparam("note_min_sim", type_=Float()))
     if INPUT in corpora or DOCUMENT in corpora:
         binds.append(bindparam("f_source", type_=String()))
     if TASK in corpora:
@@ -472,17 +478,25 @@ def _display_branch(corpus: str) -> dict[str, str]:
     return _BRANCHES[corpus]
 
 
-def _load_display(session: Session, corpus: str, ids: list[str]) -> list[SuggestHit]:
+def _load_display(
+    session: Session, corpus: str, ids: list[str], *, emb: str | None = None
+) -> list[SuggestHit]:
     """Resolve display fields for the winning ids of one corpus, reusing the
-    stage-1 select fragments so a hit reads identically to a suggest row."""
+    stage-1 select fragments so a hit reads identically to a suggest row. Notes
+    also carry their genuine cosine so the uniform record can show `sim=`."""
     b = _display_branch(corpus)
+    scored = corpus == NOTE and emb is not None
+    sim_expr = "1.0 - (n.embedding <=> CAST(:emb AS vector))" if scored else "NULL::float"
     sql = text(
-        f"SELECT type, id, title, snippet, url, task_id, source, sender, status, ts FROM ("
-        f"SELECT {b['select']}, {b['ts']} AS ts FROM {b['from']} "
+        f"SELECT type, id, title, snippet, url, task_id, source, sender, status, ts, similarity "
+        f"FROM (SELECT {b['select']}, {b['ts']} AS ts, {sim_expr} AS similarity FROM {b['from']} "
         f"WHERE {_ID_COL[corpus]}::text = ANY(:ids)"
         f") x"
     )
-    rows = session.execute(sql, {"ids": ids}).all()
+    params: dict[str, object] = {"ids": ids}
+    if scored:
+        params["emb"] = emb
+    rows = session.execute(sql, params).all()
     return [
         SuggestHit(
             type=r.type,
@@ -496,6 +510,7 @@ def _load_display(session: Session, corpus: str, ids: list[str]) -> list[Suggest
             status=r.status,
             ts=r.ts,
             score=0.0,
+            similarity=float(r.similarity) if r.similarity is not None else None,
         )
         for r in rows
     ]
@@ -509,6 +524,7 @@ def hybrid_search(
     k: int,
     corpora: frozenset[str] | None = None,
     min_input_chars: int = 0,
+    note_min_similarity: float = 0.0,
     source: str | None = None,
     label: str | None = None,
     status: str | None = None,
@@ -536,6 +552,8 @@ def hybrid_search(
     }
     if {INPUT, NOTE, DOCUMENT} & corpora:
         params["emb"] = emb_literal
+    if NOTE in corpora:
+        params["note_min_sim"] = note_min_similarity
     if {INPUT, DOCUMENT} & corpora:
         params["f_source"] = source
     if TASK in corpora:
@@ -555,7 +573,7 @@ def hybrid_search(
 
     hits: list[SuggestHit] = []
     for corpus, ids in ids_by_type.items():
-        for hit in _load_display(session, corpus, ids):
+        for hit in _load_display(session, corpus, ids, emb=emb_literal):
             hit.score = rrf[(corpus, hit.id)]
             hits.append(hit)
     hits.sort(key=lambda h: order[(h.type, h.id)])

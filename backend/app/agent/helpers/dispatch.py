@@ -71,9 +71,18 @@ async def apply_task_action(
                 pass
             outcome = "closed"
 
-        return {"outcome": outcome, "status_change": status}
+        return {
+            "outcome": outcome,
+            "status_change": status,
+            "reason": tu_input.get("reason"),
+            "confidence": tu_input.get("confidence"),
+        }
 
     if tool_name == "no_change":
-        return {"outcome": "no_change", "confidence": tu_input.get("confidence")}
+        return {
+            "outcome": "no_change",
+            "reason": tu_input.get("reason"),
+            "confidence": tu_input.get("confidence"),
+        }
 
     return {"outcome": f"unknown_tool:{tool_name}"}

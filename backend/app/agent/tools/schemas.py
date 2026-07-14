@@ -35,6 +35,16 @@ _CONFIDENCE_SCHEMA = {
     ),
 }
 
+# Optional on the create/update tools (required only on mark_not_task). One short
+# sentence on why this decision — surfaced to the user in the input's agent trace.
+_REASON_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Brief rationale for this decision, shown to the user in the trace — "
+        "e.g. why this is a task, or what the update changes and why."
+    ),
+}
+
 # Every terminal tool carries this: long-term memory is harvested from all
 # decisions, not just rejected inputs.
 _NOTES_SCHEMA = {
@@ -283,7 +293,11 @@ NEW_INPUT_TOOLS = [
         "description": "Persist a new task extracted from the current raw input.",
         "parameters": {
             "type": "object",
-            "properties": _CREATE_TASK_PROPS,
+            "properties": {
+                **_CREATE_TASK_PROPS,
+                "reason": _REASON_SCHEMA,
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
             "required": _CREATE_TASK_REQUIRED,
         },
     },
@@ -355,7 +369,12 @@ NEW_INPUT_TOOLS = [
         ),
         "parameters": {
             "type": "object",
-            "properties": {**_UPDATE_TASK_PROPS, "existing_task_id": _EXISTING_TASK_ID_SCHEMA},
+            "properties": {
+                **_UPDATE_TASK_PROPS,
+                "existing_task_id": _EXISTING_TASK_ID_SCHEMA,
+                "reason": _REASON_SCHEMA,
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
             "required": ["existing_task_id"],
         },
     },
@@ -393,7 +412,11 @@ THREAD_FOLLOWUP_TOOLS = [
         ),
         "parameters": {
             "type": "object",
-            "properties": _UPDATE_TASK_PROPS,
+            "properties": {
+                **_UPDATE_TASK_PROPS,
+                "reason": _REASON_SCHEMA,
+                "confidence": _CONFIDENCE_SCHEMA,
+            },
         },
     },
     {

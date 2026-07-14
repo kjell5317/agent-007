@@ -254,16 +254,22 @@ export function InputBody({ data }: { data: RawInput }) {
           </div>
         </Section>
       )}
-      {trace?.reason && (
-        <Section title="Reason">
-          <Markdown content={trace.reason} className="text-xs" />
-        </Section>
-      )}
       {trace &&
-        (trace.currentTask.length > 0 ||
+        (trace.reason ||
+          trace.currentTask.length > 0 ||
           evidence.length > 0 ||
           trace.tools.length > 0) && (
           <CollapsibleSection title="Agent trace">
+            {trace.reason && (
+              <Section title="Reason">
+                <Markdown content={trace.reason} className="text-xs" />
+                {trace.confidence && (
+                  <div className="text-[11px] text-muted-foreground">
+                    Confidence: {trace.confidence}
+                  </div>
+                )}
+              </Section>
+            )}
             {trace.currentTask.length > 0 && (
               <Section title="Current task">
                 <FieldGrid fields={trace.currentTask} />

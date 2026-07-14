@@ -242,6 +242,8 @@ async def run_new_input_agent(
             trace["outcome"] = "task_created"
             trace["task_id"] = str(task.id)
             trace["task_title"] = task.title
+            trace["reason"] = payload.get("reason")
+            trace["confidence"] = payload.get("confidence")
             saved = await save_notes(session, raw.id, payload.get("notes"))
             if saved:
                 trace["notes_saved"] = saved
