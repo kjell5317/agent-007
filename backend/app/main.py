@@ -22,6 +22,7 @@ from app.api import (
     inputs,
     kotx,
     labels,
+    notes,
     notifications,
     oauth,
     points,
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(inputs.router)
     app.include_router(kotx.router)
     app.include_router(labels.router)
+    app.include_router(notes.router)
     app.include_router(tasks.router)
     app.include_router(notifications.router)
     app.include_router(oauth.router)

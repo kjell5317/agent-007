@@ -121,3 +121,80 @@ def search_similar(
 def list_recent(session: Session, *, limit: int = 20) -> list[Note]:
     stmt = select(Note).order_by(Note.created_at.desc()).limit(limit)
     return list(session.execute(stmt).scalars())
+
+
+@dataclass
+class NoteListItem:
+    id: uuid.UUID
+    content: str
+    source_raw_input_id: uuid.UUID | None
+    created_at: datetime
+    source: str | None
+    source_from: str | None
+    source_subject: str | None
+
+
+# Enriches each note with its originating raw_input's source + sender/subject
+# so the audit view can show where a memory came from. LEFT JOIN keeps notes
+# whose source input was deleted (SET NULL) and chat-authored notes (no source).
+_LIST_NOTES_TEMPLATE = """
+    SELECT
+      n.id, n.content, n.source_raw_input_id, n.created_at,
+      r.source AS source,
+      r.source_metadata->>'from' AS source_from,
+      r.source_metadata->>'subject' AS source_subject
+    FROM notes n
+    LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
+    {where}
+    ORDER BY n.created_at DESC
+    {limit}
+"""
+
+
+def _to_item(row) -> NoteListItem:
+    return NoteListItem(
+        id=row.id,
+        content=row.content,
+        source_raw_input_id=row.source_raw_input_id,
+        created_at=row.created_at,
+        source=row.source,
+        source_from=row.source_from,
+        source_subject=row.source_subject,
+    )
+
+
+def list_all(session: Session, *, limit: int = 500) -> list[NoteListItem]:
+    stmt = text(_LIST_NOTES_TEMPLATE.format(where="", limit="LIMIT :limit"))
+    rows = session.execute(stmt, {"limit": limit}).all()
+    return [_to_item(r) for r in rows]
+
+
+def get_item(session: Session, note_id: uuid.UUID) -> NoteListItem | None:
+    stmt = text(_LIST_NOTES_TEMPLATE.format(where="WHERE n.id = :id", limit=""))
+    row = session.execute(stmt, {"id": note_id}).first()
+    return _to_item(row) if row is not None else None
+
+
+def update(
+    session: Session,
+    note_id: uuid.UUID,
+    *,
+    content: str,
+    embedding: list[float] | None,
+) -> bool:
+    row = session.get(Note, note_id)
+    if row is None:
+        return False
+    row.content = content
+    row.embedding = embedding
+    session.flush()
+    return True
+
+
+def delete(session: Session, note_id: uuid.UUID) -> bool:
+    row = session.get(Note, note_id)
+    if row is None:
+        return False
+    session.delete(row)
+    session.flush()
+    return True

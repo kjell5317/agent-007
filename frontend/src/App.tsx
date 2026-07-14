@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { NotesPanel } from "@/components/notes/NotesPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
 import { ChatComposer } from "@/components/search/ChatComposer";
 import { ChatPanel } from "@/components/search/ChatPanel";
@@ -29,6 +30,7 @@ export function App() {
   const lastTabRef = useRef<"tasks" | "chat">("tasks");
   const chat = useSearchChat();
   const mailOpen = view === "mail";
+  const [inboxTab, setInboxTab] = useState<"inbox" | "notes">("inbox");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
   // load so it can resolve to the adopting task.
@@ -337,15 +339,29 @@ export function App() {
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
         {view === "mail" ? (
-          <InboxPanel
-            inputs={inputs}
-            onChanged={refresh}
-            onLoadMore={loadMoreInputs}
-            hasMore={hasMoreInputs}
-            unseenInputIds={unseenInputIds}
-            onInputsVisible={markInputsVisible}
-            onOpenTask={openTask}
-          />
+          <Tabs
+            value={inboxTab}
+            onValueChange={(v) => setInboxTab(v === "notes" ? "notes" : "inbox")}
+          >
+            <TabsList className="mb-4 grid h-10 w-full grid-cols-2">
+              <TabsTrigger value="inbox">Inbox</TabsTrigger>
+              <TabsTrigger value="notes">Notes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="inbox">
+              <InboxPanel
+                inputs={inputs}
+                onChanged={refresh}
+                onLoadMore={loadMoreInputs}
+                hasMore={hasMoreInputs}
+                unseenInputIds={unseenInputIds}
+                onInputsVisible={markInputsVisible}
+                onOpenTask={openTask}
+              />
+            </TabsContent>
+            <TabsContent value="notes">
+              <NotesPanel />
+            </TabsContent>
+          </Tabs>
         ) : view === "points" ? (
           <PointsPanel onOpenTask={openTask} />
         ) : (

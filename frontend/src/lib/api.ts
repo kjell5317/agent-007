@@ -5,6 +5,7 @@ import type {
   ChatSummary,
   ChatToolTrace,
   Label,
+  Note,
   RawInput,
   SearchHit,
   SearchHitType,
@@ -139,6 +140,15 @@ export const api = {
     request<ChatSummary>(`/search/chats/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 
   listLabels: () => request<Label[]>("/labels"),
+
+  listNotes: (limit = 500) => request<Note[]>(`/notes?limit=${limit}`),
+  updateNote: (id: string, content: string) =>
+    request<Note>(`/notes/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    }),
+  deleteNote: (id: string) =>
+    request<void>(`/notes/${id}`, { method: "DELETE" }),
 
   getPoints: () => request<{ total: number }>("/points"),
   getPointsLog: (limit = 50) =>

@@ -107,6 +107,18 @@ export interface ChatSummary {
   updated_at: string;
 }
 
+// A standalone fact an agent flow extracted — the agent's long-term memory.
+// Surfaced on the Notes tab so it can be audited, edited, or deleted by hand.
+export interface Note {
+  id: string;
+  content: string;
+  source: string | null;
+  source_from: string | null;
+  source_subject: string | null;
+  source_raw_input_id: string | null;
+  created_at: string;
+}
+
 export interface RawInput {
   id: string;
   source: string;
