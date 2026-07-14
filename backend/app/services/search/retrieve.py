@@ -55,6 +55,7 @@ async def retrieve(session: Session, query: str) -> list[SearchHit]:
         raw_text=query,
         k=settings.search_chat_local_limit,
         corpora=_LOCAL_CORPORA,
+        note_min_similarity=settings.notes_semantic_min_similarity,
     )
     return [SearchHit.build(h) for h in raw]
 
@@ -145,7 +146,13 @@ async def search_notes(session: Session, query: str, *, k: int = 5) -> list[Sear
     embedding = await _embed_or_none(query)
     if embedding is None:
         return []
-    hits = notes_store.search_similar(session, embedding=embedding, query=query, k=k)
+    hits = notes_store.search_similar(
+        session,
+        embedding=embedding,
+        query=query,
+        k=k,
+        min_similarity=get_settings().notes_semantic_min_similarity,
+    )
     return [_note_hit(h) for h in hits]
 
 

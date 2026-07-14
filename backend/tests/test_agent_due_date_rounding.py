@@ -70,6 +70,8 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
                     "estimation": 30,
                     "due_date": "2026-07-02T09:01:10+00:00",
                     "label": "admin",
+                    "reason": "explicit deadline in the email",
+                    "confidence": 0.85,
                 },
             )
         )
@@ -104,6 +106,11 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
     assert created_payloads[0].due_date.isoformat() == "2026-07-02T09:05:00+00:00"
     assert finalized["status"] == "open"
     assert finalized["task_id"] == task_id
+    # create_task now explains itself: reason/confidence land on the trace (which
+    # the inbox surfaces in the Agent-trace dropdown), not on the created task.
+    assert trace["reason"] == "explicit deadline in the email"
+    assert trace["confidence"] == 0.85
+    assert not hasattr(created_payloads[0], "reason")
 
 
 @pytest.mark.asyncio
@@ -123,7 +130,13 @@ async def test_update_task_action_normalizes_agent_due_date(monkeypatch):
         {"due_date": "2026-07-02T09:01:00+00:00"},
     )
 
-    assert result == {"outcome": "updated", "status_change": None}
+    # reason/confidence ride along on every frag; None when the agent omits them.
+    assert result == {
+        "outcome": "updated",
+        "status_change": None,
+        "reason": None,
+        "confidence": None,
+    }
     assert patches[0]["due_date"].isoformat() == "2026-07-02T09:05:00+00:00"
 
 
@@ -154,6 +167,25 @@ async def test_reopen_action_reopens_then_applies_due_date(monkeypatch):
         },
     )
 
-    assert result == {"outcome": "reopened", "status_change": "open"}
+    assert result == {
+        "outcome": "reopened",
+        "status_change": "open",
+        "reason": None,
+        "confidence": None,
+    }
     assert calls == [("reopen", task_id), ("update", task_id)]
     assert patches == [{"due_date": datetime(2026, 7, 4, 10, 5, tzinfo=timezone.utc)}]
+
+
+@pytest.mark.asyncio
+async def test_task_action_frag_carries_reason_and_confidence():
+    # The agent's rationale rides the frag so the trace (and its UI dropdown) can
+    # explain a reopen/update the same way mark_not_task already does.
+    result = await dispatch.apply_task_action(
+        SimpleNamespace(),
+        SimpleNamespace(id=uuid.UUID("30000000-0000-0000-0000-000000000003")),
+        "no_change",
+        {"existing_task_id": "x", "reason": "same email again", "confidence": 0.9},
+    )
+    assert result["reason"] == "same email again"
+    assert result["confidence"] == 0.9

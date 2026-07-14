@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import String, bindparam, select, text
+from sqlalchemy import Float, String, bindparam, select, text
 from sqlalchemy.orm import Session
 
 from app.config.settings import get_settings
@@ -54,6 +54,7 @@ _SIMILAR_NOTES_SQL = text(
         SELECT n.id, row_number() OVER (ORDER BY n.embedding <=> CAST(:emb AS vector)) AS rnk
         FROM notes n
         WHERE n.embedding IS NOT NULL
+          AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :min_sim
         ORDER BY n.embedding <=> CAST(:emb AS vector)
         LIMIT :pool
     ),
@@ -84,14 +85,24 @@ _SIMILAR_NOTES_SQL = text(
       DESC
     LIMIT :k
     """
-).bindparams(bindparam("emb", type_=String()), bindparam("raw_q", type_=String()))
+).bindparams(
+    bindparam("emb", type_=String()),
+    bindparam("raw_q", type_=String()),
+    bindparam("min_sim", type_=Float()),
+)
 
 
 def search_similar(
-    session: Session, *, embedding: list[float], query: str, k: int = 5
+    session: Session,
+    *,
+    embedding: list[float],
+    query: str,
+    k: int = 5,
+    min_similarity: float = 0.0,
 ) -> list[SimilarNote]:
     """Top-k notes by hybrid similarity + keyword (RRF over pgvector and FTS),
-    re-ranked with a mild recency decay."""
+    re-ranked with a mild recency decay. `min_similarity` gates the vector side
+    only; keyword matches surface regardless."""
     emb_literal = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
     half_life_days = get_settings().notes_similarity_half_life_days
     rows = session.execute(
@@ -102,6 +113,7 @@ def search_similar(
             "k": k,
             "pool": _NOTE_POOL,
             "half_life_days": half_life_days,
+            "min_sim": min_similarity,
         },
     ).all()
     return [

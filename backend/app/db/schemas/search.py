@@ -27,6 +27,8 @@ class SearchHit(BaseModel):
 
     @classmethod
     def build(cls, hit: SuggestHit) -> "SearchHit":
+        sim = hit.similarity
+        meta = {"similarity": round(sim, 2)} if sim and sim > 0 else None
         return cls(
             type=hit.type,
             id=hit.id,
@@ -39,6 +41,7 @@ class SearchHit(BaseModel):
             status=hit.status,
             ts=hit.ts,
             score=hit.score,
+            meta=meta,
         )
 
 

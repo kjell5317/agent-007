@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # recent notes when re-ranking equally-similar hits.
     notes_similarity_half_life_days: float = 300
 
+    # Minimum cosine a note must clear on the vector side of the hybrid lookup to
+    # be surfaced to chat (pre-injection + `search_notes`). Gates the vector side
+    # only — keyword matches (account numbers, names) still surface regardless, so
+    # a far-off embedding can't ride in as a spurious "memory". Mirrors
+    # `calendar_semantic_min_similarity`.
+    notes_semantic_min_similarity: float = 0.4
+
     # Same decay for raw-input precedent search. The decayed score is what the
     # orchestrator compares against `input_dedup_threshold`, so an old
     # precedent stops auto-deciding and falls through to the agent instead.

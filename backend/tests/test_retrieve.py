@@ -13,8 +13,10 @@ import importlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from app.config import get_settings
 from app.db.clients.documents import CalendarMatch
 from app.db.clients.search import SuggestHit
+from app.db.schemas.search import SearchHit
 from app.services.search.extract import extract_text
 from app.services.search.retrieve import (
     find_tasks,
@@ -31,10 +33,12 @@ retrieve_mod = importlib.import_module("app.services.search.retrieve")
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def _suggest(type_: str, id_: str, *, status: str | None = None) -> SuggestHit:
+def _suggest(
+    type_: str, id_: str, *, status: str | None = None, similarity: float | None = None
+) -> SuggestHit:
     return SuggestHit(
         type=type_, id=id_, title="t", snippet=None, url=None, task_id=None,
-        source=None, sender=None, status=status, ts=None, score=1.0,
+        source=None, sender=None, status=status, ts=None, score=1.0, similarity=similarity,
     )
 
 
@@ -63,7 +67,18 @@ async def test_retrieve_preinjects_tasks_and_notes_only(monkeypatch):
     hits = await retrieve(object(), "standup")
     assert len(calls) == 1
     assert calls[0]["corpora"] == frozenset({"task", "note"})
+    # The note vector floor is threaded so far-off notes can't ride into context.
+    assert calls[0]["note_min_similarity"] == get_settings().notes_semantic_min_similarity
     assert [h.id for h in hits] == ["t1"]
+
+
+def test_searchhit_build_maps_similarity_to_meta():
+    # The regression: pre-injection note hits carry a cosine, but SearchHit.build
+    # dropped it, so the uniform record never showed `sim=`.
+    assert SearchHit.build(_suggest("note", "n1", similarity=0.82)).meta == {"similarity": 0.82}
+    # Keyword-only (no cosine) or a non-positive one shows no misleading number.
+    assert SearchHit.build(_suggest("note", "n2")).meta is None
+    assert SearchHit.build(_suggest("note", "n3", similarity=0.0)).meta is None
 
 
 @pytest.mark.asyncio

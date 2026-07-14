@@ -153,6 +153,10 @@ async def extract_task_fields(
     # Notes ride on `create_task` but aren't task fields — persist and strip
     # them so callers can feed the payload straight into task creation.
     await save_notes(session, raw.id, payload.pop("notes", None))
+    # reason/confidence describe the decision, not the task — lift them onto the
+    # trace and strip so they don't count as agent-extracted task fields.
+    trace["reason"] = payload.pop("reason", None)
+    trace["confidence"] = payload.pop("confidence", None)
     _backstop_required(payload, raw_id=raw.id)
     if include_trace:
         return payload, trace
