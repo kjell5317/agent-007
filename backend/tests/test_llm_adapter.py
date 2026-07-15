@@ -72,7 +72,7 @@ async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
                 ]
             }
 
-    monkeypatch.setattr(llm, "_build_generator", lambda settings: FakeGenerator())
+    monkeypatch.setattr(llm, "_build_generator", lambda settings, **kw: FakeGenerator())
     settings = SimpleNamespace(
         effective_llm_provider="anthropic",
         effective_llm_model="claude-test",

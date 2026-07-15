@@ -64,6 +64,11 @@ class LLMMessage:
     text: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     tool_result: ToolResult | None = None
+    # The provider-native reply message (Haystack ChatMessage), echoed back
+    # verbatim on the next turn so provider state survives the round-trip —
+    # notably Gemini's per-function-call thought signatures, which the API
+    # rejects a follow-up request for if they're missing.
+    raw: Any = None
 
 
 @dataclass(frozen=True)
@@ -354,6 +359,10 @@ def _to_haystack_message(message: LLMMessage) -> ChatMessage:
     if message.role == "user":
         return ChatMessage.from_user(message.text or "")
     if message.role == "assistant":
+        # Echo the provider's own reply back verbatim when we have it (preserves
+        # Gemini thought signatures); otherwise rebuild from our fields.
+        if message.raw is not None:
+            return message.raw
         return ChatMessage.from_assistant(
             text=message.text,
             tool_calls=[_to_haystack_tool_call(call) for call in message.tool_calls] or None,
@@ -390,6 +399,7 @@ def _from_haystack_reply(reply: ChatMessage, *, provider: str, model: str) -> LL
         role="assistant",
         text=text or None,
         tool_calls=tool_calls,
+        raw=reply,
     )
     return LLMResponse(
         message=message,

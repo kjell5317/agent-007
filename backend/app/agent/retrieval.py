@@ -62,6 +62,4 @@ def _note_line(h) -> str:
         parts.append(h.created_at.date().isoformat())
     if h.source_from:
         parts.append(f"from: {h.source_from}")
-    if h.source_subject:
-        parts.append(f"subject: {h.source_subject}")
     return "- " + " · ".join(parts) + f" | {h.content}"

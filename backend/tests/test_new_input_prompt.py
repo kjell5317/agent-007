@@ -48,7 +48,7 @@ def test_new_input_prompt_renders_task_candidate_header_without_duplicate_title(
         due_date=None,
         estimation=20,
         location=None,
-        link=None,
+        link="https://example.com/q2-report",
         label="admin",
     )
     hit = _hit(
@@ -69,6 +69,13 @@ def test_new_input_prompt_renders_task_candidate_header_without_duplicate_title(
     assert "  estimation: 20 min" in message
     assert "  label: admin" in message
     assert message.count("title: Send Q2 report") == 1
+    # The id is in the header (existing_task_id); the `  id:` field line is dropped.
+    assert message.count("10000000-0000-0000-0000-000000000001") == 1
+    assert "\n  id: " not in message
+    # link and the raw snippet are dropped as redundant.
+    assert "\n  link:" not in message
+    assert "https://example.com/q2-report" not in message
+    assert "\n  snippet:" not in message
 
 
 def test_new_input_prompt_renders_not_task_context(monkeypatch):
@@ -90,12 +97,14 @@ def test_new_input_prompt_renders_not_task_context(monkeypatch):
     message = runner._build_new_input_message(raw, [], [not_task])
 
     assert "[NOT_TASK] sim=0.81 · title: Weekly FYI" in message
-    assert "  id: 00000000-0000-0000-0000-000000000001" in message
+    # The bare id line is dropped — no tool acts on a not_task id.
+    assert "id: 00000000-0000-0000-0000-000000000001" not in message
     assert (
         "  metadata: source=gmail · from=sender@example.com · "
         "received_at=2026-06-01T12:30:00+00:00"
     ) in message
-    assert "  snippet: Hello, This is a context-heavy informational update" in message
+    # snippet dropped as redundant; the reason is the precedent signal we keep.
+    assert "\n  snippet:" not in message
     assert "  reason: Informational newsletter with no action requested." in message
 
 

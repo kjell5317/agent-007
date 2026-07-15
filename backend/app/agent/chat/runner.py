@@ -380,20 +380,24 @@ def _build_messages(
                 text = f"{turn.content}\n\n{context}"
             messages.append(user_message(text))
             continue
-        # Assistant turn: replay any tools it called as real tool_use /
-        # tool_result pairs (so the model sees what it already found and won't
-        # re-run the same search), then the answer text it finished with.
-        valid = [t for t in turn.tools if t.get("name")]
-        if valid:
-            calls = [
-                ToolCall(id=f"h{i}-{j}", name=str(t["name"]), input=dict(t.get("params") or {}))
-                for j, t in enumerate(valid)
-            ]
-            messages.append(LLMMessage(role="assistant", tool_calls=tuple(calls)))
-            for call, t in zip(calls, valid):
-                messages.append(tool_result_message(call, _clip(str(t.get("result") or ""), tool_chars)))
+        # Assistant turn. Fold any tools it ran into the message as text — the
+        # model sees what it already looked up (and won't re-run the same
+        # search) without provider tool-call parts, which some providers
+        # (Gemini) reject on replay when their original thought signatures are
+        # gone (we don't persist those across turns).
+        segments: list[str] = []
+        for t in turn.tools:
+            name = str(t.get("name") or "").strip()
+            if not name:
+                continue
+            args = t.get("params") if isinstance(t.get("params"), dict) else {}
+            arg_str = ", ".join(f"{k}={v}" for k, v in args.items())
+            result = _clip(str(t.get("result") or ""), tool_chars)
+            segments.append(f"[earlier tool call] {name}({arg_str}) →\n{result}")
         if turn.content:
-            messages.append(LLMMessage(role="assistant", text=turn.content))
+            segments.append(turn.content)
+        if segments:
+            messages.append(LLMMessage(role="assistant", text="\n\n".join(segments)))
     if not messages:
         messages.append(user_message(context))
     return messages

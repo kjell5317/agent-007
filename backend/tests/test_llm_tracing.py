@@ -92,7 +92,7 @@ async def test_chat_records_generation_with_model_and_usage(monkeypatch):
             return {"replies": [reply]}
 
     monkeypatch.setattr(llm.obs, "generation", fake_generation)
-    monkeypatch.setattr(llm, "_build_generator", lambda settings: _FakeGenerator())
+    monkeypatch.setattr(llm, "_build_generator", lambda settings, **kw: _FakeGenerator())
 
     resp = await llm.chat(
         [user_message("hi")],

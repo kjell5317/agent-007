@@ -23,17 +23,15 @@ def task_candidate_lines(
         f"[{hit.status.upper()}] sim={hit.similarity:.2f} · {id_part} · title: {title}",
     ]
     for line in task_field_lines(task):
-        if line.strip().lower().startswith("title:"):
+        # id/title are already in the header; link and the raw input snippet are
+        # dropped as redundant noise for the dedup decision.
+        if line.strip().lower().startswith(("id:", "title:", "link:")):
             continue
         lines.append(line)
 
     meta = candidate_metadata(hit)
     if meta:
         lines.append(f"  metadata: {meta}")
-
-    snippet = truncate_inline(hit.content_snippet or "", 300)
-    if snippet:
-        lines.append(f"  snippet: {snippet}")
 
     return lines
 
@@ -43,7 +41,6 @@ def not_task_candidate_lines(hit: SimilarInput) -> list[str]:
     lines = [
         "",
         f"[NOT_TASK] sim={hit.similarity:.2f} · title: {title}",
-        f"  id: {hit.id}",
     ]
 
     meta = candidate_metadata(hit)
@@ -52,10 +49,6 @@ def not_task_candidate_lines(hit: SimilarInput) -> list[str]:
 
     if hit.label:
         lines.append(f"  label: {hit.label}")
-
-    snippet = truncate_inline(hit.content_snippet or "", 300)
-    if snippet:
-        lines.append(f"  snippet: {snippet}")
 
     reason = truncate_inline(str((hit.agent_trace or {}).get("reason") or ""), 180)
     if reason:

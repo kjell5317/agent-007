@@ -94,8 +94,8 @@ async def test_search_notes_uses_gemini_embedding_and_notes_store(monkeypatch):
         "k": 5,
     }
     assert text == (
-        "Notes:\n- sim=0.88 · 2026-05-12 · from: alice@example.com · "
-        "subject: Project Alpha kickoff | Alice owns Project Alpha"
+        "Notes:\n- sim=0.88 · 2026-05-12 · from: alice@example.com "
+        "| Alice owns Project Alpha"
     )
 
 

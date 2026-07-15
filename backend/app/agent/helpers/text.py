@@ -95,7 +95,9 @@ def task_field_lines(task, *, indent: str = "  ") -> list[str]:
 
 # Metadata keys surfaced to the agent. Source-agnostic: missing keys are
 # silently skipped (Gmail has subject/to/cc; Slack has channel_name; etc).
-_META_KEYS = ("from", "to", "cc", "subject", "channel_name", "date", "thread_id")
+# `thread_id`/`account` are routing internals the model never acts on, so they
+# stay out of the prompt.
+_META_KEYS = ("from", "to", "cc", "subject", "channel_name", "date")
 
 
 def append_meta_lines(lines: list[str], meta: dict, *, include_account: bool = False) -> None:

@@ -370,7 +370,7 @@ def _build_new_input_message(
         f"Current time: {now_iso(get_settings().user_timezone)}",
         f"Source: {raw.source}",
     ]
-    append_meta_lines(lines, meta, include_account=True)
+    append_meta_lines(lines, meta)
 
     if task_candidates or not_task_signals:
         lines.append("")

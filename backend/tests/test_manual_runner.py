@@ -255,7 +255,7 @@ async def test_extract_task_fields_renders_precedents_and_traces_evidence(monkey
     assert "[OPEN] sim=0.91 · task_id=10000000-0000-0000-0000-000000000001" in message
     assert "  description: Send the final Q2 report to finance." in message
     assert "  metadata: source=gmail · from=sender@example.com" in message
-    assert "  snippet: Please send the Q2 report." in message
+    assert "\n  snippet:" not in message
     assert "[NOT_TASK] sim=0.81 · title: Weekly FYI" in message
     assert "  reason: Informational newsletter with no action requested." in message
     assert trace["candidates"][0]["ref"] == (
