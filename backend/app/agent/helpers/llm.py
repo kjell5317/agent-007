@@ -13,7 +13,12 @@ from haystack.dataclasses import StreamingChunk
 from haystack.dataclasses import ChatMessage, ToolCall as HaystackToolCall
 from haystack.tools import Tool
 from haystack.utils import Secret
+from google.genai import types as genai_types
 from haystack_integrations.components.generators.anthropic import AnthropicChatGenerator
+from haystack_integrations.components.generators.google_genai import GoogleGenAIChatGenerator
+from haystack_integrations.components.generators.google_genai.chat.chat_generator import (
+    _convert_tools_to_google_genai_format,
+)
 
 from app import observability as obs
 from app.config import Settings
@@ -107,27 +112,28 @@ async def chat(
     tools: list[dict[str, Any]],
     force_tool: str | None = None,
     name: str = "llm-call",
+    provider: str | None = None,
+    model: str | None = None,
+    thinking_level: str | None = None,
+    web_search: bool = False,
 ) -> LLMResponse:
-    """Call the configured Haystack chat backend and normalize its response."""
-    provider = settings.effective_llm_provider
-    model = settings.effective_llm_model
-    generator = _build_generator(settings)
-    generation_kwargs: dict[str, Any] = {
-        "max_tokens": MAX_TOKENS,
-        "temperature": TEMPERATURE,
-    }
-    if force_tool:
-        generation_kwargs["tool_choice"] = _tool_choice(provider, force_tool)
+    """Call the configured Haystack chat backend and normalize its response.
+    `provider`/`model` override the global default for per-agent routing;
+    `thinking_level`/`web_search` are Google-only knobs (ignored elsewhere)."""
+    provider = provider or settings.effective_llm_provider
+    model = model or settings.effective_llm_model
+    generator = _build_generator(settings, provider=provider, model=model)
 
     return await _invoke(
         generator,
         system_prompt=system_prompt,
         messages=messages,
         tools=tools,
-        generation_kwargs=generation_kwargs,
+        generation_kwargs=_generation_kwargs(provider, MAX_TOKENS, force_tool, thinking_level),
         provider=provider,
         model=model,
         name=name,
+        web_search=web_search,
     )
 
 
@@ -140,14 +146,19 @@ async def stream_chat(
     on_delta: Callable[[str], Awaitable[None]],
     max_tokens: int = 1500,
     name: str = "llm-call",
+    provider: str | None = None,
+    model: str | None = None,
+    thinking_level: str | None = None,
+    web_search: bool = False,
 ) -> LLMResponse:
     """Like `chat`, but streams text deltas to `on_delta` as they arrive. The
     provider still assembles the full reply (text + tool calls), which is
     normalized and returned once the stream completes — so the tool loop reads
-    tool calls exactly as in the non-streaming path."""
-    provider = settings.effective_llm_provider
-    model = settings.effective_llm_model
-    generator = _build_generator(settings)
+    tool calls exactly as in the non-streaming path. `provider`/`model` override
+    the global default; `thinking_level`/`web_search` are Google-only knobs."""
+    provider = provider or settings.effective_llm_provider
+    model = model or settings.effective_llm_model
+    generator = _build_generator(settings, provider=provider, model=model)
 
     async def _callback(chunk: StreamingChunk) -> None:
         if chunk.content:
@@ -158,11 +169,12 @@ async def stream_chat(
         system_prompt=system_prompt,
         messages=messages,
         tools=tools,
-        generation_kwargs={"max_tokens": max_tokens, "temperature": TEMPERATURE},
+        generation_kwargs=_generation_kwargs(provider, max_tokens, thinking_level=thinking_level),
         provider=provider,
         model=model,
         name=name,
         streaming_callback=_callback,
+        web_search=web_search,
     )
 
 
@@ -177,13 +189,32 @@ async def _invoke(
     model: str,
     name: str,
     streaming_callback: Callable[[StreamingChunk], Awaitable[None]] | None = None,
+    web_search: bool = False,
 ) -> LLMResponse:
     """Run one Haystack generation, wrapped in a Langfuse generation observation
     (a no-op when tracing is disabled). Input is set explicitly to the chat
     messages only — never the raw settings/kwargs — so API keys can't leak."""
+    haystack_tools = [_to_haystack_tool(tool) for tool in tools]
+    generation_kwargs = dict(generation_kwargs)
+    if web_search and provider in ("google", "gemini"):
+        # Add Gemini's built-in Google Search grounding alongside the function
+        # tools. The generator overwrites config.tools from its `tools` arg when
+        # non-empty, so hand the combined list via generation_kwargs and pass an
+        # empty `tools`. Grounding runs server-side and never surfaces as a
+        # tool_call the runner would try to dispatch.
+        google_tools = (
+            list(_convert_tools_to_google_genai_format(haystack_tools)) if haystack_tools else []
+        )
+        google_tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch()))
+        generation_kwargs["tools"] = google_tools
+        if haystack_tools:
+            generation_kwargs["tool_config"] = genai_types.ToolConfig(
+                include_server_side_tool_invocations=True
+            )
+        haystack_tools = []
     run_kwargs: dict[str, Any] = {
-        "messages": _to_haystack_messages(system_prompt, messages),
-        "tools": [_to_haystack_tool(tool) for tool in tools],
+        "messages": _to_haystack_messages(system_prompt, messages, provider),
+        "tools": haystack_tools,
         "generation_kwargs": generation_kwargs,
     }
     if streaming_callback is not None:
@@ -255,20 +286,51 @@ def _usage_details(usage: dict[str, Any]) -> dict[str, int]:
     return out
 
 
-def _build_generator(settings: Settings):
-    provider = settings.effective_llm_provider
+def _build_generator(settings: Settings, *, provider: str, model: str):
     if provider == "anthropic":
         if not settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is required for LLM_PROVIDER=anthropic")
-        return _anthropic_generator(
-            settings.effective_llm_model, settings.anthropic_api_key
-        )
-    raise ValueError(f"Unsupported LLM_PROVIDER: {settings.llm_provider!r}")
+        return _anthropic_generator(model, settings.anthropic_api_key)
+    if provider in ("google", "gemini"):
+        if not settings.gemini_api_key:
+            raise RuntimeError("GEMINI_API_KEY is required for the google LLM provider")
+        return _google_generator(model, settings.gemini_api_key)
+    raise ValueError(f"Unsupported LLM provider: {provider!r}")
 
 
 @lru_cache(maxsize=4)
 def _anthropic_generator(model: str, api_key: str) -> AnthropicChatGenerator:
     return AnthropicChatGenerator(api_key=Secret.from_token(api_key), model=model)
+
+
+@lru_cache(maxsize=4)
+def _google_generator(model: str, api_key: str) -> GoogleGenAIChatGenerator:
+    return GoogleGenAIChatGenerator(api_key=Secret.from_token(api_key), model=model)
+
+
+def _generation_kwargs(
+    provider: str,
+    max_tokens: int,
+    force_tool: str | None = None,
+    thinking_level: str | None = None,
+) -> dict[str, Any]:
+    """Per-provider generation kwargs. Anthropic takes `max_tokens`; Google's
+    GenerateContentConfig takes `max_output_tokens` and `thinking_level`
+    ('low'/'high'/'minimal'). `force_tool` also differs in shape — it's used only
+    by the extraction flows, which stay on Anthropic."""
+    if provider in ("google", "gemini"):
+        kwargs: dict[str, Any] = {"max_output_tokens": max_tokens, "temperature": TEMPERATURE}
+        if thinking_level:
+            kwargs["thinking_level"] = thinking_level
+        if force_tool:
+            kwargs["tool_config"] = {
+                "function_calling_config": {"mode": "ANY", "allowed_function_names": [force_tool]}
+            }
+        return kwargs
+    kwargs = {"max_tokens": max_tokens, "temperature": TEMPERATURE}
+    if force_tool:
+        kwargs["tool_choice"] = _tool_choice(provider, force_tool)
+    return kwargs
 
 
 def _tool_choice(provider: str, tool_name: str) -> dict[str, Any]:
@@ -277,8 +339,13 @@ def _tool_choice(provider: str, tool_name: str) -> dict[str, Any]:
     return {"type": "function", "function": {"name": tool_name}}
 
 
-def _to_haystack_messages(system_prompt: str, messages: list[LLMMessage]) -> list[ChatMessage]:
-    out = [ChatMessage.from_system(system_prompt, meta={"cache_control": CACHE_CONTROL})]
+def _to_haystack_messages(
+    system_prompt: str, messages: list[LLMMessage], provider: str
+) -> list[ChatMessage]:
+    # The ephemeral cache marker is Anthropic-specific; other providers ignore
+    # or reject it, so attach it only on the Anthropic path.
+    meta = {"cache_control": CACHE_CONTROL} if provider == "anthropic" else None
+    out = [ChatMessage.from_system(system_prompt, meta=meta)]
     out.extend(_to_haystack_message(message) for message in messages)
     return out
 

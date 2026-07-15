@@ -49,9 +49,20 @@ class SuggestResponse(BaseModel):
     hits: list[SearchHit]
 
 
+class ChatToolIn(BaseModel):
+    """A tool call the assistant made on a prior turn, sent back so the runner
+    can replay it into the model's context (so it won't re-run the same call)."""
+
+    name: str
+    params: dict[str, Any] = {}
+    result: str = ""
+    status: Literal["success", "failed"] = "success"
+
+
 class ChatMessageIn(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str = ""
+    tools: list[ChatToolIn] = []
 
 
 class ChatRequest(BaseModel):

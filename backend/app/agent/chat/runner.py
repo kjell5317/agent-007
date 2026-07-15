@@ -93,6 +93,9 @@ _TAG_PREFIX = {
 class ChatTurn:
     role: str  # "user" | "assistant"
     content: str
+    # Tool calls this (assistant) turn made — {name, params, result, status} —
+    # replayed into the model's context next turn so it won't re-run them.
+    tools: tuple[dict[str, Any], ...] = ()
 
 
 class Citations:
@@ -225,11 +228,32 @@ def _purpose(verb: str, query: str | None, *, fallback: str | None = None) -> st
     return f"{verb}: {q}" if q else (fallback or verb)
 
 
+def _notion_title(text: str) -> str | None:
+    """Best-effort page title from Notion MCP fetch output (opaque text). Notion
+    leads the page with its title as the first heading or a `title:`/`name:`
+    line; otherwise take a short first line. None when nothing plausible, so the
+    caller can fall back to the raw id."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+)", line)
+        if heading:
+            return heading.group(1).strip()
+        kv = re.match(r"^(?:title|name)\s*[:=]\s*(.+)", line, re.IGNORECASE)
+        if kv:
+            return kv.group(1).strip().strip("\"'")
+        if line.startswith(("http://", "https://")):
+            return None
+        return line if len(line) <= 80 else None
+    return None
+
+
 def _context_block(tz: str, entries: list[tuple[str, SearchHit]]) -> str:
     zone = ZoneInfo(tz)
     lines = [f"Current time: {now_iso(tz)}", ""]
     if entries:
-        lines.append("Retrieved context (cite items with their bracketed tag):")
+        lines.append("Retrieved context:")
         lines.extend(_context_line(tag, h, zone) for tag, h in entries)
     else:
         lines.append("Retrieved context: no matching items were found.")
@@ -241,6 +265,10 @@ async def run_chat(
 ) -> None:
     settings = get_settings()
     history = turns[-settings.search_chat_history_messages :]
+    # The window can start mid-exchange on an assistant turn; a conversation
+    # must begin with a user message, so drop any leading assistant turns.
+    while history and history[0].role != "user":
+        history = history[1:]
     last_user_idx = _last_user_index(history)
     query = history[last_user_idx].content if last_user_idx is not None else ""
 
@@ -275,6 +303,7 @@ async def run_chat(
             await emit("token", {"text": text})
 
         system_prompt = chat_system_prompt()
+        provider, model = settings.llm_target("chat")
         for _ in range(settings.search_chat_max_iterations):
             resp = await stream_chat(
                 messages,
@@ -283,6 +312,10 @@ async def run_chat(
                 tools=tools,
                 on_delta=on_delta,
                 name="chat-turn",
+                provider=provider,
+                model=model,
+                thinking_level=settings.chat_thinking_level,
+                web_search=settings.chat_web_search,
             )
             if not resp.tool_calls:
                 break
@@ -315,6 +348,10 @@ async def run_chat(
                 tools=[],
                 on_delta=on_delta,
                 name="chat-final",
+                provider=provider,
+                model=model,
+                thinking_level=settings.chat_thinking_level,
+                web_search=settings.chat_web_search,
             )
 
         answer = "".join(answer_parts)
@@ -334,6 +371,7 @@ def _last_user_index(history: list[ChatTurn]) -> int | None:
 def _build_messages(
     history: list[ChatTurn], last_user_idx: int | None, context: str
 ) -> list[LLMMessage]:
+    tool_chars = get_settings().search_chat_history_tool_chars
     messages: list[LLMMessage] = []
     for i, turn in enumerate(history):
         if turn.role == "user":
@@ -341,11 +379,31 @@ def _build_messages(
             if i == last_user_idx:
                 text = f"{turn.content}\n\n{context}"
             messages.append(user_message(text))
-        else:
+            continue
+        # Assistant turn: replay any tools it called as real tool_use /
+        # tool_result pairs (so the model sees what it already found and won't
+        # re-run the same search), then the answer text it finished with.
+        valid = [t for t in turn.tools if t.get("name")]
+        if valid:
+            calls = [
+                ToolCall(id=f"h{i}-{j}", name=str(t["name"]), input=dict(t.get("params") or {}))
+                for j, t in enumerate(valid)
+            ]
+            messages.append(LLMMessage(role="assistant", tool_calls=tuple(calls)))
+            for call, t in zip(calls, valid):
+                messages.append(tool_result_message(call, _clip(str(t.get("result") or ""), tool_chars)))
+        if turn.content:
             messages.append(LLMMessage(role="assistant", text=turn.content))
     if not messages:
         messages.append(user_message(context))
     return messages
+
+
+def _clip(text: str, limit: int) -> str:
+    text = text.strip()
+    if not text:
+        return "(no result)"
+    return text if len(text) <= limit else text[:limit].rstrip() + "\n…(truncated)"
 
 
 def _trace(
@@ -527,7 +585,9 @@ async def _dispatch(
         if name == "notion_fetch":
             ref = str(tin.get("id") or "").strip()
             out = await notion_mcp.notion_fetch(session, ref)
-            return out, _trace(name, purpose=_purpose("notion fetch", ref), summary=out)
+            title = _notion_title(out)
+            purpose = f"notion: {_chip_query(title)}" if title else _purpose("notion fetch", ref)
+            return out, _trace(name, purpose=purpose, summary=out)
 
         if name == "github_search":
             query = str(tin.get("query") or "").strip()

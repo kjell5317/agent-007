@@ -6,17 +6,19 @@ Two pieces live here together because they're always used as a pair:
     content + source metadata into the canonical text we embed. Source-
     agnostic so Gmail and Slack rows cluster on semantic content, not
     on which envelope key carried the sender.
-  * `embed` — single-provider (Google Gemini) embedding call via httpx.
-    Returns `None` when no API key is configured so the rest of the
-    pipeline can fall back to keyword-only search during local dev.
+  * `embed` — single-provider (Google Gemini) embedding call via the Haystack
+    Google GenAI embedder. Returns `None` when no API key is configured so the
+    rest of the pipeline can fall back to keyword-only search during local dev.
 """
 
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Literal
 
-import httpx
+from haystack.utils import Secret
+from haystack_integrations.components.embedders.google_genai import GoogleGenAITextEmbedder
 
 from app.config import get_settings
 
@@ -58,8 +60,6 @@ def _sender_descriptor(metadata: dict) -> str | None:
 
 # --- Embedding API client ----------------------------------------------------
 
-_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-
 # Gemini's embedding endpoint accepts up to ~2k tokens; we cap on chars
 # defensively. Embedding quality saturates well before this anyway.
 MAX_INPUT_CHARS = 8000
@@ -76,6 +76,17 @@ TaskType = Literal[
 ]
 
 
+@lru_cache(maxsize=8)
+def _embedder(model: str, api_key: str, task_type: str, dim: int) -> GoogleGenAITextEmbedder:
+    # SEMANTIC_SIMILARITY + outputDimensionality mirror the previous raw call
+    # exactly, so vectors stay directly comparable to already-stored ones.
+    return GoogleGenAITextEmbedder(
+        api_key=Secret.from_token(api_key),
+        model=model,
+        config={"task_type": task_type, "output_dimensionality": dim},
+    )
+
+
 async def embed(text: str, *, task_type: TaskType = "SEMANTIC_SIMILARITY") -> list[float] | None:
     """Embed a single string. Returns None if the provider isn't configured."""
     settings = get_settings()
@@ -88,25 +99,15 @@ async def embed(text: str, *, task_type: TaskType = "SEMANTIC_SIMILARITY") -> li
     if len(payload_text) > MAX_INPUT_CHARS:
         payload_text = payload_text[:MAX_INPUT_CHARS]
 
-    url = f"{_GEMINI_BASE}/{settings.embedding_model}:embedContent"
     log.debug(
         "gemini embed · model=%s task_type=%s chars=%d dim=%d",
         settings.embedding_model, task_type, len(payload_text), settings.embedding_dim,
     )
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            url,
-            params={"key": settings.gemini_api_key},
-            json={
-                "content": {"parts": [{"text": payload_text}]},
-                "taskType": task_type,
-                "outputDimensionality": settings.embedding_dim,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    vector = data["embedding"]["values"]
+    embedder = _embedder(
+        settings.embedding_model, settings.gemini_api_key, task_type, settings.embedding_dim
+    )
+    result = await embedder.run_async(text=payload_text)
+    vector = result["embedding"]
     if len(vector) != settings.embedding_dim:
         raise ValueError(
             f"Embedding length {len(vector)} does not match configured dim "

@@ -7,7 +7,7 @@ import type {
   ChatToolTrace,
 } from "@/lib/types";
 
-const HISTORY = 5;
+const HISTORY = 12;
 const RECENT = 5;
 
 interface SearchChat {
@@ -135,7 +135,25 @@ export function useSearchChat(): SearchChat {
 
       const controller = new AbortController();
       abortRef.current = controller;
-      const wire = history.slice(-HISTORY).map((m) => ({ role: m.role, content: m.content }));
+      // Carry each assistant turn's tool calls (name + input + result) so the
+      // backend can replay them into the model's context and it won't re-run
+      // the same search. `tool_limit` is a synthetic trace, not a real tool.
+      const wire = history.slice(-HISTORY).map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.role === "assistant" && m.tools.length
+          ? {
+              tools: m.tools
+                .filter((t) => t.name !== "tool_limit")
+                .map((t) => ({
+                  name: t.name,
+                  params: t.params ?? {},
+                  result: t.result ?? "",
+                  status: t.status,
+                })),
+            }
+          : {}),
+      }));
 
       api
         .chatStream(wire, controller.signal, {

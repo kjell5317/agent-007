@@ -31,6 +31,7 @@ dependencies = [
     "anthropic-haystack>=5.11.0",
     "mcp>=1.10",
     "langfuse>=4,<5",
+    "google-genai-haystack>=4.4.1",
 ]
 
 [project.optional-dependencies]

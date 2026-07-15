@@ -4,6 +4,7 @@ import type {
   ChatSummary,
   ChatToolTrace,
   Label,
+  LinkPreview,
   Note,
   RawInput,
   SearchHit,
@@ -130,6 +131,11 @@ export const api = {
 
   chatStream,
 
+  getLinkPreview: (url: string) =>
+    request<{ preview: LinkPreview | null }>(
+      `/search/link_preview?url=${encodeURIComponent(url)}`,
+    ),
+
   listChats: (limit = 5) => request<ChatSummary[]>(`/search/chats?limit=${limit}`),
   getChat: (id: string) =>
     request<ChatSummary & { messages: ChatMessage[] }>(`/search/chats/${id}`),
@@ -182,7 +188,16 @@ export interface ChatStreamHandlers {
 // `tool_call` / `error` / `done`). EventSource is GET-only, so we read the body
 // stream ourselves. Resolves when the stream ends (or aborts).
 async function chatStream(
-  messages: { role: string; content: string }[],
+  messages: {
+    role: string;
+    content: string;
+    tools?: {
+      name: string;
+      params: Record<string, unknown>;
+      result: string;
+      status: string;
+    }[];
+  }[],
   signal: AbortSignal,
   handlers: ChatStreamHandlers,
 ): Promise<void> {

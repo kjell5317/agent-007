@@ -6,11 +6,13 @@ import {
   useEffect,
   useState,
 } from "react";
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType, MouseEvent, ReactNode } from "react";
 import {
   BookOpen,
   CalendarDays,
   Cake,
+  Check,
+  Copy,
   ExternalLink,
   FileText,
   ListTodo,
@@ -24,11 +26,13 @@ import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import { subscribeEvents } from "@/lib/events";
 import { cn } from "@/lib/utils";
-import type { ChatCitation, ChatCitationMeta, Task } from "@/lib/types";
+import type { ChatCitation, ChatCitationMeta, LinkPreview, Task } from "@/lib/types";
 
 // A small inline renderer for streamed assistant text. Unlike the block-level
-// Markdown component, this keeps citation chips ([T1]) and inline widgets
-// (loc:{}, Notion links) inline, and pulls card widgets out to their own block.
+// Markdown component, this keeps inline widgets (loc:{}, Notion links) inline
+// and pulls card widgets out to their own block. Bracketed citation tags ([T1])
+// are stripped: the answer no longer shows citation chips (the card widgets
+// still resolve their data from the citation array behind the scenes).
 //
 // Card widgets the model emits (no tool call needed), rendered block-level so
 // they never split a sentence:
@@ -39,9 +43,7 @@ import type { ChatCitation, ChatCitationMeta, Task } from "@/lib/types";
 // Inline widgets:
 //   • loc:{<place>}   → a Google Maps link
 //   • a notion.so link → a Notion page chip
-//
-// An item shown as a widget makes its own citation chip redundant, so a chip
-// pointing at it is suppressed.
+//   • any other http(s) link → a fetched preview card (title/description)
 
 interface Rule {
   re: RegExp;
@@ -51,7 +53,6 @@ interface Rule {
 interface Ctx {
   byTag: Map<string, ChatCitation>;
   byTaskId: Map<string, ChatCitation>;
-  suppressedTags: Set<string>;
   // Normalized titles of items shown as cards. The card already shows the
   // title, so a standalone line repeating it (the model often emits the widget
   // AND the title) is dropped.
@@ -93,6 +94,26 @@ function mapsUrl(place: string): string {
 
 function isNotionUrl(url: string): boolean {
   return /^https?:\/\/([a-z0-9-]+\.)*(notion\.so|notion\.site)\//i.test(url);
+}
+
+// Non-Notion http(s) URLs in a line — markdown-link targets and bare URLs.
+// Notion links get their own chip, so they're skipped; the caller dedupes.
+function collectPreviewUrls(text: string): string[] {
+  const urls: string[] = [];
+  const re = /\[[^\]]+\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s)]+)/g;
+  for (const m of text.matchAll(re)) {
+    const u = (m[1] || m[2] || "").replace(/[.,;:!?)]+$/, "");
+    if (u && !isNotionUrl(u)) urls.push(u);
+  }
+  return urls;
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 // Inline rules. Card widgets are handled at block level (a card can't live
@@ -140,20 +161,10 @@ const RULES: Rule[] = [
     render: (m, key) => <NotionChip key={key} href={m[1]} label="Notion page" />,
   },
   {
-    // One or more tags in a single bracket, e.g. [N2] or [N2, N4] → a chip each.
-    re: /\[([A-Z]\d+(?:\s*,\s*[A-Z]\d+)*)\]/,
-    render: (m, key, ctx) => {
-      const tags = m[1].split(",").map((t) => t.trim()).filter(Boolean);
-      const chips = tags
-        .filter((t) => !ctx.suppressedTags.has(t))
-        .map((t, j) => <CitationChip key={j} tag={t} ctx={ctx} />);
-      if (chips.length === 0) return null;
-      return (
-        <span key={key} className="whitespace-nowrap">
-          {chips}
-        </span>
-      );
-    },
+    // Bracketed citation tags ([T1], [N2, N4]) — citation chips were removed, so
+    // strip any the model still emits rather than leak literal brackets.
+    re: /\s*\[([A-Z]\d+(?:\s*,\s*[A-Z]\d+)*)\]/,
+    render: () => null,
   },
   {
     re: /`([^`]+)`/,
@@ -265,35 +276,6 @@ function pushText(out: ReactNode[], text: string, key: string, ctx: Ctx): void {
   );
 }
 
-function CitationChip({ tag, ctx }: { tag: string; ctx: Ctx }) {
-  const cite = ctx.byTag.get(tag);
-  const openTask = cite?.task_id ?? (cite?.type === "task" ? cite.id : null);
-  const openUrl = openTask ? null : (cite?.url ?? null);
-  const canShow = Boolean(cite && (openTask || openUrl || cite.snippet));
-  const activate = () => {
-    if (!cite) return;
-    if (openTask) ctx.onOpenTask(openTask);
-    else if (openUrl) window.open(openUrl, "_blank", "noopener,noreferrer");
-    else ctx.onShowContent(cite);
-  };
-  return (
-    <button
-      type="button"
-      disabled={!canShow}
-      onClick={canShow ? activate : undefined}
-      title={cite?.title ?? tag}
-      className={cn(
-        "mx-0.5 inline-flex h-4 translate-y-[-1px] items-center rounded px-1 align-middle text-[10px] font-semibold",
-        canShow
-          ? "cursor-pointer bg-primary/15 text-primary hover:bg-primary/25"
-          : "cursor-default bg-muted text-muted-foreground",
-      )}
-    >
-      {tag}
-    </button>
-  );
-}
-
 // --- Citation card widgets ---------------------------------------------------
 
 function citeMeta(cite: ChatCitation): ChatCitationMeta {
@@ -328,6 +310,8 @@ function WidgetShell({
       onKeyDown={
         clickable
           ? (e) => {
+              // Ignore keys bubbling from inner controls (contact links/copy).
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 activate();
@@ -336,11 +320,11 @@ function WidgetShell({
           : undefined
       }
       className={cn(
-        "flex max-w-full items-start gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+        "flex max-w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
         clickable && "cursor-pointer hover:border-primary/40 hover:bg-accent",
       )}
     >
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
@@ -367,18 +351,75 @@ function DetailRow({
   );
 }
 
+// A contact detail (email/phone/address): the value is a click-to-act link
+// (mailto: / tel: / maps) plus a copy-to-clipboard button. Both stop
+// propagation so they don't also trigger the surrounding card's open action.
+function ContactDetail({
+  Icon,
+  value,
+  href,
+  external,
+}: {
+  Icon: ComponentType<{ className?: string }>;
+  value: string;
+  href: string;
+  external?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void navigator.clipboard
+      ?.writeText(value)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      })
+      .catch(() => {});
+  };
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Icon className="h-3 w-3 shrink-0" />
+      <a
+        href={href}
+        onClick={(e) => e.stopPropagation()}
+        target={external ? "_blank" : undefined}
+        rel={external ? "noopener noreferrer" : undefined}
+        className="min-w-0 flex-1 truncate text-primary underline underline-offset-2"
+      >
+        {value}
+      </a>
+      <button
+        type="button"
+        onClick={onCopy}
+        title={copied ? "Copied" : "Copy"}
+        aria-label={`Copy ${value}`}
+        className="shrink-0 rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+      >
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </div>
+  );
+}
+
 function ContactCard({ cite }: { cite: ChatCitation }) {
   const meta = citeMeta(cite);
   const emails = meta.emails ?? [];
   const phones = meta.phones ?? [];
-  const address = meta.addresses?.[0];
+  const addresses = meta.addresses ?? [];
   return (
     <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url}>
       {meta.org && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.org}</div>}
-      {emails.length > 0 && <DetailRow Icon={Mail}>{emails.join(", ")}</DetailRow>}
-      {phones.length > 0 && <DetailRow Icon={Phone}>{phones.join(", ")}</DetailRow>}
+      {emails.map((e, i) => (
+        <ContactDetail key={`e${i}`} Icon={Mail} value={e} href={`mailto:${e}`} />
+      ))}
+      {phones.map((p, i) => (
+        <ContactDetail key={`p${i}`} Icon={Phone} value={p} href={`tel:${p.replace(/[^+\d]/g, "")}`} />
+      ))}
       {meta.birthday && <DetailRow Icon={Cake}>{meta.birthday}</DetailRow>}
-      {address && <DetailRow Icon={MapPin}>{address}</DetailRow>}
+      {addresses.map((a, i) => (
+        <ContactDetail key={`a${i}`} Icon={MapPin} value={a} href={mapsUrl(a)} external />
+      ))}
     </WidgetShell>
   );
 }
@@ -423,6 +464,72 @@ function NotionChip({ href, label }: { href: string; label: string }) {
     >
       <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
+    </a>
+  );
+}
+
+// A fetched preview card for a plain http(s) link, pulled to its own block
+// below the text (WhatsApp-style). While loading: a skeleton; if the URL can't
+// be previewed: nothing (the inline link in the text still stands on its own).
+function LinkPreviewCard({ url }: { url: string }) {
+  const [preview, setPreview] = useState<LinkPreview | null>(null);
+  const [done, setDone] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreview(null);
+    setDone(false);
+    setImgFailed(false);
+    api
+      .getLinkPreview(url)
+      .then((r) => {
+        if (!cancelled) {
+          setPreview(r.preview);
+          setDone(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setDone(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (!done) {
+    return <div className="my-1.5 h-16 animate-pulse rounded-xl border bg-muted/40" />;
+  }
+  if (!preview) return null;
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="my-1.5 flex max-w-full items-stretch gap-3 overflow-hidden rounded-xl border bg-card text-left shadow-sm transition-colors hover:border-primary/40 hover:bg-accent"
+    >
+      {preview.image && !imgFailed && (
+        <img
+          src={preview.image}
+          alt=""
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          className="w-16 shrink-0 self-stretch object-cover"
+        />
+      )}
+      <div className="min-w-0 flex-1 px-3 py-2">
+        <div className="truncate text-sm font-medium">{preview.title}</div>
+        {preview.description && (
+          <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+            {preview.description}
+          </div>
+        )}
+        <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+          <ExternalLink className="h-3 w-3 shrink-0" />
+          <span className="truncate">{preview.site_name || safeHost(url)}</span>
+        </div>
+      </div>
     </a>
   );
 }
@@ -577,23 +684,18 @@ export function AssistantContent({
     }
   }
 
-  // A citation shown as a card widget is redundant with the card, so hide its
-  // inline chip and drop any line that just repeats its title.
-  const suppressedTags = new Set<string>();
+  // An item shown as a card widget already displays its title, so drop any
+  // standalone line that just repeats it.
   const cardedTitles = new Set<string>();
   for (const c of citations) {
     const target = c.task_id ?? (c.type === "task" ? c.id : null);
     const carded = cardedTags.has(c.tag) || (target != null && cardedTaskIds.has(target));
-    if (carded) {
-      suppressedTags.add(c.tag);
-      if (c.title) cardedTitles.add(normalizeTitle(c.title));
-    }
+    if (carded && c.title) cardedTitles.add(normalizeTitle(c.title));
   }
 
   const ctx: Ctx = {
     byTag,
     byTaskId,
-    suppressedTags,
     cardedTitles,
     onOpenTask,
     onShowContent,
@@ -601,6 +703,18 @@ export function AssistantContent({
 
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
+  // Link previews are pulled onto their own block after the text that mentions
+  // them. Deduped per message, and skipped while the answer is still streaming
+  // so half-typed URLs aren't fetched.
+  const previewed = new Set<string>();
+  const pushPreviews = (text: string) => {
+    if (caret) return;
+    for (const u of collectPreviewUrls(text)) {
+      if (previewed.has(u)) continue;
+      previewed.add(u);
+      blocks.push(<LinkPreviewCard key={`lp-${u}`} url={u} />);
+    }
+  };
   let key = 0;
   let i = 0;
   while (i < lines.length) {
@@ -654,11 +768,13 @@ export function AssistantContent({
           </ListTag>,
         );
       }
+      pushPreviews(items.join("\n"));
       continue;
     }
     if (hasWidget) {
       // Drop any leading bullet marker; the card stands on its own.
       blocks.push(...renderWidgetLine(line.replace(/^\s*[-*]\s+/, ""), `wl${key++}`, ctx));
+      pushPreviews(line);
       i++;
       continue;
     }
@@ -672,6 +788,7 @@ export function AssistantContent({
         {renderInline(line, `p${key}`, ctx)}
       </p>,
     );
+    pushPreviews(line);
     i++;
   }
 

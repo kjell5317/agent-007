@@ -110,6 +110,15 @@ export interface ChatToolTrace {
   artifact_refs: string[];
 }
 
+// Server-fetched unfurl of a link in an assistant answer (WhatsApp-style card).
+export interface LinkPreview {
+  url: string;
+  title: string;
+  description: string | null;
+  site_name: string | null;
+  image: string | null;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;

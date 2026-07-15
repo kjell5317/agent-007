@@ -31,6 +31,7 @@ from app.db.schemas.search import (
     ChatRequest,
     SuggestResponse,
 )
+from app.services.link_preview import get_link_preview
 from app.services.search import run_suggest
 from app.services.search.filters import ALL_CORPORA
 
@@ -98,7 +99,13 @@ async def chat(body: ChatRequest) -> EventSourceResponse:
     `error`. A fresh session per stream (the
     request-scoped one would be torn down before the generator drains)."""
     turns = [
-        ChatTurn(role=m.role, content=m.content) for m in body.messages if m.content.strip()
+        ChatTurn(
+            role=m.role,
+            content=m.content,
+            tools=tuple(t.model_dump() for t in m.tools),
+        )
+        for m in body.messages
+        if m.content.strip() or m.tools
     ]
 
     async def gen():
@@ -132,6 +139,14 @@ async def chat(body: ChatRequest) -> EventSourceResponse:
             session.close()
 
     return EventSourceResponse(gen())
+
+
+@router.get("/link_preview")
+async def link_preview(url: str = Query(..., max_length=2048)) -> dict:
+    """Server-side unfurl for a URL in a chat answer — title/description/image.
+    Fetched server-side (dodges CORS, SSRF-guarded); `preview` is null when the
+    URL can't be previewed."""
+    return {"preview": await get_link_preview(url)}
 
 
 # --- Persisted conversations --------------------------------------------------

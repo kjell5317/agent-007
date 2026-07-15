@@ -596,13 +596,22 @@ CHAT_TOOLS = [
         "description": (
             "Search the user's Google Drive for documents — Google Docs/Sheets/"
             "Slides, PDFs, and Office files (reference material, not tasks). "
+            "Keyword full-text match (matches literal words, NOT meaning), so "
+            "start broad — one or two distinctive words — to get more hits, then "
+            "read them and narrow only if there are too many. "
             "Returns file titles with a `[file_id=…]`; follow up with "
             "`get_drive_file` to read one's contents."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Full-text query for Drive files."},
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Keyword(s) to match in file names/contents. Start with a "
+                        "single distinctive word rather than a phrase."
+                    ),
+                },
                 "before": {
                     "type": "string",
                     "description": "Only files modified before this date (YYYY-MM-DD, exclusive).",
@@ -623,14 +632,18 @@ CHAT_TOOLS = [
             "and birthday when set. Use when the user asks for someone's contact "
             "details or personal facts ('what's Anna's email', 'when is Tom's "
             "birthday', 'phone number for the plumber') or you need an address to "
-            "act on."
+            "act on. Keyword match on the contact fields (NOT semantic), so try a "
+            "single distinctive term (usually a first or last name) first."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "A name or contact detail to search for.",
+                    "description": (
+                        "A name or contact detail to match (keyword). Prefer one "
+                        "distinctive term over a full phrase."
+                    ),
                 },
             },
             "required": ["query"],

@@ -40,6 +40,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     # Deprecated compatibility alias. Prefer LLM_MODEL.
     claude_model: str = ""
+    # Per-agent overrides — blank falls back to the global LLM_PROVIDER/LLM_MODEL.
+    # The interactive chat runs on Gemini Flash (breadth + cheap, cache not
+    # needed) while the background extraction agent stays on the cached Anthropic
+    # path. Uses GEMINI_API_KEY for the google provider.
+    chat_llm_provider: str = "google"
+    chat_llm_model: str = "gemini-3.5-flash"
+    # Google-only chat knobs. `thinking_level` ∈ minimal|low|high (Gemini 3
+    # reasoning depth). `web_search` adds Gemini's Google Search grounding
+    # alongside the app's tools so chat can answer from the public web.
+    chat_thinking_level: str = "low"
+    chat_web_search: bool = True
 
     # Embeddings
     gemini_api_key: str = ""
@@ -83,7 +94,14 @@ class Settings(BaseSettings):
     search_chat_drive_limit: int = 5
     search_drive_timeout_seconds: float = 4.0
     search_chat_max_iterations: int = 4
-    search_chat_history_messages: int = 5
+    # How many trailing chat turns (user + assistant messages) travel with each
+    # request, and how far each replayed tool result is truncated before it goes
+    # back to the model. Prior tool calls are replayed as tool_use/tool_result
+    # pairs so the model sees what it already found and won't re-run the same
+    # search; the truncation keeps a long chat with big Drive reads from blowing
+    # up the context.
+    search_chat_history_messages: int = 10
+    search_chat_history_tool_chars: int = 1200
     # Per-source drill-down tool limits. `messages` searches the raw_inputs
     # mirror (gmail/slack); `contacts` federates live to the Google People API
     # (same timeout budget as Drive, so a slow contacts call can't block).
@@ -231,6 +249,17 @@ class Settings(BaseSettings):
     @property
     def effective_llm_model(self) -> str:
         return self.llm_model.strip() or self.claude_model.strip() or DEFAULT_ANTHROPIC_MODEL
+
+    def llm_target(self, agent: str) -> tuple[str, str]:
+        """(provider, model) for a named agent flow, each field falling back to
+        the global default. Only `chat` overrides today; extraction and the
+        other flows use the global LLM_PROVIDER/LLM_MODEL."""
+        if agent == "chat":
+            return (
+                self.chat_llm_provider.strip().lower() or self.effective_llm_provider,
+                self.chat_llm_model.strip() or self.effective_llm_model,
+            )
+        return self.effective_llm_provider, self.effective_llm_model
 
 
 @lru_cache

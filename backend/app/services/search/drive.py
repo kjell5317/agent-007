@@ -184,16 +184,47 @@ def _to_hit(f: dict) -> SearchHit:
     )
 
 
+_MIME_LABELS = {
+    "application/vnd.google-apps.document": "Google Doc",
+    "application/vnd.google-apps.spreadsheet": "Google Sheet",
+    "application/vnd.google-apps.presentation": "Google Slides",
+    "application/vnd.google-apps.form": "Google Form",
+    "application/vnd.google-apps.folder": "Folder",
+    "application/pdf": "PDF",
+    "application/msword": "Word",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word",
+    "application/vnd.ms-excel": "Excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Excel",
+    "application/vnd.ms-powerpoint": "PowerPoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PowerPoint",
+    "text/plain": "Text",
+    "text/markdown": "Markdown",
+    "text/csv": "CSV",
+    "application/rtf": "RTF",
+    "text/rtf": "RTF",
+    "application/zip": "ZIP",
+    "image/jpeg": "Image",
+    "image/png": "Image",
+    "image/gif": "Image",
+    "image/webp": "Image",
+    "image/heic": "Image",
+    "video/mp4": "Video",
+}
+
+
 def _mime_label(mime: str | None) -> str | None:
+    """A short human label for a Drive MIME type ("application/pdf" → "PDF").
+    Falls back to a readable form of the subtype for anything unmapped."""
     if not mime:
         return None
-    tail = mime.rsplit(".", 1)[-1]
-    return {
-        "document": "Google Doc",
-        "spreadsheet": "Google Sheet",
-        "presentation": "Google Slides",
-        "folder": "Folder",
-    }.get(tail, tail)
+    mime = mime.strip().lower()
+    if mime in _MIME_LABELS:
+        return _MIME_LABELS[mime]
+    if mime.startswith("application/vnd.google-apps."):
+        kind = mime.rsplit(".", 1)[-1]
+        return kind.replace("-", " ").title()
+    subtype = mime.split("/", 1)[-1].split(".")[-1]
+    return subtype.upper() if len(subtype) <= 4 else subtype.replace("-", " ").title()
 
 
 def _parse_ts(value: str | None) -> datetime | None:
