@@ -31,6 +31,7 @@ from app.services.calendar import (
     create_event,
     delete_event,
     is_commute_event,
+    is_declined_event,
     is_task_event,
     list_events_between,
     patch_event,
@@ -852,6 +853,8 @@ def _partition(
         if is_commute_event(ev):
             if ev.calendar_id == write_calendar_id:
                 commutes.append(ev)
+            continue
+        if is_declined_event(ev):
             continue
         if is_online_location(ev.location):
             online.append(ev)
