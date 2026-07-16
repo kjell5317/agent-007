@@ -14,6 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.db.models.route_cache import RouteCache  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
+from app.services.calendar.events import is_declined_event  # noqa: E402
 from app.services.calendar.discover import _replan_span  # noqa: E402
 from app.services.commute import planner as commute_planner  # noqa: E402
 from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
@@ -831,8 +832,19 @@ def test_colliding_task_anchor_is_replaced_not_overlapped():
 
 
 def _calendar_event(
-    event_id, start, end, *, location=None, all_day=False, props=None, transparency=None,
+    event_id,
+    start,
+    end,
+    *,
+    location=None,
+    all_day=False,
+    props=None,
+    transparency=None,
+    raw=None,
 ):
+    raw_payload = dict(raw or {})
+    if transparency:
+        raw_payload["transparency"] = transparency
     return CalendarEvent(
         id=event_id,
         calendar_id="primary",
@@ -844,8 +856,83 @@ def _calendar_event(
         location=location,
         html_link=None,
         private_properties=props or {},
-        raw={"transparency": transparency} if transparency else {},
+        raw=raw_payload,
     )
+
+
+def test_declined_event_predicate_uses_self_attendee_status():
+    def event_with(attendees):
+        return _calendar_event(
+            "event",
+            _day_at(9),
+            _day_at(10),
+            raw={"attendees": attendees} if attendees is not None else {},
+        )
+
+    assert not is_declined_event(event_with(None))
+    assert not is_declined_event(
+        event_with([{"self": False, "responseStatus": "declined"}])
+    )
+    assert not is_declined_event(
+        event_with([
+            {"self": True, "responseStatus": "accepted"},
+            {"self": False, "responseStatus": "declined"},
+        ])
+    )
+    assert not is_declined_event(event_with([{"self": True, "responseStatus": "tentative"}]))
+    assert not is_declined_event(event_with([{"self": True, "responseStatus": "needsAction"}]))
+    assert is_declined_event(event_with([{"self": True, "responseStatus": "declined"}]))
+
+
+def test_partition_skips_declined_events_but_keeps_commutes_visible():
+    commute_props = {
+        "managed_by": "plan_service",
+        "kind": "commute",
+        "origin_anchor": "home",
+        "dest_anchor": "declined-physical",
+    }
+    declined = {"attendees": [{"self": True, "responseStatus": "declined"}]}
+    accepted = {"attendees": [{"self": True, "responseStatus": "accepted"}]}
+    events = [
+        _calendar_event(
+            "declined-physical", _day_at(9), _day_at(10), location=GYM, raw=declined,
+        ),
+        _calendar_event(
+            "declined-online",
+            _day_at(10),
+            _day_at(11),
+            location="https://zoom.us/j/1",
+            raw=declined,
+        ),
+        _calendar_event(
+            "accepted-physical",
+            _day_at(12),
+            _day_at(13),
+            location=OFFICE,
+            raw=accepted,
+        ),
+        _calendar_event(
+            "accepted-online",
+            _day_at(14),
+            _day_at(15),
+            location=None,
+            raw=accepted,
+        ),
+        _calendar_event(
+            "commute",
+            _day_at(8, 30),
+            _day_at(8, 55),
+            location=GYM,
+            props=commute_props,
+            raw=declined,
+        ),
+    ]
+
+    anchors, existing_commutes, online_spans = _partition(events, "primary")
+
+    assert [anchor.id for anchor in anchors] == ["accepted-physical"]
+    assert [ev.id for ev in existing_commutes] == ["commute"]
+    assert [ev.id for ev in online_spans] == ["accepted-online"]
 
 
 def test_span_touches_window_drops_out_of_window_deletions():
@@ -984,6 +1071,125 @@ async def test_deleted_event_span_widens_replan_window(monkeypatch):
         deleted[0] - timedelta(hours=2),
         deleted[1] + timedelta(hours=2),
     )
+
+
+@pytest.mark.asyncio
+async def test_declined_event_change_widens_replan_window(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+
+    captured = {}
+
+    async def fake_plan(session, *, window_start, window_end, account_key=None):
+        captured["window"] = (window_start, window_end)
+
+    monkeypatch.setattr(
+        "app.services.plan.commute.plan_commutes_window_best_effort", fake_plan,
+    )
+    monkeypatch.setattr(
+        "app.services.plan.commute.commute_window_margin", lambda: timedelta(hours=2),
+    )
+    monkeypatch.setattr(
+        discover_mod, "get_settings", lambda: SimpleNamespace(commute_enabled=True),
+    )
+
+    event = _calendar_event(
+        "declined",
+        _day_at(12),
+        _day_at(13),
+        location=GYM,
+        raw={"attendees": [{"self": True, "responseStatus": "declined"}]},
+    )
+
+    await discover_mod._plan_legs_for_changed_events(
+        None, [event], deleted_spans=None, account_key=None,
+    )
+
+    assert captured["window"] == (
+        event.start - timedelta(hours=2),
+        event.end + timedelta(hours=2),
+    )
+
+
+@pytest.mark.asyncio
+async def test_declined_event_replan_deletes_adjacent_stale_commutes(monkeypatch):
+    deleted_ids = []
+    declined = _calendar_event(
+        "declined",
+        _day_at(12),
+        _day_at(13),
+        location=GYM,
+        raw={"attendees": [{"self": True, "responseStatus": "declined"}]},
+    )
+    arrival_leg = _calendar_event(
+        "arrival-leg",
+        _day_at(11, 20),
+        _day_at(11, 55),
+        location=GYM,
+        props={
+            "managed_by": "plan_service",
+            "kind": "commute",
+            "origin_anchor": "home",
+            "dest_anchor": declined.id,
+        },
+    )
+    departure_leg = _calendar_event(
+        "departure-leg",
+        _day_at(13, 5),
+        _day_at(13, 40),
+        location="Home",
+        props={
+            "managed_by": "plan_service",
+            "kind": "commute",
+            "origin_anchor": declined.id,
+            "dest_anchor": "home",
+        },
+    )
+
+    async def fake_list_events(session, *, calendar_ids, time_min, time_max, account_key=None):
+        return [declined, arrival_leg, departure_leg]
+
+    async def fake_delete(session, *, calendar_id, event_id, account_key=None):
+        deleted_ids.append(event_id)
+
+    async def unexpected_write(*_args, **_kwargs):
+        raise AssertionError("declined event should not create or patch commute legs")
+
+    async def fake_reschedule(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(
+        commute_planner,
+        "get_settings",
+        lambda: SimpleNamespace(
+            google_calendar_id="primary",
+            google_busy_calendar_ids=[],
+            home_address="Home",
+            google_maps_api_key="key",
+            commute_lookahead_days=7,
+            commute_bike_max_minutes=25,
+            commute_home_layover_minutes=20,
+            commute_event_buffer_minutes=5,
+            commute_rain_threshold_pct=30,
+        ),
+    )
+    monkeypatch.setattr(commute_planner, "list_events_between", fake_list_events)
+    monkeypatch.setattr(commute_planner, "delete_event", fake_delete)
+    monkeypatch.setattr(commute_planner, "create_event", unexpected_write)
+    monkeypatch.setattr(commute_planner, "patch_event", unexpected_write)
+    monkeypatch.setattr(
+        "app.services.commute.reschedule.reschedule_overlapping_tasks",
+        fake_reschedule,
+    )
+
+    summary = await commute_planner.plan_window_commutes(
+        None,
+        window_start=declined.start - timedelta(hours=2),
+        window_end=declined.end + timedelta(hours=2),
+        hourly_rain={},
+    )
+
+    assert summary["planned"] == 0
+    assert sorted(deleted_ids) == ["arrival-leg", "departure-leg"]
 
 
 @pytest.mark.asyncio

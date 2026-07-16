@@ -493,6 +493,19 @@ def is_commute_event(event: CalendarEvent) -> bool:
     return props.get(PROP_MANAGED_BY) == MANAGED_BY and props.get(PROP_KIND) == KIND_COMMUTE
 
 
+def is_declined_event(event: CalendarEvent) -> bool:
+    """Whether the connected user declined this Google Calendar event."""
+    attendees = event.raw.get("attendees")
+    if not isinstance(attendees, list):
+        return False
+    return any(
+        isinstance(attendee, dict)
+        and attendee.get("self") is True
+        and attendee.get("responseStatus") == "declined"
+        for attendee in attendees
+    )
+
+
 def is_free_event(event: CalendarEvent) -> bool:
     """Google's show-as-Free flag. All-day events default to free; timed
     events default to busy."""
