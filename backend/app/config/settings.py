@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     chat_llm_provider: str = "google"
     chat_llm_model: str = "gemini-3.5-flash"
     # Google-only chat knobs. `thinking_level` ∈ minimal|low|high (Gemini 3
-    # reasoning depth). `web_search` adds Gemini's Google Search grounding
-    # alongside the app's tools so chat can answer from the public web.
+    # reasoning depth). `web_search` adds Gemini's Google Search grounding, but
+    # the grounding round-trip corrupts the model's structured output (leaks
+    # reasoning, duplicates text, garbles widget tokens), so it's OFF — see
+    # docs/search-plan.md. Re-enable only via an isolated grounded sub-call.
     chat_thinking_level: str = "low"
-    chat_web_search: bool = True
+    chat_web_search: bool = False
 
     # Embeddings
     gemini_api_key: str = ""
