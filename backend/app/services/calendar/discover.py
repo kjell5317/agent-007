@@ -42,6 +42,7 @@ from app.services.calendar.events import (
     WINDOW_DAYS,
     _task_description,
     is_commute_event,
+    is_declined_event,
     is_managed_event,
     is_task_event,
 )
@@ -410,12 +411,15 @@ async def _plan_legs_for_changed_events(
     from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
 
     spans: list[tuple[datetime, datetime]] = []
-    span = _replan_span(events)
+    active_events = [ev for ev in events if not is_declined_event(ev)]
+    span = _replan_span(active_events)
     if span is not None:
         spans.append(span)
-    if deleted_spans:
+    declined_spans = _declined_replan_spans(events)
+    if deleted_spans or declined_spans:
         margin = commute_window_margin()
-        spans.extend((start - margin, end + margin) for start, end in deleted_spans)
+        spans.extend((start - margin, end + margin) for start, end in declined_spans)
+        spans.extend((start - margin, end + margin) for start, end in deleted_spans or [])
     if not spans:
         return
 
@@ -425,6 +429,14 @@ async def _plan_legs_for_changed_events(
         window_end=max(end for _, end in spans),
         account_key=account_key,
     )
+
+
+def _declined_replan_spans(events: list[CalendarEvent]) -> list[tuple[datetime, datetime]]:
+    return [
+        (ev.start, ev.end)
+        for ev in events
+        if not ev.all_day and not is_commute_event(ev) and is_declined_event(ev)
+    ]
 
 
 def _replan_span(events: list[CalendarEvent]) -> tuple[datetime, datetime] | None:
