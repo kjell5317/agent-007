@@ -270,7 +270,7 @@ def test_context_line_renders_times_in_user_timezone():
 
 
 @pytest.mark.asyncio
-async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
+async def test_error_answer_when_tool_loop_exhausts(monkeypatch):
     max_iter = get_settings().search_chat_max_iterations
     calls = {"tool_turns": 0, "toolless": 0}
 
@@ -278,11 +278,10 @@ async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
         return []
 
     async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
-        # The forced final turn is called with no tools — answer instead of loop.
+        # A tool-less turn would mean a forced final answer — which we no longer do.
         if not tools:
             calls["toolless"] += 1
-            await on_delta("Couldn't read that file.")
-            return _resp(text="Couldn't read that file.")
+            return _resp(text="")
         calls["tool_turns"] += 1
         return _resp(
             tool_calls=(
@@ -307,12 +306,12 @@ async def test_forces_final_answer_when_tool_loop_exhausts(monkeypatch):
     await run_chat(object(), [ChatTurn(role="user", content="read the deck")], emit=emit)
 
     assert calls["tool_turns"] == max_iter  # every iteration kept calling tools
-    assert calls["toolless"] == 1  # then one forced, tool-less answer
+    assert calls["toolless"] == 0  # no forced final answer — the turn errors out
     assert events[-1][0] == "done"
-    # A limit indicator is surfaced before the forced answer.
-    assert any(e == "tool_call" and d.get("name") == "tool_limit" for e, d in events)
-    tokens = "".join(d["text"] for e, d in events if e == "token")
-    assert "Couldn't read that file." in tokens
+    # No synthetic red "tool_limit" chip; an error answer is sent instead.
+    assert not any(e == "tool_call" and d.get("name") == "tool_limit" for e, d in events)
+    errors = [d["message"] for e, d in events if e == "error"]
+    assert len(errors) == 1 and str(max_iter) in errors[0]
 
 
 @pytest.mark.asyncio

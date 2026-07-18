@@ -329,30 +329,17 @@ async def run_chat(
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
         else:
-            # Iterations exhausted while the model was still calling tools — surface
-            # that, then force a final tool-less answer so the user always gets a
-            # response instead of a bubble that just stops after the last tool call.
-            await emit(
-                "tool_call",
-                _trace(
-                    "tool_limit",
-                    purpose="Reached tool limit",
-                    summary=f"Stopped after {settings.search_chat_max_iterations} tool steps.",
-                    status="failed",
-                ),
+            # Iterations exhausted while the model was still calling tools. Rather
+            # than force another LLM turn, end the turn with an error answer so the
+            # user gets a clear "too many steps" message instead of a bubble that
+            # just stops after the last tool call.
+            msg = (
+                f"This question needed more than {settings.search_chat_max_iterations} "
+                "tool steps to answer — try narrowing it down or asking something "
+                "more specific."
             )
-            await stream_chat(
-                messages,
-                settings,
-                system_prompt=system_prompt,
-                tools=[],
-                on_delta=on_delta,
-                name="chat-final",
-                provider=provider,
-                model=model,
-                thinking_level=settings.chat_thinking_level,
-                web_search=settings.chat_web_search,
-            )
+            await emit("error", {"message": msg})
+            answer_parts.append(msg)
 
         answer = "".join(answer_parts)
         obs.set_trace_io(output=answer)

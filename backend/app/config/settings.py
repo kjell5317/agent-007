@@ -90,12 +90,13 @@ class Settings(BaseSettings):
     # Chat / "ask" mode (stage 2+3). Retrieval-first: each turn injects the top
     # hybrid hits (local + Drive) into the LLM context. `history_messages` caps
     # how many prior turns travel with the request; `max_iterations` bounds the
-    # tool loop before a final answer; `drive_timeout` is the per-request Drive
-    # federation budget (past it, Drive results are dropped, never blocking).
+    # tool loop — past it the turn ends with an error answer, not another LLM
+    # call; `drive_timeout` is the per-request Drive federation budget (past it,
+    # Drive results are dropped, never blocking).
     search_chat_local_limit: int = 10
     search_chat_drive_limit: int = 5
     search_drive_timeout_seconds: float = 4.0
-    search_chat_max_iterations: int = 4
+    search_chat_max_iterations: int = 10
     # How many trailing chat turns (user + assistant messages) travel with each
     # request, and how far each replayed tool result is truncated before it goes
     # back to the model. Prior tool calls are replayed as tool_use/tool_result
