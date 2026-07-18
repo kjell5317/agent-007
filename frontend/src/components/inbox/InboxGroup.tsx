@@ -32,6 +32,7 @@ import type { RawInput } from "@/lib/types";
 interface Props {
   group: GroupData;
   onChanged: () => Promise<void> | void;
+  onOpenTask: (id: string) => void;
   unseenMemberIds: string[];
   onVisible: (ids: string[]) => void;
 }
@@ -39,6 +40,7 @@ interface Props {
 export function InboxGroup({
   group,
   onChanged,
+  onOpenTask,
   unseenMemberIds,
   onVisible,
 }: Props) {
@@ -59,6 +61,10 @@ export function InboxGroup({
   // its own outcome badge; groups with no task fall back to the newest member.
   const activeRun = activeKotxRun(members);
   const taskBadge = liveTask ? "open" : closedTask ? "closed" : null;
+  const taskId =
+    liveTask?.task_id ??
+    closedTask?.task_id ??
+    members.find((member) => member.task_id)?.task_id;
 
   const senders = Array.from(new Set(members.map(senderName)));
   const sendersLabel =
@@ -147,9 +153,27 @@ export function InboxGroup({
   return (
     <Card ref={cardRef} className={cn(cardBorderClass)}>
       <CardContent>
-        <div className="flex items-center gap-2">
+        <div
+          className={cn("flex items-center gap-2", taskId && "cursor-pointer")}
+          onClick={(event) => {
+            if (!taskId) return;
+            if (
+              (event.target as HTMLElement).closest(
+                "button,a,summary,input,select,textarea,[role='button'],[role='link']",
+              )
+            ) {
+              return;
+            }
+            onOpenTask(taskId);
+          }}
+        >
           {action ? (
-            <ActionButton {...action} disabled={busy} />
+            <div
+              className="shrink-0"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <ActionButton {...action} disabled={busy} />
+            </div>
           ) : (
             <div className="h-8 w-8 shrink-0" />
           )}

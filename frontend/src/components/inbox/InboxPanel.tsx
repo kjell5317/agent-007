@@ -87,6 +87,7 @@ export function InboxPanel({
             key={group.key}
             group={group}
             onChanged={onChanged}
+            onOpenTask={onOpenTask}
             unseenMemberIds={group.members
               .filter((member) => unseenInputIds.has(member.id))
               .map((member) => member.id)}
