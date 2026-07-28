@@ -18,10 +18,12 @@ All tools are terminal — the runner stops after the first tool call.
 
 The tool sets are built on demand so the `label` field can carry the current
 label catalog as a strict enum — the model can't choose a label that isn't
-configured.
+configured. Callers pass the catalog in as `{name: description}` (see
+`app.db.clients.labels.agent_descriptions`), which keeps this module free of
+storage concerns.
 """
 
-from app.labels import load_labels
+from collections.abc import Mapping
 
 # Provider-neutral JSON schema format; provider adapters translate at the boundary.
 
@@ -69,19 +71,14 @@ _NOTES_SCHEMA = {
 }
 
 
-def _label_schema(*, required: bool) -> dict:
-    """Build the `label` property from the current label config.
+def _label_schema(labels: Mapping[str, str], *, required: bool) -> dict:
+    """Build the `label` property from a `{name: description}` catalog.
 
     `required=True` → the label is part of `create_task.required`; the agent
     must pick one or fall back to `mark_not_task`. `required=False` is used
     by `update_task` where omitting the field just means "don't change it".
-    Returns an empty dict when no labels are configured, so callers can
-    detect and skip the field entirely.
     """
-    labels = load_labels()
-    if not labels:
-        return {}
-    lines = [f"- {name}: {label.description}" for name, label in labels.items()]
+    lines = [f"- {name}: {description}" for name, description in labels.items()]
     return {
         "type": "string",
         "enum": list(labels.keys()),
@@ -171,18 +168,6 @@ _UPDATE_TASK_PROPS: dict = {
     "notes": _NOTES_SCHEMA,
 }
 
-# Patch the label field into the create / update schemas at import time.
-# When labels are unconfigured the field is absent — the agent can't pick
-# one and the model is never asked for it.
-_create_label = _label_schema(required=True)
-if _create_label:
-    _CREATE_TASK_PROPS["label"] = _create_label
-    _CREATE_TASK_REQUIRED.append("label")
-
-_update_label = _label_schema(required=False)
-if _update_label:
-    _UPDATE_TASK_PROPS["label"] = _update_label
-
 _EXISTING_TASK_ID_SCHEMA = {
     "type": "string",
     "format": "uuid",
@@ -190,7 +175,7 @@ _EXISTING_TASK_ID_SCHEMA = {
 }
 
 
-NEW_INPUT_TOOLS = [
+_NEW_INPUT_TOOLS = [
     {
         "name": "search_notes",
         "description": (
@@ -399,7 +384,7 @@ NEW_INPUT_TOOLS = [
 ]
 
 
-THREAD_FOLLOWUP_TOOLS = [
+_THREAD_FOLLOWUP_TOOLS = [
     {
         "name": "update_task",
         "description": (
@@ -445,11 +430,7 @@ THREAD_FOLLOWUP_TOOLS = [
 
 # Chat create_task: `label` optional (the user rarely names one; the agent may
 # pick a fitting one). `notes` is dropped — chat has a dedicated `create_note`.
-_CHAT_CREATE_TASK_PROPS = {
-    k: v for k, v in _CREATE_TASK_PROPS.items() if k not in ("notes", "label")
-}
-if _update_label:
-    _CHAT_CREATE_TASK_PROPS["label"] = _update_label
+_CHAT_CREATE_TASK_PROPS = {k: v for k, v in _CREATE_TASK_PROPS.items() if k != "notes"}
 
 _CHAT_UPDATE_TASK_PROPS = {
     "task_id": {
@@ -471,7 +452,7 @@ _EVENT_TIME_PROPS = {
     "location": {"type": "string"},
 }
 
-CHAT_TOOLS = [
+_CHAT_TOOLS = [
     {
         "name": "tasks_search",
         "description": (
@@ -759,7 +740,7 @@ CHAT_TOOLS = [
 ]
 
 
-# Notion (read-only) — appended to CHAT_TOOLS by the runner only when a Notion
+# Notion (read-only) — appended to the chat tools by the runner only when a Notion
 # workspace is connected, so the model never sees a tool that would just fail.
 # Both proxy to Notion's hosted MCP server; there are no write tools, so chat
 # can read the workspace but never mutate it.
@@ -800,7 +781,7 @@ NOTION_CHAT_TOOLS = [
 ]
 
 
-# GitHub (read-only) — appended to CHAT_TOOLS by the runner only when a PAT is
+# GitHub (read-only) — appended to the chat tools by the runner only when a PAT is
 # configured. Both hit GitHub's REST issue-search endpoint; there are no write
 # tools, so chat can read issues/PRs but never mutate them.
 GITHUB_CHAT_TOOLS = [
@@ -842,3 +823,49 @@ GITHUB_CHAT_TOOLS = [
         "parameters": {"type": "object", "properties": {}},
     },
 ]
+
+
+# --- Label injection ----------------------------------------------------------
+#
+# Labels live in the DB and are edited from the settings page, so the enum is
+# stamped onto the task tools per run rather than baked in at import. An empty
+# catalog means the `label` field is absent entirely — the model can't pick one
+# and is never asked for it.
+
+
+def new_input_tools(labels: Mapping[str, str]) -> list[dict]:
+    return _with_label_field(_NEW_INPUT_TOOLS, labels, require_on_create=True)
+
+
+def thread_followup_tools(labels: Mapping[str, str]) -> list[dict]:
+    return _with_label_field(_THREAD_FOLLOWUP_TOOLS, labels, require_on_create=False)
+
+
+def chat_tools(labels: Mapping[str, str]) -> list[dict]:
+    return _with_label_field(_CHAT_TOOLS, labels, require_on_create=False)
+
+
+def _with_label_field(
+    tools: list[dict], labels: Mapping[str, str], *, require_on_create: bool
+) -> list[dict]:
+    # Always a fresh list: callers append their own optional tools to it.
+    if not labels:
+        return list(tools)
+    on_create = _label_schema(labels, required=require_on_create)
+    on_update = _label_schema(labels, required=False)
+    return [
+        _with_property(tool, on_create, required=require_on_create)
+        if tool["name"] == "create_task"
+        else _with_property(tool, on_update, required=False)
+        if tool["name"] == "update_task"
+        else tool
+        for tool in tools
+    ]
+
+
+def _with_property(tool: dict, field: dict, *, required: bool) -> dict:
+    params = tool["parameters"]
+    patched = {**params, "properties": {**params["properties"], "label": field}}
+    if required:
+        patched["required"] = [*params.get("required", []), "label"]
+    return {**tool, "parameters": patched}

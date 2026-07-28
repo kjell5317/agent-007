@@ -46,10 +46,11 @@ from app.agent.helpers.precedents import (
     task_candidate_lines as _task_candidate_lines,
     truncate_inline as _truncate_inline,
 )
-from app.agent.tools import NEW_INPUT_TOOLS
+from app.agent.tools import new_input_tools
 from app.config import get_settings
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
+from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
 
@@ -96,13 +97,14 @@ async def run_new_input_agent(
         raw.id, len(task_candidates), len(not_task_signals),
     )
 
+    tools = new_input_tools(labels_store.agent_descriptions(session))
     done = False
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await chat(
             messages,
             settings,
             system_prompt=NEW_INPUT_SYSTEM_PROMPT,
-            tools=NEW_INPUT_TOOLS,
+            tools=tools,
         )
         log.debug(
             "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",

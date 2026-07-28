@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { labelChipClass } from "@/lib/labels";
+import { labelDotStyle } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import type { Label } from "@/lib/types";
 
@@ -53,12 +53,8 @@ export function LabelPicker({
           <span className="flex items-center gap-2">
             <span
               aria-hidden
-              className={cn(
-                "h-3 w-3 shrink-0 rounded-full",
-                selected
-                  ? labelChipClass(selected.color)
-                  : "bg-muted-foreground/30",
-              )}
+              className="h-3 w-3 shrink-0 rounded-full bg-muted-foreground/30"
+              style={selected ? labelDotStyle(selected.color) : undefined}
             />
             <span className={cn(!selected && "text-muted-foreground")}>
               {selected?.name || "No label"}
@@ -80,16 +76,15 @@ export function LabelPicker({
             <Option
               onClick={() => pick("")}
               isSelected={value === ""}
-              colorClass="bg-muted-foreground/30"
               name="No label"
               muted
             />
             {labels.map((l) => (
               <Option
-                key={l.name}
+                key={l.google_id}
                 onClick={() => pick(l.name)}
                 isSelected={value === l.name}
-                colorClass={labelChipClass(l.color)}
+                color={l.color}
                 name={l.name}
                 description={l.description}
               />
@@ -108,14 +103,14 @@ export function LabelPicker({
 function Option({
   onClick,
   isSelected,
-  colorClass,
+  color,
   name,
   description,
   muted,
 }: {
   onClick: () => void;
   isSelected: boolean;
-  colorClass: string;
+  color?: string;
   name: string;
   description?: string;
   muted?: boolean;
@@ -134,7 +129,8 @@ function Option({
     >
       <span
         aria-hidden
-        className={cn("h-3 w-3 shrink-0 rounded-full", colorClass)}
+        className="h-3 w-3 shrink-0 rounded-full bg-muted-foreground/30"
+        style={labelDotStyle(color)}
       />
       <span className={cn("flex-1 text-left", muted && "text-muted-foreground")}>
         {name}

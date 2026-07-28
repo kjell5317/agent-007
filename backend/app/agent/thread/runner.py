@@ -23,8 +23,9 @@ from app.agent.helpers.llm import (
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.helpers.text import append_meta_lines, now_iso, task_field_lines
 from app.agent.tools.notes_lookup import save_notes
-from app.agent.tools import THREAD_FOLLOWUP_TOOLS
+from app.agent.tools import thread_followup_tools
 from app.config import get_settings
+from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs
 
 log = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
         messages,
         settings,
         system_prompt=THREAD_FOLLOWUP_SYSTEM_PROMPT,
-        tools=THREAD_FOLLOWUP_TOOLS,
+        tools=thread_followup_tools(labels_store.agent_descriptions(session)),
     )
     log.debug(
         "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",

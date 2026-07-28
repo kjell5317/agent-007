@@ -9,7 +9,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.input import runner  # noqa: E402
 from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PROMPT  # noqa: E402
-from app.agent.tools.schemas import NEW_INPUT_TOOLS  # noqa: E402
+from app.agent.tools.schemas import new_input_tools  # noqa: E402
 from app.db.clients.raw_inputs import SimilarInput  # noqa: E402
 
 
@@ -161,7 +161,7 @@ def test_tool_result_entry_records_status_purpose_and_artifacts():
 
 
 def test_create_task_schema_requires_displayable_title():
-    create_task = next(tool for tool in NEW_INPUT_TOOLS if tool["name"] == "create_task")
+    create_task = next(tool for tool in new_input_tools({}) if tool["name"] == "create_task")
     title = create_task["parameters"]["properties"]["title"]
 
     assert "title" in create_task["parameters"]["required"]
@@ -179,7 +179,7 @@ def test_reopen_prompt_guidance_requires_future_due_date_for_past_task():
 
 
 def test_update_task_schema_mentions_reopen_with_past_due_date_rule():
-    update_task = next(tool for tool in NEW_INPUT_TOOLS if tool["name"] == "update_task")
+    update_task = next(tool for tool in new_input_tools({}) if tool["name"] == "update_task")
     props = update_task["parameters"]["properties"]
 
     assert (
@@ -190,7 +190,7 @@ def test_update_task_schema_mentions_reopen_with_past_due_date_rule():
 
 
 def test_update_event_schema_requires_event_id_and_is_non_terminal():
-    update_event = next(tool for tool in NEW_INPUT_TOOLS if tool["name"] == "update_event")
+    update_event = next(tool for tool in new_input_tools({}) if tool["name"] == "update_event")
     props = update_event["parameters"]["properties"]
 
     assert update_event["parameters"]["required"] == ["event_id"]

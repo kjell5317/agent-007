@@ -31,8 +31,8 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.clients import labels as labels_store
 from app.db.clients import tasks as tasks_store
-from app.labels import color_for
 from app.services.location import resolve_location_alias
 from app.services.calendar.client import (
     CalendarEvent,
@@ -95,7 +95,7 @@ async def create_event(
     end: datetime,
     description: str | None = None,
     location: str | None = None,
-    color_id: str | None = None,
+    event_label_id: str | None = None,
     private_properties: dict[str, str] | None = None,
     reminders: dict | None = None,
     account_key: str | None = None,
@@ -115,8 +115,8 @@ async def create_event(
         body["description"] = description
     if location:
         body["location"] = resolve_location_alias(location)
-    if color_id:
-        body["colorId"] = color_id
+    if event_label_id:
+        body["eventLabelId"] = event_label_id
     if private_properties:
         body["extendedProperties"] = {"private": _clean_private_properties(private_properties)}
     if reminders is not None:
@@ -153,7 +153,7 @@ async def patch_event(
     end: datetime | None = None,
     description: str | None = None,
     location: str | None = None,
-    color_id: str | None = None,
+    event_label_id: str | None = None,
     private_properties: dict[str, str] | None = None,
     reminders: dict | None = None,
     account_key: str | None = None,
@@ -174,8 +174,8 @@ async def patch_event(
         body["description"] = description
     if location is not None:
         body["location"] = resolve_location_alias(location) or ""
-    if color_id is not None:
-        body["colorId"] = color_id
+    if event_label_id is not None:
+        body["eventLabelId"] = event_label_id
     if private_properties is not None:
         body["extendedProperties"] = {"private": _clean_private_properties(private_properties)}
     if reminders is not None:
@@ -249,7 +249,7 @@ async def add_task_event(
         end=end,
         description=_task_description(task),
         location=resolve_location_alias(task.location),
-        color_id=color_for(task.label),
+        event_label_id=labels_store.google_id_for(session, task.label),
         private_properties=task_private_properties(task),
         reminders=popup_reminders(settings.reminder_lead_minutes),
     )
@@ -309,7 +309,7 @@ async def update_task_event(
     if _changed("location"):
         patch_kwargs["location"] = resolve_location_alias(task.location) or ""
     if _changed("label"):
-        patch_kwargs["color_id"] = color_for(task.label)
+        patch_kwargs["event_label_id"] = labels_store.google_id_for(session, task.label)
     if start is not None:
         patch_kwargs["start"] = start
     if end is not None:

@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.agent.manual.runner import extract_task_fields
+from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs, tasks
-from app.labels import load_labels
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
 from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_github_subject
@@ -296,7 +295,7 @@ async def _create_task_from_brief(
     # which would spam long-term memory with implementation minutiae.
     payload = await extract_task_fields(session, raw, harvest_notes=False)
     repo = str(meta.get("repo") or "")
-    label = _label_for_repo(repo)
+    label = _label_for_repo(session, repo)
     if label is None and payload.get("label"):
         label = str(payload["label"])
     # The subject is "{repo}#{number} {title}" — the repo is already carried
@@ -319,12 +318,11 @@ async def _create_task_from_brief(
     return task
 
 
-def _squash(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+def _label_for_repo(session: Session, repo: str) -> str | None:
+    """The label whose `github_repo` is this repo, set on the settings page."""
+    if not repo:
+        return None
+    row = labels_store.get_by_repo(session, repo)
+    return row.name if row is not None else None
 
 
-def _label_for_repo(repo: str) -> str | None:
-    # Compare alphanumerics only so hyphenated org/repo names still match
-    # (TUM-Social-AI → SocialAI).
-    haystack = _squash(repo)
-    return next((name for name in load_labels() if _squash(name) in haystack), None)

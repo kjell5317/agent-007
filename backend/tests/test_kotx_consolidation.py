@@ -637,7 +637,6 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
 
     finalized = {}
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
-    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {"CSEE": None})
     monkeypatch.setattr(kotx_runner.tasks, "create", fake_create)
     monkeypatch.setattr(kotx_runner, "schedule_task", fake_schedule)
     monkeypatch.setattr(
@@ -687,7 +686,6 @@ async def test_concurrent_transitions_for_same_kotx_id_create_one_task(monkeypat
     monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
     monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
     monkeypatch.setattr(kotx_runner.tasks, "latest_status_for", lambda s, ids: {})
-    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
     monkeypatch.setattr(kotx_runner.raw_inputs, "finalize", lambda *a, **k: None)
 
     async def fake_extract(session, raw, **kwargs):
@@ -937,7 +935,6 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
         return None
 
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
-    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
     monkeypatch.setattr(
         kotx_runner.tasks,
         "create",
@@ -975,7 +972,6 @@ async def test_review_task_creation_drops_done_from_scheduled_notification(
         return None
 
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
-    monkeypatch.setattr(kotx_runner, "load_labels", lambda: {})
     monkeypatch.setattr(
         kotx_runner.tasks,
         "create",
@@ -1241,11 +1237,18 @@ async def test_discard_run_for_input_rejects_non_kotx_input(monkeypatch):
         await kotx_discard.discard_run_for_input(object(), raw.id)
 
 
-def test_label_for_repo_prefers_config_match(monkeypatch):
+def test_label_for_repo_uses_the_configured_repo_mapping(monkeypatch):
+    mapped = {"asklio/csee-strategic-negotiation-agent": SimpleNamespace(name="CSEE")}
     monkeypatch.setattr(
-        kotx_runner, "load_labels", lambda: {"Uni": None, "CSEE": None, "SocialAI": None}
+        kotx_runner.labels_store,
+        "get_by_repo",
+        lambda session, repo: mapped.get(repo.strip().lower()),
     )
-    assert kotx_runner._label_for_repo("askLio/CSEE-strategic-negotiation-agent") == "CSEE"
-    # Alphanumeric-only comparison bridges hyphenated org names.
-    assert kotx_runner._label_for_repo("TUM-Social-AI/AflaConnect") == "SocialAI"
-    assert kotx_runner._label_for_repo("owner/repo") is None
+    session = SimpleNamespace()
+    assert (
+        kotx_runner._label_for_repo(session, "askLio/CSEE-strategic-negotiation-agent")
+        == "CSEE"
+    )
+    # A repo nobody mapped falls through to the label the extractor picked.
+    assert kotx_runner._label_for_repo(session, "owner/repo") is None
+    assert kotx_runner._label_for_repo(session, "") is None

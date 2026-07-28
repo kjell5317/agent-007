@@ -70,7 +70,6 @@ git clone https://github.com/kjell5317/agent-007.git
 cd agent-007
 
 cp .env.example .env                         # then fill in the secrets below
-cp config/labels.toml.example config/labels.toml
 
 docker compose up -d --build                 # Postgres + app + Caddy
 ```
@@ -111,10 +110,11 @@ essentials:
 | `HOME_ASSISTANT_URL` / `_TOKEN` | Push notifications (optional) |
 | `AUTH_ALLOWED_EMAILS` / `SESSION_SECRET` | Google-SSO email allowlist for the UI |
 
-Runtime config that isn't secret lives in [`config/`](config/) — task
-`labels.toml`. It's personal and git-ignored; copy the `*.example` template
-and edit. Points scoring is controlled by `POINTS_TASK_DONE_FACTOR` in `.env`.
-See [`config/README.md`](config/README.md).
+Runtime config that isn't secret lives in [`config/`](config/) — the personal,
+git-ignored `chat_context.md`; copy the `*.example` template and edit. Task
+labels are mirrored from the Google Calendar event labels and described from the
+UI (account menu → Edit labels). Points scoring is controlled by
+`POINTS_TASK_DONE_FACTOR` in `.env`. See [`config/README.md`](config/README.md).
 
 ## Project structure
 

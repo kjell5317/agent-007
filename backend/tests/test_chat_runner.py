@@ -3,6 +3,7 @@ sequence, citation tagging, tool dispatch, and the consolidated event tool."""
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -12,6 +13,7 @@ from app.agent.chat import runner as chat_runner
 from app.agent.chat.runner import ChatTurn, Citations, run_chat
 from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall
 from app.config import get_settings
+from app.db.clients.chat_answers import SimilarAnswer
 from app.db.schemas.search import SearchHit
 
 
@@ -35,6 +37,24 @@ def _resp(text: str = "", tool_calls: tuple[ToolCall, ...] = ()) -> LLMResponse:
 
 async def _noop_emit(event, data):
     return None
+
+
+@pytest.fixture(autouse=True)
+def _stub_answer_cache(monkeypatch):
+    """The runner now consults + writes a semantic answer cache. Default both
+    ends to inert stubs so the DB-free tests never embed or touch a DB; the cache
+    tests below override `retrieve_prior_answer` and read `["cache"]`."""
+    calls: dict[str, list] = {"cache": []}
+
+    async def no_prior(session, query):
+        return None, None
+
+    def record_cache(session, *, question, answer, embedding):
+        calls["cache"].append({"question": question, "answer": answer, "embedding": embedding})
+
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", no_prior)
+    monkeypatch.setattr(chat_runner, "cache_answer", record_cache)
+    return calls
 
 
 def test_citations_tagging_dedupes_and_prefixes_by_type():
@@ -500,3 +520,132 @@ async def test_per_source_search_emits_citations_and_uniform_record(monkeypatch)
     assert emitted[0][1]["items"][0]["tag"] == "I1"
     assert trace["name"] == "messages_search"
     assert "[I1]" in text and "id=raw1" in text and "task=abc" in text
+
+
+@pytest.mark.asyncio
+async def test_prior_cached_answer_injected_into_context(monkeypatch):
+    # A recent, similar question's answer is folded into the latest user message
+    # as a dated hint — the model reuses it or re-derives, never a short-circuit.
+    seen = {"latest_user": ""}
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        seen["latest_user"] = messages[-1].text
+        await on_delta("Your passport number is P123.")
+        return _resp(text="Your passport number is P123.")
+
+    async def fake_retrieve(session, query):
+        return []
+
+    async def fake_prior(session, query):
+        answer = SimilarAnswer(
+            id=uuid.uuid4(),
+            question="what is my passport number?",
+            answer="Your passport number is P123.",
+            similarity=0.91,
+            created_at=datetime(2026, 7, 10, tzinfo=ZoneInfo("UTC")),
+        )
+        return [0.1] * 4, answer
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", fake_prior)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    await run_chat(object(), [ChatTurn(role="user", content="passport number?")], emit=_noop_emit)
+
+    assert "You answered a similar question" in seen["latest_user"]
+    assert "P123" in seen["latest_user"]
+    assert "2026-07-10" in seen["latest_user"]
+
+
+@pytest.mark.asyncio
+async def test_clean_readonly_turn_is_cached(monkeypatch, _stub_answer_cache):
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        await on_delta("You have one open task.")
+        return _resp(text="You have one open task.")
+
+    async def fake_retrieve(session, query):
+        return []
+
+    async def fake_prior(session, query):
+        return [0.2] * 4, None  # embedding present, cache miss → still store
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", fake_prior)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    await run_chat(object(), [ChatTurn(role="user", content="my tasks?")], emit=_noop_emit)
+
+    cached = _stub_answer_cache["cache"]
+    assert len(cached) == 1
+    assert cached[0]["question"] == "my tasks?"
+    assert cached[0]["answer"] == "You have one open task."
+    assert cached[0]["embedding"] == [0.2] * 4
+
+
+@pytest.mark.asyncio
+async def test_state_changing_turn_is_not_cached(monkeypatch, _stub_answer_cache):
+    # A turn that created a task is an action, not a reusable fact — don't cache.
+    scripted = [
+        _resp(tool_calls=(ToolCall(id="1", name="create_task", input={"title": "Buy milk"}),)),
+        _resp(text="Created it."),
+    ]
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        resp = scripted.pop(0)
+        if resp.text:
+            await on_delta(resp.text)
+        return resp
+
+    async def fake_retrieve(session, query):
+        return []
+
+    async def fake_prior(session, query):
+        return [0.3] * 4, None
+
+    async def fake_create_task(session, tin):
+        return "Created task 'Buy milk'.", chat_runner._trace(
+            "create_task", purpose="create task", summary="created", changed_state=True
+        )
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", fake_prior)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "_create_task", fake_create_task)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    await run_chat(object(), [ChatTurn(role="user", content="add buy milk")], emit=_noop_emit)
+
+    assert _stub_answer_cache["cache"] == []
+
+
+@pytest.mark.asyncio
+async def test_exhausted_turn_is_not_cached(monkeypatch, _stub_answer_cache):
+    async def fake_retrieve(session, query):
+        return []
+
+    async def fake_prior(session, query):
+        return [0.4] * 4, None
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        return _resp(
+            tool_calls=(ToolCall(id="x", name="get_drive_file", input={"file_id": "x"}),)
+        )
+
+    async def fake_get_drive_file(session, file_id, *, max_chars):
+        return "get_drive_file: couldn't read that file."
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", fake_prior)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "get_drive_file", fake_get_drive_file)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    await run_chat(object(), [ChatTurn(role="user", content="read the deck")], emit=_noop_emit)
+
+    assert _stub_answer_cache["cache"] == []

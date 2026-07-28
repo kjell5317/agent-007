@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
+import { LabelsPanel } from "@/components/labels/LabelsPanel";
 import { NotesPanel } from "@/components/notes/NotesPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
 import { ChatComposer } from "@/components/search/ChatComposer";
@@ -22,11 +23,12 @@ import type { Task } from "@/lib/types";
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const { theme, setTheme } = useThemePreference();
-  // "tasks" / "chat" are the two tabs of the main view; "mail" / "points" are
-  // overlays reached from the topbar (Back returns to the last active tab).
-  const [view, setView] = useState<"tasks" | "chat" | "mail" | "points">(
-    "tasks",
-  );
+  // "tasks" / "chat" are the two tabs of the main view; "mail" / "points" /
+  // "labels" are overlays reached from the topbar (Back returns to the last
+  // active tab).
+  const [view, setView] = useState<
+    "tasks" | "chat" | "mail" | "points" | "labels"
+  >("tasks");
   const lastTabRef = useRef<"tasks" | "chat">("tasks");
   const chat = useSearchChat();
   const mailOpen = view === "mail";
@@ -331,10 +333,15 @@ export function App() {
       <Topbar
         theme={theme}
         onThemeChange={setTheme}
-        mode={view === "mail" || view === "points" ? view : "normal"}
+        mode={
+          view === "mail" || view === "points" || view === "labels"
+            ? view
+            : "normal"
+        }
         unreadInbox={unreadInbox}
         onMailOpen={() => setView("mail")}
         onPointsOpen={() => setView("points")}
+        onLabelsOpen={() => setView("labels")}
         onBack={leaveOverlay}
       />
       <main className="mx-auto max-w-2xl px-4 py-4">
@@ -364,6 +371,8 @@ export function App() {
           </Tabs>
         ) : view === "points" ? (
           <PointsPanel onOpenTask={openTask} />
+        ) : view === "labels" ? (
+          <LabelsPanel />
         ) : (
           <Tabs value={view} onValueChange={selectTab}>
             <TabsList className="mb-4 grid h-10 w-full grid-cols-2">

@@ -35,9 +35,9 @@ class Task(Base):
     estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
-    # Free-form label name; the catalog + per-label color live in
-    # `config/labels.toml`. Nullable: legacy rows and tasks created before
-    # the labels config was populated may have no label.
+    # Label name, matching a row in `labels` (mirrored from the Google Calendar
+    # event labels). Not a foreign key: a label deleted in Google shouldn't take
+    # the task's history with it. Nullable — legacy rows may have no label.
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     calendar_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)

@@ -26,9 +26,13 @@ export interface TaskRawInput extends RawInput {
 }
 
 export interface Label {
+  // Opaque Google Calendar event-label id; name and color are Google's and
+  // read-only here, description and github_repo are ours.
+  google_id: string;
   name: string;
-  description: string;
   color: string;
+  description: string;
+  github_repo: string | null;
 }
 
 export interface AgentTrace {

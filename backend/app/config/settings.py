@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     chat_thinking_level: str = "low"
     chat_web_search: bool = False
 
+    # Chat answer cache. Completed read-only chat turns persist (question,
+    # question-embedding, answer); a later similarly-phrased question pulls the
+    # nearest recent answer into context as a HINT the model reuses or re-derives
+    # — never a short-circuit, since the underlying tasks/calendar/mail move.
+    # Gated high on cosine (paraphrases of the *same* question, not merely
+    # topical, unlike notes' 0.4) and bounded by age so a stale or loosely
+    # related answer can't ride in. Only clean turns cache: no errors, no state
+    # changes.
+    chat_answer_cache_enabled: bool = True
+    chat_answer_cache_min_similarity: float = 0.75
+    chat_answer_cache_max_age_days: int = 30
+
     # Embeddings
     gemini_api_key: str = ""
     embedding_model: str = "gemini-embedding-001"
@@ -150,9 +162,6 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [e.strip().lower() for e in v.split(",") if e.strip()]
         return v
-
-    # Labels
-    labels_config_path: str = "config/labels.toml"
 
     # Personal, git-ignored routing hints appended to the chat/search system
     # prompt (which of the user's projects/people live in which source). Missing

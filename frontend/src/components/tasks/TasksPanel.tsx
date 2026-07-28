@@ -5,7 +5,7 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { useLabels } from "@/hooks/useLabels";
 import { isOverdue, isToday, isTomorrow } from "@/lib/dates";
 import type { KotxTask } from "@/lib/kotx";
-import { labelChipClass, labelChipOutlineClass } from "@/lib/labels";
+import { labelChipOutlineStyle, labelChipStyle } from "@/lib/labels";
 import { compareTasks, taskGroupDate, type TaskSortMode } from "@/lib/tasks";
 import type { Label, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -256,12 +256,12 @@ function TaskFilters({
             aria-pressed={selected}
             title={label.description || label.name}
             onClick={() => toggleLabel(label.name)}
-            className={cn(
-              chipBase,
+            className={cn(chipBase, selected && "border-transparent")}
+            style={
               selected
-                ? cn("border-transparent", labelChipClass(label.color))
-                : labelChipOutlineClass(label.color),
-            )}
+                ? labelChipStyle(label.color)
+                : labelChipOutlineStyle(label.color)
+            }
           >
             {label.name}
           </button>
@@ -272,7 +272,7 @@ function TaskFilters({
           type="button"
           aria-pressed="true"
           onClick={() => onSelectedLabelChange(null)}
-          className={cn(chipBase, "border-transparent", labelChipClass(undefined))}
+          className={cn(chipBase, "border-transparent bg-muted text-muted-foreground")}
         >
           {selectedLabel}
         </button>

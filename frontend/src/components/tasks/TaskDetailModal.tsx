@@ -34,7 +34,7 @@ import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
 import { kotx, type KotxTask } from "@/lib/kotx";
-import { labelChipClass } from "@/lib/labels";
+import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
 import type { Label, Task, TaskRawInput } from "@/lib/types";
@@ -632,10 +632,9 @@ function TaskSummary({
               disabled={busy}
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                task.label
-                  ? labelChipClass(labelMeta?.color)
-                  : TASK_SUMMARY_MUTED_BADGE_CLASS,
+                TASK_SUMMARY_MUTED_BADGE_CLASS,
               )}
+              style={task.label ? labelChipStyle(labelMeta?.color) : undefined}
               title={labelMeta?.description ?? task.label ?? "Set label"}
             >
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>

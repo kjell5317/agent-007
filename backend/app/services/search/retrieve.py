@@ -22,9 +22,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.clients import chat_answers as chat_answers_store
 from app.db.clients import documents as documents_store
 from app.db.clients import notes as notes_store
 from app.db.clients import search as search_client
+from app.db.clients.chat_answers import SimilarAnswer
 from app.db.clients import tasks as tasks_store
 from app.db.clients.search import INPUT, NOTE, TASK
 from app.db.models.raw_input import RawInput
@@ -58,6 +60,39 @@ async def retrieve(session: Session, query: str) -> list[SearchHit]:
         note_min_similarity=settings.notes_semantic_min_similarity,
     )
     return [SearchHit.build(h) for h in raw]
+
+
+async def retrieve_prior_answer(
+    session: Session, query: str
+) -> tuple[list[float] | None, SimilarAnswer | None]:
+    """Look up the nearest recent cached answer to this question. Returns the
+    question embedding alongside the hit so the caller can reuse it to store this
+    turn's answer without embedding a third time; the embedding is None (and no
+    lookup runs) when the cache is off or embeddings are unavailable."""
+    query = (query or "").strip()
+    settings = get_settings()
+    if not query or not settings.chat_answer_cache_enabled:
+        return None, None
+    embedding = await _embed_or_none(query)
+    if embedding is None:
+        return None, None
+    hits = chat_answers_store.search_similar(
+        session,
+        embedding=embedding,
+        k=1,
+        min_similarity=settings.chat_answer_cache_min_similarity,
+        max_age_days=settings.chat_answer_cache_max_age_days,
+    )
+    return embedding, (hits[0] if hits else None)
+
+
+def cache_answer(
+    session: Session, *, question: str, answer: str, embedding: list[float]
+) -> None:
+    """Persist a completed read-only turn's Q→A + question embedding. The caller
+    passes the embedding already computed by `retrieve_prior_answer`."""
+    chat_answers_store.create(session, question=question, answer=answer, embedding=embedding)
+    session.commit()
 
 
 async def search_messages(

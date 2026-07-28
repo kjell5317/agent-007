@@ -145,6 +145,15 @@ export const api = {
     request<ChatSummary>(`/search/chats/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 
   listLabels: () => request<Label[]>("/labels"),
+  syncLabels: () => request<Label[]>("/labels/sync", { method: "POST" }),
+  updateLabel: (
+    googleId: string,
+    body: { description: string; github_repo: string | null },
+  ) =>
+    request<Label>(`/labels/${encodeURIComponent(googleId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   listNotes: (limit = 500) => request<Note[]>(`/notes?limit=${limit}`),
   updateNote: (id: string, content: string) =>

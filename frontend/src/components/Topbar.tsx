@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut, Mail } from "lucide-react";
+import { CircleUser, ExternalLink, LogOut, Mail, Tags } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -44,14 +44,16 @@ export function Topbar({
   unreadInbox = 0,
   onMailOpen,
   onPointsOpen,
+  onLabelsOpen,
   onBack,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
-  mode?: "normal" | "mail" | "points";
+  mode?: "normal" | "mail" | "points" | "labels";
   unreadInbox?: number;
   onMailOpen?: () => void;
   onPointsOpen?: () => void;
+  onLabelsOpen?: () => void;
   onBack?: () => void;
 }) {
   const [healthy, setHealthy] = useState<boolean | null>(null);
@@ -243,6 +245,7 @@ export function Topbar({
                 theme={theme}
                 onToggleAutoPoll={toggleAutoPoll}
                 onThemeChange={onThemeChange}
+                onLabelsOpen={onLabelsOpen}
                 onLogout={logout}
               />
             )}
@@ -259,6 +262,7 @@ function AccountMenu({
   theme,
   onToggleAutoPoll,
   onThemeChange,
+  onLabelsOpen,
   onLogout,
 }: {
   email: string;
@@ -266,6 +270,7 @@ function AccountMenu({
   theme: ThemePreference;
   onToggleAutoPoll: (next: boolean) => void;
   onThemeChange: (next: ThemePreference) => void;
+  onLabelsOpen?: () => void;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -347,6 +352,20 @@ function AccountMenu({
                 }
               />
             </label>
+          </div>
+          <div className="border-t py-1">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onLabelsOpen?.();
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+            >
+              <Tags className="h-4 w-4 text-muted-foreground" />
+              Edit labels
+            </button>
           </div>
           <div className="border-t py-1">
             <button

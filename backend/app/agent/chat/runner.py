@@ -42,17 +42,19 @@ from app.agent.helpers.llm import (
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.prompts import chat_system_prompt
 from app.agent.tools import (
-    CHAT_TOOLS,
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
+    chat_tools,
     run_create_event,
     run_delete_event,
     run_update_event,
 )
 from app import observability as obs
 from app.config import get_settings
+from app.db.clients import labels as labels_store
 from app.db.clients import notes as notes_store
 from app.db.clients import tasks as tasks_store
+from app.db.clients.chat_answers import SimilarAnswer
 from app.db.schemas.search import SearchHit
 from app.db.schemas.task import TaskCreate
 from app.services import github, notion_mcp
@@ -61,8 +63,10 @@ from app.services.plan import schedule_task
 from app.services.search.contacts import search_contacts
 from app.services.search.drive import get_drive_file, search_drive
 from app.services.search.retrieve import (
+    cache_answer,
     find_tasks,
     retrieve,
+    retrieve_prior_answer,
     search_calendar,
     search_messages,
     search_notes,
@@ -74,6 +78,10 @@ Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 # Truncation width for the query echoed on a tool-call chip in the UI.
 _CHIP_QUERY_MAX = 48
+
+# Cap on a cached prior answer injected into context — a long answer shouldn't
+# crowd out the turn's fresh retrieval.
+_PRIOR_ANSWER_MAX = 1200
 
 # Citation tag prefixes by hit type. "E" = calendar event (a document with
 # source=calendar); "G" = Google Drive file; "C" = contact. "D" is kept for any
@@ -249,9 +257,20 @@ def _notion_title(text: str) -> str | None:
     return None
 
 
-def _context_block(tz: str, entries: list[tuple[str, SearchHit]]) -> str:
+def _context_block(
+    tz: str, entries: list[tuple[str, SearchHit]], prior: SimilarAnswer | None = None
+) -> str:
     zone = ZoneInfo(tz)
     lines = [f"Current time: {now_iso(tz)}", ""]
+    if prior is not None:
+        asked = prior.created_at.astimezone(zone).date().isoformat() if prior.created_at else "earlier"
+        lines.append(
+            f"You answered a similar question on {asked} — reuse this only if it is "
+            "still accurate for today, otherwise re-derive from current data:"
+        )
+        lines.append(f"Q: {prior.question}")
+        lines.append(f"A: {_clip(prior.answer, _PRIOR_ANSWER_MAX)}")
+        lines.append("")
     if entries:
         lines.append("Retrieved context:")
         lines.extend(_context_line(tag, h, zone) for tag, h in entries)
@@ -287,12 +306,17 @@ async def run_chat(
         entries = cites.add(await retrieve(session, query))
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
 
-        context = _context_block(settings.user_timezone, entries)
+        # Semantic answer cache: pull the nearest recent answer to a similarly
+        # phrased question in as a hint (the model reuses it or re-derives). The
+        # embedding comes back too, reused to store this turn's answer at the end.
+        prior_embedding, prior = await retrieve_prior_answer(session, query)
+
+        context = _context_block(settings.user_timezone, entries, prior)
         messages = _build_messages(history, last_user_idx, context)
 
         # Optional integrations expose their read-only tools only when connected, so
         # the model never sees a tool that would just fail with "not connected".
-        tools = list(CHAT_TOOLS)
+        tools = chat_tools(labels_store.agent_descriptions(session))
         if notion_mcp.is_connected(session):
             tools += NOTION_CHAT_TOOLS
         if github.is_connected():
@@ -304,6 +328,10 @@ async def run_chat(
 
         system_prompt = chat_system_prompt()
         provider, model = settings.llm_target("chat")
+        # Only clean, read-only turns are cacheable: `changed_state` trips if any
+        # tool created/updated something, `exhausted` if the tool loop ran out.
+        changed_state = False
+        exhausted = False
         for _ in range(settings.search_chat_max_iterations):
             resp = await stream_chat(
                 messages,
@@ -326,9 +354,11 @@ async def run_chat(
                 # into params/result; result_summary stays the collapsed label.
                 trace["params"] = tc.input or {}
                 trace["result"] = result_text
+                changed_state = changed_state or bool(trace.get("changed_state"))
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
         else:
+            exhausted = True
             # Iterations exhausted while the model was still calling tools. Rather
             # than force another LLM turn, end the turn with an error answer so the
             # user gets a clear "too many steps" message instead of a bubble that
@@ -344,6 +374,17 @@ async def run_chat(
         answer = "".join(answer_parts)
         obs.set_trace_io(output=answer)
         span.update(output=answer)
+
+    # Cache a clean, read-only answer so a repeat of this question finds it up
+    # front. `prior_embedding` is set only when the cache is on and the question
+    # embedded, so this is a no-op otherwise. Best-effort — a cache write must
+    # never surface to the user or lose the answer they already got.
+    if prior_embedding is not None and not exhausted and not changed_state and answer.strip():
+        try:
+            cache_answer(session, question=query, answer=answer, embedding=prior_embedding)
+        except Exception:  # noqa: BLE001 — caching is incidental to the answer
+            log.exception("chat answer cache write failed")
+            session.rollback()
 
     await emit("done", {})
 

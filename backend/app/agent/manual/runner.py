@@ -29,8 +29,9 @@ from app.agent.helpers.precedents import (
     not_task_candidate_lines,
     task_candidate_lines,
 )
-from app.agent.tools import NEW_INPUT_TOOLS
+from app.agent.tools import new_input_tools
 from app.config import get_settings
+from app.db.clients import labels as labels_store
 from app.db.clients import tasks
 from app.db.clients.raw_inputs import SimilarInput
 
@@ -63,10 +64,11 @@ async def extract_task_fields(
 
     precedent_candidates = precedent_candidates or []
     user_msg = _build_extract_message(session, raw, context_inputs, precedent_candidates)
-    create_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "create_task")
+    tools = new_input_tools(labels_store.agent_descriptions(session))
+    create_tool = next(t for t in tools if t["name"] == "create_task")
     if not harvest_notes:
         create_tool = _without_notes(create_tool)
-    search_tool = next(t for t in NEW_INPUT_TOOLS if t["name"] == "search_notes")
+    search_tool = next(t for t in tools if t["name"] == "search_notes")
     extract_tools = [search_tool, create_tool]
 
     messages: list[LLMMessage] = [user_message(user_msg)]

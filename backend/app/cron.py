@@ -24,6 +24,7 @@ from app.db import SessionLocal
 from app.db.clients import tasks as tasks_store
 from app.events import publish_points, publish_task
 from app.services.calendar.discover import discover_updated_events
+from app.services.calendar.labels import sync as sync_labels
 from app.services.input.poll import poll_sources
 from app.services.notify import notify_points_penalty, notify_task_created
 from app.services.plan import (
@@ -50,6 +51,11 @@ OVERDUE_DUE_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
+# Labels only change when the user edits them in Calendar, and the settings
+# page syncs on open — this loop just keeps the mirror from going stale (and
+# populates it on a fresh deploy, before anyone opens that page).
+LABEL_SYNC_INTERVAL_S = int(timedelta(hours=6).total_seconds())
+LABEL_SYNC_STARTUP_DELAY_S = 20
 # A task the planner could not place stays overdue — without a backoff the
 # 5-minute loop would re-run the whole (expensive) displacement search
 # forever. One retry per hour is plenty; any calendar edit or task update
@@ -322,8 +328,30 @@ async def _commute_cleanup() -> None:
             log.exception("commute-cleanup iteration failed")
 
 
+async def _label_sync() -> None:
+    """Mirror the calendar's event labels, starting shortly after boot."""
+    log.info("label-sync loop started · interval=%ds", LABEL_SYNC_INTERVAL_S)
+    delay = LABEL_SYNC_STARTUP_DELAY_S
+    while True:
+        try:
+            await asyncio.sleep(delay)
+            delay = LABEL_SYNC_INTERVAL_S
+            if not state.auto_poll_enabled:
+                log.debug("label-sync skipped (disabled)")
+                continue
+            with SessionLocal() as session:
+                labels = await sync_labels(session)
+            log.info("label-sync done · labels=%d", len(labels))
+        except asyncio.CancelledError:
+            log.info("label-sync loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("label-sync iteration failed")
+
+
 _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("auto-poll", _auto_poll),
+    ("label-sync", _label_sync),
     ("calendar-discover", _calendar_discover),
     ("overdue-scheduled-tasks", _overdue_scheduled_tasks),
     ("overdue-due-tasks", _overdue_due_tasks),

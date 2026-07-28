@@ -23,6 +23,11 @@ from app.services.location import resolve_location_alias
 
 _BASE = "https://www.googleapis.com/calendar/v3"
 
+# Custom event labels (the successor to the fixed 1..11 `colorId` palette) are
+# only surfaced on reads and honoured on writes when this parameter rides along;
+# without it Google silently omits `labelProperties` / drops `eventLabelId`.
+_LABEL_PARAMS = {"eventLabelVersion": "1"}
+
 # Safety valve: a full sync with `singleEvents=true` expands recurring events,
 # so cap pages to avoid an unbounded crawl. Hitting the cap forces a fresh full
 # sync next run rather than persisting a partial-state syncToken.
@@ -150,10 +155,17 @@ class GoogleCalendarClient:
                 params["pageToken"] = page_token
                 params.pop("syncToken", None)
 
+    async def get_calendar(self, calendar_id: str) -> dict:
+        """The calendar resource, including its custom `labelProperties`."""
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.get(f"{_BASE}/calendars/{calendar_id}", params=_LABEL_PARAMS)
+            resp.raise_for_status()
+            return resp.json()
+
     async def insert_event(self, calendar_id: str, body: dict) -> dict:
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             resp = await client.post(
-                f"{_BASE}/calendars/{calendar_id}/events", json=body,
+                f"{_BASE}/calendars/{calendar_id}/events", json=body, params=_LABEL_PARAMS,
             )
             resp.raise_for_status()
             return resp.json()
@@ -167,7 +179,9 @@ class GoogleCalendarClient:
     async def patch_event(self, calendar_id: str, event_id: str, body: dict) -> dict:
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
             resp = await client.patch(
-                f"{_BASE}/calendars/{calendar_id}/events/{event_id}", json=body,
+                f"{_BASE}/calendars/{calendar_id}/events/{event_id}",
+                json=body,
+                params=_LABEL_PARAMS,
             )
             resp.raise_for_status()
             return resp.json()

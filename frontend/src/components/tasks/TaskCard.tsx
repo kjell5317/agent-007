@@ -16,7 +16,7 @@ import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
-import { labelChipClass } from "@/lib/labels";
+import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/lib/types";
@@ -335,10 +335,8 @@ export function TaskCard({
               {task.label && (
                 <span
                   title={labelMeta?.description ?? task.label}
-                  className={cn(
-                    "inline-flex items-center rounded-full border border-transparent px-2 py-0.5 text-xs font-medium",
-                    labelChipClass(labelMeta?.color),
-                  )}
+                  className="inline-flex items-center rounded-full border border-transparent bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                  style={labelChipStyle(labelMeta?.color)}
                 >
                   {task.label}
                 </span>
