@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 from sqlalchemy.orm import Session
 
@@ -50,11 +51,16 @@ async def _call(session: Session, want: str, arguments: dict) -> str:
     token = await get_fresh_notion_token(session)
     url = str(token.extra.get("mcp_server_url") or get_settings().mcp_notion_url)
     headers = {"Authorization": f"Bearer {token.access_token}"}
-    async with streamablehttp_client(url, headers=headers, timeout=_TIMEOUT) as (read, write, _):
-        async with ClientSession(read, write) as mcp:
-            await mcp.initialize()
-            name = await _resolve(mcp, url, want)
-            result = await mcp.call_tool(name, arguments)
+    async with httpx.AsyncClient(
+        headers=headers,
+        timeout=httpx.Timeout(_TIMEOUT, read=300),
+        follow_redirects=True,
+    ) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as mcp:
+                await mcp.initialize()
+                name = await _resolve(mcp, url, want)
+                result = await mcp.call_tool(name, arguments)
     return _result_text(result)
 
 

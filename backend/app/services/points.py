@@ -10,7 +10,7 @@ directly.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,6 @@ log = logging.getLogger(__name__)
 PENALTY_POINTS = 10
 KOTX_TASK_DONE_FACTOR = 0.1
 SCHEDULED_OVERDUE_ACTION = "scheduled_overdue_reschedule"
-DUE_OVERDUE_ACTION = "due_overdue_hour"
 
 
 def adjust_points(
@@ -104,42 +103,6 @@ def subtract_scheduled_overdue_penalty(session: Session, task, *, scheduled_date
         PENALTY_POINTS,
     )
     return True
-
-
-def subtract_due_overdue_penalties(
-    session: Session,
-    task,
-    *,
-    now: datetime,
-) -> int:
-    due = _as_utc(task.due_date)
-    current = _as_utc(now)
-    if current < due:
-        return 0
-
-    overdue_hours = int((current - due).total_seconds() // timedelta(hours=1).total_seconds())
-    inserted = 0
-    # Skip the first reduction: penalties start after 1h overdue, not at the due moment.
-    for hour_index in range(1, overdue_hours + 1):
-        period_key = f"due:{_utc_key(due)}:h:{hour_index}"
-        entry = points_store.add_penalty_entry_once(
-            session,
-            task_id=task.id,
-            action_name=DUE_OVERDUE_ACTION,
-            period_key=period_key,
-            amount=-float(PENALTY_POINTS),
-        )
-        if entry is not None:
-            inserted += 1
-    if inserted:
-        log.info(
-            "points · overdue due penalties task=%s (%s) entries=%s points=%s",
-            task.id,
-            task.title,
-            inserted,
-            inserted * PENALTY_POINTS,
-        )
-    return inserted * PENALTY_POINTS
 
 
 def _utc_key(value: datetime) -> str:

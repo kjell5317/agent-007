@@ -242,15 +242,10 @@ async def _schedule_task_locked(
             task.id,
             task.due_date.isoformat() if task.due_date else None,
         )
-        if prior is not None and not _keep_slot:
-            # No valid slot exists for this task anymore — a stale
-            # scheduled_date (past or future-but-conflicting) shows a
-            # schedule that isn't real and breaks the frontend's
-            # unscheduled indicators, and discover would keep syncing it
-            # back from the mirror. Drop both; the cron retry sweep and
-            # discover changes pick the task up again. Displacement victims
-            # opt out (`_keep_slot`): their slot is still valid — they were
-            # only probed to make room for someone else.
+        if prior is not None and prior.end > datetime.now(user_tz()) and not _keep_slot:
+            # Preserve elapsed slots as calendar history; overdue retries
+            # still find them by scheduled_date. Future conflicting slots
+            # are cleared so they don't advertise a usable placement.
             log.info("plan.schedule · clearing unschedulable slot task=%s", task.id)
             from app.services.calendar import delete_task_event
 

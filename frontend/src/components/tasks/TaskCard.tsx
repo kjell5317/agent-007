@@ -18,6 +18,7 @@ import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
+import { isTaskOverdue } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/lib/types";
 
@@ -54,6 +55,11 @@ export function TaskCard({
   onVisible,
 }: Props) {
   const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [crossing, setCrossing] = useState(false);
   const [locationVisible, setLocationVisible] = useState(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
@@ -72,7 +78,7 @@ export function TaskCard({
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
   const cardBorderClass =
-    task.schedule_status === "unscheduled"
+    task.schedule_status === "unscheduled" || isTaskOverdue(task, now)
       ? "border-red-500/70"
       : task.kotx_task_id != null
         ? "border-primary/50"

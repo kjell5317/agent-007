@@ -2,6 +2,15 @@ import type { Task } from "@/lib/types";
 
 export type TaskSortMode = "scheduled" | "due";
 
+export function isTaskOverdue(task: Task, now = Date.now()): boolean {
+  if (task.status !== "open") return false;
+  const due = timeOrNull(task.due_date);
+  const scheduled = timeOrNull(task.scheduled_date);
+  const duration = Math.max(5, task.estimation || 30) * 60_000;
+  return (due != null && due < now) ||
+    (scheduled != null && scheduled + duration < now);
+}
+
 function timeOrNull(iso: string | null): number | null {
   if (!iso) return null;
   const time = new Date(iso).getTime();

@@ -1729,14 +1729,16 @@ def test_movable_victims_orders_least_urgent_first():
 
 
 @pytest.mark.asyncio
-async def test_no_slot_clears_stale_past_schedule(monkeypatch):
+async def test_no_slot_preserves_past_schedule_and_clears_future_conflict(monkeypatch):
     tz = user_tz()
 
     async def raising_plan(*args, **kwargs):
         raise ValueError("no free slot before due date")
 
+    deleted = []
+
     async def fake_delete(session, task):
-        return None
+        deleted.append(task.id)
 
     async def fake_notify(task):
         return None
@@ -1751,20 +1753,26 @@ async def test_no_slot_clears_stale_past_schedule(monkeypatch):
     )
     session = SimpleNamespace(flush=lambda: None, commit=lambda: None)
 
-    # Any unschedulable slot — past or future-but-conflicting — is cleared:
-    # no phantom schedule in the frontend, and the retry sweep takes over.
+    # Past events remain visible; future conflicting slots are cleared.
     for offset in (-timedelta(hours=3), timedelta(hours=3)):
         task = SimpleNamespace(
             id=uuid.uuid4(), title="x", due_date=datetime.now(tz) + timedelta(days=1),
             scheduled_date=datetime.now(tz) + offset,
             calendar_event_id="ev-old", estimation=60, location=None,
         )
+        original_date = task.scheduled_date
         result = await schedule_service._schedule_task_locked(
             session, task, block=None, account_key=None, notify=True, _depth=0,
         )
         assert result is None
-        assert task.scheduled_date is None
-        assert task.calendar_event_id is None
+        if offset < timedelta(0):
+            assert task.scheduled_date == original_date
+            assert task.calendar_event_id == "ev-old"
+            assert task.id not in deleted
+        else:
+            assert task.scheduled_date is None
+            assert task.calendar_event_id is None
+            assert task.id in deleted
 
     # Displacement victims opt out: their slot is still valid — they were
     # only probed to make room for someone else.

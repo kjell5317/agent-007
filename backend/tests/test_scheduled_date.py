@@ -963,7 +963,7 @@ async def test_overdue_scheduled_cron_waits_until_frame_and_grace_elapsed(monkey
 @pytest.mark.asyncio
 async def test_overdue_scheduled_cron_penalizes_even_failed_reschedule(monkeypatch):
     # The slot was missed whether or not a new one was found — the penalty
-    # applies either way; the cleared task moves on to the retry sweep.
+    # applies once per slot; the preserved slot remains eligible for retries.
     task = SimpleNamespace(
         id=uuid.uuid4(),
         title="Write report",
@@ -1005,34 +1005,8 @@ async def test_overdue_scheduled_cron_penalizes_even_failed_reschedule(monkeypat
     assert notified == [1]
 
 
-@pytest.mark.asyncio
-async def test_overdue_due_cron_subtracts_full_hours_idempotently(monkeypatch):
-    due = datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)
-    task = SimpleNamespace(id=uuid.uuid4(), title="Write report", due_date=due)
-    session = _sqlite_points_session()
-    published_points: list[float] = []
-    notified: list[tuple[uuid.UUID, int, str]] = []
-
-    @contextmanager
-    def fake_session_local():
-        yield session
-
-    async def fake_notify(task_arg, *, points, reason):
-        notified.append((task_arg.id, points, reason))
-
-    monkeypatch.setattr(cron, "SessionLocal", fake_session_local)
-    monkeypatch.setattr(cron.tasks_store, "overdue_due_open", lambda _session, *, cutoff: [task])
-    monkeypatch.setattr(cron, "publish_points", lambda session_arg: published_points.append(points_store.total(session_arg)))
-    monkeypatch.setattr(cron, "notify_points_penalty", fake_notify)
-
-    first = await cron.penalize_overdue_due_tasks_once()
-    second = await cron.penalize_overdue_due_tasks_once()
-
-    assert first == {"checked": 1, "penalized": 1, "points_subtracted": 20}
-    assert second == {"checked": 1, "penalized": 0, "points_subtracted": 0}
-    assert points_store.total(session) == -20
-    assert published_points == [-20]
-    assert notified == [(task.id, 20, "task is past due")]
+def test_hourly_overdue_penalty_job_is_not_registered():
+    assert "overdue-due-tasks" not in {name for name, _ in cron._JOBS}
 
 
 def test_discover_syncs_edited_fields_from_event():

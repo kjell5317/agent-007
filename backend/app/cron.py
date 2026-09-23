@@ -35,7 +35,6 @@ from app.services.plan import (
 )
 from app.services.points import (
     PENALTY_POINTS,
-    subtract_due_overdue_penalties,
     subtract_scheduled_overdue_penalty,
 )
 
@@ -47,7 +46,6 @@ AUTO_POLL_INTERVAL_S = 300
 # Google API — and a near-real-time reschedule around external edits is worth it.
 DISCOVER_INTERVAL_S = 60
 OVERDUE_TASK_INTERVAL_S = 300
-OVERDUE_DUE_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
@@ -152,7 +150,7 @@ async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
             result = await schedule_task(session, task, block=block)
             # The slot was missed whether or not a new one was found — the
             # penalty applies either way (idempotent per slot). On failure
-            # the stale slot was cleared and the retry sweep takes over.
+            # the old calendar slot stays visible until a retry succeeds.
             if subtract_scheduled_overdue_penalty(
                 session,
                 task,
@@ -205,34 +203,6 @@ async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[
     return {"attempted": attempted, "scheduled": scheduled}
 
 
-async def penalize_overdue_due_tasks_once() -> dict[str, int]:
-    now = datetime.now(timezone.utc)
-    checked = 0
-    penalized = 0
-    points_subtracted = 0
-    with SessionLocal() as session:
-        overdue = tasks_store.overdue_due_open(session, cutoff=now)
-        for task in overdue:
-            checked += 1
-            amount = subtract_due_overdue_penalties(session, task, now=now)
-            if amount <= 0:
-                continue
-            penalized += 1
-            points_subtracted += amount
-            await notify_points_penalty(
-                task,
-                points=amount,
-                reason="task is past due",
-            )
-        if points_subtracted:
-            publish_points(session)
-    return {
-        "checked": checked,
-        "penalized": penalized,
-        "points_subtracted": points_subtracted,
-    }
-
-
 async def _overdue_scheduled_tasks() -> None:
     log.info("overdue-scheduled-tasks loop started · interval=%ds", OVERDUE_TASK_INTERVAL_S)
     while True:
@@ -257,28 +227,6 @@ async def _overdue_scheduled_tasks() -> None:
             raise
         except Exception:  # noqa: BLE001 — best-effort background loop
             log.exception("overdue-scheduled-tasks iteration failed")
-
-
-async def _overdue_due_tasks() -> None:
-    log.info("overdue-due-tasks loop started · interval=%ds", OVERDUE_DUE_INTERVAL_S)
-    while True:
-        try:
-            await asyncio.sleep(OVERDUE_DUE_INTERVAL_S)
-            if not state.auto_poll_enabled:
-                log.debug("overdue-due-tasks skipped (disabled)")
-                continue
-            summary = await penalize_overdue_due_tasks_once()
-            log.info(
-                "overdue-due-tasks done · checked=%d penalized=%d points=%d",
-                summary["checked"],
-                summary["penalized"],
-                summary["points_subtracted"],
-            )
-        except asyncio.CancelledError:
-            log.info("overdue-due-tasks loop cancelled")
-            raise
-        except Exception:  # noqa: BLE001 — best-effort background loop
-            log.exception("overdue-due-tasks iteration failed")
 
 
 async def _weather_commute_refresh() -> None:
@@ -354,7 +302,6 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("label-sync", _label_sync),
     ("calendar-discover", _calendar_discover),
     ("overdue-scheduled-tasks", _overdue_scheduled_tasks),
-    ("overdue-due-tasks", _overdue_due_tasks),
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-cleanup", _commute_cleanup),
 ]

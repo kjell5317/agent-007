@@ -2606,7 +2606,7 @@ requires-dist = [
     { name = "itsdangerous", specifier = ">=2.2" },
     { name = "langfuse", specifier = ">=4,<5" },
     { name = "lxml", specifier = ">=5.3" },
-    { name = "mcp", specifier = ">=1.10" },
+    { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.9" },

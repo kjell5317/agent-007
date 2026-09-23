@@ -75,9 +75,16 @@ def _install(monkeypatch, *, tool_names, result):
         return _FakeToken()
 
     monkeypatch.setattr(notion_mcp, "get_fresh_notion_token", fake_token)
-    monkeypatch.setattr(
-        notion_mcp, "streamablehttp_client", lambda url, headers, timeout: _CM((None, None, None))
-    )
+    def transport(url, *, http_client):
+        assert url == "https://mcp.notion.com/mcp"
+        assert http_client.headers["Authorization"] == "Bearer tok"
+        assert http_client.timeout.connect == 30
+        assert http_client.timeout.read == 300
+        assert http_client.follow_redirects is True
+        assert not http_client.is_closed
+        return _CM((None, None, None))
+
+    monkeypatch.setattr(notion_mcp, "streamable_http_client", transport)
     monkeypatch.setattr(notion_mcp, "ClientSession", lambda read, write: _CM(session))
     return session
 

@@ -29,7 +29,7 @@ dependencies = [
     "tzdata>=2024.1",
     "haystack-ai>=2.30.2",
     "anthropic-haystack>=5.11.0",
-    "mcp>=1.10",
+    "mcp>=1.28.1,<2",
     "langfuse>=4,<5",
     "google-genai-haystack>=4.4.1",
 ]
