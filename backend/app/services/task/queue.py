@@ -186,9 +186,11 @@ async def _process(
             raw.agent_trace = manual_trace
 
         session.commit()
-        await schedule_task(session, task)
+        # Creation is complete even if calendar scheduling is slow or fails.
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
+        await schedule_task(session, task)
+        publish_task(session, task.id)
 
 
 def _load_context_inputs(

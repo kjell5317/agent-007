@@ -28,11 +28,14 @@ export function Composer({ onCreated, onOpenTask }: Props) {
   const [dismissed, setDismissed] = useState(false);
   const listRef = useRef<HTMLUListElement>(null);
   // Stop in-flight polls when the component unmounts.
-  const activePolls = useRef<Set<PollHandle>>(new Set());
+  const activePolls = useRef<Map<PollHandle, string | number>>(new Map());
 
   useEffect(
     () => () => {
-      activePolls.current.forEach((handle) => handle.cancel());
+      activePolls.current.forEach((toastId, handle) => {
+        handle.cancel();
+        toast.dismiss(toastId);
+      });
       activePolls.current.clear();
     },
     [],
@@ -88,7 +91,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
       onTimeout: () =>
         finish(() => toast.error("Task is taking longer than expected")),
     });
-    activePolls.current.add(handle);
+    activePolls.current.set(handle, toastId);
   };
 
   const submit = async (e: FormEvent) => {

@@ -473,3 +473,50 @@ async def test_manual_queue_preserves_prior_trace_under_manual_override(monkeypa
         override["iterations"][0]["tool_results"][1]["result_markdown"]
         == "created task 30000000-0000-0000-0000-000000000003"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheduling_fails", [False, True])
+async def test_creation_published_before_calendar_scheduling(monkeypatch, scheduling_fails):
+    raw_id, task_id = uuid.uuid4(), uuid.uuid4()
+    raw = SimpleNamespace(
+        id=raw_id, task_id=None, processed_at=None, agent_trace=None, status="processing"
+    )
+    events = []
+    session = SimpleNamespace(commit=lambda: events.append("commit"))
+
+    class FakeSessionLocal:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *_args):
+            return None
+
+    async def schedule(_session, _task):
+        assert events == ["commit", "task", "input"]
+        assert raw.task_id == task_id
+        assert raw.agent_trace["outcome"] == "task_created"
+        events.append("schedule")
+        if scheduling_fails:
+            raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(task_queue, "SessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(task_queue.raw_inputs_store, "get", lambda *_: raw)
+    monkeypatch.setattr(
+        task_queue.tasks_store, "create", lambda *_: SimpleNamespace(id=task_id)
+    )
+    monkeypatch.setattr(task_queue, "schedule_task", schedule)
+    monkeypatch.setattr(task_queue, "publish_task", lambda *_: events.append("task"))
+    monkeypatch.setattr(task_queue, "publish_input", lambda *_: events.append("input"))
+    fields = {
+        "title": "Test task",
+        "estimation": 30,
+        "due_date": datetime(2026, 7, 3, 9, 0, tzinfo=timezone.utc),
+    }
+    if scheduling_fails:
+        with pytest.raises(RuntimeError, match="calendar unavailable"):
+            await task_queue._process(raw_id, fields, [])
+        assert events == ["commit", "task", "input", "schedule"]
+    else:
+        await task_queue._process(raw_id, fields, [])
+        assert events == ["commit", "task", "input", "schedule", "task"]

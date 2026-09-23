@@ -3,6 +3,7 @@ import { subscribeEvents } from "./events";
 import type { RawInput } from "./types";
 
 const TIMEOUT_MS = 120_000;
+const RECHECK_MS = 5_000;
 
 export interface PollHandle {
   cancel: () => void;
@@ -39,9 +40,10 @@ function terminal(input: Pick<RawInput, "task_id" | "agent_trace">):
  *   - POST /tasks/open/{id}     (manual override of an existing input)
  *
  * Driven by the shared SSE stream — the worker pushes the updated RawInput
- * when it's done, so there's no polling. One immediate `getInput` covers the
+ * when it's done. An immediate `getInput` covers the
  * race where the worker finished between the POST returning and us
- * subscribing. Completion:
+ * subscribing. Periodic checks recover missed events during disconnects.
+ * Completion:
  *   - `task_id` set                          → success
  *   - `agent_trace(.manual_override).outcome` === "task_creation_failed"
  *                                             → failure
@@ -55,11 +57,13 @@ export function pollTaskCreation(
   let done = false;
   let unsubscribe: (() => void) | null = null;
   let timeoutId: number | null = null;
+  let recheckId: number | null = null;
 
   const finish = (run: () => void) => {
     if (done) return;
     done = true;
     if (timeoutId !== null) window.clearTimeout(timeoutId);
+    if (recheckId !== null) window.clearTimeout(recheckId);
     if (unsubscribe) unsubscribe();
     run();
   };
@@ -79,14 +83,16 @@ export function pollTaskCreation(
     }
   });
 
-  // Catch the case where the worker already finished before we subscribed.
-  api
-    .getInput(rawInputId)
-    .then(evaluate)
-    .catch(() => {
-      // Ignore — the SSE stream is the primary signal; a failed one-shot
-      // check just means we wait for the push (or time out).
-    });
+  const check = async () => {
+    try {
+      evaluate(await api.getInput(rawInputId));
+    } catch {
+      // A transient fetch failure must not stop completion tracking.
+    } finally {
+      if (!done) recheckId = window.setTimeout(check, RECHECK_MS);
+    }
+  };
+  void check();
 
   return { cancel: () => finish(() => {}) };
 }
