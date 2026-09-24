@@ -132,3 +132,69 @@ async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
             "input": {"query": "project alpha"},
         },
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_anthropic_sdk_request_omits_removed_sampling_parameters(monkeypatch, streaming):
+    generator = llm.AnthropicChatGenerator(
+        api_key=llm.Secret.from_token("test-key"), model="claude-test"
+    )
+    captured = {}
+
+    # Deliberately match the supported request arguments without **kwargs:
+    # removed parameters must fail here, just as they do in the newer SDK.
+    async def create(*, model, messages, system, tools, stream, max_tokens, tool_choice=None):
+        captured.update(
+            model=model, messages=messages, system=system, tools=tools,
+            stream=stream, max_tokens=max_tokens, tool_choice=tool_choice,
+        )
+        return "response"
+
+    async def process(response, callback):
+        assert response == "response"
+        if callback:
+            await callback(llm.StreamingChunk(content="created"))
+        return {"replies": [ChatMessage.from_assistant(text="created")]}
+
+    monkeypatch.setattr(generator.async_client.messages, "create", create)
+    monkeypatch.setattr(generator, "_process_response_async", process)
+    monkeypatch.setattr(llm, "_build_generator", lambda settings, **kwargs: generator)
+    settings = SimpleNamespace(
+        effective_llm_provider="anthropic", effective_llm_model="claude-test"
+    )
+    kwargs = {
+        "system_prompt": "Extract a task",
+        "tools": [{
+            "name": "create_task", "description": "Create a task",
+            "parameters": {"type": "object", "properties": {}},
+        }],
+    }
+    try:
+        if streaming:
+            deltas = []
+
+            async def on_delta(text):
+                deltas.append(text)
+
+            response = await llm.stream_chat(
+                [llm.user_message("test")], settings, on_delta=on_delta, **kwargs
+            )
+            assert deltas == ["created"]
+            assert captured["max_tokens"] == 1500
+        else:
+            response = await llm.chat(
+                [llm.user_message("test")], settings, force_tool="create_task", **kwargs
+            )
+            assert captured["tool_choice"] == {"type": "tool", "name": "create_task"}
+            assert captured["max_tokens"] == llm.MAX_TOKENS
+        assert response.text == "created"
+        assert captured["stream"] is streaming
+        assert captured["tools"][0]["name"] == "create_task"
+    finally:
+        await generator.async_client.close()
+        generator.client.close()
+
+
+def test_google_keeps_temperature():
+    assert llm._generation_kwargs("google", 1024)["temperature"] == llm.TEMPERATURE

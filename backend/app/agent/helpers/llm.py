@@ -332,7 +332,8 @@ def _generation_kwargs(
                 "function_calling_config": {"mode": "ANY", "allowed_function_names": [force_tool]}
             }
         return kwargs
-    kwargs = {"max_tokens": max_tokens, "temperature": TEMPERATURE}
+    # Current Anthropic SDKs no longer accept sampling parameters.
+    kwargs = {"max_tokens": max_tokens}
     if force_tool:
         kwargs["tool_choice"] = _tool_choice(provider, force_tool)
     return kwargs
