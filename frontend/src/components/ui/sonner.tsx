@@ -4,10 +4,10 @@ export function Toaster(props: React.ComponentProps<typeof Sonner>) {
   return (
     <Sonner
       className="toaster group"
-      position="top-center"
-      // Leave the composer and its upward-opening suggestions unobstructed.
-      offset="calc(env(safe-area-inset-top, 0px) + 16px)"
-      mobileOffset="calc(env(safe-area-inset-top, 0px) + 16px)"
+      position="bottom-center"
+      offset="calc(env(safe-area-inset-bottom, 0px) + 76px)"
+      mobileOffset="calc(env(safe-area-inset-bottom, 0px) + 76px)"
+      style={{ zIndex: 30 }}
       toastOptions={{
         // Keep the destructive variant tinted for errors; otherwise let
         // Sonner use its default card width / shape / border.

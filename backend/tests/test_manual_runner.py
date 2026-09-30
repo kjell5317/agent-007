@@ -10,6 +10,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall  # noqa: E402
 from app.agent.manual import runner  # noqa: E402
+from app.agent.helpers import web  # noqa: E402
 from app.db.clients.raw_inputs import SimilarInput  # noqa: E402
 
 
@@ -145,6 +146,41 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_manual_link_uses_separate_grounded_lookup(monkeypatch):
+    calls = []
+
+    async def fake_chat(messages, settings, **kwargs):
+        calls.append((messages, kwargs))
+        if kwargs.get("web_search"):
+            return SimpleNamespace(text="Page describes a registration deadline.", provider="google", model="test", usage={"input_tokens": 10}, meta={})
+        return _response(
+            ToolCall(
+                id="create-1", name="create_task",
+                input={"title": "Register", "estimation": 15,
+                       "due_date": "2026-10-10T19:00:00+00:00"},
+            )
+        )
+
+    monkeypatch.setattr(
+        runner, "get_settings",
+        lambda: SimpleNamespace(user_timezone="UTC", gemini_api_key="test", chat_llm_model="test", task_web_search=True),
+    )
+    monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(web, "chat", fake_chat)
+    raw = SimpleNamespace(
+        id="raw-1", source="manual", source_metadata={},
+        content="Register at https://example.com/event.",
+    )
+
+    payload = await runner.extract_task_fields(SimpleNamespace(), raw)
+
+    assert calls[0][1]["web_search"] is True
+    assert calls[0][1]["tools"] == []
+    assert "Page describes a registration deadline." in calls[1][0][0].text
+    assert payload["link"] == "https://example.com/event"
+
+
+@pytest.mark.asyncio
 async def test_extract_task_fields_harvest_notes_false_drops_notes(monkeypatch):
     # kotx path: the create_task tool must not offer `notes`, and even if the
     # model smuggles some in, they're never written to long-term memory.
@@ -251,14 +287,48 @@ async def test_extract_task_fields_renders_precedents_and_traces_evidence(monkey
     )
 
     message = captured["message"]
-    assert "Past similar inputs (ranked by similarity)." in message
-    assert "[OPEN] sim=0.91 · task_id=10000000-0000-0000-0000-000000000001" in message
+    assert "Candidate tasks (ranked by similarity)." in message
+    assert "[OPEN] sim=0.91 · existing_task_id=10000000-0000-0000-0000-000000000001" in message
     assert "  description: Send the final Q2 report to finance." in message
     assert "  metadata: source=gmail · from=sender@example.com" in message
     assert "\n  snippet:" not in message
-    assert "[NOT_TASK] sim=0.81 · title: Weekly FYI" in message
-    assert "  reason: Informational newsletter with no action requested." in message
+    assert "[NOT_TASK]" not in message
     assert trace["candidates"][0]["ref"] == (
         "candidate:00000000-0000-0000-0000-000000000002"
     )
-    assert trace["evidence_refs"][1]["status"] == "not_task"
+    assert len(trace["evidence_refs"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_extractor_can_select_existing_task(monkeypatch):
+    task_id = "10000000-0000-0000-0000-000000000009"
+    hit = _hit(status="open", task_id=task_id)
+    task = SimpleNamespace(
+        id=task_id, title="Submit report", description=None, due_date=None,
+        scheduled_date=None, estimation=30, location=None, link=None, label=None,
+    )
+    captured = {}
+
+    async def fake_chat(messages, settings, *, system_prompt, tools, force_tool=None):
+        captured["tools"] = [tool["name"] for tool in tools]
+        captured["force_tool"] = force_tool
+        return _response(ToolCall(
+            id="update-1", name="update_task",
+            input={"existing_task_id": task_id, "due_date": "2026-10-10T19:00:00+00:00"},
+        ))
+
+    monkeypatch.setattr(runner, "get_settings", lambda: SimpleNamespace(user_timezone="UTC"))
+    monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(runner.tasks, "get", lambda *_args: task)
+    raw = SimpleNamespace(id="raw-1", source="manual", source_metadata={}, content="Move the report to Oct 10")
+
+    payload, trace = await runner.extract_task_fields(
+        SimpleNamespace(), raw, precedent_candidates=[hit, _hit()], include_trace=True,
+    )
+
+    assert captured["tools"] == ["search_notes", "create_task", "update_task"]
+    assert captured["force_tool"] is None
+    assert payload["existing_task_id"] == task_id
+    assert payload["due_date"].isoformat() == "2026-10-10T19:00:00+00:00"
+    assert trace["action"] == "update_task"
+    assert len(trace["candidates"]) == 1

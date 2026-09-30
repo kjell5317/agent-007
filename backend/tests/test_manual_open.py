@@ -39,9 +39,10 @@ async def test_open_linked_duplicate_enqueues_followup(monkeypatch):
     )
     monkeypatch.setattr(open_svc, "enqueue", fake_enqueue)
 
-    await open_svc.open_task_from_input(SimpleNamespace(), raw.id, {})
+    await open_svc.open_task_from_input(SimpleNamespace(commit=lambda: None), raw.id, {})
 
     assert enqueued == [(raw.id, {}, [], task_id)]
+    assert raw.agent_trace["manual_override"]["outcome"] == "processing"
 
 
 @pytest.mark.asyncio
@@ -135,7 +136,8 @@ async def test_worker_runs_followup_for_queued_item(monkeypatch):
     published_inputs = []
     published_tasks = []
 
-    async def fake_followup(_session, raw_arg, task_arg):
+    async def fake_followup(_session, raw_arg, task_arg, *, require_change=False):
+        assert require_change is True
         followups.append((raw_arg, task_arg))
         return {"outcome": "reopened", "task_id": str(task_arg.id)}
 
@@ -238,3 +240,82 @@ async def test_thread_followup_trace_records_current_task_context(monkeypatch):
         "label": "Admin",
     }
     assert finalized["agent_trace"]["current_task"] == trace["current_task"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_followup_rejects_no_change(monkeypatch):
+    import app.agent.thread.runner as thread_runner
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="Submit report", description=None,
+        due_date=None, scheduled_date=None, estimation=None,
+        location=None, link=None, label=None,
+    )
+    raw = SimpleNamespace(
+        id=uuid.uuid4(), source="gmail", source_metadata={},
+        content="Submit the report", task_id=task.id,
+        agent_trace={"outcome": "not_task", "manual_override": {"outcome": "processing"}},
+    )
+    captured = {}
+
+    async def fake_chat(_messages, _settings, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            text="", stop_reason="tool_use", usage={}, provider="test", model="test",
+            tool_calls=(ToolCall(id="no-change", name="no_change", input={}),),
+        )
+
+    monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner.labels_store, "agent_descriptions", lambda *_args: {})
+
+    with pytest.raises(RuntimeError, match="did not update"):
+        await thread_runner.run_thread_followup(SimpleNamespace(), raw, task, require_change=True)
+
+    assert [tool["name"] for tool in captured["tools"]] == ["update_task"]
+    assert captured["force_tool"] == "update_task"
+    assert raw.agent_trace["manual_override"]["outcome"] == "processing"
+
+
+@pytest.mark.asyncio
+async def test_reopen_only_applies_due_date_and_open_status(monkeypatch):
+    import app.agent.thread.runner as thread_runner
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="Submit report", description=None,
+        due_date=None, scheduled_date=None, estimation=None,
+        location=None, link=None, label=None,
+    )
+    raw = SimpleNamespace(
+        id=uuid.uuid4(), source="manual",
+        source_metadata={"action": "reopen_task"},
+        content="Reopen task", task_id=None, agent_trace=None,
+    )
+    applied = []
+
+    async def fake_chat(_messages, _settings, **_kwargs):
+        return SimpleNamespace(
+            text="", stop_reason="tool_use", usage={}, provider="test", model="test",
+            tool_calls=(ToolCall(id="reopen", name="update_task", input={
+                "due_date": "2026-12-01T12:00:00+00:00", "title": "Wrong title",
+                "location": "Wrong place", "status": "closed",
+            }),),
+        )
+
+    async def fake_apply(_session, _task, _name, action_input):
+        applied.append(action_input)
+        return {"outcome": "reopened", "status_change": "open"}
+
+    async def fake_save_notes(*_args):
+        return []
+
+    monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner, "apply_task_action", fake_apply)
+    monkeypatch.setattr(thread_runner.labels_store, "agent_descriptions", lambda *_args: {})
+    monkeypatch.setattr(thread_runner, "save_notes", fake_save_notes)
+    monkeypatch.setattr(thread_runner.raw_inputs, "finalize", lambda *_args, **_kwargs: None)
+
+    await thread_runner.run_thread_followup(SimpleNamespace(commit=lambda: None), raw, task, require_change=True)
+    assert applied == [{
+        "due_date": "2026-12-01T12:00:00+00:00", "status": "open",
+        "reason": None, "confidence": None,
+    }]

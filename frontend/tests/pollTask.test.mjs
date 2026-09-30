@@ -75,6 +75,20 @@ test("retries a failed status request and detects worker failure", async () => {
   assert.equal(state.timers.size, 0);
 });
 
+test("linked manual action stays pending until its update finishes", async () => {
+  const state = setup(async () => ({
+    task_id: "task-1",
+    agent_trace: { manual_override: { outcome: "processing" } },
+  }));
+  await flush();
+  assert.deepEqual(state.calls, []);
+  state.emit({
+    id: "raw-1", task_id: "task-1",
+    agent_trace: { manual_override: { outcome: "updated" } },
+  });
+  assert.deepEqual(state.calls, ["success"]);
+});
+
 test("SSE resolves immediately and a late fetch cannot restart polling", async () => {
   let resolve;
   const state = setup(() => new Promise((done) => { resolve = done; }));

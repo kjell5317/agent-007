@@ -84,7 +84,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     handle = pollTaskCreation(rawInputId, {
       onSuccess: () =>
         finish(() => {
-          toast.success("Task added");
+          toast.success("Task saved");
           void onCreated();
         }),
       onFailure: (message) => finish(() => toast.error(message)),
@@ -102,7 +102,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     setDismissed(true);
     // Show the loading toast immediately — the POST itself takes a moment,
     // so without this the user gets no feedback until polling starts.
-    const toastId = toast.loading("Creating task…", { duration: Infinity });
+    const toastId = toast.loading("Saving task…", { duration: Infinity });
     try {
       const { raw_input_id } = await api.createTask(text);
       setValue("");

@@ -30,9 +30,26 @@ from app.db.clients import raw_inputs
 
 log = logging.getLogger(__name__)
 
+MANUAL_FOLLOWUP_SYSTEM_PROMPT = """\
+The user explicitly requested an action on the current task. The current
+task and input are shown below. Call update_task with the fields or status
+that must change. Include at least one changed task field or status. Do not
+call no_change or leave the task untouched. Include only changes supported
+by the input. Do not narrate.
+"""
 
-async def run_thread_followup(session: Session, raw, task) -> dict:
+REOPEN_SYSTEM_PROMPT = """\
+The user explicitly requested reopening this task. Call update_task with a
+new future due_date and status=open. Preserve every other task attribute.
+Do not call no_change. Do not narrate.
+"""
+
+
+async def run_thread_followup(
+    session: Session, raw, task, *, require_change: bool = False
+) -> dict:
     settings = get_settings()
+    is_reopen = (raw.source_metadata or {}).get("action") == "reopen_task"
 
     user_msg = _build_thread_user_message(raw, task)
     trace: dict[str, Any] = {
@@ -44,12 +61,19 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
 
     messages: list[LLMMessage] = [user_message(user_msg)]
     log.info("llm call · branch=thread_followup raw=%s task=%s", raw.id, task.id)
-    resp = await chat(
-        messages,
-        settings,
-        system_prompt=THREAD_FOLLOWUP_SYSTEM_PROMPT,
-        tools=thread_followup_tools(labels_store.agent_descriptions(session)),
-    )
+    tools = thread_followup_tools(labels_store.agent_descriptions(session))
+    if require_change:
+        tools = [tool for tool in tools if tool["name"] == "update_task"]
+    chat_kwargs: dict[str, Any] = {
+        "system_prompt": (
+            REOPEN_SYSTEM_PROMPT if is_reopen else MANUAL_FOLLOWUP_SYSTEM_PROMPT if require_change
+            else THREAD_FOLLOWUP_SYSTEM_PROMPT
+        ),
+        "tools": tools,
+    }
+    if require_change:
+        chat_kwargs["force_tool"] = "update_task"
+    resp = await chat(messages, settings, **chat_kwargs)
     log.debug(
         "llm response · raw=%s stop_reason=%s input_tokens=%s output_tokens=%s",
         raw.id, resp.stop_reason,
@@ -64,15 +88,33 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
     }
 
     tool_uses = [
-        b for b in resp.tool_calls if b.name in TERMINAL_TOOLS
+        b for b in resp.tool_calls
+        if b.name == "update_task" or (not require_change and b.name in TERMINAL_TOOLS)
     ]
     if not tool_uses:
+        if require_change:
+            raise RuntimeError("Explicit task action did not update the task")
         trace["outcome"] = "no_tool_call"
     else:
         tu = tool_uses[0]
-        frag = await apply_task_action(session, task, tu.name, tu.input or {})
+        action_input = tu.input or {}
+        if is_reopen:
+            if not action_input.get("due_date"):
+                raise ValueError("Reopen action requires a new due date")
+            action_input = {
+                "due_date": action_input["due_date"],
+                "status": "open",
+                "reason": action_input.get("reason"),
+                "confidence": action_input.get("confidence"),
+            }
+        if require_change and not any(
+            action_input.get(key) is not None
+            for key in ("title", "description", "estimation", "due_date", "location", "link", "label", "status")
+        ):
+            raise ValueError("Explicit task action must change a field or status")
+        frag = await apply_task_action(session, task, tu.name, action_input)
         trace.update(frag)
-        saved = await save_notes(session, raw.id, (tu.input or {}).get("notes"))
+        saved = await save_notes(session, raw.id, action_input.get("notes"))
         if saved:
             trace["notes_saved"] = saved
         trace["tool_results"] = [
@@ -91,8 +133,11 @@ async def run_thread_followup(session: Session, raw, task) -> dict:
     # that task's own anchor row, which close/reopen flip directly. Recording
     # the follow-up as a `duplicate` keeps it out of status derivation, so a
     # `no_change` (or a fields-only edit) never flips the task's state.
+    stored_trace = trace
+    if require_change and raw.task_id is not None:
+        stored_trace = {**(raw.agent_trace or {}), "manual_override": trace}
     raw_inputs.finalize(
-        session, raw.id, status="duplicate", task_id=task.id, agent_trace=trace
+        session, raw.id, status="duplicate", task_id=task.id, agent_trace=stored_trace
     )
     session.commit()
     return trace

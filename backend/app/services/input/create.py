@@ -32,7 +32,7 @@ from app.db.clients import raw_inputs
 from app.db.models.raw_input import RawInput
 from app.db.schemas.raw_input import RawInputCreate
 from app.events import publish_input, publish_task
-from app.services.input.embedding import candidate_query_text, embed
+from app.services.input.embedding import candidate_query_text, embed, embedding_cost_metadata
 from app.services.notify import notify_error
 
 log = logging.getLogger(__name__)
@@ -181,5 +181,9 @@ async def create_raw_input(session: Session, envelope: RawInputCreate) -> RawInp
         return raw
 
     raw_inputs.set_embedding(session, raw.id, vector)
+    raw.source_metadata = {
+        **(raw.source_metadata or {}),
+        "embedding_cost": embedding_cost_metadata(query_text),
+    }
     session.commit()
     return raw

@@ -35,13 +35,13 @@ async def open_task_from_input(
     `context_input_ids` are sibling inputs (same thread / follow-up group)
     whose content should also feed the agent's extraction, so a task created
     from a grouped thread captures the whole conversation. The anchor
-    (`raw_input_id`) is the row that links to the new task.
+    (`raw_input_id`) is the row linked to the affected task.
 
     When the anchor, an explicit target, or a context input already identifies
     a task, enqueue the raw input for the thread-follow-up agent instead of
     fresh task creation. That lets the agent update fields, close the task,
-    reopen it, or leave it unchanged using the same action dispatcher as
-    automatic thread follow-ups — run by the queue worker, like every other
+    reopen it using the same action dispatcher as automatic thread follow-ups.
+    Explicit manual actions require a change and run by the queue worker, like every other
     path behind this endpoint's 202 + poll contract.
 
     Raises:
@@ -60,6 +60,11 @@ async def open_task_from_input(
         # Run through the queue worker like fresh creation: the follow-up is
         # an LLM round-trip, and the endpoint promises 202 + poll. A failure
         # gets marked on the row by the worker, so the poll terminates.
+        if raw.task_id is not None:
+            trace = dict(raw.agent_trace or {})
+            trace["manual_override"] = {"outcome": "processing"}
+            raw.agent_trace = trace
+            session.commit()
         await enqueue(raw_input_id, user_fields, context_input_ids, followup_task_id=target.id)
         return
 

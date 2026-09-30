@@ -64,7 +64,7 @@ export function useInboxActions(onChanged: () => Promise<void> | void) {
   const promote = useCallback(
     async (anchorId: string, opts?: PromoteOpts) => {
       setBusy(true);
-      const toastId = toast.loading("Creating task…", { duration: Infinity });
+      const toastId = toast.loading("Saving task…", { duration: Infinity });
       let handle: PollHandle | null = null;
       const finish = (run: () => void) => {
         toast.dismiss(toastId);
@@ -77,7 +77,7 @@ export function useInboxActions(onChanged: () => Promise<void> | void) {
         handle = pollTaskCreation(raw_input_id, {
           onSuccess: () =>
             finish(() => {
-              toast.success("Task added");
+              toast.success("Task saved");
               void onChanged();
             }),
           onFailure: (message) => finish(() => toast.error(message)),

@@ -1841,7 +1841,7 @@ def test_extended_early_morning_block_straddles_into_normal_window():
 
 def test_extended_late_evening_block_straddles_into_normal_window():
     # Symmetric to the morning case: the day is booked until 19:45 so no 2h
-    # fit lands before DAY_TARGET (21:00). The block falls to the late-evening
+    # fit lands before DAY_TARGET (19:00). The block falls to the late-evening
     # extension and must straddle down — 20:00-22:00, not 21:00-23:00.
     window_start = _day_at(8, 0)
     window_end = _day_at(23, 59)

@@ -24,12 +24,13 @@ function terminal(input: Pick<RawInput, "task_id" | "agent_trace">):
   | "success"
   | "failure"
   | null {
-  if (input.task_id) return "success";
   const trace = input.agent_trace as Trace;
+  if (trace?.manual_override?.outcome === "processing") return null;
   const failed =
     trace?.outcome === "task_creation_failed" ||
     trace?.manual_override?.outcome === "task_creation_failed";
-  return failed ? "failure" : null;
+  if (failed) return "failure";
+  return input.task_id ? "success" : null;
 }
 
 /**
@@ -72,7 +73,7 @@ export function pollTaskCreation(
     const state = terminal(input);
     if (state === "success") finish(callbacks.onSuccess);
     else if (state === "failure")
-      finish(() => callbacks.onFailure("Task creation failed"));
+      finish(() => callbacks.onFailure("Task save failed"));
   };
 
   timeoutId = window.setTimeout(() => finish(callbacks.onTimeout), TIMEOUT_MS);

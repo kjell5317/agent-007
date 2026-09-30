@@ -233,17 +233,12 @@ export function hasInputDetails(data: RawInput): boolean {
   if (hasSourceContentDetails(data)) return true;
   const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
   if (!trace) return false;
-  return (
-    Boolean(trace.reason) ||
-    trace.currentTask.length > 0 ||
-    trace.evidence.length > 0 ||
-    trace.tools.length > 0
-  );
+  return Boolean(trace);
 }
 
 export function InputBody({ data }: { data: RawInput }) {
-  const trace = data.agent_trace ? projectAgentTrace(data.agent_trace) : null;
-  const evidence = useResolvedEvidence(trace?.evidence ?? NO_EVIDENCE);
+  const traceRecord = data.agent_trace as Record<string, unknown> | null;
+  const override = traceRecord?.manual_override;
 
   return (
     <>
@@ -254,12 +249,25 @@ export function InputBody({ data }: { data: RawInput }) {
           </div>
         </Section>
       )}
-      {trace &&
-        (trace.reason ||
-          trace.currentTask.length > 0 ||
-          evidence.length > 0 ||
-          trace.tools.length > 0) && (
-          <CollapsibleSection title="Agent trace">
+      {traceRecord && (
+        <AgentTraceSection traceRecord={traceRecord} embeddingCost={data.source_metadata?.embedding_cost} title="Agent trace" />
+      )}
+      {override && typeof override === "object" && (
+        <AgentTraceSection traceRecord={override} title="Manual action trace" />
+      )}
+    </>
+  );
+}
+
+function AgentTraceSection({ traceRecord, embeddingCost, title }: {
+  traceRecord: unknown;
+  embeddingCost?: unknown;
+  title: string;
+}) {
+  const trace = projectAgentTrace(traceRecord, embeddingCost);
+  const evidence = useResolvedEvidence(trace.evidence ?? NO_EVIDENCE);
+  return (
+          <CollapsibleSection title={title} detail={`Est. cost ${trace.estimatedCost}`}>
             {trace.reason && (
               <Section title="Reason">
                 <Markdown content={trace.reason} className="text-xs" />
@@ -294,8 +302,6 @@ export function InputBody({ data }: { data: RawInput }) {
               </Section>
             )}
           </CollapsibleSection>
-        )}
-    </>
   );
 }
 
@@ -322,9 +328,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 function CollapsibleSection({
   title,
+  detail,
   children,
 }: {
   title: string;
+  detail?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -340,6 +348,14 @@ function CollapsibleSection({
         <span className="min-w-0 flex-1">
           <SectionLabel title={title} />
         </span>
+        {detail && (
+          <span
+            className="text-[11px] text-muted-foreground"
+            title="Estimated paid rates for model tokens, embedding input, and grounded search queries; free quotas excluded. Converted using the ECB 30 Sep 2026 rate."
+          >
+            {detail}
+          </span>
+        )}
         <Chevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
       <Collapsible open={open}>

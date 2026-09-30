@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from email.utils import getaddresses
 from typing import Any
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 # Cap on body size kept after preprocessing — protects the agent's context
 # from huge marketing emails. Tune as needed.
@@ -99,6 +99,7 @@ def preprocess_message(
     # survive as Markdown the UI renders. Fall back to text/plain only when
     # there is no HTML, or it renders to nothing (empty skeleton / all images).
     body = (_html_to_markdown(html) if html else "") or plain
+    body = _strip_office_template(body)
 
     body = _strip_quoted_replies(body)
     body = _strip_signature(body)
@@ -107,7 +108,7 @@ def preprocess_message(
     # URLs in the Markdown body cover the common case. Anchors whose text was
     # empty or dropped (icons, tracking pixels) leave no inline URL behind, so
     # also scan <a href> in the raw HTML part.
-    urls = _extract_urls(body)
+    urls = _merge_urls(_extract_urls(body), _extract_urls(plain))
     if html:
         urls = _merge_urls(urls, _extract_html_hrefs(html))
 
@@ -278,6 +279,8 @@ def _children_md(node: Tag) -> str:
 
 
 def _node_md(node) -> str:  # noqa: PLR0911 — a tag dispatch, one return per tag
+    if isinstance(node, Comment):
+        return ""
     if isinstance(node, NavigableString):
         return re.sub(r"\s+", " ", str(node))
     if not isinstance(node, Tag):
@@ -342,6 +345,17 @@ def _list_md(node: Tag, *, ordered: bool) -> str:
 
 
 # --- Quote / signature stripping ---------------------------------------------
+
+_OFFICE_CONDITIONAL_RE = re.compile(
+    r"(?is)(?:\\?<!|<!--)?\s*\[if\s+(?:gte\s+)?mso\b[^\]]*\]>.*?\\?<!\s*\[endif\]\s*(?:-->)?"
+)
+
+
+def _strip_office_template(text: str) -> str:
+    """Remove Outlook conditional layout markup from plain or rendered mail."""
+    text = re.sub(r"(?im)^\s*BEGIN TEMPLATE\s*//\s*", "", text)
+    return _OFFICE_CONDITIONAL_RE.sub("", text)
+
 
 def _strip_quoted_replies(text: str) -> str:
     """Remove the quoted history below a reply.

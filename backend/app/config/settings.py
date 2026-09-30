@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     # docs/search-plan.md. Re-enable only via an isolated grounded sub-call.
     chat_thinking_level: str = "low"
     chat_web_search: bool = False
+    # Grounded URL lookup for manual and incoming task extraction.
+    task_web_search: bool = False
 
     # Chat answer cache. Completed read-only chat turns persist (question,
     # question-embedding, answer); a later similarly-phrased question pulls the

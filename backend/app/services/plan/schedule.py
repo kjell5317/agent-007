@@ -63,15 +63,15 @@ log = logging.getLogger(__name__)
 
 LEAD_DAYS = 7
 DAY_START = time(10, 0)
-DAY_TARGET = time(21, 0)
+DAY_TARGET = time(19, 0)
 # Extended-mode bounds. The normal `[DAY_START, DAY_TARGET]` range was
 # already exhausted on the first attempt that triggered the "no slot"
 # notification, so extended mode reaches past it — but a block forced into
 # the extension should sit in it as little as possible. Each day is scanned
 # in two phases, both allowed to straddle back across the normal-window edge:
 #   1. late evening — forward from DAY_START to END_OF_DAY (10→24): the
-#      earliest fit crosses DAY_TARGET with only its tail past 21:00.
-#   2. early morning — backward from DAY_TARGET to EARLY_MORNING (21→8): the
+#      earliest fit crosses DAY_TARGET with only its tail past 19:00.
+#   2. early morning — backward from DAY_TARGET to EARLY_MORNING (19→8): the
 #      latest fit crosses DAY_START with only its head before 10:00
 #      (an 8-10 block becomes 9-11 when 10-11 is free).
 # Sweeping from the far edge is what minimises the overlap; a normal-only
@@ -165,7 +165,7 @@ async def schedule_task(
 ) -> tuple[datetime, datetime] | None:
     """Plan `task` and create/update its calendar mirror (plus commute legs).
 
-    The planner searches the normal 10:00–21:00 window first. If that
+    The planner searches the normal 10:00–19:00 window first. If that
     cannot place the task, it automatically tries the extended 08:00–24:00
     fallback before reporting no slot.
 
@@ -383,7 +383,7 @@ async def plan_task_slot(
     standalone sweep for the whole trip block. The free search scans days
     forward from `max(now, due - 7d)`; within each day it starts at the
     target time and moves backward toward the start time. If the normal
-    10:00–21:00 window cannot place the block, the planner automatically
+    10:00–19:00 window cannot place the block, the planner automatically
     tries the extended 08:00–24:00 fallback before raising.
 
     `_busy_snapshot` / `_snapshot_range` carry the parent's raw calendar read
@@ -1015,7 +1015,7 @@ def _find_free_slot(
     while day <= last_day:
         if extended_window:
             # Phase 1: late evening. Sweep up from DAY_START so the earliest
-            # fit straddles down into the normal window, sitting past 21:00
+            # fit straddles down into the normal window, sitting past 19:00
             # only by its tail.
             lower, upper = _day_bounds(day, DAY_START, END_OF_DAY, tz, window_start, window_end)
             slot = _sweep_forward(ordered, duration, gaps, lower, upper)

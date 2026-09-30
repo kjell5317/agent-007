@@ -34,7 +34,7 @@ class TaskUpdate(BaseModel):
 class TaskPromote(BaseModel):
     """Body for POST /tasks/open/{raw_input_id} and POST /tasks. Every field
     optional — anything missing from title/estimation/due_date triggers an
-    agent extraction over the raw input. `content` is source text for manual
+    agent decision to create or update a task from the raw input. `content` is source text for manual
     composer submissions, not a task field override. User-provided structured
     values always override agent guesses."""
 

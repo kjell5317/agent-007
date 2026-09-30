@@ -116,3 +116,26 @@ def test_preprocess_falls_back_to_plain_text_when_html_is_empty():
     result = preprocess_message(raw)
     # HTML that renders to nothing must not blank out a body plain text has.
     assert result.body == "real plain content"
+
+
+def test_preprocess_removes_office_template_but_keeps_links():
+    plain = (
+        'BEGIN TEMPLATE // [if gte mso 9]> \\<table width="600"> '
+        '\\<tr> \\<![endif]\nCITI Program\n'
+        '[if mso]> \\<td width="600"> \\<![endif]\n'
+        'Complete training at https://example.org/training'
+    )
+    raw = {"payload": {"mimeType": "text/plain", "body": {"data": _b64url(plain)}}}
+    result = preprocess_message(raw)
+    assert "CITI Program" in result.body
+    assert "Complete training" in result.body
+    assert "mso" not in result.body.lower()
+    assert "<table" not in result.body
+    assert "https://example.org/training" in result.metadata["urls"]
+
+
+def test_html_conditional_comment_is_not_rendered():
+    html = '<!--[if mso]><table><tr><td><![endif]--><p>Open <a href="https://example.org/task">task</a>.</p>'
+    result = preprocess_message({"payload": {"mimeType": "text/html", "body": {"data": _b64url(html)}}})
+    assert "mso" not in result.body.lower()
+    assert "[task](https://example.org/task)" in result.body

@@ -59,8 +59,10 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
     task_id = uuid.UUID("10000000-0000-0000-0000-000000000001")
     created_payloads = []
     finalized = {}
+    prompts = []
 
-    async def fake_chat(*_args, **_kwargs):
+    async def fake_chat(messages, *_args, **_kwargs):
+        prompts.append(messages[0].text)
         return _response(
             ToolCall(
                 id="create-1",
@@ -86,17 +88,25 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
     def fake_finalize(_session, raw_id, **kwargs):
         finalized.update({"raw_id": raw_id, **kwargs})
 
+    async def fake_research(url, _settings):
+        assert url == "https://example.com/report"
+        return "Page says to send the report.", {
+            "url": url,
+            "llm": {"provider": "google", "model": "gemini-3.5-flash", "usage": {"input_tokens": 100, "output_tokens": 20}},
+        }
+
     monkeypatch.setattr(input_runner, "get_settings", lambda: SimpleNamespace(user_timezone="UTC"))
     monkeypatch.setattr(input_runner, "chat", fake_chat)
+    monkeypatch.setattr(input_runner, "research_link", fake_research)
     monkeypatch.setattr(input_runner.tasks, "create", fake_create)
     monkeypatch.setattr(input_runner, "schedule_task", fake_schedule_task)
     monkeypatch.setattr(input_runner.raw_inputs, "finalize", fake_finalize)
 
     raw = SimpleNamespace(
         id=uuid.UUID("20000000-0000-0000-0000-000000000001"),
-        source="manual",
+        source="gmail",
         source_metadata={},
-        content="Send the report.",
+        content="Send the report. https://example.com/report",
     )
     session = SimpleNamespace(commit=lambda: None)
 
@@ -110,6 +120,8 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
     # the inbox surfaces in the Agent-trace dropdown), not on the created task.
     assert trace["reason"] == "explicit deadline in the email"
     assert trace["confidence"] == 0.85
+    assert "Page says to send the report." in prompts[0]
+    assert trace["web_search"]["llm"]["usage"]["input_tokens"] == 100
     assert not hasattr(created_payloads[0], "reason")
 
 
