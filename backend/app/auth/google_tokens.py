@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.auth.base import get_provider
@@ -48,7 +49,14 @@ async def get_fresh_google_token(
             "Google access token expired and no refresh_token available; re-authorize."
         )
 
-    bundle = await get_provider(provider)().refresh(token.refresh_token)
+    try:
+        bundle = await get_provider(provider)().refresh(token.refresh_token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400 and exc.response.json().get("error") == "invalid_grant":
+            raise GoogleReauthorizationRequired(
+                "Google refresh token expired or was revoked; re-authorize."
+            ) from exc
+        raise
     oauth_tokens.upsert(
         session,
         provider=provider,

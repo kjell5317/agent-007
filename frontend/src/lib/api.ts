@@ -58,6 +58,7 @@ export const api = {
   health: () => request<{ status: string }>("/health"),
   whoami: () => request<{ email: string | null }>("/auth/whoami"),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
+  slackApps: () => request<string[]>("/oauth/slack/apps"),
 
   listTasks: (status?: string) =>
     request<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),

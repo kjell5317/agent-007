@@ -49,6 +49,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         email = request.session.get("email") if hasattr(request, "session") else None
         if email and email.lower() in settings.auth_allowed_emails:
+            # Re-sign the cookie on activity so its lifetime is measured from
+            # the last authenticated request, not the original login.
+            request.session["email"] = email
             return await call_next(request)
 
         accepts_html = "text/html" in request.headers.get("accept", "")

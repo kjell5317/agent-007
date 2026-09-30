@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
@@ -172,45 +173,55 @@ async def test_get_fresh_google_token_requires_reauthorization_without_refresh_t
 
 
 @pytest.mark.asyncio
-async def test_whoami_refreshes_allowlisted_session(monkeypatch):
-    calls = []
+async def test_get_fresh_google_token_requires_reauthorization_after_invalid_grant(
+    monkeypatch,
+):
+    session = FakeSession()
+    expired_token = _token(expires_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+    monkeypatch.setattr(
+        google_tokens.oauth_tokens,
+        "get_decrypted",
+        lambda *args, **kwargs: expired_token,
+    )
 
-    async def fake_get_fresh_google_token(session, *, account_key):
-        calls.append((session, account_key))
-        return _token()
+    class FakeProvider:
+        async def refresh(self, _refresh_token):
+            request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+            response = httpx.Response(400, json={"error": "invalid_grant"}, request=request)
+            raise httpx.HTTPStatusError("invalid_grant", request=request, response=response)
 
+    monkeypatch.setattr(google_tokens, "get_provider", lambda name: FakeProvider)
+
+    with pytest.raises(google_tokens.GoogleReauthorizationRequired):
+        await google_tokens.get_fresh_google_token(session, account_key="user@example.com")
+
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_whoami_keeps_allowlisted_session_independent_of_google_token(monkeypatch):
     monkeypatch.setattr(
         auth_api,
         "get_settings",
         lambda: SimpleNamespace(auth_allowed_emails=["user@example.com"]),
     )
-    monkeypatch.setattr(auth_api, "get_fresh_google_token", fake_get_fresh_google_token)
     request = SimpleNamespace(session={"email": "USER@example.com"})
-    session = object()
-
-    response = await auth_api.whoami(request, session=session)
+    response = await auth_api.whoami(request)
 
     assert response == {"email": "USER@example.com"}
-    assert calls == [(session, "user@example.com")]
     assert request.session == {"email": "USER@example.com"}
 
 
 @pytest.mark.asyncio
-async def test_whoami_clears_session_when_google_token_needs_reauthorization(
-    monkeypatch,
-):
-    async def fake_get_fresh_google_token(session, *, account_key):
-        raise google_tokens.GoogleReauthorizationRequired("reauthorize")
-
+async def test_whoami_clears_session_when_email_is_no_longer_allowed(monkeypatch):
     monkeypatch.setattr(
         auth_api,
         "get_settings",
-        lambda: SimpleNamespace(auth_allowed_emails=["user@example.com"]),
+        lambda: SimpleNamespace(auth_allowed_emails=["other@example.com"]),
     )
-    monkeypatch.setattr(auth_api, "get_fresh_google_token", fake_get_fresh_google_token)
     request = SimpleNamespace(session={"email": "user@example.com"})
 
-    response = await auth_api.whoami(request, session=object())
+    response = await auth_api.whoami(request)
 
     assert response == {"email": None}
     assert request.session == {}

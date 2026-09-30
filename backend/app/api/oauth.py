@@ -27,6 +27,11 @@ from app.db.clients import oauth_tokens
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
 
+@router.get("/slack/apps")
+async def slack_apps() -> list[str]:
+    return list(get_settings().slack_apps)
+
+
 class _State(NamedTuple):
     provider: str
     app_name: str | None

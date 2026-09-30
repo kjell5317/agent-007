@@ -37,7 +37,7 @@ async def poll(session: Session, account_key: str | None) -> dict:
     try:
         token = await get_fresh_google_token(session, account_key=account_key)
     except GoogleReauthorizationRequired:
-        return _empty("Gmail access token expired; re-authorize")
+        return _empty("Gmail authorization expired; re-authorize")
     except GoogleTokenMissing:
         return _empty("no Google account connected")
 

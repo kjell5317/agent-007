@@ -7,17 +7,6 @@ import { subscribeEvents } from "@/lib/events";
 import type { ThemePreference } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-// Each entry becomes a "Connect <label>" link inside the account dropdown.
-// The href points at the backend's generic OAuth authorize route, which
-// redirects to the provider's consent screen and back through /oauth/<p>/callback.
-// Google is intentionally omitted: /auth/login already captures Gmail +
-// Calendar scopes alongside the session, so a separate entry would duplicate it.
-const OAUTH_PROVIDERS: { label: string; href: string }[] = [
-  { label: "Notion", href: "/oauth/notion/authorize" },
-  { label: "CSEE", href: "/oauth/slack/authorize?app=csee" },
-  { label: "Social AI", href: "/oauth/slack/authorize?app=social" },
-];
-
 function formatPoints(n: number): string {
   // Points are whole numbers server-side; round defensively for display.
   return String(Math.round(n));
@@ -59,6 +48,7 @@ export function Topbar({
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
+  const [slackApps, setSlackApps] = useState<string[]>([]);
   const [points, setPoints] = useState<number | null>(null);
   // A short-lived "+N / −N" burst keyed by a counter so each change replays
   // the float + pop animation even when the same delta repeats.
@@ -101,6 +91,7 @@ export function Topbar({
       .getSettings()
       .then((s) => setAutoPoll(s.auto_poll_enabled))
       .catch(() => setAutoPoll(null));
+    api.slackApps().then(setSlackApps).catch(() => setSlackApps([]));
   }, []);
 
   useEffect(() => {
@@ -242,6 +233,7 @@ export function Topbar({
               <AccountMenu
                 email={email}
                 autoPoll={autoPoll}
+                slackApps={slackApps}
                 theme={theme}
                 onToggleAutoPoll={toggleAutoPoll}
                 onThemeChange={onThemeChange}
@@ -259,6 +251,7 @@ export function Topbar({
 function AccountMenu({
   email,
   autoPoll,
+  slackApps,
   theme,
   onToggleAutoPoll,
   onThemeChange,
@@ -267,6 +260,7 @@ function AccountMenu({
 }: {
   email: string;
   autoPoll: boolean | null;
+  slackApps: string[];
   theme: ThemePreference;
   onToggleAutoPoll: (next: boolean) => void;
   onThemeChange: (next: ThemePreference) => void;
@@ -317,7 +311,13 @@ function AccountMenu({
             <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Connect
             </div>
-            {OAUTH_PROVIDERS.map((p) => (
+            {[
+              { label: "Notion", href: "/oauth/notion/authorize" },
+              ...slackApps.map((name) => ({
+                label: `Slack · ${name}`,
+                href: `/oauth/slack/authorize?app=${encodeURIComponent(name)}`,
+              })),
+            ].map((p) => (
               <a
                 key={p.href}
                 target="_blank"

@@ -207,9 +207,7 @@ async def authorized_client(
             "No Google account connected — sign in via /auth/login first."
         )
     except GoogleReauthorizationRequired:
-        raise RuntimeError(
-            "Google access token expired and no refresh_token available; re-authorize."
-        )
+        raise RuntimeError("Google authorization expired; re-authorize.")
     return GoogleCalendarClient(token.access_token)
 
 

@@ -71,7 +71,7 @@ async def authorized_client(session: Session, account_key: str | None) -> Google
         )
     except GoogleReauthorizationRequired:
         raise RuntimeError(
-            "Google Health token expired and no refresh_token available; re-authorize "
+            "Google Health authorization expired; re-authorize "
             "at /oauth/google_health/authorize."
         )
     return GoogleHealthClient(token.access_token)
