@@ -159,7 +159,7 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
                 Needs review · Edit and save to approve
               </div>
             )}
-            <div className={cn("whitespace-pre-wrap break-words text-sm leading-snug", !expanded && "line-clamp-1")}>
+            <div className={cn("whitespace-pre-wrap break-words leading-snug", expanded ? "text-sm" : "line-clamp-1 text-base font-medium")}>
               {note.content}
             </div>
             <NoteMeta note={note} />

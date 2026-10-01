@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Circle,
   CircleCheckBig,
+  ListTodo,
   MapPin,
   RotateCcw,
   Timer,
@@ -30,6 +31,7 @@ interface Props {
   onOpen: (id: string) => void;
   unseen?: boolean;
   onVisible?: (id: string) => void;
+  compact?: boolean;
 }
 
 const CROSS_OFF_MS = 350;
@@ -53,6 +55,7 @@ export function TaskCard({
   onOpen,
   unseen = false,
   onVisible,
+  compact = false,
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now);
@@ -277,19 +280,20 @@ export function TaskCard({
     <Card
       ref={cardRef}
       className={cn(
-        "min-h-[76px] transition-opacity duration-300",
+        compact ? "h-[76px] overflow-hidden" : "min-h-[76px]",
+        "transition-opacity duration-300",
         cardBorderClass,
         crossing && "pointer-events-none opacity-40",
       )}
     >
       <CardContent
-        className="cursor-pointer"
+        className={cn("cursor-pointer", compact && "flex h-full items-center")}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           onOpen(task.id);
         }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex w-full items-center gap-2">
           {task.status === "open" ? (
             <IconButton
               label={
@@ -318,12 +322,16 @@ export function TaskCard({
             >
               <RotateCcw className="h-5 w-5" />
             </IconButton>
+          ) : compact ? (
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+              <ListTodo className="h-5 w-5" />
+            </span>
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate font-medium leading-snug transition-all duration-300",
+                  "min-w-0 flex-1 truncate text-base font-medium leading-snug transition-all duration-300",
                   crossing && "line-through opacity-60",
                 )}
               >
@@ -332,7 +340,7 @@ export function TaskCard({
             </div>
             <div
               ref={metadataRef}
-              className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+              className={cn("mt-1 flex items-center gap-x-2 gap-y-1 text-xs text-muted-foreground", compact ? "overflow-hidden whitespace-nowrap" : "flex-wrap")}
             >
               {displayDate && (
                 <Badge variant={displayDateVariant}>

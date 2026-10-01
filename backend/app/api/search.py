@@ -171,9 +171,10 @@ async def stream(
 
 @router.post("/chat")
 async def chat(body: ChatRequest) -> EventSourceResponse:
-    """Stage-2/3 chatbot search over SSE. Each user turn injects the top hybrid
-    hits (local + Drive) as context and the agent answers, citing hits and
-    calling action tools. Events: `citations`, `token`, `tool_call`, `done`,
+    """Stage-2/3 chatbot search over SSE. Each user turn injects local task
+    and note hits as context; other sources are available through tools. The
+    agent answers, citing hits and calling action tools. Events: `citations`,
+    `token`, `tool_call`, `done`,
     `error`. A fresh session per stream (the
     request-scoped one would be torn down before the generator drains)."""
     turns = [

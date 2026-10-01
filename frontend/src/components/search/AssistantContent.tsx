@@ -6,20 +6,17 @@ import {
   useEffect,
   useState,
 } from "react";
-import type { ComponentType, MouseEvent, ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { toast } from "sonner";
 import {
   BookOpen,
   CalendarDays,
-  Cake,
   Check,
   Copy,
-  ExternalLink,
   FileText,
+  Globe,
   ListTodo,
-  Mail,
   MapPin,
-  Phone,
   UserRound,
 } from "lucide-react";
 import { TaskCard } from "@/components/tasks/TaskCard";
@@ -318,22 +315,21 @@ function citeMeta(cite: ChatCitation): ChatCitationMeta {
   return (cite.meta ?? {}) as ChatCitationMeta;
 }
 
-// Shared shell: an icon, a title, optional detail rows, and (when the citation
-// has a URL) an open-in-new affordance. The whole card opens the source.
+// Match the compact task card: one leading icon, one title, one line of pills.
 function WidgetShell({
   Icon,
   title,
   href,
   onActivate,
   onOpened,
-  children,
+  pills = [],
 }: {
   Icon: ComponentType<{ className?: string }>;
   title: string;
   href?: string | null;
   onActivate?: () => void;
   onOpened?: () => void;
-  children?: ReactNode;
+  pills?: string[];
 }) {
   const clickable = Boolean(href || onActivate);
   const activate = () => {
@@ -349,7 +345,6 @@ function WidgetShell({
       onKeyDown={
         clickable
           ? (e) => {
-              // Ignore keys bubbling from inner controls (contact links/copy).
               if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -359,84 +354,23 @@ function WidgetShell({
           : undefined
       }
       className={cn(
-        "flex min-h-[76px] max-w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+        "flex h-[76px] max-w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm transition-colors",
         clickable && "cursor-pointer hover:border-primary/40 hover:bg-accent",
       )}
     >
-      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+        <Icon className="h-5 w-5" />
+      </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
-          {href && <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        <div className="truncate text-base font-medium leading-snug" title={title}>{title}</div>
+        <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+          {pills.filter(Boolean).map((pill, index) => (
+            <span key={`${pill}:${index}`} title={pill} className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              {pill}
+            </span>
+          ))}
         </div>
-        {children}
       </div>
-    </div>
-  );
-}
-
-function DetailRow({
-  Icon,
-  children,
-}: {
-  Icon: ComponentType<{ className?: string }>;
-  children: ReactNode;
-}) {
-  return (
-    <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Icon className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 truncate">{children}</span>
-    </div>
-  );
-}
-
-// A contact detail (email/phone/address): the value is a click-to-act link
-// (mailto: / tel: / maps) plus a copy-to-clipboard button. Both stop
-// propagation so they don't also trigger the surrounding card's open action.
-function ContactDetail({
-  Icon,
-  value,
-  href,
-  external,
-}: {
-  Icon: ComponentType<{ className?: string }>;
-  value: string;
-  href: string;
-  external?: boolean;
-}) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = (e: MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    void navigator.clipboard
-      ?.writeText(value)
-      .then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
-      })
-      .catch(() => {});
-  };
-  return (
-    <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Icon className="h-3 w-3 shrink-0" />
-      <a
-        href={href}
-        onClick={(e) => e.stopPropagation()}
-        target={external ? "_blank" : undefined}
-        rel={external ? "noopener noreferrer" : undefined}
-        className="min-w-0 flex-1 truncate text-primary underline underline-offset-2"
-      >
-        {value}
-      </a>
-      <button
-        type="button"
-        onClick={onCopy}
-        title={copied ? "Copied" : "Copy"}
-        aria-label={`Copy ${value}`}
-        className="shrink-0 rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
-      >
-        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-      </button>
     </div>
   );
 }
@@ -445,21 +379,10 @@ export function ContactCard({ cite, onOpened }: { cite: ChatCitation; onOpened?:
   const meta = citeMeta(cite);
   const emails = meta.emails ?? [];
   const phones = meta.phones ?? [];
-  const addresses = meta.addresses ?? [];
+  const details = [meta.org, emails[0], phones[0], meta.birthday, meta.addresses?.[0]]
+    .filter((value): value is string => Boolean(value));
   return (
-    <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url} onOpened={onOpened}>
-      {meta.org && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.org}</div>}
-      {emails.map((e, i) => (
-        <ContactDetail key={`e${i}`} Icon={Mail} value={e} href={`mailto:${e}`} />
-      ))}
-      {phones.map((p, i) => (
-        <ContactDetail key={`p${i}`} Icon={Phone} value={p} href={`tel:${p.replace(/[^+\d]/g, "")}`} />
-      ))}
-      {meta.birthday && <DetailRow Icon={Cake}>{meta.birthday}</DetailRow>}
-      {addresses.map((a, i) => (
-        <ContactDetail key={`a${i}`} Icon={MapPin} value={a} href={mapsUrl(a)} external />
-      ))}
-    </WidgetShell>
+    <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url} onOpened={onOpened} pills={details.slice(0, 2)} />
   );
 }
 
@@ -477,10 +400,8 @@ export function EventCard({
       href={cite.url}
       onActivate={onActivate}
       onOpened={onOpened}
-    >
-      {when && <DetailRow Icon={CalendarDays}>{when}</DetailRow>}
-      {location && <DetailRow Icon={MapPin}>{location}</DetailRow>}
-    </WidgetShell>
+      pills={[when, location].filter((value): value is string => Boolean(value))}
+    />
   );
 }
 
@@ -490,9 +411,14 @@ export function DocCard({
   const meta = citeMeta(cite);
   const onActivate = cite.url ? undefined : onShowContent;
   return (
-    <WidgetShell Icon={FileText} title={cite.title || "Document"} href={cite.url} onActivate={onActivate} onOpened={onOpened}>
-      {meta.mime && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.mime}</div>}
-    </WidgetShell>
+    <WidgetShell
+      Icon={FileText}
+      title={cite.title || "Document"}
+      href={cite.url}
+      onActivate={onActivate}
+      onOpened={onOpened}
+      pills={[meta.mime, cite.ts ? fmtWhen(cite.ts) : null].filter((value): value is string => Boolean(value))}
+    />
   );
 }
 
@@ -543,13 +469,11 @@ function CopyChip({ value }: { value: string }) {
 function LinkPreviewCard({ url }: { url: string }) {
   const [preview, setPreview] = useState<LinkPreview | null>(null);
   const [done, setDone] = useState(false);
-  const [imgFailed, setImgFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setPreview(null);
     setDone(false);
-    setImgFailed(false);
     api
       .getLinkPreview(url)
       .then((r) => {
@@ -567,39 +491,19 @@ function LinkPreviewCard({ url }: { url: string }) {
   }, [url]);
 
   if (!done) {
-    return <div className="my-1.5 h-16 animate-pulse rounded-xl border bg-muted/40" />;
+    return <div className="my-1.5 h-[76px] animate-pulse rounded-xl border bg-muted/40" />;
   }
   if (!preview) return null;
 
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="my-1.5 flex max-w-full items-stretch gap-3 overflow-hidden rounded-xl border bg-card text-left shadow-sm transition-colors hover:border-primary/40 hover:bg-accent"
-    >
-      {preview.image && !imgFailed && (
-        <img
-          src={preview.image}
-          alt=""
-          loading="lazy"
-          onError={() => setImgFailed(true)}
-          className="w-16 shrink-0 self-stretch object-cover"
-        />
-      )}
-      <div className="min-w-0 flex-1 px-3 py-2">
-        <div className="truncate text-sm font-medium">{preview.title}</div>
-        {preview.description && (
-          <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-            {preview.description}
-          </div>
-        )}
-        <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
-          <ExternalLink className="h-3 w-3 shrink-0" />
-          <span className="truncate">{preview.site_name || safeHost(url)}</span>
-        </div>
-      </div>
-    </a>
+    <div className="my-1.5">
+      <WidgetShell
+        Icon={Globe}
+        title={preview.title}
+        href={url}
+        pills={[preview.site_name || safeHost(url), preview.description].filter((value): value is string => Boolean(value))}
+      />
+    </div>
   );
 }
 
@@ -683,25 +587,17 @@ function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
 
   if (failed) {
     const title = ctx.byTaskId.get(taskId)?.title ?? "Open task";
-    return (
-      <button
-        type="button"
-        onClick={() => ctx.onOpenTask(taskId)}
-        className="inline-flex max-w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-left text-sm shadow-sm transition-colors hover:border-primary/40 hover:bg-accent"
-      >
-        <ListTodo className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate font-medium">{title}</span>
-      </button>
-    );
+    return <WidgetShell Icon={ListTodo} title={title} onActivate={() => ctx.onOpenTask(taskId)} />;
   }
 
   if (!task) {
-    return <div className="h-[3.25rem] animate-pulse rounded-xl border bg-muted/40" />;
+    return null;
   }
 
   return (
     <TaskCard
       task={task}
+      compact
       kotxTask={null}
       onChanged={refetch}
       onKotxChanged={refetch}

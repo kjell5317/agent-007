@@ -1,5 +1,5 @@
-import { CalendarDays, FileText, GitPullRequest, Inbox, ListTodo, Loader2, UserRound } from "lucide-react";
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { CalendarDays, FileText, GitPullRequest, Inbox, ListTodo, UserRound } from "lucide-react";
+import { useCallback, useState, type ComponentType } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { ContactCard, DocCard, EventCard } from "@/components/search/AssistantContent";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -53,20 +53,18 @@ function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
-// Second line under the title: sender · date · source (whichever exist).
-function metaLine(hit: SearchHit): string {
+// Second line under the title follows the task card's compact pill layout.
+function metaPills(hit: SearchHit): string[] {
   if (hit.type === "contact") {
     return [hit.meta?.org, hit.meta?.emails?.[0], hit.meta?.phones?.[0]]
-      .filter(Boolean).join(" · ");
+      .filter((value): value is string => Boolean(value));
   }
   return [
     hit.sender ? displaySender(hit.sender) : null,
     hit.meta?.start || hit.ts ? fmtWhen(hit.meta?.start ?? hit.ts) : null,
     hit.meta?.location ?? hit.meta?.mime ?? (hit.source ? capitalize(hit.source) : null),
   ]
-    .map((p) => (p ?? "").trim())
-    .filter(Boolean)
-    .join(" · ");
+    .filter((value): value is string => Boolean(value));
 }
 
 export function SearchResultRow({
@@ -80,12 +78,11 @@ export function SearchResultRow({
   hit: SearchHit;
   task?: Task;
   onOpenTask: (taskId: string) => void;
-  // Fired after any successful activation — the composer uses it to dismiss
-  // its dropdown.
+  // Fired after activation when embedded in another view.
   onActivate?: () => void;
   // Optional fallback for hits with no task or URL, used by chat citation cards.
   onShowContent?: () => void;
-  // In the composer the input must keep focus when a row is clicked.
+  // Keep focus in an embedding input when a row is clicked.
   preventBlur?: boolean;
 }) {
   if (hit.type === "task") {
@@ -129,31 +126,17 @@ function TaskSuggestionCard({
   preventBlur: boolean;
 }) {
   const [task, setTask] = useState<Task | null>(initialTask ?? null);
-  const [failed, setFailed] = useState(false);
   const refresh = useCallback(async () => {
     setTask(await api.getTask(hit.id));
   }, [hit.id]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!initialTask) {
-      api.getTask(hit.id).then((next) => {
-        if (!cancelled) setTask(next);
-      }).catch(() => { if (!cancelled) setFailed(true); });
-    }
-    return () => { cancelled = true; };
-  }, [hit.id, initialTask]);
-
-  if (!task && failed) return <CompactResultRow
-    hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
-    preventBlur={preventBlur}
-  />;
-  if (!task) return <div className="flex min-h-[76px] items-center justify-center rounded-xl border bg-card shadow-sm" role="status" aria-label="Loading task"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
+  if (!task) return null;
 
   return (
     <div onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}>
       <TaskCard
         task={task}
+        compact
         kotxTask={null}
         onChanged={refresh}
         onKotxChanged={refresh}
@@ -184,7 +167,7 @@ function CompactResultRow({
       : null)
     : null;
   const clickable = Boolean(openTask || openUrl || onShowContent);
-  const meta = metaLine(hit);
+  const pills = metaPills(hit);
 
   const activate = () => {
     if (openTask) onOpenTask(openTask);
@@ -200,31 +183,32 @@ function CompactResultRow({
       onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}
       onClick={clickable ? activate : undefined}
       className={cn(
-        "flex min-h-[76px] w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+        "flex h-[76px] w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm transition-colors",
         clickable
           ? "cursor-pointer hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
           : "cursor-default",
       )}
     >
-      <Icon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+        <Icon className="h-5 w-5" />
+      </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
+        <span className="block truncate text-base font-medium leading-snug">
           {hit.title || "Untitled"}
         </span>
-        {meta && (
-          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-            {meta}
-          </span>
-        )}
+        <span className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+          {hit.status && (
+            <Badge variant={STATUS_VARIANT[hit.status] ?? "muted"} className="shrink-0">
+              {badgeKindLabel(hit.status)}
+            </Badge>
+          )}
+          {pills.map((pill, index) => (
+            <span key={`${pill}:${index}`} title={pill} className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              {pill}
+            </span>
+          ))}
+        </span>
       </span>
-      {hit.status && (
-        <Badge
-          variant={STATUS_VARIANT[hit.status] ?? "muted"}
-          className="mt-0.5 shrink-0"
-        >
-          {badgeKindLabel(hit.status)}
-        </Badge>
-      )}
     </button>
   );
 }

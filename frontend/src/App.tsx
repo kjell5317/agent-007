@@ -459,8 +459,8 @@ export function App() {
           loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
         ) : (
           <div>
-            {!searchSubmitted && chat.messages.length === 0 && <SearchFilters filters={searchFilters} query={searchQuery} onChange={setSearchFilters} />}
-            <div className={!searchSubmitted && chat.messages.length === 0 ? "pt-3" : undefined}>
+            {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={setSearchFilters} />}
+            <div className={searchQuery.trim() || chat.messages.length === 0 ? "pt-3" : undefined}>
             {searchQuery.trim() ? (
               <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} submitted={searchSubmitted} onNoResults={runAiForEmptySearch} onOpenTask={openTask} />
             ) : searchFilters.kind === "tasks" ? (

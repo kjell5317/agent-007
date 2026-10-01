@@ -72,6 +72,7 @@ export function SearchResults({
   onOpenTask: (id: string) => void;
 }) {
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [taskDetails, setTaskDetails] = useState<ReadonlyMap<string, Task>>(new Map());
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [preview, setPreview] = useState<SearchHit | null>(null);
@@ -89,25 +90,33 @@ export function SearchResults({
       if (cancelled) return;
       const all = results.flatMap((result) => result.status === "fulfilled" ? result.value.hits : [])
         .filter((hit) => filterHit(hit, filters));
-      const taskIds = new Set(all.filter((hit) => hit.type === "task").map((hit) => hit.id));
+      const taskMap = new Map(tasks.map((task) => [task.id, task]));
+      const missingTaskIds = [...new Set(all.filter((hit) => hit.type === "task" && !taskMap.has(hit.id)).map((hit) => hit.id))];
+      const fetchedTasks = await Promise.allSettled(missingTaskIds.map((id) => api.getTask(id)));
+      if (cancelled) return;
+      fetchedTasks.forEach((result) => {
+        if (result.status === "fulfilled") taskMap.set(result.value.id, result.value);
+      });
+      const available = all.filter((hit) => hit.type !== "task" || taskMap.has(hit.id));
+      const taskIds = new Set(available.filter((hit) => hit.type === "task").map((hit) => hit.id));
       const seen = new Set<string>();
-      const unique = all.filter((hit) => {
-        if (hit.type === "document" && hit.task_id && taskIds.has(hit.task_id)) return false;
+      const unique = available.filter((hit) => {
+        if ((hit.type === "document" || hit.type === "input") && hit.task_id && taskIds.has(hit.task_id)) return false;
         const key = `${hit.type}:${hit.id}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
-      const taskMap = new Map(tasks.map((task) => [task.id, task]));
       const now = Date.now();
       unique.sort((a, b) => searchDistance(a, taskMap, now) - searchDistance(b, taskMap, now) ||
         b.score - a.score || a.title.localeCompare(b.title));
-      const hadFailure = results.some((result) => result.status === "rejected");
+      const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected");
       if (submitted && unique.length === 0 && !hadFailure) {
         onNoResultsRef.current(q);
         return;
       }
       setFailed(unique.length === 0 && hadFailure);
+      setTaskDetails(taskMap);
       setHits(unique);
       setLoading(false);
     }, submitted ? 0 : 180);
@@ -129,7 +138,7 @@ export function SearchResults({
             <SearchResultRow
               key={`${hit.type}:${hit.id}`}
               hit={hit}
-              task={hit.type === "task" ? tasks.find((task) => task.id === hit.id) : undefined}
+              task={hit.type === "task" ? taskDetails.get(hit.id) : undefined}
               onOpenTask={onOpenTask}
               onShowContent={() => setPreview(hit)}
             />

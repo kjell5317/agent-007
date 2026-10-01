@@ -99,8 +99,8 @@ class Settings(BaseSettings):
     # on backspace/retype, so even a few seconds spares the DB per keystroke.
     search_suggest_cache_ttl_seconds: float = 90.0
 
-    # Chat / "ask" mode (stage 2+3). Retrieval-first: each turn injects the top
-    # hybrid hits (local + Drive) into the LLM context. `history_messages` caps
+    # Chat / "ask" mode (stage 2+3). Each turn injects local task and note
+    # hits into the LLM context; Drive is fetched through a tool. `history_messages` caps
     # how many prior turns travel with the request; `max_iterations` bounds the
     # tool loop — past it the turn ends with an error answer, not another LLM
     # call; `drive_timeout` is the per-request Drive federation budget (past it,
