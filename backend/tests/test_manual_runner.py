@@ -148,13 +148,15 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_manual_link_uses_separate_grounded_lookup(monkeypatch):
+async def test_manual_link_research_is_agent_selected(monkeypatch):
     calls = []
 
     async def fake_chat(messages, settings, **kwargs):
         calls.append((messages, kwargs))
         if kwargs.get("web_search"):
             return SimpleNamespace(text="Page describes a registration deadline.", provider="google", model="test", usage={"input_tokens": 10}, meta={})
+        if len([call for _, call in calls if not call.get("web_search")]) == 1:
+            return _response(ToolCall(id="research-1", name="research_input_link", input={}))
         return _response(
             ToolCall(
                 id="create-1", name="create_task",
@@ -176,11 +178,92 @@ async def test_manual_link_uses_separate_grounded_lookup(monkeypatch):
 
     payload = await runner.extract_task_fields(SimpleNamespace(), raw)
 
-    assert calls[0][1]["web_search"] is True
-    assert calls[0][1]["tools"] == []
-    assert "Task title: Register at" in calls[0][0][0].text
-    assert "Page describes a registration deadline." in calls[1][0][0].text
+    assert any(tool["name"] == "research_input_link" for tool in calls[0][1]["tools"])
+    assert calls[1][1]["web_search"] is True
+    assert calls[1][1]["tools"] == []
+    assert "Task title: Register at" in calls[1][0][0].text
+    assert calls[2][0][-1].tool_result.content == "Page describes a registration deadline."
+    assert all(tool["name"] != "research_input_link" for tool in calls[2][1]["tools"])
     assert payload["link"] == "https://example.com/event"
+
+
+@pytest.mark.asyncio
+async def test_manual_link_can_skip_research(monkeypatch):
+    calls = []
+
+    async def fake_chat(messages, settings, **kwargs):
+        calls.append(kwargs)
+        return _response(ToolCall(
+            id="create-1", name="create_task",
+            input={"title": "Register", "estimation": 15,
+                   "due_date": "2026-10-10T19:00:00+00:00"},
+        ))
+
+    async def unexpected_research(*_args, **_kwargs):
+        raise AssertionError("link research should not run without a tool call")
+
+    monkeypatch.setattr(
+        runner, "get_settings",
+        lambda: SimpleNamespace(user_timezone="UTC", gemini_api_key="test", task_web_search=True),
+    )
+    monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(runner, "research_link", unexpected_research)
+    raw = SimpleNamespace(
+        id="raw-1", source="manual", source_metadata={},
+        content="Register at https://example.com/event.",
+    )
+
+    payload, trace = await runner.extract_task_fields(
+        SimpleNamespace(), raw, include_trace=True,
+    )
+
+    assert any(tool["name"] == "research_input_link" for tool in calls[0]["tools"])
+    assert payload["link"] == "https://example.com/event"
+    assert "web_search" not in trace
+
+
+@pytest.mark.asyncio
+async def test_manual_link_research_result_precedes_task_decision(monkeypatch):
+    calls = []
+    research_call = ToolCall(id="research-1", name="research_input_link", input={})
+    task_call = ToolCall(
+        id="create-1", name="create_task",
+        input={"title": "Register", "estimation": 15,
+               "due_date": "2026-10-10T19:00:00+00:00"},
+    )
+
+    async def fake_chat(messages, settings, **kwargs):
+        calls.append(messages)
+        if len(calls) == 1:
+            return LLMResponse(
+                message=LLMMessage(role="assistant", tool_calls=(research_call, task_call)),
+                tool_calls=(research_call, task_call), text="", stop_reason="tool_use",
+                usage={}, meta={}, provider="test", model="test",
+            )
+        assert [m.tool_result.tool_call.name for m in messages[-2:]] == [
+            "research_input_link", "create_task",
+        ]
+        assert messages[-2].tool_result.content == "Page says registration closes Friday."
+        return _response(task_call)
+
+    async def fake_research(*_args, **_kwargs):
+        return "Page says registration closes Friday.", {"status": "success"}
+
+    monkeypatch.setattr(
+        runner, "get_settings",
+        lambda: SimpleNamespace(user_timezone="UTC", gemini_api_key="test", task_web_search=True),
+    )
+    monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(runner, "research_link", fake_research)
+    raw = SimpleNamespace(
+        id="raw-1", source="manual", source_metadata={},
+        content="Register at https://example.com/event.",
+    )
+
+    payload = await runner.extract_task_fields(SimpleNamespace(), raw)
+
+    assert len(calls) == 2
+    assert payload["title"] == "Register"
 
 
 @pytest.mark.asyncio

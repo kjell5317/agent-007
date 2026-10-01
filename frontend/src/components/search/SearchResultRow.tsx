@@ -1,10 +1,13 @@
-import { CalendarDays, FileText, Inbox, ListTodo } from "lucide-react";
-import type { ComponentType } from "react";
+import { CalendarDays, FileText, Inbox, ListTodo, UserRound } from "lucide-react";
+import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { TaskCard } from "@/components/tasks/TaskCard";
+import { ContactCard, DocCard, EventCard } from "@/components/search/AssistantContent";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { fmtWhen } from "@/lib/dates";
+import { api } from "@/lib/api";
 import { badgeKindLabel } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
-import type { SearchHit, SearchHitType } from "@/lib/types";
+import type { ChatCitation, SearchHit, SearchHitType, Task } from "@/lib/types";
 
 const TYPE_ICON: Record<
   SearchHitType,
@@ -15,6 +18,7 @@ const TYPE_ICON: Record<
   note: FileText,
   document: FileText,
   drive: FileText,
+  contact: UserRound,
 };
 
 function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {
@@ -50,10 +54,14 @@ function capitalize(s: string): string {
 
 // Second line under the title: sender · date · source (whichever exist).
 function metaLine(hit: SearchHit): string {
+  if (hit.type === "contact") {
+    return [hit.meta?.org, hit.meta?.emails?.[0], hit.meta?.phones?.[0]]
+      .filter(Boolean).join(" · ");
+  }
   return [
     hit.sender ? displaySender(hit.sender) : null,
-    hit.ts ? fmtWhen(hit.ts) : null,
-    hit.source ? capitalize(hit.source) : null,
+    hit.meta?.start || hit.ts ? fmtWhen(hit.meta?.start ?? hit.ts) : null,
+    hit.meta?.location ?? hit.meta?.mime ?? (hit.source ? capitalize(hit.source) : null),
   ]
     .map((p) => (p ?? "").trim())
     .filter(Boolean)
@@ -77,9 +85,96 @@ export function SearchResultRow({
   // In the composer the input must keep focus when a row is clicked.
   preventBlur?: boolean;
 }) {
+  if (hit.type === "task") {
+    return <TaskSuggestionCard
+      hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
+      preventBlur={preventBlur}
+    />;
+  }
+  if (hit.type === "contact" || hit.type === "drive"
+      || (hit.type === "document" && !hit.task_id)) {
+    const cite: ChatCitation = {
+      ...hit,
+      tag: "",
+      url: hit.url ?? (hit.type === "drive"
+        ? `https://drive.google.com/open?id=${encodeURIComponent(hit.id)}`
+        : null),
+    };
+    return (
+      <div onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}>
+        {hit.type === "contact"
+          ? <ContactCard cite={cite} onOpened={onActivate} />
+          : hit.source === "calendar"
+            ? <EventCard cite={cite} onShowContent={onShowContent} onOpened={onActivate} />
+            : <DocCard cite={cite} onShowContent={onShowContent} onOpened={onActivate} />}
+      </div>
+    );
+  }
+  return <CompactResultRow
+    hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
+    onShowContent={onShowContent} preventBlur={preventBlur}
+  />;
+}
+
+function TaskSuggestionCard({
+  hit, onOpenTask, onActivate, preventBlur,
+}: {
+  hit: SearchHit;
+  onOpenTask: (taskId: string) => void;
+  onActivate?: () => void;
+  preventBlur: boolean;
+}) {
+  const [task, setTask] = useState<Task | null>(null);
+  const refresh = useCallback(async () => {
+    setTask(await api.getTask(hit.id));
+  }, [hit.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getTask(hit.id).then((next) => {
+      if (!cancelled) setTask(next);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [hit.id]);
+
+  if (!task) return <CompactResultRow
+    hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
+    preventBlur={preventBlur}
+  />;
+
+  return (
+    <div onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}>
+      <TaskCard
+        task={task}
+        kotxTask={null}
+        onChanged={refresh}
+        onKotxChanged={refresh}
+        onOpen={(id) => { onOpenTask(id); onActivate?.(); }}
+      />
+    </div>
+  );
+}
+
+function CompactResultRow({
+  hit,
+  onOpenTask,
+  onActivate,
+  onShowContent,
+  preventBlur = false,
+}: {
+  hit: SearchHit;
+  onOpenTask: (taskId: string) => void;
+  onActivate?: () => void;
+  onShowContent?: () => void;
+  preventBlur?: boolean;
+}) {
   const Icon = hitIcon(hit);
   const openTask = hit.task_id ?? (hit.type === "task" ? hit.id : null);
-  const openUrl = !openTask && hit.url ? hit.url : null;
+  const openUrl = !openTask
+    ? hit.url ?? (hit.type === "drive"
+      ? `https://drive.google.com/open?id=${encodeURIComponent(hit.id)}`
+      : null)
+    : null;
   const clickable = Boolean(openTask || openUrl || onShowContent);
   const meta = metaLine(hit);
 

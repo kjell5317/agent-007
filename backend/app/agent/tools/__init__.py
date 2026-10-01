@@ -9,6 +9,7 @@ from app.agent.tools.calendar_lookup import (
 )
 from app.agent.tools.notes_lookup import run_search_notes
 from app.agent.tools.schemas import (
+    INPUT_LINK_RESEARCH_TOOL,
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
     SPLIT_TASK_CHAT_TOOL,
@@ -19,6 +20,7 @@ from app.agent.tools.schemas import (
 )
 
 __all__ = [
+    "INPUT_LINK_RESEARCH_TOOL",
     "GITHUB_CHAT_TOOLS",
     "NOTION_CHAT_TOOLS",
     "SPLIT_TASK_CHAT_TOOL",

@@ -62,7 +62,7 @@ export interface AgentTrace {
   [k: string]: unknown;
 }
 
-export type SearchHitType = "task" | "note" | "input" | "document" | "drive";
+export type SearchHitType = "task" | "note" | "input" | "document" | "drive" | "contact";
 
 export interface SearchHit {
   type: SearchHitType;
@@ -82,6 +82,7 @@ export interface SearchHit {
   status: string | null;
   ts: string | null;
   score: number;
+  meta?: ChatCitationMeta | null;
 }
 
 // Chat / "ask" mode. A citation is a retrieved hit the answer can reference by

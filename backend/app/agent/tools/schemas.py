@@ -27,6 +27,17 @@ from collections.abc import Mapping
 
 # Provider-neutral JSON schema format; provider adapters translate at the boundary.
 
+INPUT_LINK_RESEARCH_TOOL = {
+    "name": "research_input_link",
+    "description": (
+        "Research the first URL in this input when the page's facts are needed to "
+        "decide or fill in a task or event. Optional: skip it when the input "
+        "already has enough information. Read-only; returns a short grounded "
+        "summary. Call at most once before the terminal decision."
+    ),
+    "parameters": {"type": "object", "properties": {}},
+}
+
 _CONFIDENCE_SCHEMA = {
     "type": "number",
     "minimum": 0.0,

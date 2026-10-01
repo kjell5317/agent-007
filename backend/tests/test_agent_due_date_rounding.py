@@ -55,7 +55,8 @@ def test_normalize_agent_due_date_ceil_rounds_to_five_minutes():
 
 
 @pytest.mark.asyncio
-async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
+@pytest.mark.parametrize("research_selected", [False, True])
+async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch, research_selected):
     task_id = uuid.UUID("10000000-0000-0000-0000-000000000001")
     created_payloads = []
     finalized = {}
@@ -63,6 +64,13 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
 
     async def fake_chat(messages, *_args, **_kwargs):
         prompts.append(messages[0].text)
+        if len(prompts) == 1:
+            assert any(t["name"] == "research_input_link" for t in _kwargs["tools"])
+        if research_selected and len(prompts) == 1:
+            return _response(ToolCall(id="research-1", name="research_input_link", input={}))
+        if research_selected:
+            assert messages[-1].tool_result.content == "Page says to send the report."
+            assert all(t["name"] != "research_input_link" for t in _kwargs["tools"])
         return _response(
             ToolCall(
                 id="create-1",
@@ -89,14 +97,18 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
         finalized.update({"raw_id": raw_id, **kwargs})
 
     async def fake_research(url, _settings, **kwargs):
+        assert research_selected, "research should run only when the agent requests it"
         assert url == "https://example.com/report"
         assert kwargs["task_title"] == "Send the report."
         return "Page says to send the report.", {
             "url": url,
+            "status": "success",
             "llm": {"provider": "google", "model": "gemini-3.5-flash", "usage": {"input_tokens": 100, "output_tokens": 20}},
         }
 
-    monkeypatch.setattr(input_runner, "get_settings", lambda: SimpleNamespace(user_timezone="UTC"))
+    monkeypatch.setattr(input_runner, "get_settings", lambda: SimpleNamespace(
+        user_timezone="UTC", task_web_search=True, gemini_api_key="test",
+    ))
     monkeypatch.setattr(input_runner, "chat", fake_chat)
     monkeypatch.setattr(input_runner, "research_link", fake_research)
     monkeypatch.setattr(input_runner.tasks, "create", fake_create)
@@ -121,8 +133,11 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
     # the inbox surfaces in the Agent-trace dropdown), not on the created task.
     assert trace["reason"] == "explicit deadline in the email"
     assert trace["confidence"] == 0.85
-    assert "Page says to send the report." in prompts[0]
-    assert trace["web_search"]["llm"]["usage"]["input_tokens"] == 100
+    assert len(prompts) == (2 if research_selected else 1)
+    if research_selected:
+        assert trace["web_search"]["llm"]["usage"]["input_tokens"] == 100
+    else:
+        assert "web_search" not in trace
     assert not hasattr(created_payloads[0], "reason")
 
 

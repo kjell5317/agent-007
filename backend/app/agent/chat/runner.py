@@ -348,7 +348,9 @@ async def run_chat(
         used_web_search = False
         exhausted = False
         completed_queries: dict[tuple[str, str], str] = {}
-        for _ in range(settings.search_chat_max_iterations):
+        tool_steps = 0
+        continuations = 0
+        while True:
             resp = await stream_chat(
                 messages,
                 settings,
@@ -360,9 +362,25 @@ async def run_chat(
                 model=model,
                 thinking_level=settings.chat_thinking_level,
                 web_search=False,
+                max_tokens=4096,
             )
             if not resp.tool_calls:
+                hit_output_limit = str(resp.stop_reason or "").lower().rsplit(".", 1)[-1] in {
+                    "max_tokens", "max_output_tokens", "length",
+                }
+                if hit_output_limit and continuations < 2:
+                    continuations += 1
+                    messages.append(assistant_message(resp))
+                    messages.append(user_message(
+                        "Continue from the last character without repeating text. "
+                        "Finish any incomplete widget token."
+                    ))
+                    continue
+                if hit_output_limit:
+                    exhausted = True
+                    await emit("error", {"message": "The answer reached its length limit."})
                 break
+            tool_steps += 1
             messages.append(assistant_message(resp))
             for tc in resp.tool_calls:
                 raw_query = tc.input.get("query") if isinstance(tc.input, dict) else None
@@ -385,19 +403,16 @@ async def run_chat(
                 changed_state = changed_state or bool(trace.get("changed_state"))
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
-        else:
-            exhausted = True
-            # Iterations exhausted while the model was still calling tools. Rather
-            # than force another LLM turn, end the turn with an error answer so the
-            # user gets a clear "too many steps" message instead of a bubble that
-            # just stops after the last tool call.
-            msg = (
-                f"This question needed more than {settings.search_chat_max_iterations} "
-                "tool steps to answer — try narrowing it down or asking something "
-                "more specific."
-            )
-            await emit("error", {"message": msg})
-            answer_parts.append(msg)
+            if tool_steps >= settings.search_chat_max_iterations:
+                exhausted = True
+                msg = (
+                    f"This question needed more than {settings.search_chat_max_iterations} "
+                    "tool steps to answer — try narrowing it down or asking something "
+                    "more specific."
+                )
+                await emit("error", {"message": msg})
+                answer_parts.append(msg)
+                break
 
         answer = "".join(answer_parts)
         obs.set_trace_io(output=answer)

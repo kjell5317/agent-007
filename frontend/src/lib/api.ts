@@ -131,6 +131,10 @@ export const api = {
     if (types && types.length) params.set("types", types.join(","));
     return request<{ hits: SearchHit[] }>(`/search/suggest?${params}`);
   },
+  suggestExternal: (q: string, limit = 6) =>
+    request<{ hits: SearchHit[] }>(
+      `/search/suggest/external?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
 
   chatStream,
 

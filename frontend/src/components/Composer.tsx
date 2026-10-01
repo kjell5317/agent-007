@@ -4,26 +4,17 @@ import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { useLiveSuggestions } from "@/hooks/useLiveSuggestions";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import type { SearchHit, SearchHitType } from "@/lib/types";
 
 interface Props {
   onCreated: () => Promise<void> | void;
   onOpenTask: (taskId: string) => void;
 }
 
-const SUGGEST_DEBOUNCE_MS = 150;
-// The composer helps you jump to something that already exists instead of
-// creating a duplicate: existing tasks (→ modal) and documents (calendar events
-// → calendar, kotx briefs → their task). Inputs and notes are out — you're
-// adding a task, so only task-shaped destinations are useful here. The server
-// restricts to these via `types` so the limit isn't spent on other corpora.
-const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "document"]);
-const SUGGEST_TYPES: readonly SearchHitType[] = ["task", "document"];
-
 export function Composer({ onCreated, onOpenTask }: Props) {
   const [value, setValue] = useState("");
-  const [suggestions, setSuggestions] = useState<SearchHit[]>([]);
+  const suggestions = useLiveSuggestions(value);
   const [dismissed, setDismissed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const postingText = useRef<Set<string>>(new Set());
@@ -42,28 +33,8 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     [],
   );
 
-  // Suggest-as-you-type, after the first character. Debounced, latest-wins.
   useEffect(() => {
-    const q = value.trim();
-    if (q.length < 1) {
-      setSuggestions([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      try {
-        const { hits } = await api.suggest(q, 8, SUGGEST_TYPES);
-        if (cancelled) return;
-        setSuggestions(hits.filter((h) => SUGGESTIBLE.has(h.type)).slice(0, 6));
-        setDismissed(false);
-      } catch {
-        if (!cancelled) setSuggestions([]);
-      }
-    }, SUGGEST_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+    setDismissed(false);
   }, [value]);
 
   const showSuggestions = !dismissed && value.trim().length >= 1 && suggestions.length > 0;
@@ -104,7 +75,6 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     postingText.current.add(text);
     setValue("");
     if (inputRef.current) inputRef.current.value = "";
-    setSuggestions([]);
     setDismissed(true);
     inputRef.current?.focus();
     // Show the loading toast immediately — the POST itself takes a moment,

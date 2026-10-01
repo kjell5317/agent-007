@@ -382,6 +382,44 @@ def test_context_line_renders_times_in_user_timezone():
 
 
 @pytest.mark.asyncio
+async def test_output_limit_continues_an_incomplete_widget(monkeypatch):
+    calls = []
+
+    async def fake_stream(messages, settings, *, on_delta, **kwargs):
+        calls.append((messages, kwargs))
+        if len(calls) == 1:
+            chunk = "task:{c4f6f757-"
+            await on_delta(chunk)
+            response = _resp(text=chunk)
+            return LLMResponse(**{**response.__dict__, "stop_reason": "MAX_TOKENS"})
+        assert messages[-1].role == "user"
+        chunk = "0000-4000-8000-000000000001}"
+        await on_delta(chunk)
+        return _resp(text=chunk)
+
+    async def fake_retrieve(session, query, *, filters=None):
+        return []
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+    events = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="show the task")], emit=emit)
+
+    assert len(calls) == 2
+    assert all(kwargs["max_tokens"] == 4096 for _, kwargs in calls)
+    assert "".join(data["text"] for event, data in events if event == "token") == (
+        "task:{c4f6f757-0000-4000-8000-000000000001}"
+    )
+    assert not any(event == "error" for event, _ in events)
+
+
+@pytest.mark.asyncio
 async def test_error_answer_when_tool_loop_exhausts(monkeypatch):
     max_iter = get_settings().search_chat_max_iterations
     calls = {"tool_turns": 0, "toolless": 0}

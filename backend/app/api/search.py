@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.agent.chat import ChatTurn, run_chat
+from app.config import get_settings
 from app.db import SessionLocal, get_session
 from app.db.clients import chats as chats_store
 from app.db.schemas.search import (
@@ -33,6 +34,8 @@ from app.db.schemas.search import (
 )
 from app.services.link_preview import get_link_preview
 from app.services.search import run_suggest
+from app.services.search.contacts import search_contacts
+from app.services.search.drive import search_drive
 from app.services.search.filters import ALL_CORPORA
 
 log = logging.getLogger(__name__)
@@ -59,6 +62,35 @@ async def suggest(
     session: Session = Depends(get_session),
 ) -> SuggestResponse:
     return SuggestResponse(hits=run_suggest(session, q, limit=limit, types=_parse_types(types)))
+
+
+@router.get("/suggest/external", response_model=SuggestResponse)
+async def suggest_external(
+    q: str = Query(..., min_length=3, max_length=256),
+    limit: int = Query(6, ge=1, le=10),
+) -> SuggestResponse:
+    """Live Drive and contact matches, separate from fast local suggestions."""
+    settings = get_settings()
+
+    async def drive_hits():
+        with SessionLocal() as session:
+            return await search_drive(
+                session, q, k=min(limit, 4),
+                timeout=settings.search_drive_timeout_seconds,
+            )
+
+    async def contact_hits():
+        with SessionLocal() as session:
+            return await search_contacts(
+                session, q, k=min(limit, 4),
+                timeout=settings.search_contacts_timeout_seconds,
+            )
+
+    drive, contacts = await asyncio.gather(drive_hits(), contact_hits())
+    hits = [hit for pair in zip(contacts, drive) for hit in pair]
+    hits.extend(contacts[len(drive):])
+    hits.extend(drive[len(contacts):])
+    return SuggestResponse(hits=hits[:limit])
 
 
 @router.get("/stream")

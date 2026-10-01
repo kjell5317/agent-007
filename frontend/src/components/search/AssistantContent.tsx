@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import type { ComponentType, MouseEvent, ReactNode } from "react";
+import { toast } from "sonner";
 import {
   BookOpen,
   CalendarDays,
@@ -42,6 +43,7 @@ import type { ChatCitation, ChatCitationMeta, LinkPreview, Task } from "@/lib/ty
 //   • doc:{<D#|G#>}   → a document / Drive file card
 // Inline widgets:
 //   • loc:{<place>}   → a Google Maps link
+//   • copy:{<value>}  → copy a name, number, or identifier
 //   • a notion.so link → a Notion page chip
 //   • any other http(s) link → a fetched preview card (title/description)
 
@@ -69,6 +71,7 @@ type WidgetKind = "task" | "contact" | "event" | "doc";
 // Card widgets, pulled to their own block. `loc:` stays inline (a map link).
 const BLOCK_WIDGET = /(task|contact|event|doc):\{([^}]+)\}/;
 const BLOCK_WIDGET_G = /(task|contact|event|doc):\{([^}]+)\}/g;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEADING = /^(#{1,6})\s+(.+)$/;
 const BULLET = /^\s*[-*]\s+/;
 const ORDERED = /^\s*\d+\.\s+/;
@@ -124,18 +127,28 @@ const RULES: Rule[] = [
     re: /loc:\{([^}]+)\}/,
     render: (m, key) => {
       const place = m[1].trim();
+      if (/^<[^>]+>$/.test(place)) {
+        return <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[0]}</code>;
+      }
       return (
         <a
           key={key}
           href={mapsUrl(place)}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-primary underline underline-offset-2"
+          className="inline-flex max-w-full items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 align-middle text-[0.9em] text-primary hover:bg-accent"
         >
-          {place}
+          <MapPin className="h-3 w-3 shrink-0" />
+          <span className="truncate">{place}</span>
         </a>
       );
     },
+  },
+  {
+    re: /copy:\{([^}]+)\}/,
+    render: (m, key) => /^<[^>]+>$/.test(m[1].trim())
+      ? <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[0]}</code>
+      : <CopyChip key={key} value={m[1].trim()} />,
   },
   // Markdown link — before the citation rule so `[x](url)` never reads as one.
   // A Notion link renders as a compact page chip instead of a bare link.
@@ -228,6 +241,7 @@ function renderWidgetLine(text: string, prefix: string, ctx: Ctx): ReactNode[] {
   let stripped = "";
   let last = 0;
   for (const m of text.matchAll(BLOCK_WIDGET_G)) {
+    if (!isWidgetRef(m[1] as WidgetKind, widgetKey(m[2]))) continue;
     stripped += text.slice(last, m.index);
     widgets.push({ kind: m[1] as WidgetKind, value: m[2].trim() });
     last = (m.index ?? 0) + m[0].length;
@@ -251,6 +265,21 @@ function widgetKey(value: string): string {
   return value.replace(/[[\]\s]/g, "");
 }
 
+function isWidgetRef(kind: WidgetKind, key: string): boolean {
+  if (kind === "task") return UUID.test(key) || /^T\d+$/i.test(key);
+  if (kind === "contact") return /^C\d+$/i.test(key) || /^people\/[^\s{}]+$/.test(key);
+  if (kind === "event") return /^E\d+$/i.test(key);
+  return /^[DG]\d+$/i.test(key) || (
+    /^[A-Za-z0-9_-]{20,}$/.test(key) && !UUID.test(key)
+  );
+}
+
+function hasBlockWidget(line: string): boolean {
+  return [...line.matchAll(BLOCK_WIDGET_G)].some((m) =>
+    isWidgetRef(m[1] as WidgetKind, widgetKey(m[2])),
+  );
+}
+
 function renderWidget(w: { kind: WidgetKind; value: string }, ctx: Ctx): ReactNode {
   const key = widgetKey(w.value);
   if (w.kind === "task") {
@@ -262,13 +291,13 @@ function renderWidget(w: { kind: WidgetKind; value: string }, ctx: Ctx): ReactNo
   // citation tag. Both identify the same retrieved item.
   const cite = ctx.byTag.get(key) ?? ctx.bySourceId.get(key);
   if (!cite && w.kind === "doc" && /^[A-Za-z0-9_-]{20,}$/.test(key)
-    && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) {
+    && !UUID.test(key)) {
     return <WidgetShell Icon={FileText} title={key} href={`https://drive.google.com/open?id=${encodeURIComponent(key)}`} />;
   }
   if (!cite) return <FallbackChip label={key} />;
   if (w.kind === "contact") return <ContactCard cite={cite} />;
-  if (w.kind === "event") return <EventCard cite={cite} ctx={ctx} />;
-  return <DocCard cite={cite} ctx={ctx} />;
+  if (w.kind === "event") return <EventCard cite={cite} onShowContent={() => ctx.onShowContent(cite)} />;
+  return <DocCard cite={cite} onShowContent={() => ctx.onShowContent(cite)} />;
 }
 
 function pushText(out: ReactNode[], text: string, key: string, ctx: Ctx): void {
@@ -296,18 +325,21 @@ function WidgetShell({
   title,
   href,
   onActivate,
+  onOpened,
   children,
 }: {
   Icon: ComponentType<{ className?: string }>;
   title: string;
   href?: string | null;
   onActivate?: () => void;
+  onOpened?: () => void;
   children?: ReactNode;
 }) {
   const clickable = Boolean(href || onActivate);
   const activate = () => {
     if (href) window.open(href, "_blank", "noopener,noreferrer");
     else onActivate?.();
+    onOpened?.();
   };
   return (
     <div
@@ -409,13 +441,13 @@ function ContactDetail({
   );
 }
 
-function ContactCard({ cite }: { cite: ChatCitation }) {
+export function ContactCard({ cite, onOpened }: { cite: ChatCitation; onOpened?: () => void }) {
   const meta = citeMeta(cite);
   const emails = meta.emails ?? [];
   const phones = meta.phones ?? [];
   const addresses = meta.addresses ?? [];
   return (
-    <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url}>
+    <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url} onOpened={onOpened}>
       {meta.org && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.org}</div>}
       {emails.map((e, i) => (
         <ContactDetail key={`e${i}`} Icon={Mail} value={e} href={`mailto:${e}`} />
@@ -431,17 +463,20 @@ function ContactCard({ cite }: { cite: ChatCitation }) {
   );
 }
 
-function EventCard({ cite, ctx }: { cite: ChatCitation; ctx: Ctx }) {
+export function EventCard({
+  cite, onShowContent, onOpened,
+}: { cite: ChatCitation; onShowContent?: () => void; onOpened?: () => void }) {
   const meta = citeMeta(cite);
   const when = fmtWhen(meta.start ?? cite.ts ?? null);
   const location = meta.location ?? null;
-  const onActivate = cite.url ? undefined : () => ctx.onShowContent(cite);
+  const onActivate = cite.url ? undefined : onShowContent;
   return (
     <WidgetShell
       Icon={CalendarDays}
       title={cite.title || "Event"}
       href={cite.url}
       onActivate={onActivate}
+      onOpened={onOpened}
     >
       {when && <DetailRow Icon={CalendarDays}>{when}</DetailRow>}
       {location && <DetailRow Icon={MapPin}>{location}</DetailRow>}
@@ -449,11 +484,13 @@ function EventCard({ cite, ctx }: { cite: ChatCitation; ctx: Ctx }) {
   );
 }
 
-function DocCard({ cite, ctx }: { cite: ChatCitation; ctx: Ctx }) {
+export function DocCard({
+  cite, onShowContent, onOpened,
+}: { cite: ChatCitation; onShowContent?: () => void; onOpened?: () => void }) {
   const meta = citeMeta(cite);
-  const onActivate = cite.url ? undefined : () => ctx.onShowContent(cite);
+  const onActivate = cite.url ? undefined : onShowContent;
   return (
-    <WidgetShell Icon={FileText} title={cite.title || "Document"} href={cite.url} onActivate={onActivate}>
+    <WidgetShell Icon={FileText} title={cite.title || "Document"} href={cite.url} onActivate={onActivate} onOpened={onOpened}>
       {meta.mime && <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta.mime}</div>}
     </WidgetShell>
   );
@@ -472,6 +509,31 @@ function NotionChip({ href, label }: { href: string; label: string }) {
       <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
     </a>
+  );
+}
+
+function CopyChip({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      aria-label={`Copy ${value}`}
+      title={copied ? "Copied" : `Copy ${value}`}
+      className="inline-flex max-w-full items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 align-middle text-[0.9em] text-foreground hover:bg-accent"
+    >
+      {copied ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}
+      <span className="truncate">{value}</span>
+    </button>
   );
 }
 
@@ -668,6 +730,18 @@ export function AssistantContent({
   onOpenTask: (taskId: string) => void;
   onShowContent: (cite: ChatCitation) => void;
 }) {
+  // A previous length-limited answer can end halfway through a task UUID.
+  // Resolve it only when the prefix identifies exactly one cited task.
+  const displayContent = caret ? content : content.replace(
+    /task:\{([0-9a-f-]{8,})$/gim,
+    (partial, prefix: string) => {
+      const matches = citations.filter((cite) => (cite.type === "task" || cite.task_id)
+        && (cite.task_id ?? cite.id).toLowerCase().startsWith(prefix.toLowerCase()));
+      return matches.length === 1
+        ? `task:{${matches[0].task_id ?? matches[0].id}}`
+        : partial;
+    },
+  );
   const byTag = new Map(citations.map((c) => [c.tag, c]));
   const bySourceId = new Map(citations.map((c) => [c.id, c]));
   const byTaskId = new Map<string, ChatCitation>();
@@ -680,9 +754,10 @@ export function AssistantContent({
   // id / citation tag it cards, tolerating a tag passed where an id was asked.
   const cardedTaskIds = new Set<string>();
   const cardedTags = new Set<string>();
-  for (const m of content.matchAll(BLOCK_WIDGET_G)) {
+  for (const m of displayContent.matchAll(BLOCK_WIDGET_G)) {
     const kind = m[1] as WidgetKind;
     const key = widgetKey(m[2]);
+    if (!isWidgetRef(kind, key)) continue;
     if (kind === "task") {
       const cite = byTag.get(key);
       cardedTaskIds.add(cite ? (cite.task_id ?? cite.id) : key);
@@ -710,7 +785,7 @@ export function AssistantContent({
     onShowContent,
   };
 
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const lines = displayContent.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   // Link previews are pulled onto their own block after the text that mentions
   // them. Deduped per message, and skipped while the answer is still streaming
@@ -732,7 +807,7 @@ export function AssistantContent({
       i++;
       continue;
     }
-    const hasWidget = BLOCK_WIDGET.test(line);
+    const hasWidget = BLOCK_WIDGET.test(line) && hasBlockWidget(line);
     // Heading (`## …`) — a compact bold line; inline markup inside still renders.
     const heading = !hasWidget ? HEADING.exec(line) : null;
     if (heading) {
@@ -757,7 +832,7 @@ export function AssistantContent({
     const listMarker = BULLET.test(line) ? BULLET : ORDERED.test(line) ? ORDERED : null;
     if (listMarker && !hasWidget) {
       const items: string[] = [];
-      while (i < lines.length && listMarker.test(lines[i]) && !BLOCK_WIDGET.test(lines[i]))
+      while (i < lines.length && listMarker.test(lines[i]) && !hasBlockWidget(lines[i]))
         items.push(lines[i++].replace(listMarker, ""));
       // Drop items that just repeat a carded item's title.
       const kept = items.filter((it) => !isDuplicateTitle(it, ctx));

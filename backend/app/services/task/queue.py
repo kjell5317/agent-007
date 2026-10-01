@@ -28,11 +28,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agent import extract_task_fields
-from app.agent.helpers.web import first_input_url, research_link
 from app.agent.retrieval import precedent_query_text, search_raw_inputs
-from app.config import get_settings
 from app.db import SessionLocal
-from app.db.models.raw_input import RawInput
 from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
@@ -49,7 +46,6 @@ EXTRACT_PRECEDENT_K = 5
 
 _queue: asyncio.Queue[_QueueItem] | None = None
 _worker: asyncio.Task | None = None
-_research_tasks: set[asyncio.Task] = set()
 
 
 async def start() -> None:
@@ -72,10 +68,6 @@ async def stop() -> None:
         pass
     _worker = None
     _queue = None
-    for task in tuple(_research_tasks):
-        task.cancel()
-    if _research_tasks:
-        await asyncio.gather(*_research_tasks, return_exceptions=True)
     log.info("task-creation queue stopped")
 
 
@@ -276,17 +268,6 @@ async def _process(
         # Creation is complete even if calendar scheduling is slow or fails.
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
-        url = first_input_url(raw) if getattr(raw, "source", None) == "manual" and not is_override else None
-        settings = get_settings()
-        research_ready: asyncio.Event | None = None
-        if url and settings.task_web_search and settings.gemini_api_key:
-            research_ready = asyncio.Event()
-            research_task = asyncio.create_task(
-                _research_created_task(raw.id, task.id, url, research_ready),
-                name=f"task-web-research-{task.id}",
-            )
-            _research_tasks.add(research_task)
-            research_task.add_done_callback(_research_done)
         try:
             children = await maybe_split_task(session, task)
             if not children:
@@ -307,74 +288,6 @@ async def _process(
         session.commit()
         publish_input(session, raw_input_id)
         publish_task(session, task.id)
-        if research_ready is not None:
-            research_ready.set()
-
-
-def _research_done(task: asyncio.Task) -> None:
-    _research_tasks.discard(task)
-    if not task.cancelled() and task.exception() is not None:
-        log.error("task web research failed", exc_info=task.exception())
-
-
-async def _research_created_task(
-    origin_id: uuid.UUID, task_id: uuid.UUID, url: str,
-    scheduling_done: asyncio.Event | None = None,
-) -> None:
-    with SessionLocal() as session:
-        task = tasks_store.get(session, task_id)
-        if task is None:
-            return
-        task_title = task.title
-        task_description = task.description
-    context, web_trace = await research_link(
-        url,
-        get_settings(),
-        task_title=task_title,
-        task_context=task_description,
-    )
-    if scheduling_done is not None:
-        await scheduling_done.wait()
-    with SessionLocal() as session:
-        task = tasks_store.get(session, task_id)
-        if task is None:
-            return
-        raw = RawInput(
-            source="web_research",
-            content=context or f"Web research could not verify {url}",
-            source_metadata={"url": url, "origin_input_id": str(origin_id)},
-            status="processing" if context else "duplicate",
-            task_id=None if context else task_id,
-            processed_at=None if context else datetime.now(timezone.utc),
-        )
-        session.add(raw)
-        session.commit()
-        session.refresh(raw)
-        publish_input(session, raw.id)
-        if context:
-            try:
-                from app.agent.thread.runner import run_thread_followup
-
-                trace = await run_thread_followup(session, raw, task)
-                raw.agent_trace = {**trace, "web_search": web_trace}
-            except Exception:
-                log.exception("task web research follow-up failed · task=%s", task_id)
-                raw.status = "duplicate"
-                raw.task_id = task_id
-                raw.agent_trace = {
-                    "branch": "web_research", "outcome": "followup_failed",
-                    "web_search": web_trace,
-                }
-                raw.processed_at = datetime.now(timezone.utc)
-            session.commit()
-            publish_task(session, task_id)
-        else:
-            raw.agent_trace = {
-                "branch": "web_research", "outcome": "research_failed",
-                "web_search": web_trace or {"url": url, "status": "failed"},
-            }
-            session.commit()
-        publish_input(session, raw.id)
 
 
 def _load_context_inputs(

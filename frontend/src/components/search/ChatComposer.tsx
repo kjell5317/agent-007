@@ -2,16 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api";
-import type { SearchHit, SearchHitType } from "@/lib/types";
-
-const SUGGEST_DEBOUNCE_MS = 150;
-// Mirror the task composer: suggest existing tasks (→ modal) and documents
-// (calendar events → calendar, kotx briefs → their task). Inputs and notes are
-// out. The server restricts to these via `types` so the limit isn't spent on
-// other corpora.
-const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "document"]);
-const SUGGEST_TYPES: readonly SearchHitType[] = ["task", "document"];
+import { useLiveSuggestions } from "@/hooks/useLiveSuggestions";
 
 export function ChatComposer({
   onSend,
@@ -25,32 +16,12 @@ export function ChatComposer({
   onOpenTask: (taskId: string) => void;
 }) {
   const [value, setValue] = useState("");
-  const [suggestions, setSuggestions] = useState<SearchHit[]>([]);
+  const suggestions = useLiveSuggestions(value);
   const [dismissed, setDismissed] = useState(false);
   const listRef = useRef<HTMLUListElement>(null);
 
-  // Suggest-as-you-type (same source as the task composer). Debounced, latest-wins.
   useEffect(() => {
-    const q = value.trim();
-    if (q.length < 1) {
-      setSuggestions([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      try {
-        const { hits } = await api.suggest(q, 8, SUGGEST_TYPES);
-        if (cancelled) return;
-        setSuggestions(hits.filter((h) => SUGGESTIBLE.has(h.type)).slice(0, 6));
-        setDismissed(false);
-      } catch {
-        if (!cancelled) setSuggestions([]);
-      }
-    }, SUGGEST_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+    setDismissed(false);
   }, [value]);
 
   const showSuggestions = !dismissed && value.trim().length >= 1 && suggestions.length > 0;
@@ -66,7 +37,6 @@ export function ChatComposer({
     if (!text || streaming) return;
     onSend(text);
     setValue("");
-    setSuggestions([]);
     setDismissed(true);
   };
 
