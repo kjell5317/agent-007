@@ -27,6 +27,7 @@ from app.agent.tools import thread_followup_tools
 from app.config import get_settings
 from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs
+from app.db.clients import tasks as tasks_store
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +63,8 @@ async def run_thread_followup(
     is_web_research = raw.source == "web_research"
     require_change = require_change or is_web_research
 
-    user_msg = _build_thread_user_message(raw, task)
+    current_status = tasks_store.latest_status_for(session, [task.id]).get(task.id, "open")
+    user_msg = _build_thread_user_message(raw, task, current_status)
     trace: dict[str, Any] = {
         "outcome": None,
         "branch": "thread_followup",
@@ -155,7 +157,7 @@ async def run_thread_followup(
     return trace
 
 
-def _build_thread_user_message(raw, task) -> str:
+def _build_thread_user_message(raw, task, status: str) -> str:
     meta = raw.source_metadata or {}
     lines = [
         f"Current time: {now_iso(get_settings().user_timezone)}",
@@ -165,6 +167,7 @@ def _build_thread_user_message(raw, task) -> str:
 
     lines.append("")
     lines.append("Current task:")
+    lines.append(f"  status: {status}")
     lines.extend(task_field_lines(task))
 
     lines.append("")

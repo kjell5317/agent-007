@@ -191,6 +191,7 @@ async def test_web_research_updates_description_without_other_task_changes(monke
         return []
 
     monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(runner.tasks_store, "latest_status_for", lambda *_args: {task.id: "open"})
     monkeypatch.setattr(runner, "apply_task_action", fake_apply)
     monkeypatch.setattr(runner, "save_notes", no_notes)
     monkeypatch.setattr(runner.labels_store, "agent_descriptions", lambda *_: {})

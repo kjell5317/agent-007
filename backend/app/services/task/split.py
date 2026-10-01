@@ -191,6 +191,7 @@ async def split_task(
             processed_at=datetime.now(timezone.utc),
         ))
     task.is_container = True
+    task.due_date = children[-1].due_date
     session.commit()
     if task.calendar_event_id:
         await delete_task_event(session, task)
@@ -231,4 +232,47 @@ async def refresh_child_deadlines(session: Session, parent: Task) -> None:
     from app.services.task.update import update_task
     for child, due in zip(children, deadlines):
         if child.due_date_derived and child.due_date != due:
-            await update_task(session, child.id, {"due_date": due, "due_date_derived": True})
+            await update_task(
+                session, child.id,
+                {"due_date": due, "due_date_derived": True},
+                cascade_deadline=False,
+            )
+    await sync_parent_deadline(session, parent, children)
+
+
+async def sync_parent_deadline(
+    session: Session, parent: Task, children: list[Task] | None = None
+) -> None:
+    """The container deadline is the deadline of its last child."""
+    children = children if children is not None else tasks_store.children(session, parent.id)
+    if children and parent.due_date != children[-1].due_date:
+        from app.services.task.update import update_task
+
+        await update_task(
+            session, parent.id, {"due_date": children[-1].due_date},
+            cascade_deadline=False,
+        )
+
+
+async def shift_group_deadlines(
+    session: Session, parent: Task, delta: timedelta, *, edited_child_id=None
+) -> None:
+    """Move child dates together and keep the parent on the last child."""
+    from app.services.task.update import update_task
+
+    children = tasks_store.children(session, parent.id)
+    for child in children:
+        if child.id == edited_child_id:
+            continue
+        if not delta:
+            continue
+        await update_task(
+            session, child.id,
+            {
+                "due_date": child.due_date + delta,
+                # A manual child edit overrides the generated sibling timeline.
+                "due_date_derived": child.due_date_derived if edited_child_id is None else False,
+            },
+            cascade_deadline=False,
+        )
+    await sync_parent_deadline(session, parent, children)

@@ -15,6 +15,7 @@ import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
 import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
+import { getUserTimezone, setUserTimezone } from "@/lib/dates";
 import { clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
@@ -22,6 +23,13 @@ import type { Task } from "@/lib/types";
 
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
+  const [timeZone, setTimeZone] = useState(getUserTimezone);
+  useEffect(() => {
+    api.getSettings().then(({ user_timezone }) => {
+      setUserTimezone(user_timezone);
+      setTimeZone(getUserTimezone());
+    }).catch(() => {});
+  }, []);
   const { theme, setTheme } = useThemePreference();
   // "tasks" / "chat" are the two tabs of the main view; "mail" / "points" /
   // "labels" are overlays reached from the topbar (Back returns to the last
@@ -396,6 +404,7 @@ export function App() {
             </TabsList>
             <TabsContent value="tasks">
               <TasksPanel
+                timeZone={timeZone}
                 tasks={tasks}
                 kotxTasks={kotxTasks}
                 onChanged={refresh}

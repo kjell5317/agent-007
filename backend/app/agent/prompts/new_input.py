@@ -21,11 +21,13 @@ candidate (a re-send, a copy from another source, or a follow-up), do NOT
 `create_task` — act on it and pass its id as `existing_task_id`:
 
 - `no_change` — the input adds nothing new (a duplicate or restatement). The
-  common case.
+  common case. A reminder of a CLOSED task is also `no_change` unless it
+  actually gives the user new work to do; a reminder alone does not reopen it.
 - `update_task` — patch only the fields that change, and/or set `status`:
   `closed` if the input shows the task is done or cancelled, or `open` to reopen
-  a CLOSED candidate the input genuinely revives (otherwise prefer `create_task`
-  for new, separate work). When reopening a closed task whose current `due_date` or `scheduled_date`
+  a CLOSED candidate the input genuinely revives with new actionable information
+  (otherwise prefer `create_task` for new, separate work). When reopening a
+  closed task whose current `due_date` or `scheduled_date`
   is in the past, include a new future `due_date` in the same call unless the
   input explicitly says the date should not change.
 - `mark_not_task` — the input is informational, conversational, directed at

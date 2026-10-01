@@ -189,6 +189,7 @@ async def test_thread_followup_trace_records_current_task_context(monkeypatch):
 
     async def fake_chat(messages, *_args, **_kwargs):
         assert "Current task:" in (messages[0].text or "")
+        assert "status: closed" in (messages[0].text or "")
         assert "title: Submit renewal paperwork" in (messages[0].text or "")
         return SimpleNamespace(
             text="",
@@ -215,6 +216,7 @@ async def test_thread_followup_trace_records_current_task_context(monkeypatch):
         return []
 
     monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner.tasks_store, "latest_status_for", lambda *_args: {task.id: "closed"})
     monkeypatch.setattr(thread_runner, "apply_task_action", fake_apply_task_action)
     monkeypatch.setattr(thread_runner, "save_notes", fake_save_notes)
     monkeypatch.setattr(
@@ -266,6 +268,7 @@ async def test_explicit_followup_rejects_no_change(monkeypatch):
         )
 
     monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner.tasks_store, "latest_status_for", lambda *_args: {task.id: "open"})
     monkeypatch.setattr(thread_runner.labels_store, "agent_descriptions", lambda *_args: {})
 
     with pytest.raises(RuntimeError, match="did not update"):
@@ -309,6 +312,7 @@ async def test_reopen_only_applies_due_date_and_open_status(monkeypatch):
         return []
 
     monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner.tasks_store, "latest_status_for", lambda *_args: {task.id: "closed"})
     monkeypatch.setattr(thread_runner, "apply_task_action", fake_apply)
     monkeypatch.setattr(thread_runner.labels_store, "agent_descriptions", lambda *_args: {})
     monkeypatch.setattr(thread_runner, "save_notes", fake_save_notes)
@@ -319,3 +323,44 @@ async def test_reopen_only_applies_due_date_and_open_status(monkeypatch):
         "due_date": "2026-12-01T12:00:00+00:00", "status": "open",
         "reason": None, "confidence": None,
     }]
+
+
+@pytest.mark.asyncio
+async def test_closed_task_reminder_leaves_anchor_closed(monkeypatch):
+    import app.agent.thread.runner as thread_runner
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="Submit report", description=None,
+        due_date=None, scheduled_date=None, estimation=30,
+        location=None, link=None, label=None,
+    )
+    raw = SimpleNamespace(
+        id=uuid.uuid4(), source="gmail", source_metadata={},
+        content="Reminder about the report", task_id=None, agent_trace=None,
+    )
+    finalized = {}
+
+    async def fake_chat(messages, _settings, **_kwargs):
+        assert "status: closed" in messages[0].text
+        return SimpleNamespace(
+            text="", stop_reason="tool_use", usage={}, provider="test", model="test",
+            tool_calls=(ToolCall(id="reminder", name="no_change", input={}),),
+        )
+
+    async def no_notes(*_args):
+        return []
+
+    monkeypatch.setattr(thread_runner, "chat", fake_chat)
+    monkeypatch.setattr(thread_runner.tasks_store, "latest_status_for", lambda *_args: {task.id: "closed"})
+    monkeypatch.setattr(thread_runner.labels_store, "agent_descriptions", lambda *_args: {})
+    monkeypatch.setattr(thread_runner, "save_notes", no_notes)
+    monkeypatch.setattr(
+        thread_runner.raw_inputs, "finalize",
+        lambda _session, _raw_id, **kwargs: finalized.update(kwargs),
+    )
+
+    result = await thread_runner.run_thread_followup(SimpleNamespace(commit=lambda: None), raw, task)
+
+    assert result["outcome"] == "no_change"
+    assert finalized["status"] == "duplicate"
+    assert finalized["task_id"] == task.id

@@ -43,15 +43,17 @@ async def close_task(
             raise ValueError("Complete all subtasks before closing the parent task")
     kotx_task_id = task.kotx_task_id
     vacated = vacated_commute_window(task)
+    latest = raw_inputs_store.latest_for_task(session, task_id)
     # Award completion points before any status flip / orphan delete, so we
-    # still have the task's estimation in hand. Idempotent per task and
+    # still have the task's estimation in hand. Idempotent per completion cycle and
     # best-effort — never let points bookkeeping block closing a task.
     try:
-        if award_points and award_for_task(session, task):
+        if award_points and (latest is None or latest.status != "closed") and award_for_task(
+            session, task, cycle_started_at=latest.processed_at if latest else None
+        ):
             publish_points(session)
     except Exception:  # noqa: BLE001
         log.exception("points award failed · task=%s", task_id)
-    latest = raw_inputs_store.latest_for_task(session, task_id)
     if latest is not None:
         latest.status = "closed"
         # Keep processed_at as the ingestion timestamp. This user action must

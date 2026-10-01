@@ -19,6 +19,7 @@ from app.db.models.task import Task  # noqa: E402
 from app.events import publish as publish_events  # noqa: E402
 from app.services import points as points_service  # noqa: E402
 from app.services.task import close as close_service  # noqa: E402
+from app.services.task import reopen as reopen_service  # noqa: E402
 
 
 def _sqlite_session():
@@ -273,6 +274,43 @@ async def test_close_task_awards_points_and_publishes_new_total(monkeypatch):
     assert raw_input.processed_at == original_processed_at
     assert published_tasks == [task.id]
     assert published_inputs == [raw_input_id]
+
+
+@pytest.mark.asyncio
+async def test_reopened_task_earns_points_again_once(monkeypatch):
+    session = _sqlite_session()
+    task = _task(estimation=30)
+    session.add(task)
+    session.commit()
+    anchor = SimpleNamespace(
+        id=uuid.uuid4(), status="open",
+        processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(points_service, "get_settings", lambda: SimpleNamespace(points_task_done_factor=0.5))
+    monkeypatch.setattr(close_service.raw_inputs_store, "latest_for_task", lambda *_args: anchor)
+    monkeypatch.setattr(close_service, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(close_service, "publish_input", lambda *_args: None)
+    monkeypatch.setattr(reopen_service, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(reopen_service, "publish_input", lambda *_args: None)
+
+    async def no_side_effect(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(close_service, "delete_task_event", no_side_effect)
+    monkeypatch.setattr(close_service, "clear_task_notification", no_side_effect)
+    monkeypatch.setattr(reopen_service, "schedule_task", no_side_effect)
+
+    await close_service.close_task(session, task.id)
+    await close_service.close_task(session, task.id)
+    assert points_store.total(session) == 15
+
+    await reopen_service.reopen_task(session, task.id)
+    assert anchor.status == "open"
+    await close_service.close_task(session, task.id)
+    await close_service.close_task(session, task.id)
+
+    assert points_store.total(session) == 30
+    assert len(session.query(PointsEntry).all()) == 2
 
 
 @pytest.mark.asyncio

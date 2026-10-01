@@ -16,6 +16,8 @@ tool:
 
 - `no_change` — the follow-up is conversational or adds nothing actionable.
   This leaves the task completely untouched — including its open/closed state.
+  A reminder or repeat mention of a closed task belongs here unless it
+  actually creates new work for the user.
 
 Be conservative: do not rewrite fields the new message doesn't change, and only
 set `status` when the message genuinely signals completion or revival.

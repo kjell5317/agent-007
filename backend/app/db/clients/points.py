@@ -36,13 +36,17 @@ def count_since(session: Session, ts: datetime) -> int:
     return int(session.execute(stmt).scalar_one() or 0)
 
 
-def has_task_entry(session: Session, task_id: uuid.UUID) -> bool:
-    """Whether this task has already been awarded points (idempotency guard)."""
+def has_task_entry(
+    session: Session, task_id: uuid.UUID, *, since: datetime | None = None
+) -> bool:
+    """Whether this task has an award in the current open/close cycle."""
     stmt = (
         select(func.count())
         .select_from(PointsEntry)
         .where(PointsEntry.source == "task", PointsEntry.task_id == task_id)
     )
+    if since is not None:
+        stmt = stmt.where(PointsEntry.created_at >= since)
     return int(session.execute(stmt).scalar_one() or 0) > 0
 
 

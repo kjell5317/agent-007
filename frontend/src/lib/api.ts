@@ -187,7 +187,7 @@ export const api = {
     }),
 
   getSettings: () => request<AppSettings>("/settings"),
-  updateSettings: (patch: Partial<AppSettings>) =>
+  updateSettings: (patch: Partial<Pick<AppSettings, "auto_poll_enabled">>) =>
     request<AppSettings>("/settings", {
       method: "PATCH",
       body: JSON.stringify(patch),
@@ -279,6 +279,7 @@ function dispatchFrame(frame: string, h: ChatStreamHandlers): void {
 
 export interface AppSettings {
   auto_poll_enabled: boolean;
+  user_timezone: string;
 }
 
 export interface TaskCreationAccepted {

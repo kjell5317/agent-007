@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getUserTimezone, zonedParts, zonedWallTimeToIso } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -36,30 +37,35 @@ function pad(n: number) {
 
 function sameDay(a: Date, b: Date) {
   return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
   );
 }
 
 function startOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function wallDate(value: string | Date): Date {
+  const parts = zonedParts(value);
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute));
 }
 
 // 6-row × 7-col grid starting on Monday that contains the given month.
 function buildGrid(year: number, month: number): Date[] {
-  const first = new Date(year, month, 1);
-  const mondayOffset = (first.getDay() + 6) % 7;
-  const start = new Date(year, month, 1 - mondayOffset);
+  const first = new Date(Date.UTC(year, month, 1));
+  const mondayOffset = (first.getUTCDay() + 6) % 7;
+  const start = new Date(Date.UTC(year, month, 1 - mondayOffset));
   return Array.from(
     { length: 42 },
-    (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i),
+    (_, i) => new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + i)),
   );
 }
 
-function toLocalTime(d: Date | null): string {
+function toWallTime(d: Date | null): string {
   if (!d) return `${pad(DEFAULT_HOUR)}:${pad(DEFAULT_MINUTE)}`;
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 export function DatePicker({
@@ -69,22 +75,24 @@ export function DatePicker({
   step,
   onStepChange,
 }: Props) {
-  const parsed = useMemo(() => (value ? new Date(value) : null), [value]);
-  const today = useMemo(() => startOfDay(new Date()), []);
+  const parsed = useMemo(() => (value ? wallDate(value) : null), [value]);
+  const today = startOfDay(wallDate(new Date()));
   const [viewMonth, setViewMonth] = useState<Date>(() =>
-    parsed ? new Date(parsed.getFullYear(), parsed.getMonth(), 1) : today,
+    parsed ? new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), 1)) : today,
   );
-  const time = toLocalTime(parsed);
+  const time = toWallTime(parsed);
 
   const emit = (day: Date, hhmm: string) => {
     const [h, m] = hhmm.split(":").map(Number);
-    const next = new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m);
-    onChange(next.toISOString());
+    onChange(zonedWallTimeToIso({
+      year: day.getUTCFullYear(), month: day.getUTCMonth() + 1,
+      day: day.getUTCDate(), hour: h, minute: m,
+    }));
   };
 
   const pickDay = (day: Date) => {
     emit(day, time);
-    setViewMonth(new Date(day.getFullYear(), day.getMonth(), 1));
+    setViewMonth(new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 1)));
   };
 
   const onTimeChange = (hhmm: string) => {
@@ -105,7 +113,7 @@ export function DatePicker({
             viewMonth={viewMonth}
             onShiftMonth={(d) =>
               setViewMonth(
-                new Date(viewMonth.getFullYear(), viewMonth.getMonth() + d, 1),
+                new Date(Date.UTC(viewMonth.getUTCFullYear(), viewMonth.getUTCMonth() + d, 1)),
               )
             }
             onPickDay={pickDay}
@@ -147,7 +155,7 @@ function DateContent({
   onPickDay: (d: Date) => void;
 }) {
   const grid = useMemo(
-    () => buildGrid(viewMonth.getFullYear(), viewMonth.getMonth()),
+    () => buildGrid(viewMonth.getUTCFullYear(), viewMonth.getUTCMonth()),
     [viewMonth],
   );
   const selectedDay = parsed ? startOfDay(parsed) : null;
@@ -164,7 +172,7 @@ function DateContent({
           <ChevronLeft className="h-4 w-4" />
         </button>
         <span className="text-sm font-medium">
-          {MONTHS[viewMonth.getMonth()]} {viewMonth.getFullYear()}
+          {MONTHS[viewMonth.getUTCMonth()]} {viewMonth.getUTCFullYear()}
         </span>
         <button
           type="button"
@@ -184,7 +192,7 @@ function DateContent({
 
       <div className="grid grid-cols-7 gap-0.5">
         {grid.map((d) => {
-          const inMonth = d.getMonth() === viewMonth.getMonth();
+          const inMonth = d.getUTCMonth() === viewMonth.getUTCMonth();
           const isSelected =
             selectedDay !== null && sameDay(d, selectedDay);
           const isCurrent = sameDay(d, today);
@@ -204,7 +212,7 @@ function DateContent({
                   "ring-1 ring-inset ring-primary",
               )}
             >
-              {d.getDate()}
+              {d.getUTCDate()}
             </button>
           );
         })}
@@ -238,6 +246,7 @@ function TimeContent({
 
   return (
     <div className="flex w-full flex-col items-center gap-3">
+      <div className="text-xs text-muted-foreground">{getUserTimezone()}</div>
       <div className="flex items-center justify-center gap-3">
         <div className="flex items-center gap-1 text-3xl font-medium tabular-nums">
           <button

@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   tasks: Task[];
+  timeZone: string;
   kotxTasks: ReadonlyMap<number, KotxTask>;
   onChanged: () => Promise<void> | void;
   onKotxChanged: () => Promise<void> | void;
@@ -22,6 +23,7 @@ interface Props {
 
 export function TasksPanel({
   tasks,
+  timeZone,
   kotxTasks,
   onChanged,
   onKotxChanged,
@@ -57,7 +59,7 @@ export function TasksPanel({
       }
     }
     return [t, tm, l];
-  }, [selectedLabel, kotxOnly, sortMode, tasks]);
+  }, [selectedLabel, kotxOnly, sortMode, tasks, timeZone]);
 
   const groups = [
     { key: "today", title: "Today", tasks: today },

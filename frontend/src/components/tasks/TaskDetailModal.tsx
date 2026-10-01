@@ -178,6 +178,22 @@ export function TaskDetailModal({
     }
   }
 
+  async function closeSubtask(childId: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.closeTask(childId);
+      const saved = await api.getTask(current.id);
+      syncTaskState(saved);
+      toast.success("Subtask marked done");
+      await onChanged();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function savePatch(patch: Partial<Task>, message = "Saved") {
     setBusy(true);
     try {
@@ -391,6 +407,7 @@ export function TaskDetailModal({
           onKotxActionDone={onClose}
           onOpenTask={onOpenTask}
           onSplitTask={splitCurrentTask}
+          onCloseSubtask={closeSubtask}
           labels={labels}
           busy={busy}
           closingAction={closingAction}
@@ -499,6 +516,7 @@ function TaskSummary({
   onKotxActionDone,
   onOpenTask,
   onSplitTask,
+  onCloseSubtask,
   labels,
   busy,
   closingAction,
@@ -540,6 +558,7 @@ function TaskSummary({
   onKotxActionDone: () => void;
   onOpenTask: (id: string) => void;
   onSplitTask: () => void;
+  onCloseSubtask: (id: string) => void;
   labels: Label[];
   busy: boolean;
   closingAction: "done" | "dismiss" | null;
@@ -623,7 +642,7 @@ function TaskSummary({
                 <Circle className="h-5 w-5" />
               )}
             </TaskSummaryIconButton>
-          ) : !kotxTask ? (
+          ) : task.status !== "open" && !kotxTask ? (
             <TaskSummaryIconButton
               label="Re-open task"
               disabled={busy}
@@ -673,7 +692,7 @@ function TaskSummary({
                 onClose={onClosePicker}
                 onBack={dateStep === "time" ? () => onDateStepChange("date") : undefined}
                 footer={
-                  pickerDue ? (
+                  pickerDue && !task.is_container ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -715,7 +734,7 @@ function TaskSummary({
           </PickerAnchor>
 
           <PickerAnchor
-            open={activePicker === "estimation"}
+            open={!task.is_container && activePicker === "estimation"}
             panel={
               <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
                 <EstimationPicker
@@ -729,7 +748,8 @@ function TaskSummary({
             <button
               type="button"
               onClick={() => onEditPicker("estimation")}
-              disabled={busy}
+              disabled={busy || task.is_container}
+              title={task.is_container ? "Duration is set by subtasks" : "Set duration"}
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
                 TASK_SUMMARY_MUTED_BADGE_CLASS,
@@ -792,15 +812,29 @@ function TaskSummary({
           <section className="space-y-2 rounded-lg border p-3">
             <h3 className="text-sm font-semibold">Subtasks</h3>
             {task.subtasks.map((child) => (
-              <button
+              <div
                 key={child.id}
-                type="button"
-                onClick={() => onOpenTask(child.id)}
-                className="flex w-full items-center justify-between gap-3 rounded px-2 py-1 text-left text-sm hover:bg-accent"
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent"
               >
-                <span>{child.status === "closed" ? "✓ " : "○ "}{child.title}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{fmtDue(child.due_date)}</span>
-              </button>
+                <button
+                  type="button"
+                  aria-label={child.status === "closed" ? `${child.title} done` : `Mark ${child.title} done`}
+                  title={child.status === "closed" ? "Done" : "Mark done"}
+                  disabled={busy || child.status !== "open"}
+                  onClick={() => onCloseSubtask(child.id)}
+                  className="shrink-0 rounded-full text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-60"
+                >
+                  {child.status === "closed" ? <CircleCheckBig className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenTask(child.id)}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                >
+                  <span className="min-w-0 truncate">{child.title}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{fmtDue(child.due_date)}</span>
+                </button>
+              </div>
             ))}
           </section>
         )}
@@ -823,21 +857,23 @@ function TaskSummary({
             above holds that context, so the fields stay hidden entirely. */}
         {task.kotx_task_id == null && (
           <div className="space-y-1.5">
-            <EditableTextBlock
-              field="location"
-              icon={<MapPin className="h-4 w-4" />}
-              value={task.location}
-              fallback="Add location"
-              editing={editingText === "location"}
-              draft={textDraft}
-              busy={busy}
-              onEdit={() => onEditText("location")}
-              onChange={onChangeText}
-              suggestions={locationSuggestions}
-              onSelectSuggestion={onSelectLocationSuggestion}
-              onCancel={onCancelText}
-              onSave={() => onSaveText("location")}
-            />
+            {!task.is_container && (
+              <EditableTextBlock
+                field="location"
+                icon={<MapPin className="h-4 w-4" />}
+                value={task.location}
+                fallback="Add location"
+                editing={editingText === "location"}
+                draft={textDraft}
+                busy={busy}
+                onEdit={() => onEditText("location")}
+                onChange={onChangeText}
+                suggestions={locationSuggestions}
+                onSelectSuggestion={onSelectLocationSuggestion}
+                onCancel={onCancelText}
+                onSave={() => onSaveText("location")}
+              />
+            )}
             <LinksSection
               task={task}
               editing={editingText === "link"}
@@ -868,6 +904,8 @@ function TaskSummary({
 
         <LinkedInputsSection
           inputs={task.raw_inputs ?? []}
+          parentTaskId={task.parent_task_id}
+          onOpenTask={onOpenTask}
           muted={kotxActionPending}
         />
       </div>
@@ -1304,9 +1342,13 @@ function InlinePickerPanel({
 
 function LinkedInputsSection({
   inputs,
+  parentTaskId,
+  onOpenTask,
   muted = false,
 }: {
   inputs: TaskRawInput[];
+  parentTaskId: string | null;
+  onOpenTask: (id: string) => void;
   muted?: boolean;
 }) {
   if (inputs.length === 0) return null;
@@ -1324,7 +1366,29 @@ function LinkedInputsSection({
       </div>
       <div className="space-y-2">
         {inputs.map((input) => (
-          <div key={input.id} className="rounded-lg border p-3">
+          <div
+            key={input.id}
+            role={parentTaskId && input.task_id === parentTaskId ? "button" : undefined}
+            tabIndex={parentTaskId && input.task_id === parentTaskId ? 0 : undefined}
+            aria-label={parentTaskId && input.task_id === parentTaskId ? `Open parent task: ${input.task_title ?? "Parent task"}` : undefined}
+            onClick={(event) => {
+              if (!parentTaskId || input.task_id !== parentTaskId) return;
+              const interactive = (event.target as HTMLElement).closest("a,button,[role='button']");
+              if (interactive && interactive !== event.currentTarget) return;
+              onOpenTask(parentTaskId);
+            }}
+            onKeyDown={(event) => {
+              if (!parentTaskId || input.task_id !== parentTaskId || event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenTask(parentTaskId);
+              }
+            }}
+            className={cn(
+              "rounded-lg border p-3",
+              parentTaskId && input.task_id === parentTaskId && "cursor-pointer transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+            )}
+          >
             <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{inputTitle(input)}</div>

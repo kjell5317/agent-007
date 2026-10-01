@@ -54,13 +54,15 @@ def _clean_manual_field(value: str | None, *, limit: int) -> str | None:
     return cleaned[:limit] or None
 
 
-def award_for_task(session: Session, task) -> bool:
+def award_for_task(
+    session: Session, task, *, cycle_started_at: datetime | None = None
+) -> bool:
     """Award completion points for a completed task.
 
     Returns whether a ledger entry was inserted. No-op when the factor is 0
-    (disabled), the task has no estimation, or the task was already awarded
-    (so a reopen→close cycle doesn't double-count). A negative factor is
-    allowed and subtracts points on completion.
+    (disabled), the task has no estimation, or the current open/close cycle
+    was already awarded. A reopened task starts a new cycle and can earn points
+    again. A negative factor is allowed and subtracts points on completion.
     """
     factor = (
         KOTX_TASK_DONE_FACTOR
@@ -70,7 +72,7 @@ def award_for_task(session: Session, task) -> bool:
     minutes = task.estimation or 0
     if factor == 0 or minutes <= 0:
         return False
-    if points_store.has_task_entry(session, task.id):
+    if points_store.has_task_entry(session, task.id, since=cycle_started_at):
         return False
     points_store.add_entry(
         session,
