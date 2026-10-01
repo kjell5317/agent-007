@@ -201,6 +201,7 @@ class NoteListItem:
     source_subject: str | None
     source_raw_input_ids: list[str] | None = None
     needs_review: bool = False
+    history_count: int = 0
     content_update_count: int = 0
     last_content_update_at: datetime | None = None
 
@@ -213,6 +214,7 @@ _LIST_NOTES_TEMPLATE = """
       n.id, n.content, n.source_raw_input_id, n.source_raw_input_ids,
       n.needs_review, n.created_at,
       greatest(n.updated_at, coalesce(a.last_event_at, n.updated_at)) AS updated_at,
+      coalesce(a.history_count, 0) AS history_count,
       coalesce(a.content_update_count, 0) AS content_update_count,
       a.last_content_update_at,
       r.source AS source,
@@ -221,6 +223,7 @@ _LIST_NOTES_TEMPLATE = """
     FROM notes n
     LEFT JOIN (
       SELECT note_id,
+        count(*) AS history_count,
         count(*) FILTER (WHERE action = 'content_updated') AS content_update_count,
         max(occurred_at) FILTER (WHERE action = 'content_updated') AS last_content_update_at,
         max(occurred_at) AS last_event_at
@@ -245,6 +248,7 @@ def _to_item(row) -> NoteListItem:
         source_subject=row.source_subject,
         source_raw_input_ids=row.source_raw_input_ids,
         needs_review=row.needs_review,
+        history_count=row.history_count,
         content_update_count=row.content_update_count,
         last_content_update_at=row.last_content_update_at,
     )

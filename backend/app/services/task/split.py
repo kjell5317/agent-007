@@ -26,7 +26,7 @@ _CONJUNCTION = re.compile(
 )
 _PLAN_TOOL = {
     "name": "propose_subtasks",
-    "description": "Propose 2 to 6 actionable subtasks for the source task.",
+    "description": "Propose 2 to 6 grounded subtasks, or none when the task cannot be split faithfully.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -37,11 +37,12 @@ _PLAN_TOOL = {
                     "properties": {
                         "title": {"type": "string"},
                         "description": {"type": "string"},
+                        "source_excerpt": {"type": "string", "description": "Exact excerpt from the task title or description that grounds this step."},
                         "estimation": {"type": "integer"},
                         "depends_on": {"type": "integer", "description": "Zero-based earlier subtask index, or omit."},
                         "due_date": {"type": "string", "description": "ISO deadline only when the source explicitly gives one for this step."},
                     },
-                    "required": ["title", "estimation"],
+                    "required": ["title", "estimation", "source_excerpt"],
                 },
             },
         },
@@ -69,6 +70,7 @@ def needs_split(task: Task) -> bool:
 
 async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
     settings = get_settings()
+    short_task = task.estimation is None or task.estimation <= 120
     response = await chat(
         [user_message(
             f"Title: {task.title}\nDescription: {task.description or ''}\n"
@@ -78,9 +80,23 @@ async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
         )],
         settings,
         system_prompt=(
-            "Split the task into 2–6 concrete, independently completable steps. "
-            "Each estimated step must be at most 120 minutes. Preserve the "
-            "source's intent and use the overall deadline. If one step must "
+            "Split the task into 2–6 concrete, independently completable steps, "
+            "each estimated at most 120 minutes. Preserve the source's exact "
+            "intent, objects, and scope. Do not add unrelated work. For each step, "
+            "give a verbatim source_excerpt from the title or description that "
+            "supports it. "
+            + (
+                "This task is at most two hours or has no estimate: only separate actions explicitly "
+                "stated in its title or description. Do not infer preparation, "
+                "research, review, follow-up, or other unstated steps. Return an "
+                "empty subtasks array if fewer than two distinct actions are stated. "
+                if short_task else
+                "This task is over two hours: you may infer "
+                "necessary intermediate steps, but ground each one in a concrete "
+                "detail or outcome from the title or description. Cover the stated "
+                "work without adding speculative deliverables or stakeholders. "
+            )
+            + "Use the overall deadline. If one step must "
             "finish before another, set depends_on to the earlier step's "
             "zero-based index. Leave it out for parallel steps. Set a step's "
             "due_date only if the source explicitly gives that step a separate "
@@ -96,17 +112,21 @@ async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
     if call is None:
         raise ValueError("Subtask planner returned no plan")
     raw = call.input.get("subtasks")
-    if not isinstance(raw, list) or not 2 <= len(raw) <= 6:
-        raise ValueError("Subtask planner must return 2–6 steps")
+    if not isinstance(raw, list) or (len(raw) != 0 and not 2 <= len(raw) <= 6):
+        raise ValueError("Subtask planner must return 0 or 2–6 steps")
     plans: list[SubtaskPlan] = []
+    source_text = f"{task.title}\n{task.description or ''}".casefold()
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ValueError("Invalid subtask plan")
         title = str(item.get("title") or "").strip()[:512]
+        excerpt = str(item.get("source_excerpt") or "").strip()
         estimate = int(item.get("estimation") or 0)
         dependency = item.get("depends_on")
         if not title or not 5 <= estimate <= 120:
             raise ValueError("Subtask title or estimate is invalid")
+        if not excerpt or excerpt.casefold() not in source_text:
+            raise ValueError("Subtask lacks source evidence")
         if dependency is not None:
             dependency = int(dependency)
             if not 0 <= dependency < index:
@@ -146,6 +166,8 @@ async def split_task(
     if getattr(task, "parent_task_id", None) or (not force and not needs_split(task)):
         return []
     plans = await propose_subtasks(task)
+    if not plans:
+        return []
     deadlines = _deadlines(task.due_date, plans)
     children: list[Task] = []
     for index, plan in enumerate(plans):
@@ -164,7 +186,7 @@ async def split_task(
         children.append(child)
         session.add(RawInput(
             source="subtask", content=plan.title,
-            source_metadata={"parent_task_id": str(task.id)},
+            source_metadata={"parent_task_id": str(task.id), "parent_title": task.title},
             status="open", task_id=child.id,
             processed_at=datetime.now(timezone.utc),
         ))

@@ -39,6 +39,7 @@ export function TasksPanel({
     task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
   const [today, tomorrow, later] = useMemo(() => {
     const sorted = tasks
+      .filter((task) => !task.is_container)
       .filter((task) => !selectedLabel || task.label === selectedLabel)
       .filter((task) => !kotxOnly || task.kotx_task_id != null)
       .sort((a, b) => compareTasks(a, b, sortMode));

@@ -56,6 +56,9 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
     raw = raw_inputs_store.latest_for_task(session, task.id)
     linked_inputs = raw_inputs_store.list_for_task(session, task.id)
+    if parent_id := getattr(task, "parent_task_id", None):
+        # The parent's original input is the source of each derived subtask.
+        linked_inputs.extend(raw_inputs_store.list_for_task(session, parent_id))
     children = tasks_store.children(session, task.id) if getattr(task, "is_container", False) else []
     child_statuses = tasks_store.latest_status_for(session, [child.id for child in children])
     return TaskRead.build(
@@ -85,7 +88,7 @@ async def list_tasks(
     limit: int = Query(100, le=500),
     session: Session = Depends(get_session),
 ) -> list[TaskRead]:
-    rows = tasks_store.list_(session, status=status_filter, limit=limit)
+    rows = tasks_store.list_(session, status=status_filter, limit=limit, include_containers=False)
     manual_map = tasks_store.is_manual_for(session, [t.id for t, _ in rows])
     return [_to_read(t, s, manual_map.get(t.id, False), session) for t, s in rows]
 

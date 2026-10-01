@@ -133,6 +133,9 @@ export function inputTitle(data: RawInput): string {
 // unlinked manual requests with the same normalized text also share a group.
 // Mirrors `_GROUPED_INPUT_IDS_SQL` on the backend.
 export function inputGroupKey(r: RawInput): string {
+  if (r.source === "subtask" && typeof r.source_metadata?.parent_task_id === "string") {
+    return `task:${r.source_metadata.parent_task_id}`;
+  }
   if (r.task_id) return `task:${r.task_id}`;
   const threadId = r.source_metadata?.thread_id;
   if (typeof threadId === "string" && threadId) {
@@ -234,17 +237,21 @@ export function groupInputs(inputs: RawInput[]): InboxGroup[] {
   for (const [key, rows] of buckets) {
     const members = [...rows].sort(byReceivedDesc);
     const newest = members[0];
-    const anchor = members.find((m) => m.task_id && m.status !== "duplicate" && m.status !== "processing");
+    const parentId = key.startsWith("task:") ? key.slice(5) : null;
+    const anchor = members.find((m) => m.task_id === parentId && m.status !== "duplicate" && m.status !== "processing")
+      ?? members.find((m) => m.task_id && m.status !== "duplicate" && m.status !== "processing");
     const liveTask = anchor?.status === "open" ? anchor : null;
     const closedTask = anchor?.status === "closed" ? anchor : null;
     const dismissedTask = anchor?.status === "not_task" ? anchor : null;
     const rep = liveTask ?? closedTask ?? dismissedTask ?? newest;
+    const parentTitle = members.find((m) => m.source === "subtask" && typeof m.source_metadata?.parent_title === "string")?.source_metadata.parent_title;
+    const title = anchor?.task_id === parentId ? inputTitle(rep) : parentTitle;
     groups.push({
       key,
       members,
       newest,
       sort: newest.received_at,
-      title: inputTitle(rep),
+      title: typeof title === "string" ? title : inputTitle(rep),
       liveTask,
       closedTask,
       dismissedTask,

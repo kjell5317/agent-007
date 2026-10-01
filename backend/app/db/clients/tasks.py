@@ -181,6 +181,7 @@ def list_(
     *,
     status: str | None = None,
     limit: int = 100,
+    include_containers: bool = True,
 ) -> list[tuple[Task, str]]:
     """Return tasks with their derived status.
 
@@ -189,6 +190,8 @@ def list_(
     an early row could evict every open task out of the window.
     """
     stmt = select(Task)
+    if not include_containers:
+        stmt = stmt.where(Task.is_container.is_(False))
     if status is not None:
         latest = (
             select(

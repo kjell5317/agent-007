@@ -71,6 +71,8 @@ _GROUPED_INPUT_IDS_SQL = text(
             id,
             received_at,
             CASE
+                WHEN source = 'subtask' AND COALESCE(source_metadata->>'parent_task_id', '') <> ''
+                    THEN 'task:' || (source_metadata->>'parent_task_id')
                 WHEN task_id IS NOT NULL
                     THEN 'task:' || task_id::text
                 -- github:* thread keys are a cross-source namespace (gmail +

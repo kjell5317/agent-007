@@ -53,3 +53,26 @@ test("manual requests differing only by URL scheme share an inbox group", () => 
   assert.equal(groups.length, 1);
   assert.equal(groups[0].members.map((row) => row.id).join(","), "second,first");
 });
+
+test("subtask inputs group under the parent task", () => {
+  const base = {
+    content: "Request", agent_trace: null, status: "open",
+    received_at: "2026-10-01T10:00:00Z",
+  };
+  const groups = exports.groupInputs([
+    { ...base, id: "parent", source: "gmail", source_metadata: {},
+      task_id: "parent-1", task_title: "Prepare proposal" },
+    { ...base, id: "child-a", source: "subtask",
+      source_metadata: { parent_task_id: "parent-1", parent_title: "Prepare proposal" },
+      task_id: "child-1", task_title: "Draft proposal" },
+    { ...base, id: "child-b", source: "subtask",
+      source_metadata: { parent_task_id: "parent-1", parent_title: "Prepare proposal" },
+      task_id: "child-2", task_title: "Send proposal" },
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].key, "task:parent-1");
+  assert.equal(groups[0].title, "Prepare proposal");
+  assert.equal(groups[0].liveTask.id, "parent");
+  assert.equal(groups[0].members.length, 3);
+});

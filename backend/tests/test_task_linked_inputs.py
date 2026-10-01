@@ -141,3 +141,28 @@ async def test_get_task_includes_linked_inputs(monkeypatch):
     assert payload["raw_inputs"][0]["source_url"] == (
         "https://mail.google.com/mail/u/0/#all/thread-b"
     )
+
+
+@pytest.mark.asyncio
+async def test_subtask_includes_parent_source_input(monkeypatch):
+    parent = _task(uuid.uuid4())
+    parent.title = "Prepare the proposal"
+    child = _task(uuid.uuid4())
+    child.parent_task_id = parent.id
+    child_input = _raw(child, source="subtask", status="open", received_at=child.created_at)
+    parent_input = _raw(parent, source="gmail", status="open", received_at=parent.created_at)
+
+    monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: child)
+    monkeypatch.setattr(tasks_api.tasks_store, "latest_status_for", lambda *_args: {child.id: "open"})
+    monkeypatch.setattr(tasks_api.tasks_store, "is_manual_for", lambda *_args: {child.id: False})
+    monkeypatch.setattr(tasks_api.raw_inputs_store, "latest_for_task", lambda *_args: child_input)
+    monkeypatch.setattr(
+        tasks_api.raw_inputs_store,
+        "list_for_task",
+        lambda _session, task_id: [parent_input] if task_id == parent.id else [child_input],
+    )
+
+    read = await tasks_api.get_task(child.id, session=object())
+
+    assert [linked.id for linked in read.raw_inputs] == [child_input.id, parent_input.id]
+    assert read.raw_inputs[1].task_title == parent.title

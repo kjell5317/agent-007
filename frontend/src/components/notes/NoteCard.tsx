@@ -25,18 +25,26 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<NoteAudit[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const hasHistory = note.history_count > 0;
 
   const toggleHistory = async () => {
+    if (!hasHistory || loadingHistory) return;
     if (showHistory) {
       setShowHistory(false);
       return;
     }
-    setShowHistory(true);
     setHistoryError(null);
+    setLoadingHistory(true);
     try {
-      setHistory(await api.noteHistory(note.id));
+      const entries = await api.noteHistory(note.id);
+      setHistory(entries);
+      setShowHistory(entries.length > 0);
     } catch (e) {
       setHistoryError((e as Error).message);
+      setShowHistory(true);
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -117,16 +125,19 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   return (
     <Card>
       <CardContent
-        role="button"
-        tabIndex={0}
-        aria-label={`${showHistory ? "Hide" : "Show"} history for note: ${note.content.slice(0, 80)}`}
-        aria-expanded={showHistory}
-        className="cursor-pointer"
+        role={hasHistory ? "button" : undefined}
+        tabIndex={hasHistory ? 0 : undefined}
+        aria-label={hasHistory ? `${showHistory ? "Hide" : "Show"} history for note: ${note.content.slice(0, 80)}` : undefined}
+        aria-expanded={hasHistory ? showHistory : undefined}
+        aria-busy={loadingHistory || undefined}
+        className={cn(hasHistory && "cursor-pointer")}
         onClick={(e) => {
+          if (!hasHistory) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           void toggleHistory();
         }}
         onKeyDown={(e) => {
+          if (!hasHistory) return;
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -165,10 +176,6 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
         <Collapsible open={showHistory}>
           <div className="mt-3 space-y-2 border-t pt-3 text-xs" onClick={(e) => e.stopPropagation()}>
             {historyError && <p className="text-destructive">{historyError}</p>}
-            {!history && !historyError && <p className="text-muted-foreground">Loading history…</p>}
-            {history?.length === 0 && (
-              <p className="text-muted-foreground">No changes recorded since history tracking began.</p>
-            )}
             {history?.length === 100 && (
               <p className="text-muted-foreground">Showing the 100 most recent changes.</p>
             )}

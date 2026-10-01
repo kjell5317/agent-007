@@ -788,15 +788,6 @@ function TaskSummary({
           )}
         </div>
 
-        {task.parent_task_id && (
-          <button
-            type="button"
-            onClick={() => onOpenTask(task.parent_task_id!)}
-            className="text-sm text-primary hover:underline"
-          >
-            View parent task
-          </button>
-        )}
         {task.subtasks.length > 0 && (
           <section className="space-y-2 rounded-lg border p-3">
             <h3 className="text-sm font-semibold">Subtasks</h3>

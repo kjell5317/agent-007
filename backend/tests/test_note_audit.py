@@ -21,17 +21,19 @@ def test_note_list_exposes_content_update_count_and_latest_time():
                 source_raw_input_ids=[], needs_review=False,
                 created_at=now, updated_at=now, source=None,
                 source_from=None, source_subject=None,
-                content_update_count=2, last_content_update_at=now,
+                history_count=3, content_update_count=2, last_content_update_at=now,
             )]
 
     class Session:
         def execute(self, statement, params):
             sql = str(statement)
+            assert "count(*) AS history_count" in sql
             assert "count(*) FILTER (WHERE action = 'content_updated')" in sql
             assert "ORDER BY updated_at DESC" in sql
             return Result()
 
     item = notes_store.list_all(Session())[0]
+    assert item.history_count == 3
     assert item.content_update_count == 2
     assert item.last_content_update_at == now
 

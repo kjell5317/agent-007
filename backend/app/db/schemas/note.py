@@ -23,6 +23,7 @@ class NoteRead(BaseModel):
     updated_at: datetime
     source_raw_input_ids: list[str] = Field(default_factory=list)
     needs_review: bool = False
+    history_count: int = 0
     content_update_count: int = 0
     last_content_update_at: datetime | None = None
 
@@ -39,6 +40,7 @@ class NoteRead(BaseModel):
             updated_at=item.updated_at,
             source_raw_input_ids=item.source_raw_input_ids or [],
             needs_review=item.needs_review,
+            history_count=item.history_count,
             content_update_count=item.content_update_count,
             last_content_update_at=item.last_content_update_at,
         )

@@ -21,6 +21,7 @@ import { fmtWhen } from "@/lib/dates";
 import {
   activeKotxRun,
   badgeKindLabel,
+  inputTitle,
   isAgentTaskFollowup,
   isDismissibleKotxRun,
   isKotxRun,
@@ -51,6 +52,7 @@ export function InboxGroup({
     useInboxActions(onChanged);
 
   const { members, newest, liveTask, closedTask, dismissedTask } = group;
+  const isSplitGroup = members.some((member) => member.source === "subtask");
   const unseenMemberKey = useMemo(
     () => unseenMemberIds.join("\u0000"),
     [unseenMemberIds],
@@ -116,7 +118,7 @@ export function InboxGroup({
   // task from thread"; a run already terminal gets no action. Mixed
   // gmail+kotx github threads keep the promote path.
   const kotxRunThread = !liveTask && !closedTask && !dismissedTask && members.every(isKotxRun);
-  const action = kotxRunThread
+  const action = isSplitGroup ? null : kotxRunThread
     ? isDismissibleKotxRun(newest)
       ? {
           label: "Dismiss run",
@@ -223,7 +225,7 @@ export function InboxGroup({
           >
             {/* Oldest-first reads like a conversation. */}
             {[...members].reverse().map((m) => (
-              <GroupMember key={m.id} data={m} />
+              <GroupMember key={m.id} data={m} onOpenTask={onOpenTask} />
             ))}
           </div>
         </Collapsible>
@@ -232,12 +234,12 @@ export function InboxGroup({
   );
 }
 
-function GroupMember({ data }: { data: RawInput }) {
+function GroupMember({ data, onOpenTask }: { data: RawInput; onOpenTask: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const header = (
     <>
       <span className="min-w-0 flex-1 truncate text-sm">
-        {senderName(data)}
+        {data.source === "subtask" ? inputTitle(data) : senderName(data)}
       </span>
       <span className="shrink-0">
         <InputStatusBadge input={data} />
@@ -247,6 +249,18 @@ function GroupMember({ data }: { data: RawInput }) {
       </span>
     </>
   );
+
+  if (data.source === "subtask" && data.task_id) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenTask(data.task_id!)}
+        className="flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border bg-muted/30 px-2 py-1.5 text-left hover:bg-accent"
+      >
+        {header}
+      </button>
+    );
+  }
 
   if (!hasInputDetails(data)) {
     return (

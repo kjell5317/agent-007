@@ -24,7 +24,7 @@ export interface AppData {
 function upsertTask(list: Task[], task: Task): Task[] {
   const rest = list.filter((t) => t.id !== task.id);
   // The hook only holds *open* tasks; a non-open push means it left the list.
-  if (task.status !== "open") return rest;
+  if (task.status !== "open" || task.is_container) return rest;
   return [...rest, task].sort(compareTasksBySchedule);
 }
 

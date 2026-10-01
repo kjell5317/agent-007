@@ -131,5 +131,8 @@ class _CommitSpy:
     def __init__(self) -> None:
         self.committed = False
 
+    def execute(self, _statement):
+        return None
+
     def commit(self) -> None:
         self.committed = True
