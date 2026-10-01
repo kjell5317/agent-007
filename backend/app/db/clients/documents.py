@@ -74,6 +74,7 @@ class CalendarMatch:
     starts_at: datetime | None
     similarity: float
     url: str | None = None
+    description: str | None = None
 
 
 # Hybrid: fuse a pgvector nearest-neighbour ranking with a Postgres FTS ranking
@@ -87,7 +88,7 @@ _CANDIDATE_POOL = 40
 
 _CALENDAR_HYBRID_SQL = text(
     """
-    WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),
+    WITH q AS (SELECT websearch_to_tsquery('simple', :raw_q) AS tsq),
     vec AS (
         SELECT d.id,
                row_number() OVER (ORDER BY d.embedding <=> CAST(:emb AS vector)) AS rnk
@@ -102,13 +103,13 @@ _CALENDAR_HYBRID_SQL = text(
     ),
     kw AS (
         SELECT d.id,
-               row_number() OVER (ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC) AS rnk
+               row_number() OVER (ORDER BY ts_rank_cd(d.tsv_simple, q.tsq) DESC) AS rnk
         FROM documents d, q
         WHERE d.provider = 'calendar'
-          AND q.tsq @@ d.tsv
+          AND q.tsq @@ d.tsv_simple
           AND (:time_min IS NULL OR d.starts_at >= CAST(:time_min AS timestamptz))
           AND (:time_max IS NULL OR d.starts_at < CAST(:time_max AS timestamptz))
-        ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC
+        ORDER BY ts_rank_cd(d.tsv_simple, q.tsq) DESC
         LIMIT :pool
     ),
     fused AS (
@@ -121,6 +122,7 @@ _CALENDAR_HYBRID_SQL = text(
       d.metadata->>'event_id' AS event_id,
       d.metadata->>'calendar_id' AS calendar_id,
       d.title AS summary,
+      d.snippet AS description,
       d.metadata->>'location' AS location,
       d.starts_at,
       d.url AS url,
@@ -140,7 +142,7 @@ _CALENDAR_HYBRID_SQL = text(
 def search_calendar_semantic(
     session: Session,
     *,
-    embedding: list[float],
+    embedding: list[float] | None,
     raw_text: str,
     k: int = 8,
     min_similarity: float = 0.0,
@@ -152,7 +154,10 @@ def search_calendar_semantic(
     matches surface regardless. Scoped to `[time_min, time_max)` on the event's
     start — pass `time_min=now` to drop past events. Ties break to the sooner
     event."""
-    emb_literal = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
+    emb_literal = (
+        "[" + ",".join(repr(float(x)) for x in embedding) + "]"
+        if embedding is not None else None
+    )
     rows = session.execute(
         _CALENDAR_HYBRID_SQL,
         {
@@ -174,6 +179,7 @@ def search_calendar_semantic(
             starts_at=r.starts_at,
             similarity=float(r.similarity) if r.similarity is not None else 0.0,
             url=r.url,
+            description=r.description,
         )
         for r in rows
         if r.event_id

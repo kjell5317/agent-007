@@ -24,6 +24,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import datetime, time as dt_time, timedelta, timezone, tzinfo
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -254,12 +255,47 @@ async def discover_updated_events(
         log.exception("discover · calendar document cache failed")
         session.rollback()
 
+    await _refresh_related_task_deadlines(session, changed_physical, cancelled_docs)
+
     await _plan_legs_for_changed_events(
         session, changed_physical, deleted_spans=deleted_spans, account_key=account_key,
     )
-
     return summary
 
+
+async def _refresh_related_task_deadlines(session, changed_events, cancelled_events) -> None:
+    from app.services.task.update import update_task
+
+    for event in changed_events:
+        if is_managed_event(event):
+            continue
+        linked = session.execute(
+            select(Task).where(
+                Task.related_event_calendar_id == event.calendar_id,
+                Task.related_event_id == event.id,
+                Task.related_event_due_derived.is_(True),
+            )
+        ).scalars().all()
+        due = event.start - timedelta(minutes=max(5, get_settings().event_buffer_minutes))
+        for task in linked:
+            if task.due_date != due:
+                await update_task(
+                    session, task.id,
+                    {"due_date": due, "related_event_due_derived": True},
+                )
+    for calendar_id, event_id in cancelled_events:
+        linked = session.execute(
+            select(Task).where(
+                Task.related_event_calendar_id == calendar_id,
+                Task.related_event_id == event_id,
+            )
+        ).scalars().all()
+        for task in linked:
+            await update_task(session, task.id, {
+                "related_event_id": None,
+                "related_event_calendar_id": None,
+                "related_event_due_derived": False,
+            })
 
 def _span_touches_window(
     span: tuple[datetime, datetime],

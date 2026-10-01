@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from app.agent.retrieval import search_notes
 from app.db.clients import notes as notes_store
-from app.services.input.embedding import embed
+from app.db.models.raw_input import RawInput
+from app.services.note.moderate import moderate_note
 
 
 async def run_search_notes(session, query: str) -> str:
@@ -21,18 +22,19 @@ async def save_notes(session, raw_input_id, raw_notes) -> list[str]:
     saved: list[str] = []
     if not isinstance(raw_notes, list):
         return saved
+    raw = session.get(RawInput, raw_input_id) if hasattr(session, "get") else None
+    source_context = (raw.content or "")[:600] if raw is not None else None
     for entry in raw_notes:
         content = str(entry or "").strip()
         if not content:
             continue
-        vec = await embed(content)
-        notes_store.create(
-            session,
-            content=content,
+        decision = await moderate_note(
+            session, content,
             source_raw_input_id=raw_input_id,
-            embedding=vec,
+            source_context=source_context,
         )
-        saved.append(content)
+        if decision.action in {"create", "merge", "review"}:
+            saved.append(decision.content)
     if saved:
         session.commit()
     return saved

@@ -14,6 +14,9 @@ export interface Task {
   estimation: number | null;
   location: string | null;
   label: string | null;
+  related_event_id: string | null;
+  related_event_calendar_id: string | null;
+  related_event_due_derived: boolean;
   status: TaskStatus;
   is_manual: boolean;
   kotx_task_id: number | null;
@@ -148,6 +151,8 @@ export interface Note {
   source_from: string | null;
   source_subject: string | null;
   source_raw_input_id: string | null;
+  source_raw_input_ids: string[];
+  needs_review: boolean;
   created_at: string;
 }
 

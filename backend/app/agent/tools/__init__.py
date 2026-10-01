@@ -4,6 +4,7 @@ from app.agent.tools.calendar_lookup import (
     run_create_event,
     run_delete_event,
     run_find_calendar_events,
+    run_get_event_details,
     run_update_event,
 )
 from app.agent.tools.notes_lookup import run_search_notes
@@ -23,6 +24,7 @@ __all__ = [
     "thread_followup_tools",
     "run_search_notes",
     "run_find_calendar_events",
+    "run_get_event_details",
     "run_create_event",
     "run_update_event",
     "run_delete_event",

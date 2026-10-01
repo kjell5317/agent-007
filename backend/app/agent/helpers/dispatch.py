@@ -18,12 +18,13 @@ from app.db.models.task import Task
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
+from app.services.event_context import apply_event_context
 
 # Fields carried on the tool variants that aren't task columns and must be
 # stripped before patching (`status` drives the lifecycle, not a column;
 # `notes` is long-term memory the runners persist separately).
 _NON_PATCH_FIELDS = frozenset(
-    {"existing_task_id", "reason", "confidence", "status", "notes"}
+    {"existing_task_id", "reason", "confidence", "status", "notes", "due_date_is_explicit"}
 )
 
 
@@ -44,6 +45,12 @@ async def apply_task_action(
         }
         if "due_date" in patch:
             patch["due_date"] = normalize_agent_due_date(patch["due_date"])
+        if patch.get("related_event_id") and patch.get("related_event_calendar_id"):
+            patch, _ = apply_event_context(
+                session,
+                {**patch, "due_date": patch.get("due_date", task.due_date)},
+                explicit_due=bool(tu_input.get("due_date_is_explicit")),
+            )
 
         outcome = "updated"
         # Reopen first so the calendar event exists before any field edits sync

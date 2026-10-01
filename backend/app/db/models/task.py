@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +41,11 @@ class Task(Base):
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     calendar_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    related_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    related_event_calendar_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    related_event_due_derived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
 
     # Link to the kotx coding-agent task driving this work, when there is one.
     # One 007 task per kotx task; transitions arrive via webhook/poll and are

@@ -24,6 +24,9 @@ from app.agent.helpers.llm import (
     user_message,
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
+from app.agent.tools.calendar_lookup import (
+    run_find_calendar_events, run_get_event_details, run_update_event,
+)
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.helpers.precedents import (
     candidate_trace_ref,
@@ -34,6 +37,7 @@ from app.config import get_settings
 from app.db.clients import labels as labels_store
 from app.db.clients import tasks
 from app.db.clients.raw_inputs import SimilarInput
+from app.services.event_context import apply_event_context, mentions_event
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +98,12 @@ async def extract_task_fields(
     if not harvest_notes:
         create_tool = _without_notes(create_tool)
     search_tool = next(t for t in tools if t["name"] == "search_notes")
-    extract_tools = [search_tool, create_tool]
+    calendar_tool = next(t for t in tools if t["name"] == "find_calendar_events")
+    event_details_tool = next(t for t in tools if t["name"] == "get_event_details")
+    event_update_tool = next(t for t in tools if t["name"] == "update_event")
+    extract_tools = [
+        search_tool, calendar_tool, event_details_tool, event_update_tool, create_tool
+    ]
     if candidate_task_ids:
         extract_tools.append(next(tool for tool in tools if tool["name"] == "update_task"))
 
@@ -110,8 +119,9 @@ async def extract_task_fields(
     }
     if web_trace:
         trace["web_search"] = web_trace
-    for attempt in range(MAX_TOOL_ITERATIONS - 1):
-        is_last = attempt == MAX_TOOL_ITERATIONS - 2
+    iteration_limit = MAX_TOOL_ITERATIONS + 2 if mentions_event(raw.content or "") else MAX_TOOL_ITERATIONS
+    for attempt in range(iteration_limit - 1):
+        is_last = attempt == iteration_limit - 2
         # On the last turn, require a terminal action. Candidate matches need
         # either create_task or update_task; without candidates only create_task fits.
         call_tools = [create_tool, extract_tools[-1]] if is_last and candidate_task_ids else extract_tools
@@ -146,21 +156,48 @@ async def extract_task_fields(
             messages.append(user_message("Call create_task or update_task now. Do not reply in prose."))
             continue
 
-        # Execute search_notes calls before accepting a terminal create_task,
-        # so mixed tool responses still leave a complete trace.
-        search_uses = [tu for tu in tool_uses if tu.name == "search_notes"]
+        # Run lookups and event edits before accepting a terminal task action.
+        search_uses = [tu for tu in tool_uses if tu.name in {
+            "search_notes", "find_calendar_events", "get_event_details", "update_event"
+        }]
         results = []
         for tu in search_uses:
             tin = tu.input or {}
-            out = await run_search_notes(
-                session, str(tin.get("query") or ""),
-            )
+            changed_state = False
+            if tu.name == "search_notes":
+                out = await run_search_notes(session, str(tin.get("query") or ""))
+            elif tu.name == "find_calendar_events":
+                out = await run_find_calendar_events(
+                    session,
+                    query=tin.get("query"),
+                    time_min=tin.get("time_min"),
+                    time_max=tin.get("time_max"),
+                )
+            elif tu.name == "get_event_details":
+                out = await run_get_event_details(
+                    session,
+                    event_id=str(tin.get("event_id") or ""),
+                    calendar_id=str(tin.get("calendar_id") or ""),
+                )
+            else:
+                out, updated_id = await run_update_event(
+                    session,
+                    event_id=str(tin.get("event_id") or ""),
+                    summary=tin.get("summary"),
+                    start=tin.get("start"),
+                    end=tin.get("end"),
+                    description=tin.get("description"),
+                    location=tin.get("location"),
+                )
+                changed_state = updated_id is not None
+                if updated_id:
+                    trace.setdefault("events_updated", []).append(updated_id)
             iter_log.setdefault("tool_results", []).append(
                 _tool_result_entry(
                     tu.name,
                     tin,
                     out,
-                    changed_state=False,
+                    changed_state=changed_state,
                 )
             )
             results.append(tool_result_message(tu, out))
@@ -206,6 +243,10 @@ async def extract_task_fields(
 
     if "due_date" in payload:
         payload["due_date"] = normalize_agent_due_date(payload["due_date"])
+    explicit_due = bool(payload.pop("due_date_is_explicit", False))
+    payload, event_warning = apply_event_context(session, payload, explicit_due=explicit_due)
+    if event_warning:
+        trace["event_warning"] = event_warning
     if source_url and not payload.get("link"):
         payload["link"] = source_url
     # Notes ride on `create_task` but aren't task fields — persist and strip

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from app.db.clients.notes import NoteListItem
@@ -20,6 +20,8 @@ class NoteRead(BaseModel):
     source_subject: str | None
     source_raw_input_id: uuid.UUID | None
     created_at: datetime
+    source_raw_input_ids: list[str] = Field(default_factory=list)
+    needs_review: bool = False
 
     @classmethod
     def from_item(cls, item: "NoteListItem") -> "NoteRead":
@@ -31,4 +33,6 @@ class NoteRead(BaseModel):
             source_subject=item.source_subject,
             source_raw_input_id=item.source_raw_input_id,
             created_at=item.created_at,
+            source_raw_input_ids=item.source_raw_input_ids or [],
+            needs_review=item.needs_review,
         )

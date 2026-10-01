@@ -24,7 +24,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,7 @@ from app.agent.tools import (
     chat_tools,
     run_create_event,
     run_delete_event,
+    run_get_event_details,
     run_update_event,
 )
 from app import observability as obs
@@ -54,6 +55,7 @@ from app.config import get_settings
 from app.db.clients import labels as labels_store
 from app.db.clients import notes as notes_store
 from app.db.clients import tasks as tasks_store
+from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
 from app.db.schemas.search import SearchHit
 from app.db.schemas.task import TaskCreate
@@ -175,6 +177,8 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     # Source-specific extras.
     if meta.get("start"):
         seg.append(_clock(meta["start"], zone))
+    if h.source == "calendar" and meta.get("calendar_id"):
+        seg.append(f"calendar_id={meta['calendar_id']}")
     if meta.get("location"):
         seg.append(f"@ {meta['location']}")
     if meta.get("mime"):
@@ -524,6 +528,14 @@ async def _dispatch(
             purpose = _purpose("calendar", _opt(tin, "query"), fallback="calendar")
             return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
 
+        if name == "get_event_details":
+            out = await run_get_event_details(
+                session,
+                event_id=str(tin.get("event_id") or ""),
+                calendar_id=str(tin.get("calendar_id") or ""),
+            )
+            return out, _trace(name, purpose="read calendar event", summary=out)
+
         if name == "drive_search":
             hits = await search_drive(
                 session,
@@ -641,6 +653,12 @@ async def _dispatch(
 
 async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     due = normalize_agent_due_date(tin.get("due_date"))
+    from app.services.event_context import apply_event_context
+    event_fields, event_warning = apply_event_context(
+        session, {**tin, "due_date": due},
+        explicit_due=bool(tin.get("due_date_is_explicit")),
+    )
+    due = event_fields.get("due_date")
     task = tasks_store.create(
         session,
         TaskCreate(
@@ -651,12 +669,28 @@ async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict
             location=str(tin.get("location")) if tin.get("location") else None,
             link=str(tin.get("link")) if tin.get("link") else None,
             label=str(tin.get("label")) if tin.get("label") else None,
+            related_event_id=event_fields.get("related_event_id"),
+            related_event_calendar_id=event_fields.get("related_event_calendar_id"),
+            related_event_due_derived=bool(event_fields.get("related_event_due_derived")),
         ),
     )
+    anchor_text = "\n".join(
+        part for part in (task.title, task.description or "") if part
+    )
+    session.add(RawInput(
+        source="chat",
+        content=anchor_text,
+        source_metadata={"subject": task.title, "chat_created": True},
+        status="open",
+        task_id=task.id,
+        processed_at=datetime.now(timezone.utc),
+        embedding=await embed(anchor_text),
+    ))
     await schedule_task(session, task)
     session.commit()
     return (
-        f"Created task '{task.title}' (id {task.id}).",
+        f"Created task '{task.title}' (id {task.id})."
+        + (f" {event_warning}" if event_warning else ""),
         _trace(
             "create_task",
             purpose=f"create task {task.title}"[:80],
@@ -702,15 +736,22 @@ async def _create_note(session: Session, tin: dict[str, Any]) -> tuple[str, dict
         return "create_note: `content` is required.", _trace(
             "create_note", purpose="save note", summary="empty content", status="failed"
         )
-    vec = await embed(content)
-    notes_store.create(session, content=content, source_raw_input_id=None, embedding=vec)
+    from app.services.note.moderate import moderate_note
+    decision = await moderate_note(session, content)
     session.commit()
+    result = {
+        "skip": "That fact is already recorded or is better kept in a task or event.",
+        "merge": "Updated an existing note with the new fact.",
+        "create": "Saved note to long-term memory.",
+        "review": "Saved the note for review before it enters memory.",
+    }[decision.action]
     return (
-        "Saved note to long-term memory.",
+        result,
         _trace(
             "create_note",
             purpose="save note",
-            summary=content[:120],
-            changed_state=True,
+            summary=result,
+            changed_state=decision.action != "skip",
+            artifact_refs=[f"note:{decision.note_id}"] if decision.note_id else [],
         ),
     )

@@ -104,6 +104,9 @@ _CREATE_TASK_PROPS: dict = {
         ),
     },
     "description": {"type": "string"},
+    "related_event_id": {"type": "string", "description": "Id of the event this work prepares for; use a verified calendar search result."},
+    "related_event_calendar_id": {"type": "string", "description": "Calendar id from the same verified event result."},
+    "due_date_is_explicit": {"type": "boolean", "description": "True only when the user or source stated this task deadline explicitly."},
     "estimation": {
         "type": "integer",
         "description": "Estimated duration in minutes. Always set a best-guess value.",
@@ -166,6 +169,8 @@ _UPDATE_TASK_PROPS: dict = {
         ),
     },
     "notes": _NOTES_SCHEMA,
+    "related_event_id": {"type": "string"},
+    "related_event_calendar_id": {"type": "string"},
 }
 
 _EXISTING_TASK_ID_SCHEMA = {
@@ -234,6 +239,18 @@ _NEW_INPUT_TOOLS = [
                     "description": "ISO 8601 end of the search window (exclusive).",
                 },
             },
+        },
+    },
+    {
+        "name": "get_event_details",
+        "description": "Read the full cached details of an event found by find_calendar_events.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                "calendar_id": {"type": "string"},
+            },
+            "required": ["event_id", "calendar_id"],
         },
     },
     {
@@ -570,6 +587,18 @@ _CHAT_TOOLS = [
                     "description": "ISO 8601 / YYYY-MM-DD end of the window (exclusive).",
                 },
             },
+        },
+    },
+    {
+        "name": "get_event_details",
+        "description": "Read full details of a calendar_search result before using it for a task deadline.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                "calendar_id": {"type": "string"},
+            },
+            "required": ["event_id", "calendar_id"],
         },
     },
     {

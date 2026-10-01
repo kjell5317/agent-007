@@ -30,6 +30,7 @@ from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import (
     run_create_event,
     run_find_calendar_events,
+    run_get_event_details,
     run_update_event,
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
@@ -51,6 +52,7 @@ from app.agent.tools import new_input_tools
 from app.config import get_settings
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
+from app.services.event_context import apply_event_context
 from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
@@ -164,6 +166,12 @@ async def run_new_input_agent(
                         time_max=str(tin.get("time_max")) if tin.get("time_max") else None,
                         query=str(tin.get("query")) if tin.get("query") else None,
                     )
+                elif tu.name == "get_event_details":
+                    out = await run_get_event_details(
+                        session,
+                        event_id=str(tin.get("event_id") or ""),
+                        calendar_id=str(tin.get("calendar_id") or ""),
+                    )
                 elif tu.name == "create_event":
                     out, event_id = await run_create_event(
                         session,
@@ -208,7 +216,7 @@ async def run_new_input_agent(
                         out,
                         status=(
                             "success"
-                            if tu.name in {"search_notes", "find_calendar_events", "create_event"}
+                            if tu.name in {"search_notes", "find_calendar_events", "get_event_details", "create_event"}
                             or changed_event
                             else "failed"
                         ),
@@ -239,6 +247,14 @@ async def run_new_input_agent(
         if tu.name == "create_task":
             payload = dict(tu_input)
             due_date = normalize_agent_due_date(payload.get("due_date"))
+            event_fields, event_warning = apply_event_context(
+                session,
+                {**payload, "due_date": due_date},
+                explicit_due=bool(payload.get("due_date_is_explicit")),
+            )
+            due_date = event_fields.get("due_date")
+            if event_warning:
+                trace["event_warning"] = event_warning
             # The schema marks `label` required, but the LLM sometimes skips
             # it — warn and leave NULL so the user can assign one later.
             if not payload.get("label"):
@@ -256,6 +272,9 @@ async def run_new_input_agent(
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
                     label=str(payload.get("label")) if payload.get("label") else None,
+                    related_event_id=event_fields.get("related_event_id"),
+                    related_event_calendar_id=event_fields.get("related_event_calendar_id"),
+                    related_event_due_derived=bool(event_fields.get("related_event_due_derived")),
                 ),
             )
             trace["outcome"] = "task_created"

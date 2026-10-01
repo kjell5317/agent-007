@@ -72,24 +72,18 @@ async def run_find_calendar_events(
     q = (query or "").strip()
     if q:
         embedding = await embed(q)
-        if embedding is not None:
-            # Default the window start to now so past events (starting before
-            # now) drop out; an explicit time_min from the agent still wins.
-            floor = start or datetime.now(tz)
-            matches = documents_store.search_calendar_semantic(
-                session,
-                embedding=embedding,
-                raw_text=q,
-                k=settings.calendar_semantic_match_limit,
-                min_similarity=settings.calendar_semantic_min_similarity,
-                time_min=floor.isoformat(),
-                time_max=end.isoformat() if end else None,
-            )
-            return _format_matches(q, matches, tz)
-        # No embeddings configured: fall back to a window listing if one was
-        # given, otherwise say so.
-        if start is None or end is None:
-            return "find_calendar_events: semantic search needs embeddings configured."
+        # The language-neutral keyword branch works even without embeddings.
+        floor = start or datetime.now(tz)
+        matches = documents_store.search_calendar_semantic(
+            session,
+            embedding=embedding,
+            raw_text=q,
+            k=settings.calendar_semantic_match_limit,
+            min_similarity=settings.calendar_semantic_min_similarity,
+            time_min=floor.isoformat(),
+            time_max=end.isoformat() if end else None,
+        )
+        return _format_matches(q, matches, tz)
 
     if start is None or end is None:
         return "find_calendar_events: provide `query`, or both `time_min` and `time_max`."
@@ -100,7 +94,8 @@ async def run_find_calendar_events(
     )
     if not events:
         return "find_calendar_events: no existing events in that window."
-    lines = [_event_line(e.id, e.start.astimezone(tz).isoformat(), e.summary, e.location)
+    lines = [_event_line(e.id, e.start.astimezone(tz).isoformat(), e.summary, e.location,
+                         calendar_id=e.calendar_id, description=e.description)
              for e in events]
     return "Existing calendar events:\n" + "\n".join(lines)
 
@@ -118,9 +113,12 @@ def _parse_bound(value: str | None, tz: ZoneInfo) -> datetime | bool | None:
     return _aware(parsed, tz)
 
 
-def _event_line(event_id: str, when: str, summary: str, location: str | None) -> str:
+def _event_line(event_id: str, when: str, summary: str, location: str | None,
+                *, calendar_id: str | None = None, description: str | None = None) -> str:
     loc = f" @ {location}" if location else ""
-    return f"- id={event_id} | {when} | {summary}{loc}"
+    calendar = f" | calendar_id={calendar_id}" if calendar_id else ""
+    details = f" | details={description[:240]}" if description else ""
+    return f"- id={event_id}{calendar} | {when} | {summary}{loc}{details}"
 
 
 def _format_matches(query: str, matches, tz: ZoneInfo) -> str:
@@ -130,9 +128,31 @@ def _format_matches(query: str, matches, tz: ZoneInfo) -> str:
     for m in matches:
         when = m.starts_at.astimezone(tz).isoformat() if m.starts_at else "(no time)"
         lines.append(
-            _event_line(m.event_id, when, m.summary, m.location) + f" | sim={m.similarity:.2f}"
+            _event_line(m.event_id, when, m.summary, m.location,
+                        calendar_id=m.calendar_id, description=m.description)
+            + f" | sim={m.similarity:.2f}"
         )
     return f"Cached calendar events matching '{query}':\n" + "\n".join(lines)
+
+
+async def run_get_event_details(session: Session, *, event_id: str, calendar_id: str) -> str:
+    document = documents_store.get_by_external_id(
+        session, provider="calendar", external_id=f"{calendar_id}:{event_id}"
+    )
+    if document is None:
+        try:
+            event = await get_event(session, calendar_id=calendar_id, event_id=event_id)
+        except Exception:
+            return "get_event_details: event is unavailable."
+        return (
+            f"Event id={event.id} calendar_id={calendar_id} starts={event.start.isoformat()}\n"
+            f"{event.summary}\n{event.location or ''}\n{(event.description or '')[:4000]}"
+        )
+    start = document.starts_at.isoformat() if document.starts_at else "unknown"
+    return (
+        f"Event id={event_id} calendar_id={calendar_id} starts={start}\n"
+        f"{(document.content or document.title)[:4000]}"
+    )
 
 
 async def run_create_event(
@@ -171,7 +191,8 @@ async def run_create_event(
         private_properties={PROP_KIND: KIND_INVITATION, PROP_CREATED_BY: CREATED_BY_AGENT},
     )
     return (
-        f"create_event: added '{summary}' at {start_dt.astimezone(tz).isoformat()}.",
+        f"create_event: added '{summary}' at {start_dt.astimezone(tz).isoformat()} "
+        f"with id={event.id} calendar_id={calendar_id}.",
         event.id,
     )
 

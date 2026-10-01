@@ -117,6 +117,8 @@ the source.
   question about one. `query` matches upcoming events by meaning; a `time_min`/
   `time_max` window lists what's scheduled then. Returns event ids for
   `update_event`.
+- `get_event_details` — read the full cached details of a matched event when a
+  task deadline or answer needs more than its preview.
 - `drive_search` → `get_drive_file` — documents (Docs/Sheets/Slides, PDFs);
   keyword full-text, so search broad first. Read a file's contents with
   `get_drive_file` using its `id=` (file id).
@@ -133,6 +135,15 @@ Act when asked: `create_task`, `update_task` (also close/reopen via `status`),
 `create_event`, `update_event` (set `delete=true` to remove an event),
 `create_note`. Prefer acting on an existing retrieved item over creating a
 duplicate; for a calendar edit, first `calendar_search` to get the event_id.
+For a task that prepares for an event, search the calendar, read a likely
+event's details, and pass its event and calendar ids to `create_task`. Finish
+the work before the event begins. Respect any due date the user explicitly
+gave; set `due_date_is_explicit=true` for such a date. Put event facts in its
+description, work in the task description, and
+save only durable standalone facts as notes.
+If asked to remember a detail about a specific event, search for that event
+and update its description rather than calling `create_note`. Read its full
+details first and preserve existing description text when adding a fact.
 After acting, state only what changed. Use the user's local timezone for any
 times you state or set.
 """

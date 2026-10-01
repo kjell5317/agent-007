@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, DateTime, ForeignKey, Text, func
+from sqlalchemy import Boolean, Computed, DateTime, ForeignKey, JSON, Text, func
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,8 @@ class Note(Base):
     )
 
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    source_raw_input_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     # Generated in the DB (keyword side of the hybrid lookup); read-only here.
     tsv: Mapped[str | None] = mapped_column(

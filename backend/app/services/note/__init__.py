@@ -1,0 +1,1 @@
+"""Moderated durable memory writes."""

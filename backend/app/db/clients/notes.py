@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Float, String, bindparam, select, text
+from sqlalchemy import Float, String, bindparam, func, select, text
 from sqlalchemy.orm import Session
 
 from app.config.settings import get_settings
@@ -22,10 +22,33 @@ def create(
         content=content,
         source_raw_input_id=source_raw_input_id,
         embedding=embedding,
+        source_raw_input_ids=[str(source_raw_input_id)] if source_raw_input_id else [],
     )
     session.add(row)
     session.flush()
     return row
+
+
+def find_exact(session: Session, content: str) -> Note | None:
+    return session.execute(
+        select(Note).where(func.lower(func.trim(Note.content)) == content.strip().lower()).limit(1)
+    ).scalar_one_or_none()
+
+
+def add_source(session: Session, note_id: uuid.UUID, raw_input_id: uuid.UUID | None) -> None:
+    if raw_input_id is None:
+        return
+    note = session.get(Note, note_id)
+    if note is not None:
+        sources = list(note.source_raw_input_ids or [])
+        if str(raw_input_id) not in sources:
+            note.source_raw_input_ids = [*sources, str(raw_input_id)]
+
+
+def mark_review(session: Session, note_id: uuid.UUID) -> None:
+    note = session.get(Note, note_id)
+    if note is not None:
+        note.needs_review = True
 
 
 @dataclass
@@ -54,6 +77,7 @@ _SIMILAR_NOTES_SQL = text(
         SELECT n.id, row_number() OVER (ORDER BY n.embedding <=> CAST(:emb AS vector)) AS rnk
         FROM notes n
         WHERE n.embedding IS NOT NULL
+          AND NOT n.needs_review
           AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :min_sim
         ORDER BY n.embedding <=> CAST(:emb AS vector)
         LIMIT :pool
@@ -62,6 +86,7 @@ _SIMILAR_NOTES_SQL = text(
         SELECT n.id, row_number() OVER (ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC) AS rnk
         FROM notes n, q
         WHERE q.tsq @@ n.tsv
+          AND NOT n.needs_review
         ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC
         LIMIT :pool
     ),
@@ -144,6 +169,8 @@ class NoteListItem:
     source: str | None
     source_from: str | None
     source_subject: str | None
+    source_raw_input_ids: list[str] | None = None
+    needs_review: bool = False
 
 
 # Enriches each note with its originating raw_input's source + sender/subject
@@ -151,7 +178,8 @@ class NoteListItem:
 # whose source input was deleted (SET NULL) and chat-authored notes (no source).
 _LIST_NOTES_TEMPLATE = """
     SELECT
-      n.id, n.content, n.source_raw_input_id, n.created_at,
+      n.id, n.content, n.source_raw_input_id, n.source_raw_input_ids,
+      n.needs_review, n.created_at,
       r.source AS source,
       r.source_metadata->>'from' AS source_from,
       r.source_metadata->>'subject' AS source_subject
@@ -172,6 +200,8 @@ def _to_item(row) -> NoteListItem:
         source=row.source,
         source_from=row.source_from,
         source_subject=row.source_subject,
+        source_raw_input_ids=row.source_raw_input_ids,
+        needs_review=row.needs_review,
     )
 
 
@@ -199,6 +229,7 @@ def update(
         return False
     row.content = content
     row.embedding = embedding
+    row.needs_review = False
     session.flush()
     return True
 

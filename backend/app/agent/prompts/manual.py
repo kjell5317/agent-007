@@ -33,13 +33,21 @@ Optional: description, location (home is possible), link (most relevant
 source URL), notes (durable, cross-project long-term memory; the `notes` field
 describes what makes a good note; skip ephemeral content).
 
-You also have one non-terminal tool:
+You also have non-terminal lookup tools:
 
 - `search_notes(query)` — look up the agent's long-term memory (facts
   saved from past inputs). Call this before deciding when the current
   input mentions a person, project, account, or fact you might have
   recorded earlier. You may call it more than once. After searching
   you still need to call a terminal task tool to finish.
+- `find_calendar_events(query?, time_min?, time_max?)` finds events related to
+  the task. Use it when the request names an event or asks for preparation.
+- `get_event_details(event_id, calendar_id)` reads the likely event's details.
+  Link a clear match using both ids. Complete preparation before its start;
+  set `due_date_is_explicit` only when the input states a deadline. Keep event
+  facts in its description and work instructions in the task description.
+- `update_event` may add new event details to an existing primary-calendar
+  event. Read the full description first and preserve it when adding facts.
 
 When a "Candidate tasks" section is present, use `update_task` with its
 existing_task_id if the input changes that task. Include at least one changed

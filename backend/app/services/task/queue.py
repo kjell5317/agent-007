@@ -36,6 +36,7 @@ from app.db.models.raw_input import RawInput
 from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
+from app.services.event_context import apply_event_context, mentions_event
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.input.embedding import candidate_query_text, embed
@@ -141,6 +142,13 @@ async def _process(
         is_override = raw.processed_at is not None
 
         needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
+        if getattr(raw, "source", None) == "manual" and not user_fields.get("related_event_id"):
+            needs_agent = needs_agent or mentions_event(
+                " ".join(str(value or "") for value in (
+                    user_fields.get("title"), user_fields.get("description"),
+                    getattr(raw, "content", None)
+                ))
+            )
         agent_fields: dict = {}
         agent_trace: dict[str, Any] = {"branch": "manual"}
         if needs_agent:
@@ -215,6 +223,11 @@ async def _process(
             agent_trace["extraction_fallback"] = True
 
         merged = {**agent_fields, **user_fields}
+        merged, event_warning = apply_event_context(
+            session, merged, explicit_due=user_fields.get("due_date") is not None
+        )
+        if event_warning:
+            agent_trace["event_warning"] = event_warning
         task = tasks_store.create(
             session,
             TaskCreate(
@@ -225,8 +238,19 @@ async def _process(
                 location=merged.get("location"),
                 link=merged.get("link"),
                 label=merged.get("label"),
+                related_event_id=merged.get("related_event_id"),
+                related_event_calendar_id=merged.get("related_event_calendar_id"),
+                related_event_due_derived=bool(merged.get("related_event_due_derived")),
             ),
         )
+
+        if getattr(raw, "source", None) == "manual" and getattr(raw, "embedding", None) is None:
+            try:
+                raw.embedding = await embed(candidate_query_text(
+                    raw.content or "", raw.source_metadata or {}
+                ))
+            except Exception:
+                log.exception("manual task input embedding failed · raw=%s", raw.id)
 
         raw.status = "open"
         raw.task_id = task.id

@@ -206,18 +206,17 @@ async def search_calendar(
     q = (query or "").strip()
     if q:
         embedding = await _embed_or_none(q)
-        if embedding is not None:
-            floor = time_min or datetime.now(tz).isoformat()
-            matches = documents_store.search_calendar_semantic(
-                session,
-                embedding=embedding,
-                raw_text=q,
-                k=settings.calendar_semantic_match_limit,
-                min_similarity=settings.calendar_semantic_min_similarity,
-                time_min=floor,
-                time_max=time_max,
-            )
-            return [_calendar_match_hit(m) for m in matches]
+        floor = time_min or datetime.now(tz).isoformat()
+        matches = documents_store.search_calendar_semantic(
+            session,
+            embedding=embedding,
+            raw_text=q,
+            k=settings.calendar_semantic_match_limit,
+            min_similarity=settings.calendar_semantic_min_similarity,
+            time_min=floor,
+            time_max=time_max,
+        )
+        return [_calendar_match_hit(m) for m in matches]
     return await _calendar_window(session, tz, time_min, time_max)
 
 
@@ -322,11 +321,13 @@ def _note_hit(h) -> SearchHit:
 def _calendar_match_hit(m) -> SearchHit:
     meta = _calendar_meta(m.starts_at, m.location) or {}
     meta.update(_similarity_meta(m.similarity))
+    if m.calendar_id:
+        meta["calendar_id"] = m.calendar_id
     return SearchHit(
         type="document",
         id=m.event_id,
         title=m.summary,
-        snippet=m.location,
+        snippet=m.description or m.location,
         url=m.url,
         source="calendar",
         status="event",
@@ -341,13 +342,13 @@ def _calendar_event_hit(e: CalendarEvent) -> SearchHit:
         type="document",
         id=e.id,
         title=e.summary or "(untitled)",
-        snippet=e.location,
+        snippet=(e.description or "")[:240] or e.location,
         url=e.html_link,
         source="calendar",
         status="event",
         ts=e.start,
         score=0.0,
-        meta=_calendar_meta(e.start, e.location),
+        meta={**(_calendar_meta(e.start, e.location) or {}), "calendar_id": e.calendar_id},
     )
 
 

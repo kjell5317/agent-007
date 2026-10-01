@@ -81,7 +81,8 @@ _GROUPED_INPUT_IDS_SQL = text(
                 ELSE 'input:' || id::text
             END AS group_key
         FROM raw_inputs
-        WHERE (CAST(:status AS text) IS NULL OR status = :status)
+        WHERE source <> 'chat'
+          AND (CAST(:status AS text) IS NULL OR status = :status)
           AND (CAST(:source AS text) IS NULL OR source = :source)
     ),
     top_groups AS (

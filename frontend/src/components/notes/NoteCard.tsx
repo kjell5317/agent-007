@@ -33,7 +33,7 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
       toast.error("Note can't be empty");
       return;
     }
-    if (content === note.content) {
+    if (content === note.content && !note.needs_review) {
       setMode("view");
       return;
     }
@@ -107,6 +107,11 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
           />
 
           <div className="min-w-0 flex-1">
+            {note.needs_review && (
+              <div className="mb-1 text-xs font-medium text-amber-600">
+                Needs review · Edit and save to approve
+              </div>
+            )}
             <div className="whitespace-pre-wrap break-words text-sm leading-snug">
               {note.content}
             </div>

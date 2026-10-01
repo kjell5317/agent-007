@@ -15,6 +15,9 @@ class TaskBase(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
+    related_event_id: str | None = None
+    related_event_calendar_id: str | None = None
+    related_event_due_derived: bool = False
 
 
 class TaskCreate(TaskBase):
@@ -29,6 +32,9 @@ class TaskUpdate(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
+    related_event_id: str | None = None
+    related_event_calendar_id: str | None = None
+    related_event_due_derived: bool | None = None
 
 
 class TaskPromote(BaseModel):
@@ -46,6 +52,8 @@ class TaskPromote(BaseModel):
     estimation: int | None = None
     location: str | None = None
     label: str | None = None
+    related_event_id: str | None = None
+    related_event_calendar_id: str | None = None
 
 
 class TaskOpenRequest(TaskPromote):
@@ -159,6 +167,9 @@ class TaskRead(TaskBase):
                 "estimation": task.estimation,
                 "location": task.location,
                 "label": task.label,
+                "related_event_id": getattr(task, "related_event_id", None),
+                "related_event_calendar_id": getattr(task, "related_event_calendar_id", None),
+                "related_event_due_derived": getattr(task, "related_event_due_derived", False),
                 "status": status_,
                 "is_manual": is_manual,
                 "kotx_task_id": getattr(task, "kotx_task_id", None),

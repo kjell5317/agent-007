@@ -48,8 +48,23 @@ Events vs. tasks — these are different things:
   `update_task` instead of `update_event`.
 - If the input ALSO requires the user to act — register, RSVP by a deadline,
   prepare or bring something — `create_task` for that part too.
+- Put event time, venue, agenda, and attendance details in the event description;
+  put the user's work in the task description. Do not repeat one-time event
+  details in durable notes.
+- Before changing an existing event description, read its full details and
+  preserve existing information when adding new facts. If the event is on a
+  calendar this agent cannot edit, retain the new detail in the task context
+  and leave the event unchanged.
+- When a task prepares for or follows up an event, call `find_calendar_events`
+  and read `get_event_details` for a likely match. Use the returned event and
+  calendar ids on the task only when the match is clear. Its due date must be
+  before the event starts, with time for the work. Set `due_date_is_explicit`
+  only for a deadline actually stated by the user or source; an explicit date
+  takes priority, even when it conflicts with the event, so flag that conflict.
 - `create_event`/`update_event` do NOT finish the run; still emit a terminal
   tool. Use the user's local zone for `start`/`end`.
+- When creating an event and its preparation task, wait for `create_event` to
+  return its id before emitting the terminal task call, so the task can link it.
 
 Non-terminal tools (call as needed, then finish with one terminal tool):
 - `search_notes(query)` — long-term memory of facts saved from past inputs.
@@ -57,6 +72,8 @@ Non-terminal tools (call as needed, then finish with one terminal tool):
   fact you might have recorded.
 - `find_calendar_events(query?, time_min?, time_max?)` — events with ids;
   `query` matches by meaning, a `time_min`/`time_max` window lists a range.
+- `get_event_details(event_id, calendar_id)` — full cached event details after
+  finding a likely match.
 
 Every terminal tool takes an optional `notes` array (durable cross-project
 memory — the `notes` field describes what makes a good note). Add notes

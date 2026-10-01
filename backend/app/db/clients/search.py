@@ -140,12 +140,21 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
         tsq = "to_tsquery('english', :tsquery)"
         score = f"ts_rank_cd({b['fts']}, {tsq}) * {recency}"
         where = f"{b['fts']} @@ {tsq}"
+        if corpus in {TASK, DOCUMENT}:
+            simple = "to_tsquery('simple', :tsquery)"
+            simple_fts = "t.tsv_simple" if corpus == TASK else "d.tsv_simple"
+            score = (
+                f"greatest(ts_rank_cd({b['fts']}, {tsq}), "
+                f"ts_rank_cd({simple_fts}, {simple})) * {recency}"
+            )
+            where = f"({where} OR {simple_fts} @@ {simple})"
     else:
         score = recency
         where = "TRUE"
     select = f"{b['select']}, {b['ts']} AS ts, {score} AS score"
 
     if corpus == INPUT:
+        parts.append("r.source <> 'chat'")
         # Keep only the best-scoring (then newest) input per thread — DISTINCT ON
         # picks it before the outer query re-ranks everything by score.
         inner = (
@@ -376,13 +385,13 @@ _VEC_BRANCH = {
         "        r.embedding <=> CAST(:emb AS vector) AS dist\n"
         "   FROM raw_inputs r\n"
         "  WHERE :emb IS NOT NULL AND r.embedding IS NOT NULL\n"
-        f"    AND r.processed_at IS NOT NULL AND r.status <> 'duplicate'{_F_INPUT}\n"
+        f"    AND r.processed_at IS NOT NULL AND r.status <> 'duplicate' AND r.source <> 'chat'{_F_INPUT}\n"
         "  ORDER BY r.embedding <=> CAST(:emb AS vector) LIMIT :pool)"
     ),
     NOTE: (
         "(SELECT n.id::text AS id, 'note' AS type, n.embedding <=> CAST(:emb AS vector) AS dist\n"
         "   FROM notes n\n"
-        f"  WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL{_F_NOTE}\n"
+        f"  WHERE :emb IS NOT NULL AND n.embedding IS NOT NULL AND NOT n.needs_review{_F_NOTE}\n"
         "    AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :note_min_sim\n"
         "  ORDER BY n.embedding <=> CAST(:emb AS vector) LIMIT :pool)"
     ),
@@ -395,20 +404,21 @@ _VEC_BRANCH = {
 }
 _KW_BRANCH = {
     TASK: (
-        "(SELECT t.id::text AS id, 'task' AS type, ts_rank_cd(t.tsv, q.tsq) AS rank\n"
-        f"   FROM tasks t, q WHERE q.tsq @@ t.tsv{_F_TASK}\n"
-        "  ORDER BY ts_rank_cd(t.tsv, q.tsq) DESC LIMIT :pool)"
+        "(SELECT t.id::text AS id, 'task' AS type, "
+        "greatest(ts_rank_cd(t.tsv, q.tsq), ts_rank_cd(t.tsv_simple, q.simple_tsq)) AS rank\n"
+        f"   FROM tasks t, q WHERE (q.tsq @@ t.tsv OR q.simple_tsq @@ t.tsv_simple){_F_TASK}\n"
+        "  ORDER BY rank DESC LIMIT :pool)"
     ),
     INPUT: (
         "(SELECT r.id::text AS id, 'input' AS type, ts_rank_cd(r.tsv, q.tsq) AS rank\n"
         "   FROM raw_inputs r, q\n"
         "  WHERE q.tsq @@ r.tsv AND r.processed_at IS NOT NULL\n"
-        f"    AND r.status <> 'duplicate'{_F_INPUT}\n"
+        f"    AND r.status <> 'duplicate' AND r.source <> 'chat'{_F_INPUT}\n"
         "  ORDER BY ts_rank_cd(r.tsv, q.tsq) DESC LIMIT :pool)"
     ),
     NOTE: (
         "(SELECT n.id::text AS id, 'note' AS type, ts_rank_cd(n.tsv, q.tsq) AS rank\n"
-        f"   FROM notes n, q WHERE q.tsq @@ n.tsv{_F_NOTE}\n"
+        f"   FROM notes n, q WHERE q.tsq @@ n.tsv AND NOT n.needs_review{_F_NOTE}\n"
         "  ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC LIMIT :pool)"
     ),
     DOCUMENT: (
@@ -442,7 +452,8 @@ def _hybrid_sql(corpora: frozenset[str]):
     vec_members = [_VEC_BRANCH[c] for c in (INPUT, NOTE, DOCUMENT) if c in corpora]
     kw_members = [_KW_BRANCH[c] for c in (TASK, INPUT, NOTE, DOCUMENT) if c in corpora]
     sql = (
-        "WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq),\n"
+        "WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq, "
+        "websearch_to_tsquery('simple', :raw_q) AS simple_tsq),\n"
         + _cte("vec", vec_members, "dist") + ",\n"
         + _cte("kw", kw_members, "rank DESC") + ",\n"
         "fused AS (SELECT coalesce(vec.id, kw.id) AS id, coalesce(vec.type, kw.type) AS type,\n"

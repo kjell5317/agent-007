@@ -46,6 +46,9 @@ def create(session: Session, payload: TaskCreate) -> Task:
         estimation=payload.estimation,
         location=payload.location,
         label=payload.label,
+        related_event_id=payload.related_event_id,
+        related_event_calendar_id=payload.related_event_calendar_id,
+        related_event_due_derived=payload.related_event_due_derived,
     )
     session.add(row)
     session.flush()
@@ -101,7 +104,8 @@ def clear_calendar_event(session: Session, task: Task) -> Task:
 
 _UPDATABLE = {
     "title", "description", "link", "due_date", "estimation",
-    "location", "label",
+    "location", "label", "related_event_id", "related_event_calendar_id",
+    "related_event_due_derived",
 }
 
 
@@ -122,6 +126,8 @@ def update(session: Session, task_id: uuid.UUID, **fields) -> Task | None:
         if key == "title" and value is None:
             continue
         setattr(row, key, value)
+    if "due_date" in fields and "related_event_due_derived" not in fields:
+        row.related_event_due_derived = False
     session.flush()
     return row
 
