@@ -36,6 +36,11 @@ async def close_task(
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
+    if getattr(task, "is_container", False):
+        children = tasks_store.children(session, task_id)
+        statuses = tasks_store.latest_status_for(session, [child.id for child in children])
+        if any(statuses.get(child.id, "open") != "closed" for child in children):
+            raise ValueError("Complete all subtasks before closing the parent task")
     kotx_task_id = task.kotx_task_id
     vacated = vacated_commute_window(task)
     # Award completion points before any status flip / orphan delete, so we
@@ -69,3 +74,11 @@ async def close_task(
             await kotx_client.discard_task(kotx_task_id)
         except Exception:  # noqa: BLE001 — closing must never fail on kotx
             log.exception("kotx discard failed · kotx_task=%s", kotx_task_id)
+    parent_id = getattr(task, "parent_task_id", None)
+    if parent_id:
+        siblings = tasks_store.children(session, parent_id)
+        statuses = tasks_store.latest_status_for(session, [sibling.id for sibling in siblings])
+        if siblings and all(statuses.get(sibling.id, "open") == "closed" for sibling in siblings):
+            parent_status = tasks_store.latest_status_for(session, [parent_id]).get(parent_id, "open")
+            if parent_status != "closed":
+                await close_task(session, parent_id, award_points=False)

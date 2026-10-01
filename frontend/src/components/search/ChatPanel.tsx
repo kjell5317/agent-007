@@ -109,7 +109,7 @@ function CitationModal({
 function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-[15px] text-primary-foreground">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-[15px] text-primary-foreground">
         {content}
       </div>
     </div>
@@ -131,10 +131,8 @@ function AssistantBubble({
   return (
     <div className="max-w-[92%] space-y-2">
       {message.tools.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {message.tools.map((t, i) => (
-            <ToolChip key={i} trace={t} />
-          ))}
+        <div>
+          <ToolChip traces={message.tools} />
         </div>
       )}
       {showTyping ? (
@@ -165,16 +163,15 @@ interface PanelPos {
   maxHeight: number;
 }
 
-function ToolChip({ trace }: { trace: ChatToolTrace }) {
+function ToolChip({ traces }: { traces: ChatToolTrace[] }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<PanelPos | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const failed = trace.status === "failed";
-  const params =
-    trace.params && Object.keys(trace.params).length > 0 ? trace.params : null;
-  const result = trace.result?.trim() || null;
-  const hasDetail = Boolean(params || result);
+  const failed = traces.some((trace) => trace.status === "failed");
+  const hasDetail = traces.some((trace) =>
+    Boolean((trace.params && Object.keys(trace.params).length > 0) || trace.result?.trim()),
+  );
 
   // Anchor the panel to the chip in viewport coordinates so it never gets
   // clipped by a scrolling ancestor: flip above when there's no room below,
@@ -238,7 +235,7 @@ function ToolChip({ trace }: { trace: ChatToolTrace }) {
             return !v;
           });
         }}
-        title={trace.result_summary}
+        title={traces.map((trace) => trace.result_summary).join("\n")}
         className={cn(
           "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
           failed
@@ -248,7 +245,9 @@ function ToolChip({ trace }: { trace: ChatToolTrace }) {
         )}
       >
         <Wrench className="h-3 w-3" />
-        <span className="max-w-[16rem] truncate font-medium">{trace.purpose || trace.name}</span>
+        <span className="max-w-[16rem] truncate font-medium">
+          {traces.length === 1 ? traces[0].purpose || traces[0].name : `${traces.length} tool calls`}
+        </span>
         {failed ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
         {hasDetail && (
           <ChevronDown
@@ -272,9 +271,18 @@ function ToolChip({ trace }: { trace: ChatToolTrace }) {
             }}
             className="z-50 space-y-2.5 overflow-y-auto rounded-xl border bg-card p-3 text-xs shadow-lg"
           >
-            <div className="font-mono text-[11px] text-muted-foreground">{trace.name}</div>
-            {params && <ToolDetailSection title="Parameters" body={JSON.stringify(params, null, 2)} />}
-            {result && <ToolDetailSection title="Result" body={result} />}
+            {traces.map((trace, i) => {
+              const params = trace.params && Object.keys(trace.params).length > 0 ? trace.params : null;
+              const result = trace.result?.trim() || null;
+              return (
+                <div key={i} className="space-y-1.5 border-b border-border pb-2.5 last:border-0 last:pb-0">
+                  <div className="font-medium">{trace.purpose || trace.name}</div>
+                  <div className="font-mono text-[11px] text-muted-foreground">{trace.name}</div>
+                  {params && <ToolDetailSection title="Parameters" body={JSON.stringify(params, null, 2)} />}
+                  {result && <ToolDetailSection title="Result" body={result} />}
+                </div>
+              );
+            })}
           </div>,
           document.body,
         )}

@@ -29,6 +29,7 @@ from app.db.schemas.task import (
     TaskPromote,
     TaskRawInputRead,
     TaskRead,
+    SubtaskSummary,
     TaskUpdate,
 )
 from app.events import publish_task
@@ -46,6 +47,7 @@ from app.services.task.create import create_manual_task
 from app.services.task.dismiss import dismiss_task
 from app.services.task.open import open_task_from_input
 from app.services.task.reopen import enqueue_reopen_task
+from app.services.task.split import split_task as split_task_svc
 from app.services.task.update import update_task as update_task_svc
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -54,6 +56,8 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
     raw = raw_inputs_store.latest_for_task(session, task.id)
     linked_inputs = raw_inputs_store.list_for_task(session, task.id)
+    children = tasks_store.children(session, task.id) if getattr(task, "is_container", False) else []
+    child_statuses = tasks_store.latest_status_for(session, [child.id for child in children])
     return TaskRead.build(
         task,
         status_,
@@ -66,6 +70,12 @@ def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
             )
             for linked in linked_inputs
         ],
+        subtasks=[SubtaskSummary(
+            id=child.id, title=child.title, due_date=child.due_date,
+            estimation=child.estimation,
+            status=child_statuses.get(child.id, "open"),
+            depends_on_task_id=child.depends_on_task_id,
+        ) for child in children],
     )
 
 
@@ -94,6 +104,22 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
     row = tasks_store.get(session, task_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual, session)
+
+
+@router.post("/{task_id}/split", response_model=TaskRead)
+async def split_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    try:
+        children = await split_task_svc(session, row, force=True)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    if not children:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This task cannot be split")
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return _to_read(row, status_, is_manual, session)
@@ -209,6 +235,8 @@ async def close_task(task_id: uuid.UUID, session: Session = Depends(get_session)
         await close_task_svc(session, task_id)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.post("/{task_id}/not_task", status_code=status.HTTP_204_NO_CONTENT)

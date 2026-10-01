@@ -1,6 +1,15 @@
 export type TaskStatus = "open" | "duplicate" | "closed" | "not_task";
 export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled";
 
+export interface SubtaskSummary {
+  id: string;
+  title: string;
+  due_date: string;
+  estimation: number | null;
+  status: TaskStatus;
+  depends_on_task_id: string | null;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -17,6 +26,11 @@ export interface Task {
   related_event_id: string | null;
   related_event_calendar_id: string | null;
   related_event_due_derived: boolean;
+  parent_task_id: string | null;
+  depends_on_task_id: string | null;
+  is_container: boolean;
+  due_date_derived: boolean;
+  subtasks: SubtaskSummary[];
   status: TaskStatus;
   is_manual: boolean;
   kotx_task_id: number | null;

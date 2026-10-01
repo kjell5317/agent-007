@@ -7,6 +7,15 @@ from pydantic import BaseModel, Field
 TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled"]
 
 
+class SubtaskSummary(BaseModel):
+    id: uuid.UUID
+    title: str
+    due_date: datetime
+    estimation: int | None
+    status: str
+    depends_on_task_id: uuid.UUID | None = None
+
+
 class TaskBase(BaseModel):
     title: str
     description: str | None = None
@@ -18,6 +27,10 @@ class TaskBase(BaseModel):
     related_event_id: str | None = None
     related_event_calendar_id: str | None = None
     related_event_due_derived: bool = False
+    parent_task_id: uuid.UUID | None = None
+    depends_on_task_id: uuid.UUID | None = None
+    is_container: bool = False
+    due_date_derived: bool = False
 
 
 class TaskCreate(TaskBase):
@@ -119,6 +132,7 @@ class TaskRead(TaskBase):
     schedule_status: TaskScheduleStatus
     source_url: str | None = None
     raw_inputs: list[TaskRawInputRead] = Field(default_factory=list)
+    subtasks: list[SubtaskSummary] = Field(default_factory=list)
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
     kotx_task_id: int | None = None
@@ -136,6 +150,7 @@ class TaskRead(TaskBase):
         is_manual: bool,
         source_url: str | None = None,
         raw_inputs: list[TaskRawInputRead] | None = None,
+        subtasks: list[SubtaskSummary] | None = None,
         scheduling: str | None = None,
     ) -> "TaskRead":
         """Assemble the read model from an ORM row plus its derived
@@ -153,6 +168,8 @@ class TaskRead(TaskBase):
             latest = next((item for item in (raw_inputs or []) if item.status != "duplicate"), None)
             scheduling = scheduling if scheduling is not None else (latest.agent_trace or {}).get("scheduling") if latest else None
             schedule_status = "pending" if scheduling in {"pending", "not_needed"} else "unscheduled"
+        if getattr(task, "is_container", False):
+            schedule_status = "pending"
         return cls.model_validate(
             {
                 "id": task.id,
@@ -164,12 +181,17 @@ class TaskRead(TaskBase):
                 "schedule_status": schedule_status,
                 "source_url": source_url,
                 "raw_inputs": raw_inputs or [],
+                "subtasks": subtasks or [],
                 "estimation": task.estimation,
                 "location": task.location,
                 "label": task.label,
                 "related_event_id": getattr(task, "related_event_id", None),
                 "related_event_calendar_id": getattr(task, "related_event_calendar_id", None),
                 "related_event_due_derived": getattr(task, "related_event_due_derived", False),
+                "parent_task_id": getattr(task, "parent_task_id", None),
+                "depends_on_task_id": getattr(task, "depends_on_task_id", None),
+                "is_container": getattr(task, "is_container", False),
+                "due_date_derived": getattr(task, "due_date_derived", False),
                 "status": status_,
                 "is_manual": is_manual,
                 "kotx_task_id": getattr(task, "kotx_task_id", None),

@@ -28,6 +28,7 @@ from app.db.models.task import Task
 from app.events import publish_task
 from app.services.calendar import update_task_event
 from app.services.plan import update_task_to_calendar
+from app.services.task.split import maybe_split_task, refresh_child_deadlines
 
 log = logging.getLogger(__name__)
 
@@ -50,10 +51,24 @@ async def update_task(
     session.commit()
 
     changed = set(fields.keys())
+    if getattr(row, "is_container", False):
+        if "due_date" in changed:
+            await refresh_child_deadlines(session, row)
+        publish_task(session, task_id)
+        return row
+    if changed & {"title", "estimation"} and not getattr(row, "parent_task_id", None):
+        if await maybe_split_task(session, row):
+            publish_task(session, task_id)
+            return row
     if changed & PLAN_TRIGGER_FIELDS:
         await update_task_to_calendar(session, row, changed_fields=changed)
     else:
         await update_task_event(session, row, changed_fields=changed)
+
+    if getattr(row, "parent_task_id", None) and "estimation" in changed:
+        parent = tasks_store.get(session, row.parent_task_id)
+        if parent is not None:
+            await refresh_child_deadlines(session, parent)
 
     publish_task(session, task_id)
     return row

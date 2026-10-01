@@ -130,6 +130,18 @@ _INPUT_THREAD_KEY = (
     "ELSE 'input:' || r.id::text END"
 )
 
+# Search suggestions stay short; chat retrieval gets enough of each message to
+# answer from the result directly. Fetch one extra character to detect clipping.
+MESSAGE_CONTENT_CHARS = 3000
+_INPUT_SELECT_TEMPLATE = (
+    "'input' AS type, r.id::text AS id, "
+    "coalesce(nullif(r.source_metadata->>'subject',''), "
+    "left(coalesce(r.content,''), 80)) AS title, "
+    "left(coalesce(r.content,''), {content_chars}) AS snippet, NULL::text AS url, "
+    "r.task_id::text AS task_id, r.source AS source, "
+    "r.source_metadata->>'from' AS sender, r.status AS status"
+)
+
 _HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, ts, score"
 
 
@@ -154,7 +166,7 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
     select = f"{b['select']}, {b['ts']} AS ts, {score} AS score"
 
     if corpus == INPUT:
-        parts.append("r.source <> 'chat'")
+        where += " AND r.source <> 'chat'"
         # Keep only the best-scoring (then newest) input per thread — DISTINCT ON
         # picks it before the outer query re-ranks everything by score.
         inner = (

@@ -562,6 +562,21 @@ _CHAT_TOOLS = [
         },
     },
     {
+        "name": "get_message_details",
+        "description": (
+            "Read the stored body and metadata of one Gmail or Slack message. "
+            "Use the `id=` from a `messages_search` result when its preview is "
+            "cut off or the question needs details beyond the preview."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "The message id from a search result."},
+            },
+            "required": ["message_id"],
+        },
+    },
+    {
         "name": "calendar_search",
         "description": (
             "Find events on the user's calendar — meetings, appointments, talks. "
@@ -782,6 +797,21 @@ WEB_SEARCH_CHAT_TOOL = {
         "type": "object",
         "properties": {"query": {"type": "string", "description": "Specific public-web question to verify."}},
         "required": ["query"],
+    },
+}
+
+SPLIT_TASK_CHAT_TOOL = {
+    "name": "split_task",
+    "description": (
+        "Break an existing broad task into linked, individually scheduled subtasks. "
+        "Use when its estimate is over 120 minutes, its title joins distinct "
+        "actions (and/und/et/y/& and similar words), or the user asks to split it. "
+        "The task must already exist; use its id from a task hit or create_task result."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"task_id": {"type": "string", "description": "Task UUID to split."}},
+        "required": ["task_id"],
     },
 }
 

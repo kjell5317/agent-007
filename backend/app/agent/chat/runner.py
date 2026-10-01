@@ -19,6 +19,7 @@ The runner is transport-agnostic: it pushes structured events (`citations`,
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -45,6 +46,7 @@ from app.agent.prompts import chat_system_prompt
 from app.agent.tools import (
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
+    SPLIT_TASK_CHAT_TOOL,
     WEB_SEARCH_CHAT_TOOL,
     chat_tools,
     run_create_event,
@@ -55,6 +57,7 @@ from app.agent.tools import (
 from app import observability as obs
 from app.config import get_settings
 from app.db.clients import labels as labels_store
+from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
@@ -63,6 +66,7 @@ from app.db.schemas.task import TaskCreate
 from app.services import github, notion_mcp
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
+from app.services.task.split import maybe_split_task, split_task
 from app.services.search.contacts import search_contacts
 from app.services.search.drive import get_drive_file, search_drive
 from app.services.search.retrieve import (
@@ -214,6 +218,8 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
         body = snippet[:1200 if h.source == "calendar" else 200]
     else:
         body = f"{title} — {snippet[:1200 if h.source == 'calendar' else 200]}"
+    if h.type == "input" and snippet and len(snippet) >= 200:
+        body += "… [preview; use get_message_details with id to read the stored message]"
     return f"{prefix} — {body}"
 
 
@@ -307,7 +313,7 @@ async def run_chat(
         # Fast local pre-injection: the top tasks + notes for this message, no
         # external calls. Everything else is a per-source tool the model calls on
         # demand. `retrieve` degrades to [] on an embed failure rather than sinking
-        # the answer; a repeated tool search is harmless (citation dedup drops it).
+        # the answer.
         entries = cites.add(await retrieve(session, query))
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
 
@@ -322,6 +328,7 @@ async def run_chat(
         # Optional integrations expose their read-only tools only when connected, so
         # the model never sees a tool that would just fail with "not connected".
         tools = chat_tools(labels_store.agent_descriptions(session))
+        tools.append(SPLIT_TASK_CHAT_TOOL)
         if settings.chat_web_search and settings.gemini_api_key:
             tools.append(WEB_SEARCH_CHAT_TOOL)
         if notion_mcp.is_connected(session):
@@ -340,6 +347,7 @@ async def run_chat(
         changed_state = False
         used_web_search = False
         exhausted = False
+        completed_queries: dict[tuple[str, str], str] = {}
         for _ in range(settings.search_chat_max_iterations):
             resp = await stream_chat(
                 messages,
@@ -357,10 +365,21 @@ async def run_chat(
                 break
             messages.append(assistant_message(resp))
             for tc in resp.tool_calls:
+                raw_query = tc.input.get("query") if isinstance(tc.input, dict) else None
+                query_key = None
+                if isinstance(raw_query, str):
+                    canonical_input = dict(tc.input)
+                    canonical_input["query"] = " ".join(raw_query.split()).casefold()
+                    query_key = (tc.name, json.dumps(canonical_input, sort_keys=True, default=str))
+                if query_key is not None and query_key in completed_queries:
+                    messages.append(tool_result_message(tc, completed_queries[query_key]))
+                    continue
                 used_web_search = used_web_search or tc.name == "web_search"
                 result_text, trace = await _dispatch(session, cites, tc, settings, emit)
-                # Surface the raw call + full result so the UI can expand a chip
-                # into params/result; result_summary stays the collapsed label.
+                if query_key is not None:
+                    completed_queries[query_key] = result_text
+                # Surface the raw call + full result so the UI can expand the
+                # grouped tool pill into each call's params/result.
                 trace["params"] = tc.input or {}
                 trace["result"] = result_text
                 changed_state = changed_state or bool(trace.get("changed_state"))
@@ -519,6 +538,31 @@ async def _dispatch(
             hits = await search_notes(session, q)
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("notes", q))
 
+        if name == "split_task":
+            try:
+                task_id = uuid.UUID(str(tin.get("task_id")))
+            except (ValueError, TypeError):
+                return "split_task: invalid task id.", _trace(
+                    name, purpose="split task", summary="invalid task id", status="failed"
+                )
+            task = tasks_store.get(session, task_id)
+            if task is None:
+                return "split_task: task not found.", _trace(
+                    name, purpose="split task", summary="task not found", status="failed"
+                )
+            already_split = bool(getattr(task, "is_container", False))
+            children = await split_task(session, task, force=True)
+            if not children:
+                return "split_task: this task cannot be split.", _trace(
+                    name, purpose="split task", summary="cannot split", status="failed"
+                )
+            out = "Subtasks: " + "; ".join(f"{child.title} (id {child.id})" for child in children)
+            return out, _trace(
+                name, purpose=f"split {_chip_query(task.title)}", summary=out,
+                changed_state=not already_split,
+                artifact_refs=[f"task:{c.id}" for c in children],
+            )
+
         if name == "web_search":
             out = await research_web(q, settings)
             return out, _trace(
@@ -535,6 +579,31 @@ async def _dispatch(
                 after=_opt(tin, "after"),
             )
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("messages", q))
+
+        if name == "get_message_details":
+            try:
+                message_id = uuid.UUID(str(tin.get("message_id") or ""))
+            except ValueError:
+                return "get_message_details: invalid message id.", _trace(
+                    name, purpose="read message", summary="invalid message id", status="failed"
+                )
+            message = raw_inputs_store.get(session, message_id)
+            if message is None or message.source not in {"gmail", "slack"}:
+                return "get_message_details: message not found.", _trace(
+                    name, purpose="read message", summary="message not found", status="failed"
+                )
+            meta = message.source_metadata or {}
+            details = [
+                f"id={message.id}",
+                f"source={message.source}",
+                f"from={meta.get('from') or '(unknown)'}",
+                f"subject={meta.get('subject') or '(none)'}",
+                f"received_at={message.received_at.isoformat() if message.received_at else '(unknown)'}",
+                "content:",
+                message.content or "(empty)",
+            ]
+            result = "\n".join(details)
+            return result, _trace(name, purpose="read message", summary="message details")
 
         if name == "calendar_search":
             hits = await search_calendar(
@@ -704,10 +773,13 @@ async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict
         processed_at=datetime.now(timezone.utc),
         embedding=await embed(anchor_text),
     ))
-    await schedule_task(session, task)
+    children = await maybe_split_task(session, task)
+    if not children:
+        await schedule_task(session, task)
     session.commit()
     return (
         f"Created task '{task.title}' (id {task.id})."
+        + (f" Split into {len(children)} subtasks." if children else "")
         + (f" {event_warning}" if event_warning else ""),
         _trace(
             "create_task",

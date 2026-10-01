@@ -100,7 +100,7 @@ _SIMILAR_NOTES_SQL = text(
         FROM notes n
         WHERE n.embedding IS NOT NULL
           AND NOT n.needs_review
-          AND (:before_at IS NULL OR (n.created_at, n.id) <
+          AND (CAST(:before_at AS timestamptz) IS NULL OR (n.created_at, n.id) <
                (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
           AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :min_sim
         ORDER BY n.embedding <=> CAST(:emb AS vector)
@@ -111,7 +111,7 @@ _SIMILAR_NOTES_SQL = text(
         FROM notes n, q
         WHERE q.tsq @@ n.tsv
           AND NOT n.needs_review
-          AND (:before_at IS NULL OR (n.created_at, n.id) <
+          AND (CAST(:before_at AS timestamptz) IS NULL OR (n.created_at, n.id) <
                (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
         ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC
         LIMIT :pool

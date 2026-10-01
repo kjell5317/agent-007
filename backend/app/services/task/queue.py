@@ -36,6 +36,7 @@ from app.db.models.raw_input import RawInput
 from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
+from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context, mentions_event
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
@@ -287,7 +288,9 @@ async def _process(
             _research_tasks.add(research_task)
             research_task.add_done_callback(_research_done)
         try:
-            await schedule_task(session, task)
+            children = await maybe_split_task(session, task)
+            if not children:
+                await schedule_task(session, task)
         except Exception:
             log.exception("task scheduling failed · task=%s", task.id)
         manual_trace["scheduling"] = (

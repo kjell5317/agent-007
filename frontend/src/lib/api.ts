@@ -63,6 +63,7 @@ export const api = {
   listTasks: (status?: string) =>
     request<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
   getTask: (id: string) => request<Task>(`/tasks/${id}`),
+  splitTask: (id: string) => request<Task>(`/tasks/${id}/split`, { method: "POST" }),
   createTask: (text: string) =>
     request<TaskCreationAccepted>("/tasks", {
       method: "POST",

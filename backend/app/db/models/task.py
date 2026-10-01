@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +46,14 @@ class Task(Base):
     related_event_due_derived: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    depends_on_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    is_container: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    due_date_derived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     # Link to the kotx coding-agent task driving this work, when there is one.
     # One 007 task per kotx task; transitions arrive via webhook/poll and are

@@ -49,6 +49,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
 from app.services.commute.legs import FAILED_LEG_SECONDS
 from app.services.location import (
@@ -176,6 +177,8 @@ async def schedule_task(
 
     Returns the placed `(start, end)` on success, `None` otherwise.
     """
+    if getattr(task, "is_container", False):
+        return None
     if task.due_date is None:
         log.debug("plan.schedule · task=%s has no due_date", task.id)
         return None
@@ -205,6 +208,14 @@ async def schedule_task(
                 _depth=_depth,
                 _displaced=_displaced,
             )
+    if planned is not None and _depth == 0 and getattr(task, "parent_task_id", None):
+        for dependent in tasks_store.dependents(session, task.id):
+            if (
+                dependent.calendar_event_id
+                and dependent.scheduled_date
+                and to_user_tz(dependent.scheduled_date) < planned.end
+            ):
+                await schedule_task(session, dependent, notify=False)
     return (planned.start, planned.end) if planned is not None else None
 
 
@@ -406,6 +417,19 @@ async def plan_task_slot(
     now = datetime.now(user_tz()) + timedelta(minutes=settings.slot_min_lead_minutes)
     window_start = max(now, due - timedelta(days=LEAD_DAYS))
     window_end = due
+    predecessor_id = getattr(task, "depends_on_task_id", None)
+    if predecessor_id:
+        predecessor = tasks_store.get(session, predecessor_id)
+        if predecessor is None:
+            raise ValueError("predecessor task is missing")
+        status = tasks_store.latest_status_for(session, [predecessor_id]).get(predecessor_id, "open")
+        if status != "closed":
+            if predecessor.scheduled_date is None or predecessor.calendar_event_id is None:
+                raise ValueError("predecessor task is not scheduled")
+            predecessor_end = to_user_tz(predecessor.scheduled_date) + timedelta(
+                minutes=_duration_minutes(predecessor, settings)
+            )
+            window_start = max(window_start, predecessor_end)
     if window_end <= window_start:
         raise ValueError("deadline is in the past")
 

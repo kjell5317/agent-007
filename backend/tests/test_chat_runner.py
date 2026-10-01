@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -154,6 +155,44 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_chat_reuses_identical_query_result_within_turn(monkeypatch):
+    calls = []
+    scripted = [
+        _resp(tool_calls=(ToolCall(id="1", name="search_notes", input={"query": "3. Januar"}),)),
+        _resp(tool_calls=(ToolCall(id="2", name="search_notes", input={"query": "  3.   januar  "}),)),
+        _resp(text="Found the note."),
+    ]
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        response = scripted.pop(0)
+        if response.text:
+            await on_delta(response.text)
+        return response
+
+    async def fake_search_notes(session, query):
+        calls.append(query)
+        return [_hit("note", "n1", "3. Januar")]
+
+    async def no_hits(session, query):
+        return []
+
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "search_notes", fake_search_notes)
+    monkeypatch.setattr(chat_runner, "retrieve", no_hits)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+    events = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="3. Januar")], emit=emit)
+    assert calls == ["3. Januar"]
+    assert len([event for event, _ in events if event == "tool_call"]) == 1
+    assert events[-1][0] == "done"
+
+
+@pytest.mark.asyncio
 async def test_chat_web_search_is_separate_from_main_model_tools(monkeypatch, _stub_answer_cache):
     settings = get_settings().model_copy(
         update={"chat_web_search": True, "gemini_api_key": "test"}
@@ -243,6 +282,34 @@ def test_context_line_surfaces_action_ids():
         "E1", _hit("document", "ev123", "Standup", source="calendar", status="event"), _TZ
     )
     assert "[E1]" in cal and "id=ev123" in cal
+
+
+def test_message_preview_identifies_its_detail_tool():
+    snippet = "BEGIN TEMPLATE // " + "x" * 182
+    line = chat_runner._context_line(
+        "I2", _hit("input", "message-id", "Registration", snippet=snippet, source="gmail"), _TZ
+    )
+    assert "get_message_details" in line
+    assert "id=message-id" in line
+
+
+@pytest.mark.asyncio
+async def test_get_message_details_returns_stored_body(monkeypatch):
+    message_id = uuid.uuid4()
+    body = "BEGIN TEMPLATE // " + "important content " * 80
+    row = SimpleNamespace(
+        id=message_id, source="gmail", source_metadata={"subject": "Registration"},
+        received_at=datetime(2026, 9, 30), content=body,
+    )
+    monkeypatch.setattr(chat_runner.raw_inputs_store, "get", lambda session, id_: row)
+    result, trace = await chat_runner._dispatch(
+        object(), Citations(),
+        ToolCall(id="details", name="get_message_details", input={"message_id": str(message_id)}),
+        get_settings(), _noop_emit,
+    )
+    assert body in result
+    assert "subject=Registration" in result
+    assert trace["status"] == "success"
 
 
 def test_context_line_surfaces_contact_birthday_and_address():

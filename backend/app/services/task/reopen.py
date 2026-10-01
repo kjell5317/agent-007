@@ -70,5 +70,11 @@ async def reopen_task(session: Session, task_id: uuid.UUID) -> None:
     # If there's no anchor raw_input (orphan task), the task already
     # surfaces as "open" by default in tasks.list_, so no flip is
     # needed — fall through to re-mirror it on the calendar.
-    await schedule_task(session, task)
+    if not getattr(task, "is_container", False):
+        await schedule_task(session, task)
+    parent_id = getattr(task, "parent_task_id", None)
+    if parent_id:
+        parent_status = tasks_store.latest_status_for(session, [parent_id]).get(parent_id, "open")
+        if parent_status == "closed":
+            await reopen_task(session, parent_id)
     publish_task(session, task_id)

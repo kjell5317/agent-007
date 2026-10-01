@@ -44,6 +44,7 @@ interface Props {
   kotxTask?: KotxTask | null;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
+  onOpenTask: (id: string) => void;
   onKotxChanged?: () => Promise<void> | void;
 }
 
@@ -78,6 +79,7 @@ export function TaskDetailModal({
   kotxTask = null,
   onClose,
   onChanged,
+  onOpenTask,
   onKotxChanged,
 }: Props) {
   const labels = useLabels();
@@ -161,6 +163,20 @@ export function TaskDetailModal({
     setPickerEstimation(saved.estimation);
     setPickerLabel(saved.label ?? "");
   };
+
+  async function splitCurrentTask() {
+    setBusy(true);
+    try {
+      const saved = await api.splitTask(current.id);
+      syncTaskState(saved);
+      toast.success(`Created ${saved.subtasks.length} subtasks`);
+      await onChanged();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function savePatch(patch: Partial<Task>, message = "Saved") {
     setBusy(true);
@@ -373,6 +389,8 @@ export function TaskDetailModal({
           kotxTask={kotxTask}
           onKotxChanged={onKotxChanged}
           onKotxActionDone={onClose}
+          onOpenTask={onOpenTask}
+          onSplitTask={splitCurrentTask}
           labels={labels}
           busy={busy}
           closingAction={closingAction}
@@ -479,6 +497,8 @@ function TaskSummary({
   kotxTask,
   onKotxChanged,
   onKotxActionDone,
+  onOpenTask,
+  onSplitTask,
   labels,
   busy,
   closingAction,
@@ -518,6 +538,8 @@ function TaskSummary({
   kotxTask: KotxTask | null;
   onKotxChanged?: () => Promise<void> | void;
   onKotxActionDone: () => void;
+  onOpenTask: (id: string) => void;
+  onSplitTask: () => void;
   labels: Label[];
   busy: boolean;
   closingAction: "done" | "dismiss" | null;
@@ -582,7 +604,7 @@ function TaskSummary({
               (which dismisses on kotx tasks — done is handled through kotx),
               closed/dismissed non-kotx → re-open. A non-open kotx task gets no
               lifecycle button; its run section carries the applicable actions. */}
-          {task.status === "open" ? (
+          {task.status === "open" && !task.is_container ? (
             <TaskSummaryIconButton
               label={
                 kotxTask
@@ -720,7 +742,7 @@ function TaskSummary({
             </button>
           </PickerAnchor>
 
-          <button
+          {!task.is_container && <button
             type="button"
             onClick={onReschedule}
             disabled={busy}
@@ -740,7 +762,7 @@ function TaskSummary({
               {scheduledBadgeText}
               <RefreshCw className="h-3 w-3 opacity-70" />
             </span>
-          </button>
+          </button>}
 
           {kotxTask && (
             <RunStatusBadge
@@ -749,7 +771,7 @@ function TaskSummary({
             />
           )}
 
-          {task.status === "open" && !kotxTask && (
+          {task.status === "open" && !kotxTask && !task.is_container && (
             <TaskSummaryIconButton
               label="Mark not a task"
               disabled={busy}
@@ -765,6 +787,37 @@ function TaskSummary({
             </TaskSummaryIconButton>
           )}
         </div>
+
+        {task.parent_task_id && (
+          <button
+            type="button"
+            onClick={() => onOpenTask(task.parent_task_id!)}
+            className="text-sm text-primary hover:underline"
+          >
+            View parent task
+          </button>
+        )}
+        {task.subtasks.length > 0 && (
+          <section className="space-y-2 rounded-lg border p-3">
+            <h3 className="text-sm font-semibold">Subtasks</h3>
+            {task.subtasks.map((child) => (
+              <button
+                key={child.id}
+                type="button"
+                onClick={() => onOpenTask(child.id)}
+                className="flex w-full items-center justify-between gap-3 rounded px-2 py-1 text-left text-sm hover:bg-accent"
+              >
+                <span>{child.status === "closed" ? "✓ " : "○ "}{child.title}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{fmtDue(child.due_date)}</span>
+              </button>
+            ))}
+          </section>
+        )}
+        {task.status === "open" && !task.is_container && !task.parent_task_id && !kotxTask && (
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSplitTask}>
+            Split into subtasks
+          </Button>
+        )}
 
         {kotxTask && (
           <KotxRunSection

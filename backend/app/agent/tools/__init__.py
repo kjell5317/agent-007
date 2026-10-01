@@ -11,6 +11,7 @@ from app.agent.tools.notes_lookup import run_search_notes
 from app.agent.tools.schemas import (
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
+    SPLIT_TASK_CHAT_TOOL,
     WEB_SEARCH_CHAT_TOOL,
     chat_tools,
     new_input_tools,
@@ -20,6 +21,7 @@ from app.agent.tools.schemas import (
 __all__ = [
     "GITHUB_CHAT_TOOLS",
     "NOTION_CHAT_TOOLS",
+    "SPLIT_TASK_CHAT_TOOL",
     "WEB_SEARCH_CHAT_TOOL",
     "chat_tools",
     "new_input_tools",

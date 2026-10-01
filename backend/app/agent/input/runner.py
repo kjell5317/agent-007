@@ -52,6 +52,7 @@ from app.agent.tools import new_input_tools
 from app.config import get_settings
 from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
+from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context
 from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs, tasks
@@ -296,7 +297,9 @@ async def run_new_input_agent(
             )
             final_status = "open"
             final_task_id = task.id
-            await schedule_task(session, task)
+            children = await maybe_split_task(session, task)
+            if not children:
+                await schedule_task(session, task)
             done = True
             break
         if tu.name in ("no_change", "update_task"):

@@ -424,6 +424,7 @@ export function App() {
           kotxTask={selectedKotxTask}
           onClose={closeSelectedModal}
           onChanged={refresh}
+          onOpenTask={openTask}
           onKotxChanged={runs.refresh}
         />
       )}

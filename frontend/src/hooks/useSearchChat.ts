@@ -28,8 +28,7 @@ function deriveTitle(messages: ChatMessage[]): string {
  * Holds the chat conversation and streams `/search/chat`. Conversations are
  * persisted server-side: the recent list is fetched for the empty-chat view,
  * a completed turn is saved (create then update), and `loadChat` reopens one.
- * Streamed pre-tool preamble ("thinking") is dropped — the content resets when
- * a tool runs, so only the final post-tool answer is shown.
+ * All streamed text is kept, including text emitted before a tool call.
  */
 export function useSearchChat(): SearchChat {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -162,9 +161,7 @@ export function useSearchChat(): SearchChat {
           onToken: (t: string) =>
             patchLast((m) => ({ ...m, content: m.content + t, pending: false })),
           onTool: (trace: ChatToolTrace) =>
-            // Drop any streamed preamble ("thinking") — keep only the tool chips
-            // and let the post-tool answer stream fresh.
-            patchLast((m) => ({ ...m, tools: [...m.tools, trace], content: "", pending: true })),
+            patchLast((m) => ({ ...m, tools: [...m.tools, trace] })),
           onError: (msg: string) =>
             patchLast((m) => ({
               ...m,

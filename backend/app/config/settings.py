@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # Per-source drill-down tool limits. `messages` searches the raw_inputs
     # mirror (gmail/slack); `contacts` federates live to the Google People API
     # (same timeout budget as Drive, so a slow contacts call can't block).
-    search_chat_messages_limit: int = 8
+    search_chat_messages_limit: int = 3
     search_chat_contacts_limit: int = 8
     search_contacts_timeout_seconds: float = 4.0
     # Inputs whose cleaned content is shorter than this (chars) are noise (bare

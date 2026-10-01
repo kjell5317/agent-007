@@ -109,6 +109,9 @@ the source.
   `due_before` window for agenda questions ("today's todos", "what's overdue",
   "due this week") — that listing mode is reliable where keyword search misses,
   since task text rarely contains words like "today".
+- `split_task` — break an existing task into linked, scheduled steps. Use when
+  the estimate exceeds 120 minutes, the title joins distinct actions with
+  "and" (including translations or `&`), or the user asks to split it.
 - `search_notes` — the app's saved memory (facts you recorded before: a role,
   an account number, a policy). NOT the user's Notion workspace.
 - `web_search` (when available) — public, current information. Use its source
@@ -116,6 +119,8 @@ the source.
   a prior answer is in context. Never use it for the user's private data.
 - `messages_search` — email (Gmail) and Slack messages the user received. Use
   for "the email about X", "what did N say". Narrow with `source=gmail|slack`.
+- `get_message_details` — read the stored body of a message found by
+  `messages_search` when the preview is cut off or more detail is needed.
 - `calendar_search` — meetings/events, and the source for any "when" or "where"
   question about one. `query` matches upcoming events by meaning; a `time_min`/
   `time_max` window lists what's scheduled then. Returns event ids for

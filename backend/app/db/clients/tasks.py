@@ -49,6 +49,10 @@ def create(session: Session, payload: TaskCreate) -> Task:
         related_event_id=payload.related_event_id,
         related_event_calendar_id=payload.related_event_calendar_id,
         related_event_due_derived=payload.related_event_due_derived,
+        parent_task_id=payload.parent_task_id,
+        depends_on_task_id=payload.depends_on_task_id,
+        is_container=payload.is_container,
+        due_date_derived=payload.due_date_derived,
     )
     session.add(row)
     session.flush()
@@ -57,6 +61,18 @@ def create(session: Session, payload: TaskCreate) -> Task:
 
 def get(session: Session, task_id: uuid.UUID) -> Task | None:
     return session.get(Task, task_id)
+
+
+def children(session: Session, parent_id: uuid.UUID) -> list[Task]:
+    return list(session.execute(
+        select(Task).where(Task.parent_task_id == parent_id).order_by(Task.created_at, Task.id)
+    ).scalars())
+
+
+def dependents(session: Session, predecessor_id: uuid.UUID) -> list[Task]:
+    return list(session.execute(
+        select(Task).where(Task.depends_on_task_id == predecessor_id)
+    ).scalars())
 
 
 def get_by_kotx_id(session: Session, kotx_task_id: int) -> Task | None:
@@ -106,6 +122,7 @@ _UPDATABLE = {
     "title", "description", "link", "due_date", "estimation",
     "location", "label", "related_event_id", "related_event_calendar_id",
     "related_event_due_derived",
+    "due_date_derived",
 }
 
 
@@ -128,6 +145,8 @@ def update(session: Session, task_id: uuid.UUID, **fields) -> Task | None:
         setattr(row, key, value)
     if "due_date" in fields and "related_event_due_derived" not in fields:
         row.related_event_due_derived = False
+    if "due_date" in fields and "due_date_derived" not in fields:
+        row.due_date_derived = False
     session.flush()
     return row
 
