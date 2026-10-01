@@ -770,6 +770,21 @@ _CHAT_TOOLS = [
     },
 ]
 
+WEB_SEARCH_CHAT_TOOL = {
+    "name": "web_search",
+    "description": (
+        "Search the public web for current or external facts. Use this for news, "
+        "public websites, and facts newer than your knowledge cutoff. Do not use "
+        "it to search the user's tasks, messages, calendar, or private files. "
+        "Returns a grounded summary and source links."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "Specific public-web question to verify."}},
+        "required": ["query"],
+    },
+}
+
 
 # Notion (read-only) — appended to the chat tools by the runner only when a Notion
 # workspace is connected, so the model never sees a tool that would just fail.

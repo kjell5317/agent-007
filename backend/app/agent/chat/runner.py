@@ -9,7 +9,7 @@ model routes to the one source a question needs rather than fanning out blindly.
 A full agent loop lets it call any action tool (create/update/close tasks,
 events, notes) then answer; unlike the input flows there is no terminal tool.
 
-Every search path returns `SearchHit`s that render into one uniform context
+Internal search paths return `SearchHit`s that render into one uniform context
 record (`type · sim · date · id · meta — content`), so results read identically
 whatever source they came from.
 
@@ -40,10 +40,12 @@ from app.agent.helpers.llm import (
     user_message,
 )
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
+from app.agent.helpers.web import research_web
 from app.agent.prompts import chat_system_prompt
 from app.agent.tools import (
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
+    WEB_SEARCH_CHAT_TOOL,
     chat_tools,
     run_create_event,
     run_delete_event,
@@ -320,6 +322,8 @@ async def run_chat(
         # Optional integrations expose their read-only tools only when connected, so
         # the model never sees a tool that would just fail with "not connected".
         tools = chat_tools(labels_store.agent_descriptions(session))
+        if settings.chat_web_search and settings.gemini_api_key:
+            tools.append(WEB_SEARCH_CHAT_TOOL)
         if notion_mcp.is_connected(session):
             tools += NOTION_CHAT_TOOLS
         if github.is_connected():
@@ -334,6 +338,7 @@ async def run_chat(
         # Only clean, read-only turns are cacheable: `changed_state` trips if any
         # tool created/updated something, `exhausted` if the tool loop ran out.
         changed_state = False
+        used_web_search = False
         exhausted = False
         for _ in range(settings.search_chat_max_iterations):
             resp = await stream_chat(
@@ -346,12 +351,13 @@ async def run_chat(
                 provider=provider,
                 model=model,
                 thinking_level=settings.chat_thinking_level,
-                web_search=settings.chat_web_search,
+                web_search=False,
             )
             if not resp.tool_calls:
                 break
             messages.append(assistant_message(resp))
             for tc in resp.tool_calls:
+                used_web_search = used_web_search or tc.name == "web_search"
                 result_text, trace = await _dispatch(session, cites, tc, settings, emit)
                 # Surface the raw call + full result so the UI can expand a chip
                 # into params/result; result_summary stays the collapsed label.
@@ -382,7 +388,13 @@ async def run_chat(
     # front. `prior_embedding` is set only when the cache is on and the question
     # embedded, so this is a no-op otherwise. Best-effort — a cache write must
     # never surface to the user or lose the answer they already got.
-    if prior_embedding is not None and not exhausted and not changed_state and answer.strip():
+    if (
+        prior_embedding is not None
+        and not exhausted
+        and not changed_state
+        and not used_web_search
+        and answer.strip()
+    ):
         try:
             cache_answer(session, question=query, answer=answer, embedding=prior_embedding)
         except Exception:  # noqa: BLE001 — caching is incidental to the answer
@@ -506,6 +518,13 @@ async def _dispatch(
         if name == "search_notes":
             hits = await search_notes(session, q)
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("notes", q))
+
+        if name == "web_search":
+            out = await research_web(q, settings)
+            return out, _trace(
+                name, purpose=_purpose("web", q), summary=out,
+                status="failed" if out.startswith("Web search failed:") else "success",
+            )
 
         if name == "messages_search":
             hits = await search_messages(

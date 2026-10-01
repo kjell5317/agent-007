@@ -154,6 +154,51 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_web_search_is_separate_from_main_model_tools(monkeypatch, _stub_answer_cache):
+    settings = get_settings().model_copy(
+        update={"chat_web_search": True, "gemini_api_key": "test"}
+    )
+    monkeypatch.setattr(chat_runner, "get_settings", lambda: settings)
+    monkeypatch.setattr(chat_runner, "retrieve", lambda *args: _empty_hits())
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", lambda *args: _prior_embedding())
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+    seen = []
+
+    async def fake_stream(messages, settings, *, tools, on_delta, **kw):
+        seen.append((tools, kw))
+        if len(seen) == 1:
+            return _resp(tool_calls=(ToolCall(id="1", name="web_search", input={"query": "iPhone date"}),))
+        await on_delta("The iPhone was announced in 2007.")
+        return _resp(text="The iPhone was announced in 2007.")
+
+    async def fake_research(query, settings):
+        assert query == "iPhone date"
+        return "Announced in 2007.\n\nSources:\n- Apple: https://example.com/iphone"
+
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "research_web", fake_research)
+    events = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="When was the iPhone announced?")], emit=emit)
+    assert all(any(t["name"] == "web_search" for t in tools) for tools, _ in seen)
+    assert all(kw["web_search"] is False for _, kw in seen)
+    assert any(e == "tool_call" and d["name"] == "web_search" and "https://example.com/iphone" in d["result"] for e, d in events)
+    assert _stub_answer_cache["cache"] == []
+
+
+async def _empty_hits():
+    return []
+
+
+async def _prior_embedding():
+    return [0.1], None
+
+
+@pytest.mark.asyncio
 async def test_emits_citations_and_injects_context(monkeypatch):
     seen = {"latest_user": ""}
 

@@ -111,6 +111,9 @@ the source.
   since task text rarely contains words like "today".
 - `search_notes` — the app's saved memory (facts you recorded before: a role,
   an account number, a policy). NOT the user's Notion workspace.
+- `web_search` (when available) — public, current information. Use its source
+  links when citing web facts. Always call it for current public facts, even if
+  a prior answer is in context. Never use it for the user's private data.
 - `messages_search` — email (Gmail) and Slack messages the user received. Use
   for "the email about X", "what did N say". Narrow with `source=gmail|slack`.
 - `calendar_search` — meetings/events, and the source for any "when" or "where"
