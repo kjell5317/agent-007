@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -31,7 +30,7 @@ async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     latest_id = latest.id if latest is not None else None
     if latest is not None:
         latest.status = "not_task"
-        latest.processed_at = datetime.now(timezone.utc)
+        # processed_at belongs to ingestion, not to this manual state change.
     else:
         session.delete(task)
     session.commit()

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -50,7 +49,8 @@ async def close_task(
     latest = raw_inputs_store.latest_for_task(session, task_id)
     if latest is not None:
         latest.status = "closed"
-        latest.processed_at = datetime.now(timezone.utc)
+        # Keep processed_at as the ingestion timestamp. This user action must
+        # not make an old input count as newly arrived in the inbox.
         session.commit()
         publish_task(session, task_id)
         publish_input(session, latest.id)

@@ -180,7 +180,8 @@ async def test_reopen_task_service_creates_fresh_followup_input(monkeypatch):
 async def test_dismiss_keeps_task_and_input_links_for_reopen(monkeypatch):
     task = _task()
     anchor = SimpleNamespace(
-        id=uuid.uuid4(), task_id=task.id, status="open", processed_at=None,
+        id=uuid.uuid4(), task_id=task.id, status="open",
+        processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
     )
     followup = SimpleNamespace(id=uuid.uuid4(), task_id=task.id, status="duplicate")
     session = FakeSession()
@@ -202,6 +203,7 @@ async def test_dismiss_keeps_task_and_input_links_for_reopen(monkeypatch):
     await dismiss_svc.dismiss_task(session, task.id)
 
     assert anchor.status == "not_task"
+    assert anchor.processed_at == datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
     assert anchor.task_id == followup.task_id == task.id
     assert session.commits == 1
     assert published == [("task", task.id), ("input", anchor.id)]

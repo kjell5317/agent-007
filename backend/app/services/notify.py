@@ -84,11 +84,16 @@ async def notify(
         from app.services import ntfy
 
         try:
-            await ntfy.send(
+            receipt = await ntfy.send(
                 s, title, message, url=url, tag=tag,
                 actions=actions, importance=importance,
             )
-            log.info("ntfy notify · sent title=%r tag=%r", title, tag)
+            if message == "clear_notification":
+                log.info("ntfy notify · cleared tag=%r server=%s id=%s", tag,
+                         s.ntfy_base_url, (receipt or {}).get("id"))
+            else:
+                log.info("ntfy notify · accepted title=%r tag=%r server=%s id=%s",
+                         title, tag, s.ntfy_base_url, (receipt or {}).get("id"))
         except Exception as exc:  # noqa: BLE001 — notification failures must not break task work
             log.warning("ntfy notify failed: %s", exc)
         return

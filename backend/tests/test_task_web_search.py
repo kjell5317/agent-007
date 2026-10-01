@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+import uuid
 
 import pytest
 
 from app.agent.helpers import web
+from app.agent.helpers.llm import ToolCall
 
 
 @pytest.mark.asyncio
@@ -84,3 +86,49 @@ def test_provisional_task_title_prefers_subject_and_removes_url():
     assert web.provisional_task_title(raw) == "Prepare for XY"
     raw.source_metadata = {}
     assert web.provisional_task_title(raw) == "See for details"
+
+
+@pytest.mark.asyncio
+async def test_web_research_updates_description_without_other_task_changes(monkeypatch):
+    from app.agent.thread import runner
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="Prepare for XY", description="Prepare slides.",
+        due_date=None, scheduled_date=None, estimation=None, location=None,
+        link=None, label=None,
+    )
+    raw = SimpleNamespace(
+        id=uuid.uuid4(), source="web_research", source_metadata={},
+        content="XY starts at 10:00 in Room 4.", task_id=None, agent_trace=None,
+    )
+    calls = {}
+
+    async def fake_chat(_messages, _settings, **kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(
+            text="", stop_reason="tool_use", usage={}, provider="test", model="test",
+            tool_calls=(ToolCall(id="update", name="update_task", input={
+                "description": "Prepare slides. XY starts at 10:00 in Room 4."
+            }),),
+        )
+
+    async def fake_apply(_session, _task, name, fields):
+        calls["action"] = (name, fields)
+        return {"outcome": "updated"}
+
+    async def no_notes(*_args):
+        return []
+
+    monkeypatch.setattr(runner, "chat", fake_chat)
+    monkeypatch.setattr(runner, "apply_task_action", fake_apply)
+    monkeypatch.setattr(runner, "save_notes", no_notes)
+    monkeypatch.setattr(runner.labels_store, "agent_descriptions", lambda *_: {})
+    monkeypatch.setattr(runner.raw_inputs, "finalize", lambda *_a, **_k: None)
+
+    await runner.run_thread_followup(SimpleNamespace(commit=lambda: None), raw, task)
+
+    assert calls["force_tool"] == "update_task"
+    assert [tool["name"] for tool in calls["tools"]] == ["update_task"]
+    assert calls["action"] == ("update_task", {
+        "description": "Prepare slides. XY starts at 10:00 in Room 4."
+    })

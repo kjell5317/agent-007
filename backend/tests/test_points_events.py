@@ -243,7 +243,8 @@ async def test_close_task_awards_points_and_publishes_new_total(monkeypatch):
     published_tasks: list[uuid.UUID] = []
     published_inputs: list[uuid.UUID] = []
     raw_input_id = uuid.uuid4()
-    raw_input = SimpleNamespace(id=raw_input_id, status="open", processed_at=None)
+    original_processed_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    raw_input = SimpleNamespace(id=raw_input_id, status="open", processed_at=original_processed_at)
 
     monkeypatch.setattr(
         points_service,
@@ -269,6 +270,7 @@ async def test_close_task_awards_points_and_publishes_new_total(monkeypatch):
     assert points_store.total(session) == 15
     assert _decode(published) == [{"type": "points", "total": 15.0}]
     assert raw_input.status == "closed"
+    assert raw_input.processed_at == original_processed_at
     assert published_tasks == [task.id]
     assert published_inputs == [raw_input_id]
 

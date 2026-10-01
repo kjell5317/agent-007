@@ -207,7 +207,7 @@ export function App() {
 
     if (previousIds) {
       const arrived = inputs.filter((input) => {
-        if (input.source === "manual" || previousIds.has(input.id)) return false;
+        if (input.source === "manual" || input.source === "web_research" || previousIds.has(input.id)) return false;
         const receivedAt = Date.parse(input.received_at);
         return (
           !Number.isNaN(receivedAt) &&

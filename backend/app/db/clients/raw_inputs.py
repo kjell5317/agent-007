@@ -142,13 +142,14 @@ def count_since(session: Session, ts: datetime) -> int:
     in the inbox. In-flight items (processed_at IS NULL) fail the `> ts`
     comparison and don't count until their run finalizes.
 
-    Manual entries are excluded — the user just created them via POST /tasks,
-    they don't need a notification badge about their own creation. The inbox
+    Manual entries and their automatic web research follow-ups are excluded —
+    they don't need a notification badge about the user's own creation. The inbox
     feed (list_) does still surface them so they can be reopened later.
     """
     stmt = (
         select(func.count(RawInput.id))
-        .where(RawInput.processed_at > ts, RawInput.source != "manual")
+        .where(RawInput.processed_at > ts,
+               RawInput.source.notin_(("manual", "web_research")))
     )
     return int(session.execute(stmt).scalar_one() or 0)
 

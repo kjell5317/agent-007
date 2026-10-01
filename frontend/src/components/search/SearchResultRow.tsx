@@ -27,7 +27,7 @@ function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {
 const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
   open: "open",
   closed: "closed",
-  not_task: "no task",
+  not_task: "not_task",
   duplicate: "duplicate",
   reopened: "reopened",
   updated: "updated",

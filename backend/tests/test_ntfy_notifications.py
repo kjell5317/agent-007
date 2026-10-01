@@ -158,7 +158,10 @@ async def test_ntfy_transport_publishes_and_clears_same_sequence(monkeypatch):
 
     def capture(request):
         requests.append(request)
-        return httpx.Response(200, json={"id": "abc"}, request=request)
+        return httpx.Response(200, json={
+            "id": "abc", "topic": settings.ntfy_topic,
+            "event": "message_clear" if request.method == "PUT" else "message",
+        }, request=request)
 
     transport = httpx.MockTransport(capture)
     monkeypatch.setattr(ntfy.httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs))
@@ -172,6 +175,24 @@ async def test_ntfy_transport_publishes_and_clears_same_sequence(monkeypatch):
     assert json.loads(requests[0].content)["sequence_id"] == ntfy.sequence_id(tag)
     assert requests[1].method == "PUT"
     assert str(requests[1].url) == f"https://ntfy.sh/{settings.ntfy_topic}/{ntfy.sequence_id(tag)}/clear"
+
+
+@pytest.mark.asyncio
+async def test_ntfy_rejects_success_status_without_a_matching_receipt(monkeypatch):
+    settings = _settings()
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        return httpx.Response(200, json={"id": "abc", "event": "message",
+                                         "topic": "different-topic"}, request=request)
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(ntfy.httpx, "AsyncClient",
+                        lambda **kwargs: real_client(transport=transport, **kwargs))
+
+    with pytest.raises(ValueError, match="different topic"):
+        await ntfy.send(settings, "Task", "Scheduled", url=None, tag="task-1",
+                        actions=None, importance=None)
 
 
 @pytest.mark.asyncio

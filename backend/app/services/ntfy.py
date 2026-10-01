@@ -93,13 +93,13 @@ async def send(
     settings: Settings, title: str, message: str, *, url: str | None,
     tag: str | None, actions: list[dict[str, str]] | None,
     importance: str | None,
-) -> None:
+) -> dict[str, Any] | None:
     base = settings.ntfy_base_url.rstrip("/")
     headers = {"Authorization": f"Bearer {settings.ntfy_token}"} if settings.ntfy_token else {}
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         if message == "clear_notification":
             if not tag:
-                return
+                return None
             endpoint = f"{base}/{quote(settings.ntfy_topic.strip(), safe='')}/{sequence_id(tag)}/clear"
             response = await client.put(endpoint, headers=headers)
         else:
@@ -112,3 +112,12 @@ async def send(
                 headers=headers,
             )
         response.raise_for_status()
+        receipt = response.json()
+        expected_event = "message_clear" if message == "clear_notification" else "message"
+        if not isinstance(receipt, dict) or receipt.get("topic") != settings.ntfy_topic.strip():
+            raise ValueError("ntfy returned a receipt for a different topic or no topic")
+        if receipt.get("event") != expected_event:
+            raise ValueError(f"ntfy returned unexpected event: {receipt.get('event')!r}")
+        if not receipt.get("id"):
+            raise ValueError("ntfy accepted the request without a message id")
+        return receipt
