@@ -1,4 +1,4 @@
-import { CalendarDays, FileText, Inbox, ListTodo, Loader2, UserRound } from "lucide-react";
+import { CalendarDays, FileText, GitPullRequest, Inbox, ListTodo, Loader2, UserRound } from "lucide-react";
 import { useCallback, useEffect, useState, type ComponentType } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { ContactCard, DocCard, EventCard } from "@/components/search/AssistantContent";
@@ -19,6 +19,7 @@ const TYPE_ICON: Record<
   document: FileText,
   drive: FileText,
   contact: UserRound,
+  github: GitPullRequest,
 };
 
 function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {

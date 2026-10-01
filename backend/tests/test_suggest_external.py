@@ -43,3 +43,17 @@ async def test_external_suggestions_interleave_contacts_and_drive(monkeypatch):
     contacts_only = await search_api.suggest_external("Kjell", limit=3, kind="contact")
     assert [hit.id for hit in contacts_only.hits] == ["person-0", "person-1"]
     assert [name for name, *_ in calls] == ["contact"]
+
+
+@pytest.mark.asyncio
+async def test_github_external_suggestions_use_github_only(monkeypatch):
+    calls = []
+
+    async def fake_github(query, *, limit):
+        calls.append((query, limit))
+        return [SearchHit(type="github", id="acme/widgets#1", title="Fix", score=0)]
+
+    monkeypatch.setattr(search_api, "search_github_hits", fake_github)
+    result = await search_api.suggest_external("Fix", limit=10, kind="github")
+    assert [hit.id for hit in result.hits] == ["acme/widgets#1"]
+    assert calls == [("Fix", 10)]

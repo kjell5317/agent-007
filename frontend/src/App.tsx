@@ -10,6 +10,7 @@ import { ChatPanel } from "@/components/search/ChatPanel";
 import { EMPTY_SEARCH_FILTERS, SearchFilters, type SearchFiltersState } from "@/components/search/SearchFilters";
 import { SearchResults } from "@/components/search/SearchResults";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
+import { TaskCard } from "@/components/tasks/TaskCard";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
 import { Toaster } from "@/components/ui/sonner";
@@ -40,6 +41,7 @@ export function App() {
   const [searchClosing, setSearchClosing] = useState(false);
   const chat = useSearchChat();
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchSubmitted, setSearchSubmitted] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
   const inboxOpen = view === "chat" && !searchQuery.trim() && searchFilters.kind === "messages";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -79,9 +81,25 @@ export function App() {
   const openChat = useCallback(() => {
     chat.newChat();
     setSearchQuery("");
+    setSearchSubmitted(false);
     setSearchFilters(EMPTY_SEARCH_FILTERS);
     setView("chat");
   }, [chat]);
+
+  const changeSearchQuery = (next: string) => {
+    if (next !== searchQuery) setSearchSubmitted(false);
+    setSearchQuery(next);
+    if (!next.trim() && (searchFilters.kind === "contacts" || searchFilters.kind === "events" || searchFilters.kind === "files")) {
+      setSearchFilters(EMPTY_SEARCH_FILTERS);
+    }
+  };
+
+  const runAiForEmptySearch = (query: string) => {
+    chat.send(query);
+    setSearchQuery("");
+    setSearchFilters(EMPTY_SEARCH_FILTERS);
+    setSearchSubmitted(false);
+  };
 
   const leaveOverlay = useCallback(() => {
     if (view === "chat") closeSearchTo();
@@ -382,6 +400,27 @@ export function App() {
     />
   );
 
+  const renderFlatTasks = (label: string) => {
+    const filtered = tasks.filter((task) => !task.is_container &&
+      (!label || task.label?.toLowerCase() === label.toLowerCase()));
+    return filtered.length ? (
+      <div className="space-y-2">
+        {filtered.map((task) => (
+          <TaskCard
+            key={task.id}
+            task={task}
+            kotxTask={task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null}
+            onChanged={refresh}
+            onKotxChanged={runs.refresh}
+            onOpen={openTask}
+            unseen={unseenTaskIds.has(task.id)}
+            onVisible={markTaskVisible}
+          />
+        ))}
+      </div>
+    ) : <p className="py-12 text-center text-sm text-muted-foreground">No matching tasks.</p>;
+  };
+
   return (
     <div className={view === "tasks" ? "min-h-dvh pb-28" : "min-h-dvh pb-8"}>
       <Topbar
@@ -401,18 +440,17 @@ export function App() {
         chatSearch={view === "chat" ? (
           <ChatComposer
             value={searchQuery}
-            onChange={setSearchQuery}
-            onSend={chat.send}
+            onChange={changeSearchQuery}
             streaming={chat.streaming}
             onClose={leaveOverlay}
-            chatEnabled={searchFilters.kind === null}
+            onEnter={() => setSearchSubmitted(true)}
           />
         ) : undefined}
         onPointsOpen={() => setView("points")}
         onLabelsOpen={() => setView("labels")}
         onBack={leaveOverlay}
       />
-      <main className={`mx-auto max-w-2xl px-4 py-4 ${view === "chat" ? searchClosing ? "animate-search-content-close" : "animate-search-content-open" : ""}`}>
+      <main className={`mx-auto max-w-2xl px-4 pb-4 pt-2 ${view === "chat" ? searchClosing ? "animate-search-content-close" : "animate-search-content-open" : ""}`}>
         {view === "points" ? (
           <PointsPanel onOpenTask={openTask} />
         ) : view === "labels" ? (
@@ -421,15 +459,16 @@ export function App() {
           loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
         ) : (
           <div>
-            <SearchFilters filters={searchFilters} onChange={setSearchFilters} />
+            {!searchSubmitted && chat.messages.length === 0 && <SearchFilters filters={searchFilters} query={searchQuery} onChange={setSearchFilters} />}
+            <div className={!searchSubmitted && chat.messages.length === 0 ? "pt-3" : undefined}>
             {searchQuery.trim() ? (
-              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} onOpenTask={openTask} />
+              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} submitted={searchSubmitted} onNoResults={runAiForEmptySearch} onOpenTask={openTask} />
             ) : searchFilters.kind === "tasks" ? (
-              loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks(searchFilters.label)
+              loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters.label)
             ) : searchFilters.kind === "messages" ? (
               loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading messages"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderInbox(searchFilters.source)
             ) : searchFilters.kind === "notes" ? (
-              <NotesPanel />
+              <NotesPanel key={searchFilters.source} source={searchFilters.source} />
             ) : searchFilters.kind === null && chat.messages.length > 0 ? (
               <ChatPanel
                 messages={chat.messages}
@@ -439,16 +478,11 @@ export function App() {
                 onLoadChat={chat.loadChat}
               />
             ) : searchFilters.kind === null ? (
-              loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : (
-                <div className="space-y-8 pt-2">
-                  <section className="space-y-2"><h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Open tasks</h2>{renderTasks()}</section>
-                  <section className="space-y-2"><h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Messages</h2>{renderInbox()}</section>
-                  <section className="space-y-2"><h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notes</h2><NotesPanel /></section>
-                </div>
-              )
+              null
             ) : (
               null
             )}
+            </div>
           </div>
         )}
       </main>
@@ -464,11 +498,7 @@ export function App() {
         />
       )}
       {view === "tasks" ? (
-        <Composer
-          onCreated={refresh}
-          onOpenTask={openTask}
-          tasks={tasks}
-        />
+        <Composer onCreated={refresh} />
       ) : null}
       <Toaster />
     </div>

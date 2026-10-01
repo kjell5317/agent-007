@@ -41,6 +41,40 @@ async def test_list_notes_returns_enriched_reads(monkeypatch):
     assert payload["source_from"] == "alice@example.com"
 
 
+def test_list_notes_filters_source_before_limit():
+    from app.db.clients import notes as notes_store
+
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            captured["params"] = params
+            return type("Rows", (), {"all": lambda self: []})()
+
+    assert notes_store.list_all(Session(), source="gmail", limit=20) == []
+    assert "WHERE coalesce(r.source, 'chat') = :source" in captured["sql"]
+    assert captured["sql"].index("WHERE coalesce") < captured["sql"].index("LIMIT :limit")
+    assert captured["params"] == {"source": "gmail", "limit": 20}
+
+
+def test_list_notes_filters_query_before_limit():
+    from app.db.clients import notes as notes_store
+
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            captured["params"] = params
+            return type("Rows", (), {"all": lambda self: []})()
+
+    assert notes_store.list_all(Session(), query="Alice", limit=10) == []
+    assert "position(lower(:query) in lower(n.content)) > 0" in captured["sql"]
+    assert captured["sql"].index("position(lower(:query)") < captured["sql"].index("LIMIT :limit")
+    assert captured["params"] == {"query": "Alice", "limit": 10}
+
+
 @pytest.mark.asyncio
 async def test_update_note_reembeds_and_returns_updated(monkeypatch):
     note_id = uuid.uuid4()

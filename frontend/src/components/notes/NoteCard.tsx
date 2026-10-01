@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,6 +23,7 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   const [draft, setDraft] = useState(note.content);
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [history, setHistory] = useState<NoteAudit[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -123,25 +124,23 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   }
 
   return (
-    <Card className="min-h-[76px]">
+    <Card className={expanded ? "min-h-[76px]" : "h-[76px] overflow-hidden"}>
       <CardContent
-        role={hasHistory ? "button" : undefined}
-        tabIndex={hasHistory ? 0 : undefined}
-        aria-label={hasHistory ? `${showHistory ? "Hide" : "Show"} history for note: ${note.content.slice(0, 80)}` : undefined}
-        aria-expanded={hasHistory ? showHistory : undefined}
+        role="button"
+        tabIndex={0}
+        aria-label={`${expanded ? "Collapse" : "Expand"} note: ${note.content.slice(0, 80)}`}
+        aria-expanded={expanded}
         aria-busy={loadingHistory || undefined}
-        className={cn(hasHistory && "cursor-pointer")}
+        className="cursor-pointer"
         onClick={(e) => {
-          if (!hasHistory) return;
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          void toggleHistory();
+          setExpanded((current) => !current);
         }}
         onKeyDown={(e) => {
-          if (!hasHistory) return;
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            void toggleHistory();
+            setExpanded((current) => !current);
           }
         }}
       >
@@ -155,12 +154,12 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
           />
 
           <div className="min-w-0 flex-1">
-            {note.needs_review && (
+            {note.needs_review && expanded && (
               <div className="mb-1 text-xs font-medium text-amber-600">
                 Needs review · Edit and save to approve
               </div>
             )}
-            <div className="whitespace-pre-wrap break-words text-sm leading-snug">
+            <div className={cn("whitespace-pre-wrap break-words text-sm leading-snug", !expanded && "line-clamp-1")}>
               {note.content}
             </div>
             <NoteMeta note={note} />
@@ -172,8 +171,14 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
             disabled={busy}
             onClick={startEdit}
           />
+          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} aria-hidden="true" />
         </div>
-        <Collapsible open={showHistory}>
+        {expanded && hasHistory && (
+          <Button type="button" variant="ghost" size="sm" className="ml-8 mt-2" onClick={(e) => { e.stopPropagation(); void toggleHistory(); }}>
+            {showHistory ? "Hide history" : "History"}
+          </Button>
+        )}
+        <Collapsible open={expanded && showHistory}>
           <div className="mt-3 space-y-2 border-t pt-3 text-xs" onClick={(e) => e.stopPropagation()}>
             {historyError && <p className="text-destructive">{historyError}</p>}
             {history?.length === 100 && (
@@ -257,7 +262,7 @@ function IconButton({
       aria-label={label}
       title={label}
       disabled={disabled}
-      onClick={onClick}
+      onClick={(event) => { event.stopPropagation(); onClick(); }}
       className={cn(
         "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-50",
         className,

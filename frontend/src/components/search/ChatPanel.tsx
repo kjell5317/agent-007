@@ -330,12 +330,6 @@ function EmptyState({
 }) {
   return (
     <div className="space-y-6">
-      <div className="pt-10 text-center text-[15px] text-muted-foreground">
-        <p className="font-medium text-foreground">
-          Ask about your tasks, inbox, notes and calendar.
-        </p>
-        <p className="mt-2">Try “what’s due this week?” or “create a task to email Alice tomorrow”.</p>
-      </div>
       {recent.length > 0 && (
         <div>
           <div className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">

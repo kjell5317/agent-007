@@ -275,9 +275,20 @@ def history(session: Session, note_id: uuid.UUID, *, limit: int = 100) -> list[N
     return [NoteAuditItem(**row._mapping) for row in rows]
 
 
-def list_all(session: Session, *, limit: int = 500) -> list[NoteListItem]:
-    stmt = text(_LIST_NOTES_TEMPLATE.format(where="", limit="LIMIT :limit"))
-    rows = session.execute(stmt, {"limit": limit}).all()
+def list_all(session: Session, *, limit: int = 500, source: str | None = None, query: str | None = None) -> list[NoteListItem]:
+    clauses = []
+    if source:
+        clauses.append("coalesce(r.source, 'chat') = :source")
+    if query:
+        clauses.append("position(lower(:query) in lower(n.content)) > 0")
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    stmt = text(_LIST_NOTES_TEMPLATE.format(where=where, limit="LIMIT :limit"))
+    params = {"limit": limit}
+    if source:
+        params["source"] = source
+    if query:
+        params["query"] = query
+    rows = session.execute(stmt, params).all()
     return [_to_item(r) for r in rows]
 
 

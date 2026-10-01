@@ -3,8 +3,8 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNotes } from "@/hooks/useNotes";
 
-export function NotesPanel() {
-  const { notes, loading, error, refresh, replaceNote, removeNote } = useNotes();
+export function NotesPanel({ source = "" }: { source?: string }) {
+  const { notes, loading, error, refresh, replaceNote, removeNote } = useNotes(source);
 
   if (loading && notes.length === 0) {
     return (

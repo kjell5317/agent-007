@@ -41,23 +41,25 @@ const pillBase = "inline-flex h-7 max-w-40 shrink-0 items-center rounded-full bo
 const childPill = (selected: boolean) => cn(
   pillBase,
   selected
-    ? "border-teal-600 bg-teal-600 text-white dark:border-teal-500 dark:bg-teal-500 dark:text-slate-950"
-    : "border-teal-500/40 bg-teal-500/10 text-teal-800 hover:bg-teal-500/20 dark:text-teal-300",
+    ? "border-slate-600 bg-slate-600 text-white dark:border-slate-400 dark:bg-slate-400 dark:text-slate-950"
+    : "border-slate-400/50 bg-slate-500/10 text-slate-700 hover:bg-slate-500/20 dark:text-slate-300",
 );
 
 export function SearchFilters({
   filters,
+  query,
   onChange,
 }: {
   filters: SearchFiltersState;
+  query: string;
   onChange: (next: SearchFiltersState) => void;
 }) {
   const labels = useLabels();
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const [facets, setFacets] = useState<{ messages: string[]; files: string[] }>({ messages: [], files: [] });
+  const [facets, setFacets] = useState<{ messages: string[]; files: string[]; notes: string[] }>({ messages: [], files: [], notes: [] });
   useEffect(() => {
     const kind = filters.kind;
-    if (kind !== "messages" && kind !== "files") return;
+    if (kind !== "messages" && kind !== "files" && kind !== "notes") return;
     let active = true;
     api.searchFacets(kind).then(({ options }) => {
       if (active) setFacets((current) => ({ ...current, [kind]: options }));
@@ -66,9 +68,12 @@ export function SearchFilters({
     });
     return () => { active = false; };
   }, [filters.kind]);
+  const visibleKinds = query.trim() ? KINDS : KINDS.filter((kind) =>
+    kind.key === "tasks" || kind.key === "messages" || kind.key === "notes",
+  );
   const orderedKinds = filters.kind
-    ? [KINDS.find((kind) => kind.key === filters.kind)!, ...KINDS.filter((kind) => kind.key !== filters.kind)]
-    : KINDS;
+    ? [KINDS.find((kind) => kind.key === filters.kind)!, ...visibleKinds.filter((kind) => kind.key !== filters.kind)]
+    : visibleKinds;
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ left: 0, behavior: "smooth" });
@@ -106,7 +111,7 @@ export function SearchFilters({
               aria-pressed={selected}
               title={label.description || label.name}
               onClick={() => onChange({ ...filters, label: selected ? "" : label.name })}
-              className={cn(pillBase, selected ? "border-transparent bg-teal-600 text-white" : "bg-card")}
+              className={cn(pillBase, selected ? "border-transparent bg-slate-600 text-white" : "bg-card")}
               style={selected ? labelChipStyle(label.color) : labelChipOutlineStyle(label.color)}
             >
               <span className="truncate">{label.name}</span>
@@ -115,6 +120,20 @@ export function SearchFilters({
         })
       )}
       {filters.kind === "messages" && selectedFirst(facets.messages, facets.messages.find((source) => source === filters.source)).map((source) => {
+        const selected = filters.source === source;
+        return (
+          <button
+            key={source}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange({ ...filters, source: selected ? "" : source })}
+            className={childPill(selected)}
+          >
+            {sourceLabel(source)}
+          </button>
+        );
+      })}
+      {filters.kind === "notes" && selectedFirst(facets.notes, facets.notes.find((source) => source === filters.source)).map((source) => {
         const selected = filters.source === source;
         return (
           <button

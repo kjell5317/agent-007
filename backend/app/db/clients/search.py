@@ -49,6 +49,7 @@ class SuggestHit:
     # Genuine cosine for embedded corpora resolved via the vector side (notes
     # today); None for keyword-only hits, which carry no meaningful cosine.
     similarity: float | None = None
+    due_date: datetime | None = None
 
 
 # Per-corpus SQL fragments. `fts` is the stored, GIN-indexed tsvector column;
@@ -78,7 +79,7 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "'task' AS type, t.id::text AS id, t.title AS title, "
             "left(coalesce(t.description,''), 200) AS snippet, t.link AS url, "
             "t.id::text AS task_id, li.source AS source, li.sender AS sender, "
-            "coalesce(li.status, 'open') AS status"
+            "coalesce(li.status, 'open') AS status, t.due_date AS due_date"
         ),
     },
     INPUT: {
@@ -91,7 +92,7 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "left(coalesce(r.content,''), 80)) AS title, "
             "left(coalesce(r.content,''), 200) AS snippet, NULL::text AS url, "
             "r.task_id::text AS task_id, r.source AS source, "
-            "r.source_metadata->>'from' AS sender, r.status AS status"
+            "r.source_metadata->>'from' AS sender, r.status AS status, NULL::timestamptz AS due_date"
         ),
     },
     DOCUMENT: {
@@ -105,13 +106,13 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "THEN d.external_id::int END"
         ),
         "fts": "d.tsv",
-        "ts": "coalesce(d.starts_at, d.updated_at, now())",
+        "ts": "CASE WHEN d.provider = 'calendar' THEN coalesce(d.starts_at, d.updated_at) ELSE coalesce(d.updated_at, now()) END",
         "select": (
             "'document' AS type, d.id::text AS id, d.title AS title, "
             "coalesce(d.snippet, left(coalesce(d.content,''), 200)) AS snippet, "
             "coalesce(kt.link, d.url) AS url, kt.id::text AS task_id, "
             "d.provider AS source, NULL::text AS sender, "
-            "CASE WHEN d.provider = 'calendar' THEN 'event'::text END AS status"
+            "CASE WHEN d.provider = 'calendar' THEN 'event'::text END AS status, NULL::timestamptz AS due_date"
         ),
     },
 }
@@ -143,7 +144,7 @@ _INPUT_SELECT_TEMPLATE = (
     "r.source_metadata->>'from' AS sender, r.status AS status"
 )
 
-_HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, ts, score"
+_HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, due_date, ts, score"
 
 
 def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
@@ -181,7 +182,7 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
 
 
 def _filters_sql(
-    corpus: str, *, source, label, status, before, after, exclude_source, exclude_linked_inputs: bool
+    corpus: str, *, source, label, status, before, after, exclude_source, exclude_calendar_id, exclude_linked_inputs: bool
 ) -> str:
     parts: list[str] = []
     ts = _BRANCHES[corpus]["ts"]
@@ -213,6 +214,8 @@ def _filters_sql(
         if exclude_linked_inputs:
             parts.append("r.task_id IS NULL")
     if corpus == DOCUMENT:
+        if exclude_calendar_id:
+            parts.append("(d.provider <> 'calendar' OR coalesce(d.metadata->>'calendar_id', '') <> :exclude_calendar_id)")
         if source is not None:
             parts.append("d.provider = :source")
         if exclude_source is not None:
@@ -233,6 +236,7 @@ def suggest(
     before: str | None = None,
     after: str | None = None,
     exclude_source: str | None = None,
+    exclude_calendar_id: str | None = None,
 ) -> list[SuggestHit]:
     match = bool(tsquery)
     active = [c for c in (TASK, INPUT, DOCUMENT) if c in branches]
@@ -254,6 +258,7 @@ def suggest(
                 before=before,
                 after=after,
                 exclude_source=exclude_source,
+                exclude_calendar_id=exclude_calendar_id,
                 exclude_linked_inputs=exclude_linked_inputs,
             ),
         )
@@ -281,6 +286,7 @@ def suggest(
             "before": before,
             "after": after,
             "exclude_source": exclude_source,
+            "exclude_calendar_id": exclude_calendar_id,
         },
     ).all()
     return [
@@ -296,6 +302,7 @@ def suggest(
             status=r.status,
             ts=r.ts,
             score=float(r.score) if r.score is not None else 0.0,
+            due_date=r.due_date,
         )
         for r in rows
     ]

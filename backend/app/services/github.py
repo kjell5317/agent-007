@@ -1,4 +1,4 @@
-"""Read-only GitHub access for the chat agent via the REST API.
+"""Read-only GitHub access for chat and search via the REST API.
 
 Personal use: a single fine-grained PAT (read-only) in settings authenticates
 GitHub's issue/PR search. Only search is wired — no write endpoints — so the
@@ -17,10 +17,15 @@ from __future__ import annotations
 
 import re
 import time
+import logging
+from datetime import datetime
 
 import httpx
 
 from app.config import get_settings
+from app.db.schemas.search import SearchHit
+
+log = logging.getLogger(__name__)
 
 _API = "https://api.github.com"
 _TIMEOUT = 10
@@ -58,6 +63,34 @@ async def search_issues(query: str, *, limit: int = _SEARCH_LIMIT) -> str:
         return f"No issues or PRs in your repositories matched: {query}"
     listing = "\n".join(_format_item(it) for it in items)
     return f"{len(items)} result(s) in your repositories for `{query}`:\n{listing}"
+
+
+async def search_hits(query: str, *, limit: int = 10) -> list[SearchHit]:
+    """Navigable issue and PR hits for the search UI."""
+    if not is_connected() or not query.strip():
+        return []
+    try:
+        items, _ = await _fetch(query, limit, restrict=True)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        log.info("github search skipped · %s: %s", type(exc).__name__, exc)
+        return []
+    hits = []
+    for item in items:
+        repo = _repo_name(str(item.get("repository_url") or ""))
+        kind = "PR" if "pull_request" in item else "Issue"
+        updated = item.get("updated_at")
+        try:
+            modified = datetime.fromisoformat(updated.replace("Z", "+00:00")) if updated else None
+        except ValueError:
+            modified = None
+        hits.append(SearchHit(
+            type="github", id=f"{repo}#{item.get('number')}",
+            title=str(item.get("title") or "(untitled)"),
+            snippet=str(item.get("body") or "")[:200] or None,
+            url=item.get("html_url"), source="github", status=kind,
+            ts=modified, score=0.0,
+        ))
+    return hits
 
 
 async def my_work() -> str:

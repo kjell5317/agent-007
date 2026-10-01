@@ -13,7 +13,7 @@ export interface NotesData {
   removeNote: (id: string) => void;
 }
 
-export function useNotes(): NotesData {
+export function useNotes(source = ""): NotesData {
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,14 +21,14 @@ export function useNotes(): NotesData {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setNotes(await api.listNotes());
+      setNotes(await api.listNotes(500, source));
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [source]);
 
   useEffect(() => {
     void refresh();

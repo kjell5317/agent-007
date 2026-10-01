@@ -18,7 +18,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -35,6 +35,7 @@ from app.db.schemas.search import (
     SuggestResponse,
 )
 from app.services.link_preview import get_link_preview
+from app.services.github import search_hits as search_github_hits
 from app.services.search import run_suggest
 from app.services.search.contacts import search_contacts
 from app.services.search.drive import available_drive_formats, search_drive
@@ -48,13 +49,20 @@ _MAX_LIMIT = 25
 
 
 @router.get("/facets")
-async def search_facets(kind: str = Query(..., pattern="^(messages|files)$")) -> dict[str, list[str]]:
+async def search_facets(kind: str = Query(..., pattern="^(messages|files|notes)$")) -> dict[str, list[str]]:
     """Only offer child filters backed by searchable data."""
     with SessionLocal() as session:
         if kind == "messages":
             sources = session.execute(
                 select(RawInput.source).where(RawInput.source != "chat").distinct().order_by(RawInput.source)
             ).scalars().all()
+            return {"options": list(sources)}
+        if kind == "notes":
+            sources = session.execute(text("""
+                SELECT DISTINCT coalesce(r.source, 'chat') AS source
+                FROM notes n LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
+                ORDER BY source
+            """)).scalars().all()
             return {"options": list(sources)}
         formats = await available_drive_formats(
             session, timeout=get_settings().search_drive_timeout_seconds,
@@ -89,12 +97,14 @@ async def suggest(
 
 @router.get("/suggest/external", response_model=SuggestResponse)
 async def suggest_external(
-    q: str = Query(..., min_length=3, max_length=256),
+    q: str = Query(..., min_length=1, max_length=256),
     limit: int = Query(6, ge=1, le=10),
-    kind: str | None = Query(None, pattern="^(contact|drive)$"),
+    kind: str | None = Query(None, pattern="^(contact|drive|github)$"),
     mime_label: str | None = Query(None, max_length=32),
 ) -> SuggestResponse:
-    """Live Drive and contact matches, separate from fast local suggestions."""
+    """Live Drive, contact, and GitHub matches, separate from fast local suggestions."""
+    if kind == "github":
+        return SuggestResponse(hits=await search_github_hits(q, limit=limit))
     settings = get_settings()
     per_source_limit = limit if kind in {"contact", "drive"} else min(limit, 4)
 

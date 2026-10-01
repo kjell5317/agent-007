@@ -3,7 +3,8 @@ import { Loader2 } from "lucide-react";
 import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
-import type { Note, SearchHit, SearchHitType, Task } from "@/lib/types";
+import { searchDistance } from "@/lib/searchRanking";
+import type { Note, SearchHit, Task } from "@/lib/types";
 import type { SearchFiltersState } from "@/components/search/SearchFilters";
 
 function noteHit(note: Note): SearchHit {
@@ -15,17 +16,7 @@ function noteHit(note: Note): SearchHit {
   };
 }
 
-function localTypes(filters: SearchFiltersState): SearchHitType[] | undefined {
-  switch (filters.kind) {
-    case "tasks": return ["task"];
-    case "messages": return ["input"];
-    case "events":
-    case "files": return ["document"];
-    case "contacts":
-    case "notes": return [];
-    default: return undefined;
-  }
-}
+const PER_SOURCE = 10;
 
 function filterHit(hit: SearchHit, filters: SearchFiltersState): boolean {
   if (filters.kind === "events") return hit.type === "document" && hit.source === "calendar";
@@ -34,84 +25,103 @@ function filterHit(hit: SearchHit, filters: SearchFiltersState): boolean {
     if (filters.format && hit.meta?.mime !== filters.format) return false;
   }
   if (filters.kind === "contacts") return hit.type === "contact";
-  if (filters.kind === "notes") return hit.type === "note";
+  if (filters.kind === "notes") return hit.type === "note" && (!filters.source || (hit.source ?? "chat") === filters.source);
   return true;
 }
 
+function searchRequests(query: string, filters: SearchFiltersState, submitted: boolean): Promise<{ hits: SearchHit[] }>[] {
+  const requests: Promise<{ hits: SearchHit[] }>[] = [];
+  if (filters.kind === null || filters.kind === "tasks") {
+    requests.push(api.suggest(query, PER_SOURCE, ["task"], { label: filters.kind === "tasks" ? filters.label : undefined }));
+  }
+  if (filters.kind === null || filters.kind === "messages") {
+    requests.push(api.suggest(query, PER_SOURCE, ["input"], { source: filters.kind === "messages" ? filters.source : undefined }));
+  }
+  if (filters.kind === null || filters.kind === "events") {
+    requests.push(api.suggest(query, PER_SOURCE, ["document"], { source: "calendar" }));
+  }
+  if (filters.kind === null || filters.kind === "files") {
+    requests.push(api.suggest(query, PER_SOURCE, ["document"], { excludeSource: "calendar" }));
+  }
+  if (filters.kind === null || filters.kind === "notes") {
+    requests.push(api.listNotes(PER_SOURCE, filters.kind === "notes" ? filters.source : "", query)
+      .then((notes) => ({ hits: notes.map(noteHit) })));
+  }
+  if (submitted) {
+    if (filters.kind === null || filters.kind === "files") {
+      requests.push(api.suggestExternal(query, PER_SOURCE, "drive", filters.kind === "files" ? filters.format || undefined : undefined));
+    }
+    if (filters.kind === null || filters.kind === "contacts") {
+      requests.push(api.suggestExternal(query, PER_SOURCE, "contact"));
+    }
+    if (filters.kind === null) {
+      requests.push(api.suggestExternal(query, PER_SOURCE, "github"));
+    }
+  }
+  return requests;
+}
+
 export function SearchResults({
-  query, filters, tasks, onOpenTask,
+  query, filters, tasks, submitted, onNoResults, onOpenTask,
 }: {
   query: string;
   filters: SearchFiltersState;
   tasks: Task[];
+  submitted: boolean;
+  onNoResults: (query: string) => void;
   onOpenTask: (id: string) => void;
 }) {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [preview, setPreview] = useState<SearchHit | null>(null);
-  const notesCacheRef = useRef<Promise<Note[]> | null>(null);
-  const needsQuery = (filters.kind === "contacts" && query.trim().length < 3) ||
-    (filters.kind === "files" && Boolean(filters.format) && query.trim().length < 3);
+  const onNoResultsRef = useRef(onNoResults);
+  onNoResultsRef.current = onNoResults;
 
   useEffect(() => {
     let cancelled = false;
-    if (needsQuery) {
-      setHits([]);
-      setLoading(false);
-      setFailed(false);
-      return;
-    }
     setLoading(true);
     setFailed(false);
     const timer = window.setTimeout(async () => {
       const q = query.trim();
-      const types = localTypes(filters);
-      const local = types?.length === 0
-        ? null
-        : api.suggest(q, 25, types, {
-            source: filters.kind === "events" ? "calendar"
-              : filters.kind === "messages" ? filters.source : undefined,
-            label: filters.kind === "tasks" ? filters.label : undefined,
-            excludeSource: filters.kind === "files" ? "calendar" : undefined,
-          });
-      const external = q.length >= 3 && (filters.kind === null || filters.kind === "files" || filters.kind === "contacts")
-        ? api.suggestExternal(q, 10,
-            filters.kind === "contacts" ? "contact" : filters.kind === "files" ? "drive" : undefined,
-            filters.kind === "files" ? filters.format || undefined : undefined)
-        : null;
-      const notes = filters.kind === null || filters.kind === "notes"
-        ? (notesCacheRef.current ??= api.listNotes(500).catch((error) => {
-            notesCacheRef.current = null;
-            throw error;
-          }))
-        : null;
-      const results = await Promise.allSettled([local, external, notes]);
+      const requests = searchRequests(q, filters, submitted);
+      const results = await Promise.allSettled(requests);
       if (cancelled) return;
-      setFailed(!results.some((result) => result.status === "fulfilled" && result.value !== null));
-      const localHits = results[0].status === "fulfilled" ? results[0].value?.hits ?? [] : [];
-      const externalHits = results[1].status === "fulfilled" ? results[1].value?.hits ?? [] : [];
-      const noteHits = results[2].status === "fulfilled"
-        ? (results[2].value ?? []).filter((note) => !q || note.content.toLowerCase().includes(q.toLowerCase())).map(noteHit)
-        : [];
-      const all = [...localHits, ...externalHits, ...noteHits]
+      const all = results.flatMap((result) => result.status === "fulfilled" ? result.value.hits : [])
         .filter((hit) => filterHit(hit, filters));
-      setHits(all.slice(0, 35));
+      const taskIds = new Set(all.filter((hit) => hit.type === "task").map((hit) => hit.id));
+      const seen = new Set<string>();
+      const unique = all.filter((hit) => {
+        if (hit.type === "document" && hit.task_id && taskIds.has(hit.task_id)) return false;
+        const key = `${hit.type}:${hit.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const taskMap = new Map(tasks.map((task) => [task.id, task]));
+      const now = Date.now();
+      unique.sort((a, b) => searchDistance(a, taskMap, now) - searchDistance(b, taskMap, now) ||
+        b.score - a.score || a.title.localeCompare(b.title));
+      const hadFailure = results.some((result) => result.status === "rejected");
+      if (submitted && unique.length === 0 && !hadFailure) {
+        onNoResultsRef.current(q);
+        return;
+      }
+      setFailed(unique.length === 0 && hadFailure);
+      setHits(unique);
       setLoading(false);
-    }, 180);
+    }, submitted ? 0 : 180);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [query, filters, needsQuery]);
+  }, [query, filters, submitted, tasks]);
 
   return (
-    <div className="space-y-2 pt-2">
-      {needsQuery ? (
-        <p className="py-12 text-center text-sm text-muted-foreground">Enter at least 3 characters to search {filters.kind === "contacts" ? "contacts" : "Drive files"}.</p>
-      ) : loading ? (
+    <div className="space-y-2">
+      {loading ? (
         <div className="flex justify-center py-12" role="status" aria-label="Searching"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : failed ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Search is unavailable right now.</p>
       ) : hits.length === 0 ? (
-        <p className="py-12 text-center text-sm text-muted-foreground">No matching results.</p>
+        submitted ? <p className="py-12 text-center text-sm text-muted-foreground">No matching results.</p> : null
       ) : (
         <div className="space-y-2">
           <p className="px-1 text-xs font-medium text-muted-foreground">{hits.length} results</p>

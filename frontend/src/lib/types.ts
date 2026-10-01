@@ -62,7 +62,7 @@ export interface AgentTrace {
   [k: string]: unknown;
 }
 
-export type SearchHitType = "task" | "note" | "input" | "document" | "drive" | "contact";
+export type SearchHitType = "task" | "note" | "input" | "document" | "drive" | "contact" | "github";
 
 export interface SearchHit {
   type: SearchHitType;
@@ -116,6 +116,7 @@ export interface ChatCitationMeta {
   end?: string;
   location?: string;
   mime?: string;
+  due_date?: string;
   similarity?: number;
   [k: string]: unknown;
 }

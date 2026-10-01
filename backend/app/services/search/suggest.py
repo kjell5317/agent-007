@@ -76,6 +76,7 @@ def run_suggest(
             before=filters.before,
             after=filters.after,
             exclude_source=exclude_source,
+            exclude_calendar_id=settings.google_calendar_id,
         )
         result = [SearchHit.build(h) for h in hits]
         result = _drop_documents_shadowed_by_tasks(result)

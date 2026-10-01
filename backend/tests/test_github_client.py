@@ -97,6 +97,22 @@ async def test_search_scopes_to_owner_and_formats(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_hits_returns_navigable_issue_and_pr_with_modified_dates(monkeypatch):
+    issue = _issue(number=7)
+    pr = _issue(number=8, pull_request={}, html_url="https://github.com/acme/widgets/pull/8")
+    _install(
+        monkeypatch,
+        search=_response(200, {"total_count": 2, "items": [issue, pr]}),
+        repos=_response(200, [_repo("acme/widgets")]),
+    )
+    hits = await github.search_hits("fix", limit=10)
+    assert [hit.type for hit in hits] == ["github", "github"]
+    assert [hit.id for hit in hits] == ["acme/widgets#7", "acme/widgets#8"]
+    assert hits[0].ts.isoformat() == "2026-07-01T10:00:00+00:00"
+    assert hits[1].url.endswith("/pull/8")
+
+
+@pytest.mark.asyncio
 async def test_search_filters_out_non_contributing_repos(monkeypatch):
     mine = _issue(number=1, repository_url="https://api.github.com/repos/acme/widgets")
     theirs = _issue(number=2, repository_url="https://api.github.com/repos/stranger/other")

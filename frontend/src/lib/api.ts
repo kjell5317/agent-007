@@ -136,11 +136,11 @@ export const api = {
     }
     return request<{ hits: SearchHit[] }>(`/search/suggest?${params}`);
   },
-  suggestExternal: (q: string, limit = 6, kind?: "contact" | "drive", mimeLabel?: string) =>
+  suggestExternal: (q: string, limit = 6, kind?: "contact" | "drive" | "github", mimeLabel?: string) =>
     request<{ hits: SearchHit[] }>(
       `/search/suggest/external?${new URLSearchParams({ q, limit: String(limit), ...(kind ? { kind } : {}), ...(mimeLabel ? { mime_label: mimeLabel } : {}) })}`,
     ),
-  searchFacets: (kind: "messages" | "files") =>
+  searchFacets: (kind: "messages" | "files" | "notes") =>
     request<{ options: string[] }>(`/search/facets?kind=${kind}`),
 
   chatStream,
@@ -169,7 +169,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  listNotes: (limit = 500) => request<Note[]>(`/notes?limit=${limit}`),
+  listNotes: (limit = 500, source = "", query = "") =>
+    request<Note[]>(`/notes?${new URLSearchParams({ limit: String(limit), ...(source ? { source } : {}), ...(query ? { query } : {}) })}`),
   noteHistory: (id: string) => request<NoteAudit[]>(`/notes/${id}/history`),
   updateNote: (id: string, content: string) =>
     request<Note>(`/notes/${id}`, {

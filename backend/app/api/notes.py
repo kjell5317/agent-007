@@ -25,9 +25,11 @@ router = APIRouter(prefix="/notes", tags=["notes"])
 @router.get("", response_model=list[NoteRead])
 async def list_notes(
     limit: int = Query(500, le=500),
+    source: str | None = Query(None, max_length=64),
+    query: str | None = Query(None, max_length=256),
     session: Session = Depends(get_session),
 ) -> list[NoteRead]:
-    return [NoteRead.from_item(item) for item in notes_store.list_all(session, limit=limit)]
+    return [NoteRead.from_item(item) for item in notes_store.list_all(session, limit=limit, source=source, query=query)]
 
 
 @router.get("/{note_id}/history", response_model=list[NoteAuditRead])

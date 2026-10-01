@@ -4,25 +4,16 @@ import { Input } from "@/components/ui/input";
 export function ChatComposer({
   value,
   onChange,
-  onSend,
   streaming,
   onClose,
-  chatEnabled,
+  onEnter,
 }: {
   value: string;
   onChange: (value: string) => void;
-  onSend: (text: string) => void;
   streaming: boolean;
   onClose: () => void;
-  chatEnabled: boolean;
+  onEnter: (query: string) => void;
 }) {
-  const submit = () => {
-    const text = value.trim();
-    if (!chatEnabled || !text || streaming) return;
-    onSend(text);
-    onChange("");
-  };
-
   return (
     <div className="relative min-w-0 flex-1">
       <div className="flex h-12 items-center gap-3 rounded-full bg-secondary px-4 shadow-sm">
@@ -31,7 +22,7 @@ export function ChatComposer({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="Search..."
-          enterKeyHint={chatEnabled ? "send" : "search"}
+          enterKeyHint="search"
           autoCapitalize="sentences"
           autoCorrect="off"
           autoComplete="off"
@@ -40,8 +31,8 @@ export function ChatComposer({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              if (chatEnabled) submit();
-              else event.currentTarget.blur();
+              if (value.trim() && !streaming) onEnter(value.trim());
+              event.currentTarget.blur();
             } else if (event.key === "Escape") {
               onClose();
             }

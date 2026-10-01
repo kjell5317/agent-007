@@ -9,7 +9,7 @@ from app.db.clients.search import SuggestHit
 
 
 class SearchHit(BaseModel):
-    type: str  # task | input | note | document | drive | contact
+    type: str  # task | input | note | document | drive | contact | github
     id: str  # the source_id an action/get tool consumes (task_id, file_id, event_id, …)
     title: str
     snippet: str | None = None
@@ -29,6 +29,8 @@ class SearchHit(BaseModel):
     def build(cls, hit: SuggestHit) -> "SearchHit":
         sim = hit.similarity
         meta = {"similarity": round(sim, 2)} if sim and sim > 0 else None
+        if hit.due_date:
+            meta = {**(meta or {}), "due_date": hit.due_date.isoformat()}
         return cls(
             type=hit.type,
             id=hit.id,

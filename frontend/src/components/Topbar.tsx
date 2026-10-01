@@ -166,18 +166,28 @@ export function Topbar({
   return (
     <header className="sticky top-0 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
       <div className="mx-auto flex max-w-2xl items-center gap-2 px-4 py-3">
-        {mode === "chat" ? (
+        {mode === "chat" || mode === "points" ? (
           <>
             <Button
               size="icon"
               variant="ghost"
               onClick={onBack}
-              aria-label="Close search"
+              aria-label={mode === "chat" ? "Close search" : "Back"}
               className="h-12 w-12 shrink-0"
             >
               <ArrowLeft className="h-5 w-5" />
             </Button>
-            {chatSearch}
+            {mode === "chat" ? chatSearch : (
+              <button
+                type="button"
+                onClick={onChatOpen}
+                aria-label="Search and chat"
+                className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-full bg-secondary px-4 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Search className="h-5 w-5 shrink-0" />
+                <span className="truncate">Search...</span>
+              </button>
+            )}
           </>
         ) : mode !== "normal" ? (
           <>
@@ -207,7 +217,7 @@ export function Topbar({
             </button>
           </>
         )}
-        {(mode === "normal" || mode === "chat") && (
+        {(mode === "normal" || mode === "chat" || mode === "points") && (
           <>
             <div className="relative shrink-0">
               <Button

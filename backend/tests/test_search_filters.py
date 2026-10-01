@@ -107,6 +107,24 @@ def test_suggest_excludes_calendar_from_file_results():
     assert "d.provider <> :exclude_source" in captured["sql"]
 
 
+def test_suggest_excludes_task_calendar_before_limit_and_returns_due_dates():
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            captured["params"] = params
+            return SimpleNamespace(all=lambda: [])
+
+    assert search_client.suggest(
+        Session(), tsquery="meeting:*", branches=frozenset({TASK, DOCUMENT}),
+        limit=10, half_life_days=100, exclude_calendar_id="007@example.com",
+    ) == []
+    assert "coalesce(d.metadata->>'calendar_id', '') <> :exclude_calendar_id" in captured["sql"]
+    assert "t.due_date AS due_date" in captured["sql"]
+    assert captured["params"]["exclude_calendar_id"] == "007@example.com"
+
+
 @pytest.mark.asyncio
 async def test_message_facets_use_stored_sources_and_exclude_chat(monkeypatch):
     from app.api import search as search_api
@@ -128,3 +146,26 @@ async def test_message_facets_use_stored_sources_and_exclude_chat(monkeypatch):
     assert await search_api.search_facets("messages") == {"options": ["gmail", "slack"]}
     assert "source != :source_1" in captured["sql"]
     assert "DISTINCT" in captured["sql"]
+
+
+@pytest.mark.asyncio
+async def test_note_facets_use_sources_of_existing_notes(monkeypatch):
+    from app.api import search as search_api
+
+    captured = {}
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, statement):
+            captured["sql"] = str(statement)
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["chat", "gmail"]))
+
+    monkeypatch.setattr(search_api, "SessionLocal", Session)
+    assert await search_api.search_facets("notes") == {"options": ["chat", "gmail"]}
+    assert "FROM notes n LEFT JOIN raw_inputs r" in captured["sql"]
+    assert "coalesce(r.source, 'chat')" in captured["sql"]
