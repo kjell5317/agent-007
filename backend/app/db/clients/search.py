@@ -130,9 +130,10 @@ _INPUT_THREAD_KEY = (
     "ELSE 'input:' || r.id::text END"
 )
 
-# Search suggestions stay short; chat retrieval gets enough of each message to
-# answer from the result directly. Fetch one extra character to detect clipping.
-MESSAGE_CONTENT_CHARS = 3000
+# Search suggestions stay short; chat retrieval can use the full stored Gmail
+# body (Gmail preprocessing caps it at 8,000). Fetch one extra character to
+# detect clipping for other sources.
+MESSAGE_CONTENT_CHARS = 8000
 _INPUT_SELECT_TEMPLATE = (
     "'input' AS type, r.id::text AS id, "
     "coalesce(nullif(r.source_metadata->>'subject',''), "
@@ -508,11 +509,15 @@ def _load_display(
     stage-1 select fragments so a hit reads identically to a suggest row. Notes
     also carry their genuine cosine so the uniform record can show `sim=`."""
     b = _display_branch(corpus)
+    select_expr = (
+        _INPUT_SELECT_TEMPLATE.format(content_chars=MESSAGE_CONTENT_CHARS + 1)
+        if corpus == INPUT else b["select"]
+    )
     scored = corpus == NOTE and emb is not None
     sim_expr = "1.0 - (n.embedding <=> CAST(:emb AS vector))" if scored else "NULL::float"
     sql = text(
         f"SELECT type, id, title, snippet, url, task_id, source, sender, status, ts, similarity "
-        f"FROM (SELECT {b['select']}, {b['ts']} AS ts, {sim_expr} AS similarity FROM {b['from']} "
+        f"FROM (SELECT {select_expr}, {b['ts']} AS ts, {sim_expr} AS similarity FROM {b['from']} "
         f"WHERE {_ID_COL[corpus]}::text = ANY(:ids)"
         f") x"
     )

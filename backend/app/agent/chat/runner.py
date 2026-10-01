@@ -57,7 +57,6 @@ from app.agent.tools import (
 from app import observability as obs
 from app.config import get_settings
 from app.db.clients import labels as labels_store
-from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
@@ -207,6 +206,9 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     # prefixes of the same text, so we keep the fuller snippet and drop the
     # redundant short title. Drive/contact snippets and a snippet equal to the
     # location are already in the segments above, so they collapse to the title.
+    detail = snippet
+    if detail and h.type != "input":
+        detail = detail[:1200 if h.source == "calendar" else 200]
     if (
         not snippet
         or h.type in ("drive", "contact")
@@ -215,11 +217,9 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     ):
         body = title
     elif snippet.startswith(title):
-        body = snippet[:1200 if h.source == "calendar" else 200]
+        body = detail
     else:
-        body = f"{title} — {snippet[:1200 if h.source == 'calendar' else 200]}"
-    if h.type == "input" and snippet and len(snippet) >= 200:
-        body += "… [preview; use get_message_details with id to read the stored message]"
+        body = f"{title} — {detail}"
     return f"{prefix} — {body}"
 
 
@@ -579,31 +579,6 @@ async def _dispatch(
                 after=_opt(tin, "after"),
             )
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("messages", q))
-
-        if name == "get_message_details":
-            try:
-                message_id = uuid.UUID(str(tin.get("message_id") or ""))
-            except ValueError:
-                return "get_message_details: invalid message id.", _trace(
-                    name, purpose="read message", summary="invalid message id", status="failed"
-                )
-            message = raw_inputs_store.get(session, message_id)
-            if message is None or message.source not in {"gmail", "slack"}:
-                return "get_message_details: message not found.", _trace(
-                    name, purpose="read message", summary="message not found", status="failed"
-                )
-            meta = message.source_metadata or {}
-            details = [
-                f"id={message.id}",
-                f"source={message.source}",
-                f"from={meta.get('from') or '(unknown)'}",
-                f"subject={meta.get('subject') or '(none)'}",
-                f"received_at={message.received_at.isoformat() if message.received_at else '(unknown)'}",
-                "content:",
-                message.content or "(empty)",
-            ]
-            result = "\n".join(details)
-            return result, _trace(name, purpose="read message", summary="message details")
 
         if name == "calendar_search":
             hits = await search_calendar(

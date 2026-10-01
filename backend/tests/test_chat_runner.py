@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -284,32 +283,13 @@ def test_context_line_surfaces_action_ids():
     assert "[E1]" in cal and "id=ev123" in cal
 
 
-def test_message_preview_identifies_its_detail_tool():
-    snippet = "BEGIN TEMPLATE // " + "x" * 182
+def test_message_search_result_keeps_long_body():
+    snippet = "BEGIN TEMPLATE // " + "x" * 2000
     line = chat_runner._context_line(
         "I2", _hit("input", "message-id", "Registration", snippet=snippet, source="gmail"), _TZ
     )
-    assert "get_message_details" in line
+    assert snippet in line
     assert "id=message-id" in line
-
-
-@pytest.mark.asyncio
-async def test_get_message_details_returns_stored_body(monkeypatch):
-    message_id = uuid.uuid4()
-    body = "BEGIN TEMPLATE // " + "important content " * 80
-    row = SimpleNamespace(
-        id=message_id, source="gmail", source_metadata={"subject": "Registration"},
-        received_at=datetime(2026, 9, 30), content=body,
-    )
-    monkeypatch.setattr(chat_runner.raw_inputs_store, "get", lambda session, id_: row)
-    result, trace = await chat_runner._dispatch(
-        object(), Citations(),
-        ToolCall(id="details", name="get_message_details", input={"message_id": str(message_id)}),
-        get_settings(), _noop_emit,
-    )
-    assert body in result
-    assert "subject=Registration" in result
-    assert trace["status"] == "success"
 
 
 def test_context_line_surfaces_contact_birthday_and_address():

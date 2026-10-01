@@ -538,7 +538,8 @@ _CHAT_TOOLS = [
             "messages — by meaning and keyword. Use to find what someone sent "
             "('the email about the lease', 'what did Anna say about the demo'). "
             "Optionally restrict to one `source` and/or a date window. Returns "
-            "message hits with citation tags."
+            "up to three message hits with citation tags and up to 8,000 "
+            "characters of stored content per hit."
         ),
         "parameters": {
             "type": "object",
@@ -559,21 +560,6 @@ _CHAT_TOOLS = [
                 },
             },
             "required": ["query"],
-        },
-    },
-    {
-        "name": "get_message_details",
-        "description": (
-            "Read the stored body and metadata of one Gmail or Slack message. "
-            "Use the `id=` from a `messages_search` result when its preview is "
-            "cut off or the question needs details beyond the preview."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "message_id": {"type": "string", "description": "The message id from a search result."},
-            },
-            "required": ["message_id"],
         },
     },
     {

@@ -24,3 +24,17 @@ def test_numeric_message_search_builds_input_branch():
     sql = search._branch_sql(search.INPUT, match=True, filters_sql="")
     assert "r.source <> 'chat'" in sql
     assert "WHERE r.tsv @@ to_tsquery('english', :tsquery)" in sql
+
+
+def test_chat_message_display_reads_longer_body_than_suggest():
+    class Result:
+        def all(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params):
+            assert "left(coalesce(r.content,''), 8001) AS snippet" in str(statement)
+            return Result()
+
+    assert search._load_display(Session(), search.INPUT, ["input-id"]) == []
+    assert "left(coalesce(r.content,''), 200) AS snippet" in search._BRANCHES[search.INPUT]["select"]

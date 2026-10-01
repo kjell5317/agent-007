@@ -122,6 +122,9 @@ async def search_messages(
         after=after,
     )
     hits = [SearchHit.build(h) for h in raw]
+    for hit in hits:
+        if hit.snippet and len(hit.snippet) > search_client.MESSAGE_CONTENT_CHARS:
+            hit.snippet = hit.snippet[:search_client.MESSAGE_CONTENT_CHARS].rstrip() + "…"
     _attach_input_source_urls(session, hits)
     return hits
 

@@ -88,9 +88,21 @@ async def test_search_messages_restricts_to_inputs_with_filters(monkeypatch):
     monkeypatch.setattr(retrieve_mod, "_attach_input_source_urls", lambda s, h: None)
     hits = await search_messages(object(), "invoice", source="gmail", before="2026-08-01")
     assert calls[0]["corpora"] == frozenset({"input"})
+    assert calls[0]["k"] == 3
     assert calls[0]["source"] == "gmail"
     assert calls[0]["before"] == "2026-08-01"
     assert [h.id for h in hits] == ["i1"]
+
+
+@pytest.mark.asyncio
+async def test_search_messages_keeps_long_content_and_marks_actual_clipping(monkeypatch):
+    row = _suggest("input", "i1")
+    row.snippet = "x" * (retrieve_mod.search_client.MESSAGE_CONTENT_CHARS + 1)
+    _patch_hybrid(monkeypatch, [], rows=[row])
+    monkeypatch.setattr(retrieve_mod, "_attach_input_source_urls", lambda s, h: None)
+    hits = await search_messages(object(), "registration")
+    assert len(hits[0].snippet) == retrieve_mod.search_client.MESSAGE_CONTENT_CHARS + 1
+    assert hits[0].snippet.endswith("…")
 
 
 @pytest.mark.asyncio

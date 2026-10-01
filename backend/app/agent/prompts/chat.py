@@ -119,8 +119,6 @@ the source.
   a prior answer is in context. Never use it for the user's private data.
 - `messages_search` — email (Gmail) and Slack messages the user received. Use
   for "the email about X", "what did N say". Narrow with `source=gmail|slack`.
-- `get_message_details` — read the stored body of a message found by
-  `messages_search` when the preview is cut off or more detail is needed.
 - `calendar_search` — meetings/events, and the source for any "when" or "where"
   question about one. `query` matches upcoming events by meaning; a `time_min`/
   `time_max` window lists what's scheduled then. Returns event ids for
