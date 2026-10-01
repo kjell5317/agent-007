@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleUser, ExternalLink, LogOut, Mail, Tags } from "lucide-react";
+import {
+  ArrowLeft,
+  CircleUser,
+  ExternalLink,
+  LogOut,
+  Search,
+  Tags,
+} from "lucide-react";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -30,22 +38,23 @@ export function Topbar({
   theme,
   onThemeChange,
   mode = "normal",
-  unreadInbox = 0,
-  onMailOpen,
+  title = "",
+  onChatOpen,
+  chatSearch,
   onPointsOpen,
   onLabelsOpen,
   onBack,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
-  mode?: "normal" | "mail" | "points" | "labels";
-  unreadInbox?: number;
-  onMailOpen?: () => void;
+  mode?: "normal" | "chat" | "points" | "labels";
+  title?: string;
+  onChatOpen?: () => void;
+  chatSearch?: ReactNode;
   onPointsOpen?: () => void;
   onLabelsOpen?: () => void;
   onBack?: () => void;
 }) {
-  const [healthy, setHealthy] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
   const [slackApps, setSlackApps] = useState<string[]>([]);
@@ -80,10 +89,6 @@ export function Topbar({
 
   useEffect(() => {
     api
-      .health()
-      .then(() => setHealthy(true))
-      .catch(() => setHealthy(false));
-    api
       .whoami()
       .then((r) => setEmail(r?.email ?? null))
       .catch(() => setEmail(null));
@@ -91,7 +96,10 @@ export function Topbar({
       .getSettings()
       .then((s) => setAutoPoll(s.auto_poll_enabled))
       .catch(() => setAutoPoll(null));
-    api.slackApps().then(setSlackApps).catch(() => setSlackApps([]));
+    api
+      .slackApps()
+      .then(setSlackApps)
+      .catch(() => setSlackApps([]));
   }, []);
 
   useEffect(() => {
@@ -155,92 +163,94 @@ export function Topbar({
   };
 
   return (
-    <header className="border-b bg-card">
+    <header className="sticky top-0 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
       <div className="mx-auto flex max-w-2xl items-center gap-2 px-4 py-3">
-        <span
-          className={cn(
-            "inline-block h-2 w-2 rounded-full",
-            healthy == null
-              ? "bg-muted-foreground"
-              : healthy
-                ? "bg-emerald-500"
-                : "bg-destructive",
-          )}
-          title={
-            healthy == null ? "checking" : healthy ? "healthy" : "unreachable"
-          }
-        />
-        <h1 className="flex-1 text-base font-semibold">Task Agent</h1>
-        {mode !== "normal" ? (
-          <Button onClick={onBack}>Back</Button>
-        ) : (
+        {mode === "chat" ? (
           <>
-            {points != null && (
-              <div className="relative">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={onPointsOpen}
-                  className="gap-1.5 tabular-nums"
-                  title="Points"
-                >
-                  <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
-                  <span
-                    key={flash?.key ?? "idle"}
-                    className={cn(
-                      "inline-block",
-                      flash && "animate-points-pop",
-                    )}
-                  >
-                    {formatPoints(points)}
-                  </span>
-                </Button>
-                {flash && (
-                  <span
-                    key={flash.key}
-                    onAnimationEnd={() => setFlash(null)}
-                    className={cn(
-                      "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
-                      flash.delta >= 0
-                        ? "text-emerald-500"
-                        : "text-destructive",
-                    )}
-                  >
-                    {flash.delta >= 0 ? "+" : "−"}
-                    {formatPoints(Math.abs(flash.delta))}
-                  </span>
-                )}
-              </div>
-            )}
             <Button
               size="icon"
               variant="ghost"
-              onClick={onMailOpen}
-              aria-label={
-                unreadInbox > 0
-                  ? `Open mail, ${unreadInbox} unread`
-                  : "Open mail"
-              }
-              title="Mail"
-              className="relative"
+              onClick={onBack}
+              aria-label="Close search"
+              className="h-12 w-12 shrink-0"
             >
-              <Mail className="h-5 w-5" />
-              {unreadInbox > 0 && (
-                <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-emerald-500" />
-              )}
+              <ArrowLeft className="h-5 w-5" />
             </Button>
-            {email && (
-              <AccountMenu
-                email={email}
-                autoPoll={autoPoll}
-                slackApps={slackApps}
-                theme={theme}
-                onToggleAutoPoll={toggleAutoPoll}
-                onThemeChange={onThemeChange}
-                onLabelsOpen={onLabelsOpen}
-                onLogout={logout}
-              />
-            )}
+            {chatSearch}
+          </>
+        ) : mode !== "normal" ? (
+          <>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onBack}
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+            <h1 className="flex-1 text-lg font-semibold">{title}</h1>
+          </>
+        ) : (
+          <>
+            <span className="w-12 shrink-0" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={onChatOpen}
+              aria-label="Search and chat"
+              className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-full bg-secondary px-4 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Search className="h-5 w-5 shrink-0" />
+              <span className="truncate">Search...</span>
+            </button>
+          </>
+        )}
+        {(mode === "normal" || mode === "chat") && (
+          <>
+            <div className="relative shrink-0">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onPointsOpen}
+                className="h-12 w-14 gap-1 px-1 tabular-nums"
+                title={points == null ? "Points unavailable" : "Points"}
+                aria-label={
+                  points == null
+                    ? "Points unavailable"
+                    : `${formatPoints(points)} points`
+                }
+              >
+                <PointsIcon className="h-3.5 w-3.5 text-amber-500" />
+                <span
+                  key={flash?.key ?? "idle"}
+                  className={cn("inline-block", flash && "animate-points-pop")}
+                >
+                  {points == null ? "—" : formatPoints(points)}
+                </span>
+              </Button>
+              {flash && (
+                <span
+                  key={flash.key}
+                  onAnimationEnd={() => setFlash(null)}
+                  className={cn(
+                    "animate-points-float pointer-events-none absolute -top-2 left-1/2 text-xs font-bold tabular-nums",
+                    flash.delta >= 0 ? "text-emerald-500" : "text-destructive",
+                  )}
+                >
+                  {flash.delta >= 0 ? "+" : "−"}
+                  {formatPoints(Math.abs(flash.delta))}
+                </span>
+              )}
+            </div>
+            <AccountMenu
+              email={email}
+              autoPoll={autoPoll}
+              slackApps={slackApps}
+              theme={theme}
+              onToggleAutoPoll={toggleAutoPoll}
+              onThemeChange={onThemeChange}
+              onLabelsOpen={onLabelsOpen}
+              onLogout={logout}
+            />
           </>
         )}
       </div>
@@ -258,7 +268,7 @@ function AccountMenu({
   onLabelsOpen,
   onLogout,
 }: {
-  email: string;
+  email: string | null;
   autoPoll: boolean | null;
   slackApps: string[];
   theme: ThemePreference;
@@ -291,11 +301,12 @@ function AccountMenu({
       <Button
         size="icon"
         variant="ghost"
+        className="h-12 w-12"
         onClick={() => setOpen((v) => !v)}
         aria-label="Account menu"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={email}
+        title={email ?? "Account"}
       >
         <CircleUser className="h-5 w-5" />
       </Button>
@@ -305,7 +316,7 @@ function AccountMenu({
           className="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-md border bg-card text-card-foreground shadow-md"
         >
           <div className="truncate border-b px-3 py-2 text-xs text-muted-foreground">
-            {email}
+            {email ?? "Account"}
           </div>
           <div className="py-1">
             <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.db.clients import search as search_client
 from app.db.models.raw_input import RawInput
 from app.db.schemas.search import SearchHit
-from app.services.search.filters import ALL_CORPORA, build_tsquery, corpus_restriction, parse_query
+from app.services.search.filters import ALL_CORPORA, Filters, build_tsquery, corpus_restriction, parse_query
 from app.services.source_url import source_url_for_raw_input
 
 _CACHE_MAX = 512
@@ -31,6 +31,9 @@ def run_suggest(
     *,
     limit: int | None = None,
     types: frozenset[str] | None = None,
+    exclude_source: str | None = None,
+    source: str | None = None,
+    label: str | None = None,
 ) -> list[SearchHit]:
     """Stage-1 suggestions. `types` restricts the corpora searched (the task
     composer asks for tasks + documents only); it intersects with any corpus
@@ -38,14 +41,24 @@ def run_suggest(
     settings = get_settings()
     limit = limit or settings.search_suggest_limit
     types_key = ",".join(sorted(types)) if types else "all"
-    key = f"{query.strip().lower()}|{limit}|{types_key}"
+    key = "|".join(str(value).lower() for value in (
+        query.strip(), limit, types_key, exclude_source or "",
+        source or "", label or "",
+    ))
 
     now = time.monotonic()
     cached = _cache.get(key)
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    text, filters = parse_query(query)
+    text, parsed = parse_query(query)
+    filters = Filters(
+        source=source or parsed.source,
+        label=label or parsed.label,
+        status=parsed.status,
+        after=parsed.after,
+        before=parsed.before,
+    )
     branches = corpus_restriction(filters) or ALL_CORPORA
     if types is not None:
         branches = frozenset(branches & types)
@@ -62,6 +75,7 @@ def run_suggest(
             status=filters.status,
             before=filters.before,
             after=filters.after,
+            exclude_source=exclude_source,
         )
         result = [SearchHit.build(h) for h in hits]
         result = _drop_documents_shadowed_by_tasks(result)

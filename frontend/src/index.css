@@ -92,7 +92,19 @@
 }
 .animate-caret-blink { animation: caret-blink 1.05s steps(1, end) infinite; }
 
+@keyframes search-content-open {
+  from { clip-path: inset(0 0 100% 0); opacity: 0; transform: translateY(-8px); }
+  to { clip-path: inset(0 0 0 0); opacity: 1; transform: translateY(0); }
+}
+@keyframes search-content-close {
+  from { clip-path: inset(0 0 0 0); opacity: 1; transform: translateY(0); }
+  to { clip-path: inset(0 0 100% 0); opacity: 0; transform: translateY(-8px); }
+}
+.animate-search-content-open { animation: search-content-open 220ms ease-out both; }
+.animate-search-content-close { animation: search-content-close 220ms ease-in both; }
+
 @media (prefers-reduced-motion: reduce) {
   .animate-points-pop, .animate-points-float { animation: none; }
   .animate-caret-blink { animation: none; opacity: 1; }
+  .animate-search-content-open, .animate-search-content-close { animation: none; }
 }

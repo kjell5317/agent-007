@@ -18,12 +18,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.agent.chat import ChatTurn, run_chat
 from app.config import get_settings
 from app.db import SessionLocal, get_session
+from app.db.models.raw_input import RawInput
 from app.db.clients import chats as chats_store
 from app.db.schemas.search import (
     ChatConversationRead,
@@ -35,7 +37,7 @@ from app.db.schemas.search import (
 from app.services.link_preview import get_link_preview
 from app.services.search import run_suggest
 from app.services.search.contacts import search_contacts
-from app.services.search.drive import search_drive
+from app.services.search.drive import available_drive_formats, search_drive
 from app.services.search.filters import ALL_CORPORA
 
 log = logging.getLogger(__name__)
@@ -43,6 +45,21 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
 _MAX_LIMIT = 25
+
+
+@router.get("/facets")
+async def search_facets(kind: str = Query(..., pattern="^(messages|files)$")) -> dict[str, list[str]]:
+    """Only offer child filters backed by searchable data."""
+    with SessionLocal() as session:
+        if kind == "messages":
+            sources = session.execute(
+                select(RawInput.source).where(RawInput.source != "chat").distinct().order_by(RawInput.source)
+            ).scalars().all()
+            return {"options": list(sources)}
+        formats = await available_drive_formats(
+            session, timeout=get_settings().search_drive_timeout_seconds,
+        )
+        return {"options": formats}
 
 
 def _parse_types(types: str | None) -> frozenset[str] | None:
@@ -59,34 +76,53 @@ async def suggest(
     q: str = Query("", max_length=256),
     limit: int | None = Query(None, ge=1, le=_MAX_LIMIT),
     types: str | None = Query(None, max_length=64),
+    exclude_source: str | None = Query(None, max_length=64),
+    source: str | None = Query(None, max_length=64),
+    label: str | None = Query(None, max_length=128),
     session: Session = Depends(get_session),
 ) -> SuggestResponse:
-    return SuggestResponse(hits=run_suggest(session, q, limit=limit, types=_parse_types(types)))
+    return SuggestResponse(hits=run_suggest(
+        session, q, limit=limit, types=_parse_types(types),
+        exclude_source=exclude_source, source=source, label=label,
+    ))
 
 
 @router.get("/suggest/external", response_model=SuggestResponse)
 async def suggest_external(
     q: str = Query(..., min_length=3, max_length=256),
     limit: int = Query(6, ge=1, le=10),
+    kind: str | None = Query(None, pattern="^(contact|drive)$"),
+    mime_label: str | None = Query(None, max_length=32),
 ) -> SuggestResponse:
     """Live Drive and contact matches, separate from fast local suggestions."""
     settings = get_settings()
+    per_source_limit = limit if kind in {"contact", "drive"} else min(limit, 4)
 
     async def drive_hits():
         with SessionLocal() as session:
+            search_kwargs = {}
+            if isinstance(mime_label, str):
+                search_kwargs["mime_label"] = mime_label
             return await search_drive(
-                session, q, k=min(limit, 4),
+                session, q, k=per_source_limit,
                 timeout=settings.search_drive_timeout_seconds,
+                **search_kwargs,
             )
 
     async def contact_hits():
         with SessionLocal() as session:
             return await search_contacts(
-                session, q, k=min(limit, 4),
+                session, q, k=per_source_limit,
                 timeout=settings.search_contacts_timeout_seconds,
             )
 
-    drive, contacts = await asyncio.gather(drive_hits(), contact_hits())
+    async def empty_hits():
+        return []
+
+    drive, contacts = await asyncio.gather(
+        drive_hits() if kind != "contact" else empty_hits(),
+        contact_hits() if kind != "drive" else empty_hits(),
+    )
     hits = [hit for pair in zip(contacts, drive) for hit in pair]
     hits.extend(contacts[len(drive):])
     hits.extend(drive[len(contacts):])

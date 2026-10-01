@@ -53,10 +53,35 @@ class DriveClient:
         self._headers = {"Authorization": f"Bearer {access_token}"}
         self._timeout = timeout
 
+    async def available_formats(self) -> list[str]:
+        """Formats with at least one searchable file in this Drive account."""
+        groups: dict[str, list[str]] = {}
+        for mime in _USEFUL_MIME_TYPES:
+            groups.setdefault(_mime_label(mime), []).append(mime)
+
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            async def exists(mimes: list[str]) -> bool:
+                clause = "(" + " or ".join(f"mimeType = '{mime}'" for mime in mimes) + ")"
+                response = await client.get(_BASE, params={
+                    "q": f"trashed = false and {clause}",
+                    "fields": "files(id)",
+                    "pageSize": 1,
+                    "spaces": "drive",
+                    "corpora": "user",
+                })
+                response.raise_for_status()
+                return bool(response.json().get("files"))
+
+            present = await asyncio.gather(*(exists(mimes) for mimes in groups.values()))
+        return [label for label, found in zip(groups, present) if found]
+
     async def search(
-        self, query: str, *, limit: int, after: str | None = None, before: str | None = None
+        self, query: str, *, limit: int, after: str | None = None,
+        before: str | None = None, mime_label: str | None = None,
     ) -> list[dict]:
-        clauses = [f"fullText contains '{_escape(query)}'", "trashed = false", _MIME_CLAUSE]
+        mime_types = [mime for mime, label in _MIME_LABELS.items() if label == mime_label] if mime_label else []
+        mime_clause = "(" + " or ".join(f"mimeType = '{mime}'" for mime in mime_types) + ")" if mime_types else _MIME_CLAUSE
+        clauses = [f"fullText contains '{_escape(query)}'", "trashed = false", mime_clause]
         if after:
             clauses.append(f"modifiedTime >= '{_rfc3339(after)}'")
         if before:
@@ -135,22 +160,35 @@ async def search_drive(
     timeout: float,
     after: str | None = None,
     before: str | None = None,
+    mime_label: str | None = None,
 ) -> list[SearchHit]:
     query = (query or "").strip()
     if not query:
         return []
     try:
-        return await asyncio.wait_for(_search(session, query, k, after, before), timeout=timeout)
+        return await asyncio.wait_for(_search(session, query, k, after, before, mime_label), timeout=timeout)
     except (asyncio.TimeoutError, GoogleTokenError, httpx.HTTPError) as exc:
         log.info("drive search skipped · %s: %s", type(exc).__name__, exc)
         return []
 
 
+async def available_drive_formats(session: Session, *, timeout: float) -> list[str]:
+    try:
+        token = await get_fresh_google_token(session)
+        return await asyncio.wait_for(
+            DriveClient(token.access_token).available_formats(), timeout=timeout,
+        )
+    except (asyncio.TimeoutError, GoogleTokenError, httpx.HTTPError) as exc:
+        log.info("drive formats unavailable · %s: %s", type(exc).__name__, exc)
+        return []
+
+
 async def _search(
-    session: Session, query: str, k: int, after: str | None, before: str | None
+    session: Session, query: str, k: int, after: str | None, before: str | None,
+    mime_label: str | None,
 ) -> list[SearchHit]:
     token = await get_fresh_google_token(session)
-    files = await DriveClient(token.access_token).search(query, limit=k, after=after, before=before)
+    files = await DriveClient(token.access_token).search(query, limit=k, after=after, before=before, mime_label=mime_label)
     return [_to_hit(f) for f in files]
 
 

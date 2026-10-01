@@ -38,3 +38,8 @@ async def test_external_suggestions_interleave_contacts_and_drive(monkeypatch):
 
     assert [hit.id for hit in result.hits] == ["person-0", "file-0", "person-1"]
     assert {name for name, *_ in calls} == {"drive", "contact"}
+
+    calls.clear()
+    contacts_only = await search_api.suggest_external("Kjell", limit=3, kind="contact")
+    assert [hit.id for hit in contacts_only.hits] == ["person-0", "person-1"]
+    assert [name for name, *_ in calls] == ["contact"]

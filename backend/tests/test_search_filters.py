@@ -1,3 +1,8 @@
+from types import SimpleNamespace
+
+import pytest
+
+from app.db.clients import search as search_client
 from app.db.clients.search import DOCUMENT, INPUT, TASK
 from app.services.search.filters import (
     Filters,
@@ -80,3 +85,46 @@ def test_provider_is_no_longer_a_filter():
 
 def test_before_after_do_not_restrict_corpus():
     assert corpus_restriction(parse_query("x before:2026")[1]) is None
+
+
+def test_suggest_excludes_calendar_from_file_results():
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            captured["params"] = params
+            return SimpleNamespace(all=lambda: [])
+
+    hits = search_client.suggest(
+        Session(), tsquery="alice:*", branches=frozenset({INPUT, DOCUMENT}),
+        limit=25, half_life_days=30,
+        exclude_source="calendar",
+    )
+
+    assert hits == []
+    assert captured["params"]["exclude_source"] == "calendar"
+    assert "d.provider <> :exclude_source" in captured["sql"]
+
+
+@pytest.mark.asyncio
+async def test_message_facets_use_stored_sources_and_exclude_chat(monkeypatch):
+    from app.api import search as search_api
+
+    captured = {}
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, statement):
+            captured["sql"] = str(statement)
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["gmail", "slack"]))
+
+    monkeypatch.setattr(search_api, "SessionLocal", Session)
+    assert await search_api.search_facets("messages") == {"options": ["gmail", "slack"]}
+    assert "source != :source_1" in captured["sql"]
+    assert "DISTINCT" in captured["sql"]

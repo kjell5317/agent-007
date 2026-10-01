@@ -181,7 +181,7 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
 
 
 def _filters_sql(
-    corpus: str, *, source, label, status, before, after, exclude_linked_inputs: bool
+    corpus: str, *, source, label, status, before, after, exclude_source, exclude_linked_inputs: bool
 ) -> str:
     parts: list[str] = []
     ts = _BRANCHES[corpus]["ts"]
@@ -215,6 +215,8 @@ def _filters_sql(
     if corpus == DOCUMENT:
         if source is not None:
             parts.append("d.provider = :source")
+        if exclude_source is not None:
+            parts.append("d.provider <> :exclude_source")
     return "".join(f" AND {p}" for p in parts)
 
 
@@ -230,6 +232,7 @@ def suggest(
     status: str | None = None,
     before: str | None = None,
     after: str | None = None,
+    exclude_source: str | None = None,
 ) -> list[SuggestHit]:
     match = bool(tsquery)
     active = [c for c in (TASK, INPUT, DOCUMENT) if c in branches]
@@ -250,6 +253,7 @@ def suggest(
                 status=status,
                 before=before,
                 after=after,
+                exclude_source=exclude_source,
                 exclude_linked_inputs=exclude_linked_inputs,
             ),
         )
@@ -276,6 +280,7 @@ def suggest(
             "status": status,
             "before": before,
             "after": after,
+            "exclude_source": exclude_source,
         },
     ).all()
     return [

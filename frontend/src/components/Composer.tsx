@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Button } from "@/components/ui/button";
@@ -93,7 +94,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40">
+    <div className="fixed inset-x-0 bottom-[calc(4.125rem+env(safe-area-inset-bottom))] z-40">
       {showSuggestions && (
         <div className="mx-auto max-w-2xl px-3">
           {/* Elevated panel so the suggestions read as a distinct surface
@@ -119,39 +120,37 @@ export function Composer({ onCreated, onOpenTask }: Props) {
           </ul>
         </div>
       )}
-      <form
-        onSubmit={submit}
-        autoComplete="off"
-        className="border-t bg-card pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_14px_rgba(15,23,42,0.06)] dark:shadow-[0_-4px_18px_rgba(0,0,0,0.35)]"
-      >
-        <div className="mx-auto flex max-w-2xl items-center gap-2 px-3 py-2.5">
-          <Input
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onFocus={() => {
-              // Re-show suggestions when returning to a field that still has text.
-              if (value.trim().length >= 1) setDismissed(false);
-            }}
-            onBlur={() => window.setTimeout(() => setDismissed(true), 100)}
-            placeholder="Add a task…"
-            enterKeyHint="send"
-            autoCapitalize="sentences"
-            autoComplete="off"
-            autoCorrect="off"
-            // Suppress browser + password-manager autofill overlays on this field.
-            name="task-title"
-            data-1p-ignore
-            data-lpignore="true"
-            data-form-type="other"
-            role="combobox"
-            aria-expanded={showSuggestions}
-            aria-autocomplete="list"
-            className="h-10 rounded-full bg-secondary px-4 text-[15px]"
-          />
-          <Button type="submit" disabled={!value.trim()} className="px-5">
-            Add
-          </Button>
+      <form onSubmit={submit} autoComplete="off">
+        <div className="mx-auto max-w-2xl px-4 py-2">
+          <div className="flex h-12 items-center gap-3 rounded-full bg-secondary px-4 shadow-sm">
+            <Input
+              ref={inputRef}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onFocus={() => {
+                // Re-show suggestions when returning to a field that still has text.
+                if (value.trim().length >= 1) setDismissed(false);
+              }}
+              onBlur={() => window.setTimeout(() => setDismissed(true), 100)}
+              placeholder="Add a task…"
+              enterKeyHint="send"
+              autoCapitalize="sentences"
+              autoComplete="off"
+              autoCorrect="off"
+              // Suppress browser + password-manager autofill overlays on this field.
+              name="task-title"
+              data-1p-ignore
+              data-lpignore="true"
+              data-form-type="other"
+              role="combobox"
+              aria-expanded={showSuggestions}
+              aria-autocomplete="list"
+              className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+            />
+            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-8 w-8 shrink-0 rounded-full p-0">
+              <Plus className="h-5 w-5" />
+            </Button>
+          </div>
         </div>
       </form>
     </div>

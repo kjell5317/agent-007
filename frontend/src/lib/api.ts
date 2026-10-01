@@ -126,15 +126,22 @@ export const api = {
   markInputsSeen: () =>
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 
-  suggest: (q: string, limit = 8, types?: readonly SearchHitType[]) => {
+  suggest: (q: string, limit = 8, types?: readonly SearchHitType[], filters?: {
+    excludeSource?: string; source?: string; label?: string;
+  }) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     if (types && types.length) params.set("types", types.join(","));
+    if (filters) for (const [key, value] of Object.entries(filters)) {
+      if (value) params.set(key === "excludeSource" ? "exclude_source" : key, value);
+    }
     return request<{ hits: SearchHit[] }>(`/search/suggest?${params}`);
   },
-  suggestExternal: (q: string, limit = 6) =>
+  suggestExternal: (q: string, limit = 6, kind?: "contact" | "drive", mimeLabel?: string) =>
     request<{ hits: SearchHit[] }>(
-      `/search/suggest/external?q=${encodeURIComponent(q)}&limit=${limit}`,
+      `/search/suggest/external?${new URLSearchParams({ q, limit: String(limit), ...(kind ? { kind } : {}), ...(mimeLabel ? { mime_label: mimeLabel } : {}) })}`,
     ),
+  searchFacets: (kind: "messages" | "files") =>
+    request<{ options: string[] }>(`/search/facets?kind=${kind}`),
 
   chatStream,
 

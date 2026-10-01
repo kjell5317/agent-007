@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Inbox, ListTodo } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { LabelsPanel } from "@/components/labels/LabelsPanel";
@@ -6,6 +7,8 @@ import { NotesPanel } from "@/components/notes/NotesPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
 import { ChatComposer } from "@/components/search/ChatComposer";
 import { ChatPanel } from "@/components/search/ChatPanel";
+import { EMPTY_SEARCH_FILTERS, SearchFilters, type SearchFiltersState } from "@/components/search/SearchFilters";
+import { SearchResults } from "@/components/search/SearchResults";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
@@ -31,21 +34,24 @@ export function App() {
     }).catch(() => {});
   }, []);
   const { theme, setTheme } = useThemePreference();
-  // "tasks" / "chat" are the two tabs of the main view; "mail" / "points" /
-  // "labels" are overlays reached from the topbar (Back returns to the last
-  // active tab).
+  // Tasks and Inbox are the main tabs. Chat, points, and labels return to the
+  // most recently selected tab when closed.
   const [view, setView] = useState<
-    "tasks" | "chat" | "mail" | "points" | "labels"
+    "tasks" | "inbox" | "chat" | "points" | "labels"
   >("tasks");
-  const lastTabRef = useRef<"tasks" | "chat">("tasks");
+  const lastTabRef = useRef<"tasks" | "inbox">("tasks");
+  const searchCloseTimerRef = useRef<number | null>(null);
+  const [searchClosing, setSearchClosing] = useState(false);
   const chat = useSearchChat();
-  const mailOpen = view === "mail";
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
+  const inboxOpen = view === "inbox";
   const [inboxTab, setInboxTab] = useState<"inbox" | "notes">("inbox");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
   // load so it can resolve to the adopting task.
   const [pendingRunId, setPendingRunId] = useState<number | null>(null);
-  const runs = useRuns(!mailOpen, "all");
+  const runs = useRuns(!inboxOpen, "all");
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [unseenTaskIds, setUnseenTaskIds] = useState<Set<string>>(() => new Set());
   const [unseenInputIds, setUnseenInputIds] = useState<Set<string>>(() => new Set());
@@ -55,25 +61,53 @@ export function App() {
   const pendingClearTaskIdsRef = useRef(new Set<string>());
   const pendingClearInputIdsRef = useRef(new Set<string>());
   const tasksActive = view === "tasks";
-  const inboxActive = view === "mail";
+  const inboxActive = view === "inbox" && inboxTab === "inbox";
+  const selectedMainTab = view === "chat" ? lastTabRef.current : view;
 
-  // Selecting the Chat tab always starts a fresh conversation (the persisted
-  // last chat is still reachable via its recent-chats list in the empty state).
-  const selectTab = useCallback(
-    (next: string) => {
-      const tab = next === "chat" ? "chat" : "tasks";
+  const closeSearchTo = useCallback((tab: "tasks" | "inbox") => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       lastTabRef.current = tab;
-      if (tab === "chat") chat.newChat();
+      setView(tab);
+      return;
+    }
+    setSearchClosing(true);
+    if (searchCloseTimerRef.current !== null) window.clearTimeout(searchCloseTimerRef.current);
+    searchCloseTimerRef.current = window.setTimeout(() => {
+      lastTabRef.current = tab;
+      setView(tab);
+      setSearchClosing(false);
+      searchCloseTimerRef.current = null;
+    }, 220);
+  }, []);
+
+  useEffect(() => () => {
+    if (searchCloseTimerRef.current !== null) window.clearTimeout(searchCloseTimerRef.current);
+  }, []);
+
+  const selectTab = useCallback(
+    (tab: "tasks" | "inbox") => {
+      if (view === "chat") {
+        closeSearchTo(tab);
+        return;
+      }
+      lastTabRef.current = tab;
       setView(tab);
     },
-    [chat],
+    [closeSearchTo, view],
   );
 
-  // Back / Escape out of the mail or points overlay, returning to whichever tab
-  // was last active.
+  const openChat = useCallback(() => {
+    chat.newChat();
+    setSearchQuery("");
+    setSearchFilters(EMPTY_SEARCH_FILTERS);
+    setView("chat");
+  }, [chat]);
+
+  // Return from a header view to the last main tab.
   const leaveOverlay = useCallback(() => {
-    setView(lastTabRef.current);
-  }, []);
+    if (view === "chat") closeSearchTo(lastTabRef.current);
+    else setView(lastTabRef.current);
+  }, [closeSearchTo, view]);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -130,11 +164,13 @@ export function App() {
     if (link.kind === "task") {
       setSelectedTaskId(link.id);
       setPendingRunId(null);
+      lastTabRef.current = "tasks";
       setView("tasks");
       return;
     }
     setPendingRunId(link.id);
     setSelectedTaskId(null);
+    lastTabRef.current = "tasks";
     setView("tasks");
   }, []);
 
@@ -166,13 +202,13 @@ export function App() {
   }, [inputs, loadInboxUnread]);
 
   useEffect(() => {
-    if (mailOpen && unreadInbox > 0) markInboxViewed();
-  }, [mailOpen, markInboxViewed, unreadInbox]);
+    if (inboxOpen && unreadInbox > 0) markInboxViewed();
+  }, [inboxOpen, markInboxViewed, unreadInbox]);
 
   useEffect(() => {
-    if (!mailOpen || document.visibilityState !== "visible") return;
+    if (!inboxOpen || document.visibilityState !== "visible") return;
     markInboxViewed();
-  }, [inputs, mailOpen, markInboxViewed]);
+  }, [inputs, inboxOpen, markInboxViewed]);
 
   // Refresh the unread badge when the app comes back to the foreground. The
   // input list itself is already refreshed by useAppData on visibilitychange /
@@ -345,23 +381,38 @@ export function App() {
       : null;
 
   return (
-    <div className="min-h-dvh pb-24">
+    <div className={view === "tasks" ? "min-h-dvh pb-40" : "min-h-dvh pb-24"}>
       <Topbar
         theme={theme}
         onThemeChange={setTheme}
         mode={
-          view === "mail" || view === "points" || view === "labels"
+          view === "chat" || view === "points" || view === "labels"
             ? view
             : "normal"
         }
-        unreadInbox={unreadInbox}
-        onMailOpen={() => setView("mail")}
+        title={
+          view === "points" ? "Points" :
+          view === "labels" ? "Labels" :
+          view === "chat" ? "Chat" :
+          view === "inbox" ? "Inbox" : "Tasks"
+        }
+        onChatOpen={openChat}
+        chatSearch={view === "chat" ? (
+          <ChatComposer
+            value={searchQuery}
+            onChange={setSearchQuery}
+            onSend={chat.send}
+            streaming={chat.streaming}
+            onClose={leaveOverlay}
+            chatEnabled={searchFilters.kind === null}
+          />
+        ) : undefined}
         onPointsOpen={() => setView("points")}
         onLabelsOpen={() => setView("labels")}
         onBack={leaveOverlay}
       />
-      <main className="mx-auto max-w-2xl px-4 py-4">
-        {view === "mail" ? (
+      <main className={`mx-auto max-w-2xl px-4 py-4 ${view === "chat" ? searchClosing ? "animate-search-content-close" : "animate-search-content-open" : ""}`}>
+        {view === "inbox" ? (
           <Tabs
             value={inboxTab}
             onValueChange={(v) => setInboxTab(v === "notes" ? "notes" : "inbox")}
@@ -389,32 +440,23 @@ export function App() {
           <PointsPanel onOpenTask={openTask} />
         ) : view === "labels" ? (
           <LabelsPanel />
+        ) : view === "tasks" ? (
+          <TasksPanel
+            timeZone={timeZone}
+            tasks={tasks}
+            kotxTasks={kotxTasks}
+            onChanged={refresh}
+            onKotxChanged={runs.refresh}
+            onTaskOpen={openTask}
+            unseenTaskIds={unseenTaskIds}
+            onTaskVisible={markTaskVisible}
+          />
         ) : (
-          <Tabs value={view} onValueChange={selectTab}>
-            <TabsList className="mb-4 grid h-10 w-full grid-cols-2">
-              <TabsTrigger value="tasks">
-                Tasks
-                {tasks.length > 0 && (
-                  <span className="ml-1.5 text-xs text-muted-foreground">
-                    {tasks.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="chat">Chat</TabsTrigger>
-            </TabsList>
-            <TabsContent value="tasks">
-              <TasksPanel
-                timeZone={timeZone}
-                tasks={tasks}
-                kotxTasks={kotxTasks}
-                onChanged={refresh}
-                onKotxChanged={runs.refresh}
-                onTaskOpen={openTask}
-                unseenTaskIds={unseenTaskIds}
-                onTaskVisible={markTaskVisible}
-              />
-            </TabsContent>
-            <TabsContent value="chat">
+          <div>
+            <SearchFilters filters={searchFilters} onChange={setSearchFilters} />
+            {searchQuery.trim() || searchFilters.kind ? (
+              <SearchResults query={searchQuery} filters={searchFilters} onOpenTask={openTask} />
+            ) : (
               <ChatPanel
                 messages={chat.messages}
                 streaming={chat.streaming}
@@ -422,8 +464,8 @@ export function App() {
                 recent={chat.recent}
                 onLoadChat={chat.loadChat}
               />
-            </TabsContent>
-          </Tabs>
+            )}
+          </div>
         )}
       </main>
       {selectedTask && (
@@ -437,19 +479,27 @@ export function App() {
           onKotxChanged={runs.refresh}
         />
       )}
-      {view === "chat" ? (
-        <ChatComposer
-          onSend={chat.send}
-          streaming={chat.streaming}
-          onClose={() => selectTab("tasks")}
-          onOpenTask={openTask}
-        />
-      ) : view === "tasks" ? (
+      {view === "tasks" ? (
         <Composer
           onCreated={refresh}
           onOpenTask={openTask}
         />
       ) : null}
+      {(view === "tasks" || view === "inbox" || view === "chat") && (
+        <nav aria-label="Main navigation" className="fixed inset-x-0 bottom-0 z-40 border-t bg-card pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_12px_rgba(15,23,42,0.05)]">
+          <div className="mx-auto grid max-w-2xl grid-cols-2 px-4 py-2">
+            <button type="button" onClick={() => selectTab("tasks")} aria-label="Tasks" aria-current={selectedMainTab === "tasks" ? "page" : undefined} className="flex min-h-12 items-center justify-center text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <span className={selectedMainTab === "tasks" ? "flex h-9 w-20 items-center justify-center rounded-full bg-primary/15 text-primary" : "flex h-9 w-20 items-center justify-center"}><ListTodo className="h-6 w-6" /></span>
+            </button>
+            <button type="button" onClick={() => selectTab("inbox")} aria-current={selectedMainTab === "inbox" ? "page" : undefined} aria-label={unreadInbox > 0 ? `Inbox, ${unreadInbox} unread` : "Inbox"} className="flex min-h-12 items-center justify-center text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <span className={selectedMainTab === "inbox" ? "relative flex h-9 w-20 items-center justify-center rounded-full bg-primary/15 text-primary" : "relative flex h-9 w-20 items-center justify-center"}>
+                <Inbox className="h-6 w-6" />
+                {unreadInbox > 0 && <span className="absolute right-5 top-1 h-2 w-2 rounded-full bg-primary" aria-hidden="true" />}
+              </span>
+            </button>
+          </div>
+        </nav>
+      )}
       <Toaster />
     </div>
   );
