@@ -41,7 +41,6 @@ export function App() {
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [unseenTaskIds, setUnseenTaskIds] = useState<Set<string>>(() => new Set());
   const [unseenInputIds, setUnseenInputIds] = useState<Set<string>>(() => new Set());
-  const [pendingTasks, setPendingTasks] = useState<{ id: string; text: string; rawInputId?: string }[]>([]);
   const knownTaskIdsRef = useRef<Set<string> | null>(null);
   const knownInputIdsRef = useRef<Set<string> | null>(null);
   const newestInputReceivedAtRef = useRef<number | null>(null);
@@ -199,16 +198,6 @@ export function App() {
   }, [loading, tasks]);
 
   useEffect(() => {
-    setPendingTasks((pending) => pending.filter((item) => {
-      if (!item.rawInputId) return true;
-      if (tasks.some((task) => task.raw_inputs.some((raw) => raw.id === item.rawInputId))) return false;
-      return !inputs.some((input) => input.id === item.rawInputId &&
-        (input.agent_trace?.outcome === "task_creation_failed" ||
-          (input.agent_trace?.manual_override as { outcome?: string } | undefined)?.outcome === "task_creation_failed"));
-    }));
-  }, [tasks, inputs]);
-
-  useEffect(() => {
     if (loading) return;
 
     const currentIds = new Set(inputs.map((input) => input.id));
@@ -303,20 +292,28 @@ export function App() {
     setSelectedTaskId(id);
   }, []);
 
+  const selectedTaskSnapshot = useRef<Task | null>(null);
+  const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const closeSelectedModal = useCallback(() => {
     clearDeepLink();
+    selectedTaskSnapshot.current = null;
+    setFetchedTask(null);
     setSelectedTaskId(null);
   }, []);
 
-  const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const selectedListTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [selectedTaskId, tasks],
   );
-  const selectedTask = selectedTaskId ? selectedListTask ?? fetchedTask : null;
+  const selectedTask = selectedTaskId
+    ? selectedListTask ??
+      (fetchedTask?.id === selectedTaskId ? fetchedTask : null) ??
+      (selectedTaskSnapshot.current?.id === selectedTaskId ? selectedTaskSnapshot.current : null)
+    : null;
+  if (selectedTask) selectedTaskSnapshot.current = selectedTask;
 
   useEffect(() => {
-    if (!selectedTaskId || selectedListTask) {
+    if (!selectedTaskId || selectedListTask || selectedTaskSnapshot.current?.id === selectedTaskId) {
       setFetchedTask(null);
       return;
     }
@@ -400,7 +397,6 @@ export function App() {
             <TabsContent value="tasks">
               <TasksPanel
                 tasks={tasks}
-                pendingTasks={pendingTasks}
                 kotxTasks={kotxTasks}
                 onChanged={refresh}
                 onKotxChanged={runs.refresh}
@@ -423,6 +419,7 @@ export function App() {
       </main>
       {selectedTask && (
         <TaskDetailModal
+          key={selectedTask.id}
           task={selectedTask}
           kotxTask={selectedKotxTask}
           onClose={closeSelectedModal}
@@ -441,14 +438,6 @@ export function App() {
         <Composer
           onCreated={refresh}
           onOpenTask={openTask}
-          onPending={(text) => {
-            const id = crypto.randomUUID();
-            setPendingTasks((pending) => [{ id, text }, ...pending]);
-            return id;
-          }}
-          onAccepted={(id, rawInputId) => setPendingTasks((pending) => pending.map((item) =>
-            item.id === id ? { ...item, rawInputId } : item))}
-          onSettled={(id) => setPendingTasks((pending) => pending.filter((item) => item.id !== id))}
         />
       ) : null}
       <Toaster />

@@ -103,16 +103,14 @@ export function InboxCard({
   };
 
   // Promote when the input isn't the anchor of an active task: no link at all,
-  // or the link is a marker the user can override into a fresh task — an
-  // embedding auto-decided `duplicate` or a `not_task` row. When the *agent*
-  // acted on an existing task (reopened / updated / closed / no_change), the
-  // task is real and "Make a task" would duplicate it, so it's suppressed.
+  // or the link is an embedding auto-decided `duplicate`. When the *agent*
+  // acted on a linked task (reopened / updated / closed / no_change), creating
+  // another would duplicate it. An orphaned follow-up can still be promoted.
   // Otherwise: open task → dismiss, closed → reopen.
   const promotable =
-    !isAgentTaskFollowup(data) &&
+    (!isAgentTaskFollowup(data) || !data.task_id) &&
     (!data.task_id ||
-      data.status === "duplicate" ||
-      data.status === "not_task");
+      data.status === "duplicate");
   // A promotable kotx card is a run that hasn't produced a task yet (preparing/
   // queued/running). Don't offer "Make a task" — kotx makes the task itself
   // when the run reaches an actionable state. Instead let the user dismiss the
@@ -125,7 +123,7 @@ export function InboxCard({
       : { label: "Make a task", Icon: CirclePlus, run: () => promote(item.id) }
     : data.status === "open"
       ? { label: "Dismiss task", Icon: Trash2, run: dismiss }
-      : data.status === "closed"
+      : data.status === "closed" || data.status === "not_task"
         ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
         : null;
 

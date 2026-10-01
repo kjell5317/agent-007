@@ -49,7 +49,7 @@ export function InboxGroup({
   const { busy, runTaskAction, promote, reopenTask, dismissRun } =
     useInboxActions(onChanged);
 
-  const { members, newest, liveTask, closedTask } = group;
+  const { members, newest, liveTask, closedTask, dismissedTask } = group;
   const unseenMemberKey = useMemo(
     () => unseenMemberIds.join("\u0000"),
     [unseenMemberIds],
@@ -60,10 +60,11 @@ export function InboxGroup({
   // so the group adapts instead of sitting on "open". Each member below shows
   // its own outcome badge; groups with no task fall back to the newest member.
   const activeRun = activeKotxRun(members);
-  const taskBadge = liveTask ? "open" : closedTask ? "closed" : null;
+  const taskBadge = liveTask ? "open" : closedTask ? "closed" : dismissedTask ? "not_task" : null;
   const taskId =
     liveTask?.task_id ??
     closedTask?.task_id ??
+    dismissedTask?.task_id ??
     members.find((member) => member.task_id)?.task_id;
 
   const senders = Array.from(new Set(members.map(senderName)));
@@ -107,13 +108,13 @@ export function InboxGroup({
   // duplicates stay overridable this way — but not when the agent acted on an
   // existing task from a follow-up (reopened / updated / closed / no_change):
   // that task is real, so promoting would duplicate it.
-  const agentActed = members.some(isAgentTaskFollowup);
+  const agentActed = members.some(isAgentTaskFollowup) && members.some((m) => m.task_id);
   // A task-less thread whose members are all kotx transitions is a kotx run
   // (or successive runs on the same issue) that hasn't produced a task yet.
   // Offer "Dismiss run" (discard the newest run upstream) instead of "Make a
   // task from thread"; a run already terminal gets no action. Mixed
   // gmail+kotx github threads keep the promote path.
-  const kotxRunThread = !liveTask && !closedTask && members.every(isKotxRun);
+  const kotxRunThread = !liveTask && !closedTask && !dismissedTask && members.every(isKotxRun);
   const action = kotxRunThread
     ? isDismissibleKotxRun(newest)
       ? {
@@ -122,7 +123,7 @@ export function InboxGroup({
           run: () => dismissRun(newest.id),
         }
       : null
-    : !liveTask && !closedTask && !agentActed
+    : !liveTask && !closedTask && !dismissedTask && !agentActed
       ? {
           label: "Make a task from thread",
           Icon: CirclePlus,
@@ -140,11 +141,11 @@ export function InboxGroup({
                 "Task dismissed",
               ),
           }
-        : closedTask
+        : closedTask || dismissedTask
           ? {
               label: "Re-open task",
               Icon: RotateCcw,
-              run: () => reopenTask(closedTask.task_id!),
+              run: () => reopenTask((closedTask ?? dismissedTask)!.task_id!),
             }
           : null;
 

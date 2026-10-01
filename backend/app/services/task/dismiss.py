@@ -1,11 +1,4 @@
-"""Dismiss a task — user retracts it as not actually a task for them.
-
-Flips the anchor raw_input to status='not_task', drops the calendar
-mirror, and deletes the task row outright. The end shape matches an
-agent-auto `mark_not_task` (raw_input status='not_task', task_id NULL),
-so the inbox card can offer a clean "Make a task" override without the
-old backlink getting in the way.
-"""
+"""Dismiss a task while retaining its linked input history for reopening."""
 
 from __future__ import annotations
 
@@ -15,7 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
-from app.events import publish_input, publish_task_removed
+from app.events import publish_input, publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.notify import clear_task_notification
 from app.services.task.vacate import vacated_commute_window, replan_vacated_window
@@ -31,22 +24,19 @@ async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     await delete_task_event(session, task)
     await clear_task_notification(task_id)
     await replan_vacated_window(session, vacated)
-    # If an anchor raw_input still exists, flip it to `not_task` so the
-    # inbox card reflects the dismissal. Orphan tasks (anchor promoted
-    # away via no_change override, etc.) skip this — the deletion below
-    # is enough to make them disappear.
+    # Keep the task and every input backlink so follow-ups remain grouped and
+    # the dismissed task can be reopened. Orphans have no lifecycle anchor and
+    # would still appear open by default, so remove only those.
     latest = raw_inputs_store.latest_for_task(session, task_id)
     latest_id = latest.id if latest is not None else None
     if latest is not None:
         latest.status = "not_task"
         latest.processed_at = datetime.now(timezone.utc)
-    # Drop the task row. Without this, listing defaults a task with no
-    # non-duplicate raw_input back to "open" (see tasks.list_), so the
-    # dismissed task would silently reappear. The raw_inputs FK is
-    # `ON DELETE SET NULL`, so every backlink (anchor + follow-ups)
-    # clears in one statement.
-    session.delete(task)
+    else:
+        session.delete(task)
     session.commit()
-    publish_task_removed(task_id)
     if latest_id is not None:
+        publish_task(session, task_id)
         publish_input(session, latest_id)
+    else:
+        publish_task_removed(task_id)

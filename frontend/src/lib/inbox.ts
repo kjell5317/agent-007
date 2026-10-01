@@ -116,7 +116,7 @@ function displaySubject(data: RawInput): string {
 // title — that's the human-meaningful name — else the raw envelope.
 export function inputTitle(data: RawInput): string {
   const linked =
-    data.task_title && (data.status === "open" || data.status === "closed")
+    data.task_title && (data.status === "open" || data.status === "closed" || data.status === "not_task")
       ? data.task_title
       : null;
   return (
@@ -153,6 +153,8 @@ export interface InboxGroup {
   liveTask: RawInput | null;
   /** Member anchoring a completed task, if any. */
   closedTask: RawInput | null;
+  /** Member anchoring a dismissed task, if any. */
+  dismissedTask: RawInput | null;
 }
 
 function byReceivedDesc(a: RawInput, b: RawInput): number {
@@ -222,11 +224,11 @@ export function groupInputs(inputs: RawInput[]): InboxGroup[] {
   for (const [key, rows] of buckets) {
     const members = [...rows].sort(byReceivedDesc);
     const newest = members[0];
-    const liveTask =
-      members.find((m) => m.status === "open" && m.task_id) ?? null;
-    const closedTask =
-      members.find((m) => m.status === "closed" && m.task_id) ?? null;
-    const rep = liveTask ?? closedTask ?? newest;
+    const anchor = members.find((m) => m.task_id && m.status !== "duplicate" && m.status !== "processing");
+    const liveTask = anchor?.status === "open" ? anchor : null;
+    const closedTask = anchor?.status === "closed" ? anchor : null;
+    const dismissedTask = anchor?.status === "not_task" ? anchor : null;
+    const rep = liveTask ?? closedTask ?? dismissedTask ?? newest;
     groups.push({
       key,
       members,
@@ -235,6 +237,7 @@ export function groupInputs(inputs: RawInput[]): InboxGroup[] {
       title: inputTitle(rep),
       liveTask,
       closedTask,
+      dismissedTask,
     });
   }
 

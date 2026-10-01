@@ -10,9 +10,6 @@ import type { SearchHit, SearchHitType } from "@/lib/types";
 interface Props {
   onCreated: () => Promise<void> | void;
   onOpenTask: (taskId: string) => void;
-  onPending: (text: string) => string;
-  onAccepted: (id: string, rawInputId: string) => void;
-  onSettled: (id: string) => void;
 }
 
 const SUGGEST_DEBOUNCE_MS = 150;
@@ -24,7 +21,7 @@ const SUGGEST_DEBOUNCE_MS = 150;
 const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "document"]);
 const SUGGEST_TYPES: readonly SearchHitType[] = ["task", "document"];
 
-export function Composer({ onCreated, onOpenTask, onPending, onAccepted, onSettled }: Props) {
+export function Composer({ onCreated, onOpenTask }: Props) {
   const [value, setValue] = useState("");
   const [suggestions, setSuggestions] = useState<SearchHit[]>([]);
   const [dismissed, setDismissed] = useState(false);
@@ -78,7 +75,7 @@ export function Composer({ onCreated, onOpenTask, onPending, onAccepted, onSettl
     if (el) el.scrollTop = el.scrollHeight;
   }, [suggestions, showSuggestions]);
 
-  const trackPoll = (rawInputId: string, toastId: string | number, pendingId: string) => {
+  const trackPoll = (rawInputId: string, toastId: string | number) => {
     let handle: PollHandle | null = null;
     const finish = (run: () => void) => {
       toast.dismiss(toastId);
@@ -89,10 +86,9 @@ export function Composer({ onCreated, onOpenTask, onPending, onAccepted, onSettl
       onSuccess: () =>
         finish(() => {
           toast.success("Task saved");
-          void Promise.resolve(onCreated()).catch(() => {}).finally(() => onSettled(pendingId));
+          void Promise.resolve(onCreated()).catch(() => {});
         }),
       onFailure: (message) => finish(() => {
-        onSettled(pendingId);
         toast.error(message);
       }),
       onTimeout: () =>
@@ -106,7 +102,6 @@ export function Composer({ onCreated, onOpenTask, onPending, onAccepted, onSettl
     const text = inputRef.current?.value.trim() ?? value.trim();
     if (!text || postingText.current.has(text)) return;
     postingText.current.add(text);
-    const pendingId = onPending(text);
     setValue("");
     if (inputRef.current) inputRef.current.value = "";
     setSuggestions([]);
@@ -117,10 +112,8 @@ export function Composer({ onCreated, onOpenTask, onPending, onAccepted, onSettl
     const toastId = toast.loading("Saving task…", { duration: Infinity });
     try {
       const { raw_input_id } = await api.createTask(text);
-      onAccepted(pendingId, raw_input_id);
-      trackPoll(raw_input_id, toastId, pendingId);
+      trackPoll(raw_input_id, toastId);
     } catch (err) {
-      onSettled(pendingId);
       setValue((current) => current || text);
       toast.dismiss(toastId);
       toast.error((err as Error).message);

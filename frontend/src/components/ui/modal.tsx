@@ -54,8 +54,11 @@ export function Modal({
       // even if the layout shifts the release point onto the backdrop (e.g.
       // switching to a shorter tab re-centers and shrinks the dialog under
       // the cursor between mousedown and mouseup).
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
         pressedOnBackdrop.current = e.target === e.currentTarget;
+      }}
+      onPointerCancel={() => {
+        pressedOnBackdrop.current = false;
       }}
       onClick={(e) => {
         if (pressedOnBackdrop.current && e.target === e.currentTarget) onClose();

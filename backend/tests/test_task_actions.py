@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 from app.api import tasks as tasks_api  # noqa: E402
 from app.services.kotx import runs as kotx_runs  # noqa: E402
 from app.services.task import reopen as reopen_svc  # noqa: E402
+from app.services.task import dismiss as dismiss_svc  # noqa: E402
 
 
 class FakeSession:
@@ -173,6 +174,37 @@ async def test_reopen_task_service_creates_fresh_followup_input(monkeypatch):
     assert enqueued == [(raw.id, task.id)]
     assert published == [raw.id]
     assert anchor.status == "closed"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_keeps_task_and_input_links_for_reopen(monkeypatch):
+    task = _task()
+    anchor = SimpleNamespace(
+        id=uuid.uuid4(), task_id=task.id, status="open", processed_at=None,
+    )
+    followup = SimpleNamespace(id=uuid.uuid4(), task_id=task.id, status="duplicate")
+    session = FakeSession()
+    published = []
+
+    async def noop(*_args):
+        pass
+
+    monkeypatch.setattr(dismiss_svc.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(dismiss_svc.raw_inputs_store, "latest_for_task", lambda *_args: anchor)
+    monkeypatch.setattr(dismiss_svc, "vacated_commute_window", lambda *_args: None)
+    monkeypatch.setattr(dismiss_svc, "delete_task_event", noop)
+    monkeypatch.setattr(dismiss_svc, "clear_task_notification", noop)
+    monkeypatch.setattr(dismiss_svc, "replan_vacated_window", noop)
+    monkeypatch.setattr(dismiss_svc, "publish_task", lambda _session, id: published.append(("task", id)))
+    monkeypatch.setattr(dismiss_svc, "publish_input", lambda _session, id: published.append(("input", id)))
+    monkeypatch.setattr(dismiss_svc, "publish_task_removed", lambda _id: pytest.fail("task was removed"))
+
+    await dismiss_svc.dismiss_task(session, task.id)
+
+    assert anchor.status == "not_task"
+    assert anchor.task_id == followup.task_id == task.id
+    assert session.commits == 1
+    assert published == [("task", task.id), ("input", anchor.id)]
 
 
 @pytest.mark.asyncio

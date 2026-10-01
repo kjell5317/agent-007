@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   tasks: Task[];
-  pendingTasks: { id: string; text: string }[];
   kotxTasks: ReadonlyMap<number, KotxTask>;
   onChanged: () => Promise<void> | void;
   onKotxChanged: () => Promise<void> | void;
@@ -23,7 +22,6 @@ interface Props {
 
 export function TasksPanel({
   tasks,
-  pendingTasks,
   kotxTasks,
   onChanged,
   onKotxChanged,
@@ -102,17 +100,7 @@ export function TasksPanel({
 
   return (
     <div className="space-y-6">
-      {pendingTasks.length > 0 && (
-        <section className="space-y-2" aria-label="Tasks being created">
-          {pendingTasks.map((item) => (
-            <div key={item.id} className="rounded-xl border-2 border-emerald-500/70 bg-card px-4 py-3 shadow-sm">
-              <div className="line-clamp-2 text-sm font-medium">{item.text}</div>
-              <div className="mt-1 text-xs text-muted-foreground">Creating task…</div>
-            </div>
-          ))}
-        </section>
-      )}
-      {groups.length === 0 && pendingTasks.length === 0 && (
+      {groups.length === 0 && (
         <section>
           <SectionToggle
             title="Today"

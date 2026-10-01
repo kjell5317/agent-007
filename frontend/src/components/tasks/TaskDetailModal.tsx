@@ -213,8 +213,8 @@ export function TaskDetailModal({
     try {
       await action();
       toast.success(message);
-      await onChanged();
       onClose();
+      void Promise.resolve(onChanged()).catch(() => {});
     } catch (e) {
       toast.error((e as Error).message);
       setBusy(false);
