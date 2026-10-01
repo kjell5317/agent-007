@@ -27,11 +27,13 @@ from app.config import get_settings
 from app.db import SessionLocal, get_session
 from app.db.models.raw_input import RawInput
 from app.db.clients import chats as chats_store
+from app.db.clients import search_clicks
 from app.db.schemas.search import (
     ChatConversationRead,
     ChatConversationSummary,
     ChatConversationWrite,
     ChatRequest,
+    SearchHit,
     SuggestResponse,
 )
 from app.services.link_preview import get_link_preview
@@ -46,6 +48,19 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
 _MAX_LIMIT = 25
+
+
+@router.get("/popular", response_model=SuggestResponse)
+def popular_results(
+    limit: int = Query(10, ge=1, le=25),
+    session: Session = Depends(get_session),
+) -> SuggestResponse:
+    return SuggestResponse(hits=search_clicks.popular(session, limit=limit))
+
+
+@router.post("/click", status_code=204)
+def record_result_click(hit: SearchHit, session: Session = Depends(get_session)) -> None:
+    search_clicks.record(session, hit)
 
 
 @router.get("/facets")

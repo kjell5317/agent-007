@@ -142,6 +142,10 @@ export const api = {
     ),
   searchFacets: (kind: "messages" | "files" | "notes") =>
     request<{ options: string[] }>(`/search/facets?kind=${kind}`),
+  popularSearchResults: (limit = 10) =>
+    request<{ hits: SearchHit[] }>(`/search/popular?limit=${limit}`),
+  recordSearchClick: (hit: SearchHit) =>
+    request<void>("/search/click", { method: "POST", body: JSON.stringify(hit) }),
 
   chatStream,
 

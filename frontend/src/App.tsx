@@ -7,6 +7,7 @@ import { NotesPanel } from "@/components/notes/NotesPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
 import { ChatComposer } from "@/components/search/ChatComposer";
 import { ChatPanel } from "@/components/search/ChatPanel";
+import { PopularSearchResults } from "@/components/search/PopularSearchResults";
 import { EMPTY_SEARCH_FILTERS, SearchFilters, type SearchFiltersState } from "@/components/search/SearchFilters";
 import { SearchResults } from "@/components/search/SearchResults";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
@@ -479,7 +480,7 @@ export function App() {
                 onLoadChat={chat.loadChat}
               />
             ) : searchFilters.kind === null ? (
-              null
+              <PopularSearchResults tasks={tasks} onOpenTask={openTask} />
             ) : (
               null
             )}

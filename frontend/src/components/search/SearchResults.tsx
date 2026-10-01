@@ -148,6 +148,7 @@ export function SearchResults({
               key={`${hit.type}:${hit.id}`}
               hit={hit}
               task={hit.type === "task" ? taskDetails.get(hit.id) : undefined}
+              onActivate={() => { void api.recordSearchClick(hit).catch(() => {}); }}
               onOpenTask={onOpenTask}
               onShowContent={() => setPreview(hit)}
             />
