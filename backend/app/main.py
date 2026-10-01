@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,7 @@ from app import observability
 from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 from app.services.task import queue as task_queue
+from app.services.note.startup import moderate_existing_notes
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _ASSETS_DIR = _STATIC_DIR / "assets"
@@ -60,9 +62,15 @@ def _configure_logging(level: str) -> None:
 async def _lifespan(_app: FastAPI):
     await task_queue.start()
     await cron.start()
+    moderation_task = asyncio.create_task(moderate_existing_notes(), name="moderate-existing-notes")
     try:
         yield
     finally:
+        moderation_task.cancel()
+        try:
+            await moderation_task
+        except asyncio.CancelledError:
+            pass
         await cron.stop()
         await task_queue.stop()
         observability.shutdown()

@@ -20,6 +20,7 @@ class NoteRead(BaseModel):
     source_subject: str | None
     source_raw_input_id: uuid.UUID | None
     created_at: datetime
+    updated_at: datetime
     source_raw_input_ids: list[str] = Field(default_factory=list)
     needs_review: bool = False
 
@@ -33,6 +34,7 @@ class NoteRead(BaseModel):
             source_subject=item.source_subject,
             source_raw_input_id=item.source_raw_input_id,
             created_at=item.created_at,
+            updated_at=item.updated_at,
             source_raw_input_ids=item.source_raw_input_ids or [],
             needs_review=item.needs_review,
         )

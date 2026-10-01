@@ -53,7 +53,6 @@ from app.agent.tools import (
 from app import observability as obs
 from app.config import get_settings
 from app.db.clients import labels as labels_store
-from app.db.clients import notes as notes_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
@@ -210,9 +209,9 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     ):
         body = title
     elif snippet.startswith(title):
-        body = snippet[:200]
+        body = snippet[:1200 if h.source == "calendar" else 200]
     else:
-        body = f"{title} — {snippet[:200]}"
+        body = f"{title} — {snippet[:1200 if h.source == 'calendar' else 200]}"
     return f"{prefix} — {body}"
 
 

@@ -117,8 +117,8 @@ the source.
   question about one. `query` matches upcoming events by meaning; a `time_min`/
   `time_max` window lists what's scheduled then. Returns event ids for
   `update_event`.
-- `get_event_details` — read the full cached details of a matched event when a
-  task deadline or answer needs more than its preview.
+- `get_event_details` — read a matched event if its description was truncated.
+  Do not replace a description if even this extended result is truncated.
 - `drive_search` → `get_drive_file` — documents (Docs/Sheets/Slides, PDFs);
   keyword full-text, so search broad first. Read a file's contents with
   `get_drive_file` using its `id=` (file id).

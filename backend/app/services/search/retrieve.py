@@ -312,10 +312,16 @@ def _note_hit(h) -> SearchHit:
         url=None,
         source="note",
         status="note",
-        ts=h.created_at,
+        ts=h.updated_at,
         score=float(h.similarity),
         meta=meta or None,
     )
+
+
+def _event_preview(value: str | None) -> str | None:
+    if not value or len(value) <= 1200:
+        return value
+    return value[:1180] + " [truncated]"
 
 
 def _calendar_match_hit(m) -> SearchHit:
@@ -327,7 +333,7 @@ def _calendar_match_hit(m) -> SearchHit:
         type="document",
         id=m.event_id,
         title=m.summary,
-        snippet=m.description or m.location,
+        snippet=_event_preview(m.description or m.location),
         url=m.url,
         source="calendar",
         status="event",
@@ -342,7 +348,7 @@ def _calendar_event_hit(e: CalendarEvent) -> SearchHit:
         type="document",
         id=e.id,
         title=e.summary or "(untitled)",
-        snippet=(e.description or "")[:240] or e.location,
+        snippet=_event_preview(e.description or e.location),
         url=e.html_link,
         source="calendar",
         status="event",

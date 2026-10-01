@@ -61,7 +61,7 @@ export function senderName(data: RawInput): string {
     if (typeof repo === "string" && repo) return repo;
   }
   if (data.source === "manual") return "Manual";
-  if (data.source === "web_research") return "Web research";
+  if (data.source === "web_research") return "Web";
   return data.source;
 }
 

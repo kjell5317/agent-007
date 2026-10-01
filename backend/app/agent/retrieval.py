@@ -58,8 +58,8 @@ async def search_notes(session: Any, *, query: str, k: int = 5) -> str:
 
 def _note_line(h) -> str:
     parts = [f"sim={h.similarity:.2f}"]
-    if h.created_at is not None:
-        parts.append(h.created_at.date().isoformat())
+    if h.updated_at is not None:
+        parts.append(h.updated_at.date().isoformat())
     if h.source_from:
         parts.append(f"from: {h.source_from}")
     return "- " + " · ".join(parts) + f" | {h.content}"

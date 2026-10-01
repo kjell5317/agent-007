@@ -35,14 +35,36 @@ def find_exact(session: Session, content: str) -> Note | None:
     ).scalar_one_or_none()
 
 
+def find_exact_before(session: Session, content: str, note: Note) -> Note | None:
+    return session.execute(
+        select(Note).where(
+            func.lower(func.trim(Note.content)) == content.strip().lower(),
+            (Note.created_at < note.created_at)
+            | ((Note.created_at == note.created_at) & (Note.id < note.id)),
+        ).order_by(Note.created_at, Note.id).limit(1)
+    ).scalar_one_or_none()
+
+
 def add_source(session: Session, note_id: uuid.UUID, raw_input_id: uuid.UUID | None) -> None:
-    if raw_input_id is None:
-        return
     note = session.get(Note, note_id)
     if note is not None:
         sources = list(note.source_raw_input_ids or [])
-        if str(raw_input_id) not in sources:
+        if raw_input_id is not None and str(raw_input_id) not in sources:
             note.source_raw_input_ids = [*sources, str(raw_input_id)]
+        note.updated_at = func.now()
+
+
+def absorb_sources(session: Session, target_id: uuid.UUID, source: Note) -> None:
+    target = session.get(Note, target_id)
+    if target is None:
+        return
+    source_ids = list(source.source_raw_input_ids or [])
+    if source.source_raw_input_id:
+        source_ids.append(str(source.source_raw_input_id))
+    target.source_raw_input_ids = list(dict.fromkeys([*(target.source_raw_input_ids or []), *source_ids]))
+    if target.source_raw_input_id is None and source.source_raw_input_id is not None:
+        target.source_raw_input_id = source.source_raw_input_id
+    target.updated_at = func.now()
 
 
 def mark_review(session: Session, note_id: uuid.UUID) -> None:
@@ -57,7 +79,7 @@ class SimilarNote:
     content: str
     similarity: float
     source_raw_input_id: uuid.UUID | None
-    created_at: datetime
+    updated_at: datetime
     source_from: str | None
     source_subject: str | None
 
@@ -78,6 +100,8 @@ _SIMILAR_NOTES_SQL = text(
         FROM notes n
         WHERE n.embedding IS NOT NULL
           AND NOT n.needs_review
+          AND (:before_at IS NULL OR (n.created_at, n.id) <
+               (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
           AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :min_sim
         ORDER BY n.embedding <=> CAST(:emb AS vector)
         LIMIT :pool
@@ -87,6 +111,8 @@ _SIMILAR_NOTES_SQL = text(
         FROM notes n, q
         WHERE q.tsq @@ n.tsv
           AND NOT n.needs_review
+          AND (:before_at IS NULL OR (n.created_at, n.id) <
+               (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
         ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC
         LIMIT :pool
     ),
@@ -97,7 +123,7 @@ _SIMILAR_NOTES_SQL = text(
         FROM vec FULL OUTER JOIN kw ON vec.id = kw.id
     )
     SELECT
-      n.id, n.content, n.source_raw_input_id, n.created_at,
+      n.id, n.content, n.source_raw_input_id, n.updated_at,
       r.source_metadata->>'from' AS source_from,
       r.source_metadata->>'subject' AS source_subject,
       1.0 - (n.embedding <=> CAST(:emb AS vector)) AS similarity
@@ -106,7 +132,7 @@ _SIMILAR_NOTES_SQL = text(
     LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
     ORDER BY
       fused.rrf
-        * exp(- EXTRACT(EPOCH FROM (now() - n.created_at)) / (:half_life_days * 86400.0))
+        * exp(- EXTRACT(EPOCH FROM (now() - n.updated_at)) / (:half_life_days * 86400.0))
       DESC
     LIMIT :k
     """
@@ -124,6 +150,7 @@ def search_similar(
     query: str,
     k: int = 5,
     min_similarity: float = 0.0,
+    before: Note | None = None,
 ) -> list[SimilarNote]:
     """Top-k notes by hybrid similarity + keyword (RRF over pgvector and FTS),
     re-ranked with a mild recency decay. `min_similarity` gates the vector side
@@ -139,6 +166,8 @@ def search_similar(
             "pool": _NOTE_POOL,
             "half_life_days": half_life_days,
             "min_sim": min_similarity,
+            "before_at": before.created_at.isoformat() if before else None,
+            "before_id": str(before.id) if before else None,
         },
     ).all()
     return [
@@ -147,7 +176,7 @@ def search_similar(
             content=r.content,
             similarity=float(r.similarity) if r.similarity is not None else 0.0,
             source_raw_input_id=r.source_raw_input_id,
-            created_at=r.created_at,
+            updated_at=r.updated_at,
             source_from=r.source_from,
             source_subject=r.source_subject,
         )
@@ -156,7 +185,7 @@ def search_similar(
 
 
 def list_recent(session: Session, *, limit: int = 20) -> list[Note]:
-    stmt = select(Note).order_by(Note.created_at.desc()).limit(limit)
+    stmt = select(Note).order_by(Note.updated_at.desc()).limit(limit)
     return list(session.execute(stmt).scalars())
 
 
@@ -166,6 +195,7 @@ class NoteListItem:
     content: str
     source_raw_input_id: uuid.UUID | None
     created_at: datetime
+    updated_at: datetime
     source: str | None
     source_from: str | None
     source_subject: str | None
@@ -179,14 +209,14 @@ class NoteListItem:
 _LIST_NOTES_TEMPLATE = """
     SELECT
       n.id, n.content, n.source_raw_input_id, n.source_raw_input_ids,
-      n.needs_review, n.created_at,
+      n.needs_review, n.created_at, n.updated_at,
       r.source AS source,
       r.source_metadata->>'from' AS source_from,
       r.source_metadata->>'subject' AS source_subject
     FROM notes n
     LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
     {where}
-    ORDER BY n.created_at DESC
+    ORDER BY n.updated_at DESC
     {limit}
 """
 
@@ -197,6 +227,7 @@ def _to_item(row) -> NoteListItem:
         content=row.content,
         source_raw_input_id=row.source_raw_input_id,
         created_at=row.created_at,
+        updated_at=row.updated_at,
         source=row.source,
         source_from=row.source_from,
         source_subject=row.source_subject,
@@ -230,6 +261,7 @@ def update(
     row.content = content
     row.embedding = embedding
     row.needs_review = False
+    row.updated_at = func.now()
     session.flush()
     return True
 

@@ -6,7 +6,10 @@ import { badgeKindLabel } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
 import type { SearchHit, SearchHitType } from "@/lib/types";
 
-const TYPE_ICON: Record<SearchHitType, ComponentType<{ className?: string }>> = {
+const TYPE_ICON: Record<
+  SearchHitType,
+  ComponentType<{ className?: string }>
+> = {
   task: ListTodo,
   input: Inbox,
   note: FileText,
@@ -24,7 +27,7 @@ function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {
 const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
   open: "open",
   closed: "closed",
-  not_task: "not_task",
+  not_task: "no task",
   duplicate: "duplicate",
   reopened: "reopened",
   updated: "updated",
@@ -102,13 +105,20 @@ export function SearchResultRow({
     >
       <Icon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{hit.title || "Untitled"}</span>
+        <span className="block truncate text-sm font-medium">
+          {hit.title || "Untitled"}
+        </span>
         {meta && (
-          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{meta}</span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            {meta}
+          </span>
         )}
       </span>
       {hit.status && (
-        <Badge variant={STATUS_VARIANT[hit.status] ?? "muted"} className="mt-0.5 shrink-0">
+        <Badge
+          variant={STATUS_VARIANT[hit.status] ?? "muted"}
+          className="mt-0.5 shrink-0"
+        >
           {badgeKindLabel(hit.status)}
         </Badge>
       )}

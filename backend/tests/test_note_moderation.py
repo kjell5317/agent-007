@@ -63,5 +63,24 @@ async def test_related_note_can_merge_without_creating_another(monkeypatch):
     assert linked == [True]
 
 
+@pytest.mark.asyncio
+async def test_existing_duplicate_absorbs_sources_and_removes_later_note(monkeypatch):
+    older = SimpleNamespace(id=uuid.uuid4(), content="Alice prefers afternoons")
+    later = SimpleNamespace(id=uuid.uuid4(), content=older.content)
+    actions = []
+    monkeypatch.setattr(moderate.notes_store, "find_exact_before",
+                        lambda _session, _content, note: older if note is later else None)
+    monkeypatch.setattr(moderate.notes_store, "absorb_sources",
+                        lambda _session, target, source: actions.append(("absorb", target, source.id)))
+    monkeypatch.setattr(moderate.notes_store, "delete",
+                        lambda _session, note_id: actions.append(("delete", note_id)))
+
+    decision = await moderate.moderate_note(object(), later.content, existing=later,
+                                            raise_on_error=True)
+
+    assert decision.note_id == older.id
+    assert actions == [("absorb", older.id, later.id), ("delete", later.id)]
+
+
 async def _embed():
     return [0.1]

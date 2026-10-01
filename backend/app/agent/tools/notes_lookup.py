@@ -35,6 +35,8 @@ async def save_notes(session, raw_input_id, raw_notes) -> list[str]:
         )
         if decision.action in {"create", "merge", "review"}:
             saved.append(decision.content)
-    if saved:
+    # Duplicate proposals refresh the matched note's recency even when no new
+    # note appears in the returned list.
+    if raw_notes:
         session.commit()
     return saved

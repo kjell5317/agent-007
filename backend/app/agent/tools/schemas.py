@@ -215,7 +215,8 @@ _NEW_INPUT_TOOLS = [
             "when you don't know the exact time; and/or pass a `time_min`/"
             "`time_max` window to list events in that range. Call before "
             "`create_event` to avoid duplicating an event that already exists, "
-            "and before `update_event` to get the `event_id`. Non-terminal — "
+            "and before `update_event` to get the `event_id`. Results include "
+            "event details (up to 1200 characters per event). Non-terminal — "
             "you still need a terminal tool (`create_task`, `mark_not_task`, or "
             "a duplicate action) to finish."
         ),
@@ -243,7 +244,7 @@ _NEW_INPUT_TOOLS = [
     },
     {
         "name": "get_event_details",
-        "description": "Read the full cached details of an event found by find_calendar_events.",
+        "description": "Read up to 4000 characters of an event description when find_calendar_events truncates it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -568,7 +569,8 @@ _CHAT_TOOLS = [
             "meaning ('team offsite' finds 'Q3 offsite planning'), and/or a "
             "`time_min`/`time_max` window to list what's scheduled in that range "
             "(use the window for 'what's on my calendar tomorrow'). Each hit "
-            "carries an event id for `update_event`. For the user's to-do items "
+            "carries an event id and event details (up to 1200 characters) "
+            "for planning or `update_event`. For the user's to-do items "
             "use `tasks_search`, not this."
         ),
         "parameters": {
@@ -591,7 +593,7 @@ _CHAT_TOOLS = [
     },
     {
         "name": "get_event_details",
-        "description": "Read full details of a calendar_search result before using it for a task deadline.",
+        "description": "Read up to 4000 characters of an event description when calendar_search truncates it.",
         "parameters": {
             "type": "object",
             "properties": {

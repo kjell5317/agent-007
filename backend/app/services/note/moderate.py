@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 from app.db.clients import notes as notes_store
+from app.db.models.note import Note
 from app.services.input.embedding import embed
 
 
@@ -38,19 +39,27 @@ async def moderate_note(
     *,
     source_raw_input_id: uuid.UUID | None = None,
     source_context: str | None = None,
+    existing: Note | None = None,
+    raise_on_error: bool = False,
 ) -> NoteDecision:
     content = content.strip()
     if not content:
         return NoteDecision("skip", "", None)
-    exact = notes_store.find_exact(session, content)
+    exact = (notes_store.find_exact_before(session, content, existing) if existing
+             else notes_store.find_exact(session, content))
     if exact is not None:
-        notes_store.add_source(session, exact.id, source_raw_input_id)
+        if existing:
+            notes_store.absorb_sources(session, exact.id, existing)
+            notes_store.delete(session, existing.id)
+        else:
+            notes_store.add_source(session, exact.id, source_raw_input_id)
         return NoteDecision("skip", exact.content, exact.id)
 
     vector = await embed(content)
     candidates = (
         notes_store.search_similar(
-            session, embedding=vector, query=content, k=4, min_similarity=0.55
+            session, embedding=vector, query=content, k=4, min_similarity=0.55,
+            before=existing,
         ) if vector is not None else []
     )
     candidate_ids = {str(candidate.id) for candidate in candidates}
@@ -81,6 +90,8 @@ async def moderate_note(
         )
         decision = next(call.input for call in response.tool_calls if call.name == "moderate_note")
     except Exception:
+        if raise_on_error:
+            raise
         decision = {"action": "review", "content": content}
 
     action = str(decision.get("action") or "review")
@@ -89,16 +100,37 @@ async def moderate_note(
         target = str(decision.get("target_id") or "")
         target_id = uuid.UUID(target) if target in candidate_ids else None
         if target_id is not None:
-            notes_store.add_source(session, target_id, source_raw_input_id)
+            if existing:
+                notes_store.absorb_sources(session, target_id, existing)
+                notes_store.delete(session, existing.id)
+            else:
+                notes_store.add_source(session, target_id, source_raw_input_id)
+        elif existing:
+            notes_store.delete(session, existing.id)
         return NoteDecision("skip", content, target_id)
     if action == "merge" and str(decision.get("target_id") or "") in candidate_ids and rewritten:
         target_id = uuid.UUID(str(decision["target_id"]))
-        if rewritten != content:
+        if rewritten != candidates[[str(c.id) for c in candidates].index(str(target_id))].content:
             notes_store.update(
                 session, target_id, content=rewritten, embedding=await embed(rewritten)
             )
-        notes_store.add_source(session, target_id, source_raw_input_id)
+        if existing:
+            notes_store.absorb_sources(session, target_id, existing)
+            notes_store.delete(session, existing.id)
+        else:
+            notes_store.add_source(session, target_id, source_raw_input_id)
         return NoteDecision("merge", rewritten, target_id)
+    if existing:
+        if action == "create":
+            if rewritten != content:
+                notes_store.update(session, existing.id, content=rewritten,
+                                   embedding=await embed(rewritten))
+            else:
+                existing.needs_review = False
+        else:
+            notes_store.mark_review(session, existing.id)
+        return NoteDecision("create" if action == "create" else "review",
+                            existing.content, existing.id)
     row = notes_store.create(
         session,
         content=rewritten if action == "create" else content,

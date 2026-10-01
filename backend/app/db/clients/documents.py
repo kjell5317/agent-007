@@ -122,7 +122,7 @@ _CALENDAR_HYBRID_SQL = text(
       d.metadata->>'event_id' AS event_id,
       d.metadata->>'calendar_id' AS calendar_id,
       d.title AS summary,
-      d.snippet AS description,
+      d.content AS description,
       d.metadata->>'location' AS location,
       d.starts_at,
       d.url AS url,

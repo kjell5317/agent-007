@@ -75,7 +75,7 @@ async def test_search_notes_uses_gemini_embedding_and_notes_store(monkeypatch):
             SimpleNamespace(
                 similarity=0.876,
                 content="Alice owns Project Alpha",
-                created_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
                 source_from="alice@example.com",
                 source_subject="Project Alpha kickoff",
             )

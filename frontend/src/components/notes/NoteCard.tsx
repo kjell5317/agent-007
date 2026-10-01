@@ -15,7 +15,7 @@ interface Props {
   onDeleted: (id: string) => void;
 }
 
-type Mode = "view" | "edit" | "confirmDelete";
+type Mode = "view" | "edit";
 
 export function NoteCard({ note, onSaved, onDeleted }: Props) {
   const [mode, setMode] = useState<Mode>("view");
@@ -97,12 +97,12 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   return (
     <Card>
       <CardContent>
-        <div className="flex items-start gap-2">
+        <div className="flex items-center gap-2">
           <IconButton
             label="Delete note"
             Icon={Trash2}
             disabled={busy}
-            onClick={() => setMode("confirmDelete")}
+            onClick={remove}
             className="hover:text-destructive"
           />
 
@@ -125,31 +125,6 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
             onClick={startEdit}
           />
         </div>
-
-        {mode === "confirmDelete" && (
-          <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3 text-sm">
-            <span className="text-muted-foreground">Delete this note?</span>
-            <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() => setMode("view")}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={busy}
-                onClick={remove}
-              >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
-            </div>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
@@ -157,26 +132,29 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
 
 function NoteMeta({ note }: { note: Note }) {
   const origin = noteOrigin(note);
-  const when = fmtWhen(note.created_at);
+  const when = fmtWhen(note.updated_at ?? note.created_at);
   return (
     <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
-      {origin && <span className="min-w-0 truncate font-medium">{origin}</span>}
-      {origin && when && (
-        <span aria-hidden className="shrink-0">
-          •
-        </span>
+      {origin && (
+        <span className="min-w-0 flex-1 truncate font-medium">{origin}</span>
       )}
+      {!origin && <span className="flex-1" />}
       {when && <span className="shrink-0 font-medium">{when}</span>}
     </div>
   );
 }
 
-// "gmail · alice@example.com", "slack", or "chat" for a note the assistant
-// wrote directly (no source input).
+// Use the same sender label as the input inbox; fall back to the source.
 function noteOrigin(note: Note): string {
-  const source = note.source ?? (note.source_raw_input_id ? null : "chat");
-  const parts = [source, note.source_from].filter(Boolean) as string[];
-  return parts.join(" · ");
+  const from = note.source_from?.trim();
+  if (from) {
+    const match = from.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
+    const name = match ? match[1].trim() || match[2].trim() : from;
+    return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+  }
+  if (note.source === "manual") return "Manual";
+  if (note.source === "web_research") return "Web";
+  return note.source ?? (note.source_raw_input_id ? "" : "Chat");
 }
 
 function IconButton({

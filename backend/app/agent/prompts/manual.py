@@ -42,10 +42,12 @@ You also have non-terminal lookup tools:
   you still need to call a terminal task tool to finish.
 - `find_calendar_events(query?, time_min?, time_max?)` finds events related to
   the task. Use it when the request names an event or asks for preparation.
-- `get_event_details(event_id, calendar_id)` reads the likely event's details.
-  Link a clear match using both ids. Complete preparation before its start;
+- `find_calendar_events` includes event details. Link a clear match using both
+  ids. Complete preparation before its start;
   set `due_date_is_explicit` only when the input states a deadline. Keep event
   facts in its description and work instructions in the task description.
+- `get_event_details(event_id, calendar_id)` reads an extended description if
+  the event search result was truncated. Do not overwrite truncated details.
 - `update_event` may add new event details to an existing primary-calendar
   event. Read the full description first and preserve it when adding facts.
 

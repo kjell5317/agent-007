@@ -62,6 +62,8 @@ export function InboxCard({
     useInboxActions(onChanged);
 
   const data = item.data;
+  const dueDateWarning = typeof data.agent_trace?.event_warning === "string"
+    ? data.agent_trace.event_warning : null;
   const title = inputTitle(data);
   const when = fmtWhen(data.received_at);
   const kotxRun = isKotxRun(data);
@@ -169,6 +171,9 @@ export function InboxCard({
               </span>
               <span className="shrink-0 font-medium">{when}</span>
             </div>
+            {dueDateWarning && (
+              <div className="mt-1 text-xs text-amber-600">{dueDateWarning}</div>
+            )}
           </div>
 
           <div aria-hidden className="h-6 w-6 shrink-0" />
@@ -263,9 +268,12 @@ function AgentTraceSection({ traceRecord, embeddingCost, title }: {
   title: string;
 }) {
   const trace = projectAgentTrace(traceRecord, embeddingCost);
+  const eventWarning = traceRecord && typeof (traceRecord as Record<string, unknown>).event_warning === "string"
+    ? (traceRecord as Record<string, unknown>).event_warning as string : null;
   const evidence = useResolvedEvidence(trace.evidence ?? NO_EVIDENCE);
   return (
           <CollapsibleSection title={title} detail={`Est. cost ${trace.estimatedCost}`}>
+            {eventWarning && <Section title="Due date conflict"><div className="text-xs text-amber-600">{eventWarning}</div></Section>}
             {trace.reason && (
               <Section title="Reason">
                 <Markdown content={trace.reason} className="text-xs" />

@@ -314,7 +314,7 @@ _ID_COL = {TASK: "t.id", INPUT: "r.id", NOTE: "n.id", DOCUMENT: "d.id"}
 # navigable there). Task link comes from the source input when it has one.
 _NOTE_DISPLAY = {
     "from": "notes n LEFT JOIN raw_inputs nr ON nr.id = n.source_raw_input_id",
-    "ts": "n.created_at",
+    "ts": "n.updated_at",
     "select": (
         "'note' AS type, n.id::text AS id, "
         "left(coalesce(n.content,''), 80) AS title, "
@@ -363,8 +363,8 @@ _F_TASK = (
     " AND (:f_after IS NULL OR t.updated_at >= CAST(:f_after AS timestamptz))"
 )
 _F_NOTE = (
-    " AND (:f_before IS NULL OR n.created_at < CAST(:f_before AS timestamptz))"
-    " AND (:f_after IS NULL OR n.created_at >= CAST(:f_after AS timestamptz))"
+    " AND (:f_before IS NULL OR n.updated_at < CAST(:f_before AS timestamptz))"
+    " AND (:f_after IS NULL OR n.updated_at >= CAST(:f_after AS timestamptz))"
 )
 _F_DOC = (
     " AND (:f_source IS NULL OR d.provider = :f_source)"
