@@ -52,6 +52,7 @@ interface Rule {
 
 interface Ctx {
   byTag: Map<string, ChatCitation>;
+  bySourceId: Map<string, ChatCitation>;
   byTaskId: Map<string, ChatCitation>;
   // Normalized titles of items shown as cards. The card already shows the
   // title, so a standalone line repeating it (the model often emits the widget
@@ -257,7 +258,13 @@ function renderWidget(w: { kind: WidgetKind; value: string }, ctx: Ctx): ReactNo
     const cite = ctx.byTag.get(key);
     return <ChatTaskCard taskId={cite ? (cite.task_id ?? cite.id) : key} ctx={ctx} />;
   }
-  const cite = ctx.byTag.get(key);
+  // Models sometimes use the source id from a search result instead of its
+  // citation tag. Both identify the same retrieved item.
+  const cite = ctx.byTag.get(key) ?? ctx.bySourceId.get(key);
+  if (!cite && w.kind === "doc" && /^[A-Za-z0-9_-]{20,}$/.test(key)
+    && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) {
+    return <WidgetShell Icon={FileText} title={key} href={`https://drive.google.com/open?id=${encodeURIComponent(key)}`} />;
+  }
   if (!cite) return <FallbackChip label={key} />;
   if (w.kind === "contact") return <ContactCard cite={cite} />;
   if (w.kind === "event") return <EventCard cite={cite} ctx={ctx} />;
@@ -662,6 +669,7 @@ export function AssistantContent({
   onShowContent: (cite: ChatCitation) => void;
 }) {
   const byTag = new Map(citations.map((c) => [c.tag, c]));
+  const bySourceId = new Map(citations.map((c) => [c.id, c]));
   const byTaskId = new Map<string, ChatCitation>();
   for (const c of citations) {
     if (c.type === "task") byTaskId.set(c.id, c);
@@ -680,7 +688,7 @@ export function AssistantContent({
       cardedTaskIds.add(cite ? (cite.task_id ?? cite.id) : key);
       if (cite) cardedTags.add(cite.tag); // also drop the [T#] chip for it
     } else {
-      cardedTags.add(key);
+      cardedTags.add((byTag.get(key) ?? bySourceId.get(key))?.tag ?? key);
     }
   }
 
@@ -695,6 +703,7 @@ export function AssistantContent({
 
   const ctx: Ctx = {
     byTag,
+    bySourceId,
     byTaskId,
     cardedTitles,
     onOpenTask,

@@ -183,7 +183,7 @@ function ToolChip({ traces }: { traces: ChatToolTrace[] }) {
     const margin = 12;
     const gap = 6;
     const maxH = 320;
-    const width = Math.min(320, window.innerWidth - margin * 2);
+    const width = Math.min(640, window.innerWidth - margin * 2);
     const left = Math.max(margin, Math.min(r.left, window.innerWidth - width - margin));
     const spaceBelow = window.innerHeight - r.bottom;
     const openUp = spaceBelow < 240 && r.top > spaceBelow;
