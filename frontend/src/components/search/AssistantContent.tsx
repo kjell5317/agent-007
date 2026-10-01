@@ -359,7 +359,7 @@ function WidgetShell({
           : undefined
       }
       className={cn(
-        "flex max-w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+        "flex min-h-[76px] max-w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
         clickable && "cursor-pointer hover:border-primary/40 hover:bg-accent",
       )}
     >

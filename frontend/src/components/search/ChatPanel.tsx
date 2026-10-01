@@ -136,9 +136,8 @@ function AssistantBubble({
         </div>
       )}
       {showTyping ? (
-        <div className="flex items-center gap-2 text-[15px] text-muted-foreground">
+        <div className="flex items-center text-muted-foreground" role="status" aria-label="Thinking">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Thinking…
         </div>
       ) : (
         message.content && (

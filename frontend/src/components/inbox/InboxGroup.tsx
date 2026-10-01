@@ -155,7 +155,7 @@ export function InboxGroup({
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <Card ref={cardRef} className={cn(cardBorderClass)}>
+    <Card ref={cardRef} className={cn("min-h-[76px]", cardBorderClass)}>
       <CardContent>
         <div
           className={cn("flex items-center gap-2", taskId && "cursor-pointer")}

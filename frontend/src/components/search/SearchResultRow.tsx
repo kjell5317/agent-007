@@ -1,4 +1,4 @@
-import { CalendarDays, FileText, Inbox, ListTodo, UserRound } from "lucide-react";
+import { CalendarDays, FileText, Inbox, ListTodo, Loader2, UserRound } from "lucide-react";
 import { useCallback, useEffect, useState, type ComponentType } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { ContactCard, DocCard, EventCard } from "@/components/search/AssistantContent";
@@ -70,12 +70,14 @@ function metaLine(hit: SearchHit): string {
 
 export function SearchResultRow({
   hit,
+  task,
   onOpenTask,
   onActivate,
   onShowContent,
   preventBlur = false,
 }: {
   hit: SearchHit;
+  task?: Task;
   onOpenTask: (taskId: string) => void;
   // Fired after any successful activation — the composer uses it to dismiss
   // its dropdown.
@@ -87,7 +89,7 @@ export function SearchResultRow({
 }) {
   if (hit.type === "task") {
     return <TaskSuggestionCard
-      hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
+      hit={hit} initialTask={task} onOpenTask={onOpenTask} onActivate={onActivate}
       preventBlur={preventBlur}
     />;
   }
@@ -117,30 +119,35 @@ export function SearchResultRow({
 }
 
 function TaskSuggestionCard({
-  hit, onOpenTask, onActivate, preventBlur,
+  hit, initialTask, onOpenTask, onActivate, preventBlur,
 }: {
   hit: SearchHit;
+  initialTask?: Task;
   onOpenTask: (taskId: string) => void;
   onActivate?: () => void;
   preventBlur: boolean;
 }) {
-  const [task, setTask] = useState<Task | null>(null);
+  const [task, setTask] = useState<Task | null>(initialTask ?? null);
+  const [failed, setFailed] = useState(false);
   const refresh = useCallback(async () => {
     setTask(await api.getTask(hit.id));
   }, [hit.id]);
 
   useEffect(() => {
     let cancelled = false;
-    api.getTask(hit.id).then((next) => {
-      if (!cancelled) setTask(next);
-    }).catch(() => {});
+    if (!initialTask) {
+      api.getTask(hit.id).then((next) => {
+        if (!cancelled) setTask(next);
+      }).catch(() => { if (!cancelled) setFailed(true); });
+    }
     return () => { cancelled = true; };
-  }, [hit.id]);
+  }, [hit.id, initialTask]);
 
-  if (!task) return <CompactResultRow
+  if (!task && failed) return <CompactResultRow
     hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
     preventBlur={preventBlur}
   />;
+  if (!task) return <div className="flex min-h-[76px] items-center justify-center rounded-xl border bg-card shadow-sm" role="status" aria-label="Loading task"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
 
   return (
     <div onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}>
@@ -192,7 +199,7 @@ function CompactResultRow({
       onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}
       onClick={clickable ? activate : undefined}
       className={cn(
-        "flex w-full items-start gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+        "flex min-h-[76px] w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
         clickable
           ? "cursor-pointer hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
           : "cursor-default",

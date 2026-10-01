@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  CircleCheckBig,
   CircleUser,
   ExternalLink,
   LogOut,
@@ -192,7 +193,9 @@ export function Topbar({
           </>
         ) : (
           <>
-            <span className="w-12 shrink-0" aria-hidden="true" />
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center text-primary" aria-hidden="true">
+              <CircleCheckBig className="h-6 w-6" />
+            </span>
             <button
               type="button"
               onClick={onChatOpen}

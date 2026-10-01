@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { labelChipOutlineStyle, labelChipStyle } from "@/lib/labels";
@@ -23,10 +23,10 @@ export const EMPTY_SEARCH_FILTERS: SearchFiltersState = {
 const KINDS: { key: SearchKind; label: string }[] = [
   { key: "tasks", label: "Tasks" },
   { key: "messages", label: "Messages" },
+  { key: "notes", label: "Notes" },
   { key: "events", label: "Events" },
   { key: "files", label: "Files" },
   { key: "contacts", label: "Contacts" },
-  { key: "notes", label: "Notes" },
 ];
 
 function selectedFirst<T>(items: T[], selected: T | undefined): T[] {
@@ -37,7 +37,7 @@ function sourceLabel(source: string): string {
   return source.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
-const pillBase = "inline-flex h-8 max-w-44 shrink-0 items-center rounded-full border px-3.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const pillBase = "inline-flex h-7 max-w-40 shrink-0 items-center rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const childPill = (selected: boolean) => cn(
   pillBase,
   selected
@@ -53,6 +53,7 @@ export function SearchFilters({
   onChange: (next: SearchFiltersState) => void;
 }) {
   const labels = useLabels();
+  const scrollerRef = useRef<HTMLDivElement>(null);
   const [facets, setFacets] = useState<{ messages: string[]; files: string[] }>({ messages: [], files: [] });
   useEffect(() => {
     const kind = filters.kind;
@@ -65,18 +66,21 @@ export function SearchFilters({
     });
     return () => { active = false; };
   }, [filters.kind]);
-  const hasChildren = filters.kind === "tasks" || filters.kind === "messages" || filters.kind === "files";
   const orderedKinds = filters.kind
     ? [KINDS.find((kind) => kind.key === filters.kind)!, ...KINDS.filter((kind) => kind.key !== filters.kind)]
     : KINDS;
+
+  useEffect(() => {
+    scrollerRef.current?.scrollTo({ left: 0, behavior: "smooth" });
+  }, [filters.kind, filters.label, filters.source, filters.format]);
 
   const selectKind = (kind: SearchKind) => {
     onChange({ ...EMPTY_SEARCH_FILTERS, kind: filters.kind === kind ? null : kind });
   };
 
   return (
-    <div aria-label="Search filters" className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {orderedKinds.slice(0, hasChildren ? 1 : undefined).map((kind) => (
+    <div ref={scrollerRef} aria-label="Search filters" className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-2 [overflow-anchor:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {orderedKinds.slice(0, filters.kind ? 1 : undefined).map((kind) => (
         <button
           key={kind.key}
           type="button"

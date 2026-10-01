@@ -1,6 +1,6 @@
 import { NoteCard } from "@/components/notes/NoteCard";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SkeletonBlock } from "@/components/ui/skeleton";
 import { useNotes } from "@/hooks/useNotes";
 
 export function NotesPanel() {
@@ -8,10 +8,8 @@ export function NotesPanel() {
 
   if (loading && notes.length === 0) {
     return (
-      <div className="space-y-2">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <SkeletonBlock key={i} className="h-20 w-full rounded-xl" />
-        ))}
+      <div className="flex justify-center py-12" role="status" aria-label="Loading notes">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
   }

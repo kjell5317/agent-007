@@ -7,13 +7,15 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { useLiveSuggestions } from "@/hooks/useLiveSuggestions";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
+import type { Task } from "@/lib/types";
 
 interface Props {
   onCreated: () => Promise<void> | void;
   onOpenTask: (taskId: string) => void;
+  tasks: Task[];
 }
 
-export function Composer({ onCreated, onOpenTask }: Props) {
+export function Composer({ onCreated, onOpenTask, tasks }: Props) {
   const [value, setValue] = useState("");
   const suggestions = useLiveSuggestions(value);
   const [dismissed, setDismissed] = useState(false);
@@ -94,7 +96,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-[calc(4.125rem+env(safe-area-inset-bottom))] z-40">
+    <div className="fixed inset-x-0 bottom-[env(safe-area-inset-bottom)] z-40">
       {showSuggestions && (
         <div className="mx-auto max-w-2xl px-3">
           {/* Elevated panel so the suggestions read as a distinct surface
@@ -111,6 +113,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
               <li key={`${hit.type}:${hit.id}`} role="option" aria-selected={false}>
                 <SearchResultRow
                   hit={hit}
+                  task={hit.type === "task" ? tasks.find((task) => task.id === hit.id) : undefined}
                   onOpenTask={onOpenTask}
                   onActivate={() => setDismissed(true)}
                   preventBlur
@@ -122,32 +125,34 @@ export function Composer({ onCreated, onOpenTask }: Props) {
       )}
       <form onSubmit={submit} autoComplete="off">
         <div className="mx-auto max-w-2xl px-4 py-2">
-          <div className="flex h-12 items-center gap-3 rounded-full bg-secondary px-4 shadow-sm">
-            <Input
-              ref={inputRef}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onFocus={() => {
-                // Re-show suggestions when returning to a field that still has text.
-                if (value.trim().length >= 1) setDismissed(false);
-              }}
-              onBlur={() => window.setTimeout(() => setDismissed(true), 100)}
-              placeholder="Add a task…"
-              enterKeyHint="send"
-              autoCapitalize="sentences"
-              autoComplete="off"
-              autoCorrect="off"
-              // Suppress browser + password-manager autofill overlays on this field.
-              name="task-title"
-              data-1p-ignore
-              data-lpignore="true"
-              data-form-type="other"
-              role="combobox"
-              aria-expanded={showSuggestions}
-              aria-autocomplete="list"
-              className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-            />
-            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-8 w-8 shrink-0 rounded-full p-0">
+          <div className="flex items-center gap-2">
+            <div className="flex h-12 min-w-0 flex-1 items-center rounded-full bg-secondary px-4 shadow-sm">
+              <Input
+                ref={inputRef}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onFocus={() => {
+                  // Re-show suggestions when returning to a field that still has text.
+                  if (value.trim().length >= 1) setDismissed(false);
+                }}
+                onBlur={() => window.setTimeout(() => setDismissed(true), 100)}
+                placeholder="Add a task…"
+                enterKeyHint="send"
+                autoCapitalize="sentences"
+                autoComplete="off"
+                autoCorrect="off"
+                // Suppress browser + password-manager autofill overlays on this field.
+                name="task-title"
+                data-1p-ignore
+                data-lpignore="true"
+                data-form-type="other"
+                role="combobox"
+                aria-expanded={showSuggestions}
+                aria-autocomplete="list"
+                className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+            </div>
+            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 rounded-full p-0 shadow-sm">
               <Plus className="h-5 w-5" />
             </Button>
           </div>

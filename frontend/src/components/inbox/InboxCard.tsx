@@ -134,7 +134,7 @@ export function InboxCard({
   // Linked inputs open their task. Unlinked inputs use the card body as their
   // details toggle when there is anything to show.
   return (
-    <Card ref={cardRef} className={cn(cardBorderClass)}>
+    <Card ref={cardRef} className={cn("min-h-[76px]", cardBorderClass)}>
       <CardContent
         className={cn((data.task_id || expandable) && "cursor-pointer")}
         onClick={(e) => {

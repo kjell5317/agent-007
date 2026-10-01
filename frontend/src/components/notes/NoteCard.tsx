@@ -123,7 +123,7 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   }
 
   return (
-    <Card>
+    <Card className="min-h-[76px]">
       <CardContent
         role={hasHistory ? "button" : undefined}
         tabIndex={hasHistory ? 0 : undefined}

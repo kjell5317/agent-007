@@ -277,7 +277,7 @@ export function TaskCard({
     <Card
       ref={cardRef}
       className={cn(
-        "transition-opacity duration-300",
+        "min-h-[76px] transition-opacity duration-300",
         cardBorderClass,
         crossing && "pointer-events-none opacity-40",
       )}

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
-import type { Note, SearchHit, SearchHitType } from "@/lib/types";
+import type { Note, SearchHit, SearchHitType, Task } from "@/lib/types";
 import type { SearchFiltersState } from "@/components/search/SearchFilters";
 
 function noteHit(note: Note): SearchHit {
@@ -38,14 +39,15 @@ function filterHit(hit: SearchHit, filters: SearchFiltersState): boolean {
 }
 
 export function SearchResults({
-  query, filters, onOpenTask,
+  query, filters, tasks, onOpenTask,
 }: {
   query: string;
   filters: SearchFiltersState;
+  tasks: Task[];
   onOpenTask: (id: string) => void;
 }) {
   const [hits, setHits] = useState<SearchHit[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [preview, setPreview] = useState<SearchHit | null>(null);
   const notesCacheRef = useRef<Promise<Note[]> | null>(null);
@@ -105,7 +107,7 @@ export function SearchResults({
       {needsQuery ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Enter at least 3 characters to search {filters.kind === "contacts" ? "contacts" : "Drive files"}.</p>
       ) : loading ? (
-        <p className="py-12 text-center text-sm text-muted-foreground">Searching…</p>
+        <div className="flex justify-center py-12" role="status" aria-label="Searching"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : failed ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Search is unavailable right now.</p>
       ) : hits.length === 0 ? (
@@ -117,6 +119,7 @@ export function SearchResults({
             <SearchResultRow
               key={`${hit.type}:${hit.id}`}
               hit={hit}
+              task={hit.type === "task" ? tasks.find((task) => task.id === hit.id) : undefined}
               onOpenTask={onOpenTask}
               onShowContent={() => setPreview(hit)}
             />

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { InboxCard } from "@/components/inbox/InboxCard";
 import { InboxGroup } from "@/components/inbox/InboxGroup";
 import { Button } from "@/components/ui/button";
@@ -50,7 +51,7 @@ export function InboxPanel({
         onClick={handleLoadMore}
         disabled={loadingMore}
       >
-        {loadingMore ? "Loading…" : "Load more"}
+        {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" aria-label="Loading more messages" /> : "Load more"}
       </Button>
     </div>
   ) : null;
