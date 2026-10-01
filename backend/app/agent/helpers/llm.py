@@ -156,11 +156,10 @@ async def stream_chat(
     thinking_level: str | None = None,
     web_search: bool = False,
 ) -> LLMResponse:
-    """Like `chat`, but streams text deltas to `on_delta` as they arrive. The
-    provider still assembles the full reply (text + tool calls), which is
-    normalized and returned once the stream completes — so the tool loop reads
-    tool calls exactly as in the non-streaming path. `provider`/`model` override
-    the global default; `thinking_level`/`web_search` are Google-only knobs."""
+    """Like `chat`, delivering text to `on_delta`. Tool-enabled Google turns
+    emit one final text chunk to preserve multiple function calls; other turns
+    stream chunks as they arrive. `provider`/`model` override the global default;
+    `thinking_level`/`web_search` are Google-only knobs."""
     provider = provider or settings.effective_llm_provider
     model = model or settings.effective_llm_model
     generator = _build_generator(settings, provider=provider, model=model)
@@ -169,7 +168,13 @@ async def stream_chat(
         if chunk.content:
             await on_delta(chunk.content)
 
-    return await _invoke(
+    # Haystack's Gemini streaming assembler resets the function-call index in
+    # each chunk. Two calls emitted in separate chunks can be concatenated into
+    # one invalid call (name and JSON arguments both doubled). The non-streaming
+    # converter reads the provider's complete response and preserves each call.
+    # Deliver its final text as one delta so the chat transport stays the same.
+    google_tools = provider in ("google", "gemini") and bool(tools)
+    response = await _invoke(
         generator,
         system_prompt=system_prompt,
         messages=messages,
@@ -178,9 +183,12 @@ async def stream_chat(
         provider=provider,
         model=model,
         name=name,
-        streaming_callback=_callback,
+        streaming_callback=None if google_tools else _callback,
         web_search=web_search,
     )
+    if google_tools and response.text:
+        await on_delta(response.text)
+    return response
 
 
 async def _invoke(

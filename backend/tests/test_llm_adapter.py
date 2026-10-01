@@ -138,6 +138,43 @@ async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_google_tool_turn_keeps_separate_calls_without_stream_aggregation(monkeypatch):
+    captured = {}
+
+    class FakeGenerator:
+        async def run_async(self, **kwargs):
+            captured.update(kwargs)
+            return {"replies": [ChatMessage.from_assistant(
+                text="Reading both files.",
+                tool_calls=[
+                    HaystackToolCall(tool_name="get_drive_file", arguments={"file_id": "first"}, id="1"),
+                    HaystackToolCall(tool_name="get_drive_file", arguments={"file_id": "second"}, id="2"),
+                ],
+            )]}
+
+    monkeypatch.setattr(llm, "_build_generator", lambda settings, **kw: FakeGenerator())
+    settings = SimpleNamespace(effective_llm_provider="google", effective_llm_model="gemini-test")
+    deltas = []
+
+    async def on_delta(value):
+        deltas.append(value)
+
+    response = await llm.stream_chat(
+        [llm.user_message("Read two files")], settings,
+        system_prompt="system", tools=[{
+            "name": "get_drive_file", "description": "Read a file", "parameters": {
+                "type": "object", "properties": {"file_id": {"type": "string"}},
+                "required": ["file_id"],
+            },
+        }], on_delta=on_delta,
+    )
+
+    assert "streaming_callback" not in captured
+    assert deltas == ["Reading both files."]
+    assert [call.input["file_id"] for call in response.tool_calls] == ["first", "second"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_anthropic_sdk_request_omits_removed_sampling_parameters(monkeypatch, streaming):
     generator = llm.AnthropicChatGenerator(
