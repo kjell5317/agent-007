@@ -37,3 +37,19 @@ test("dismissed task retains its follow-up group and reopen anchor", () => {
   assert.equal(groups[0].liveTask, null);
   assert.equal(groups[0].title, "Original task");
 });
+
+test("manual requests differing only by URL scheme share an inbox group", () => {
+  const base = {
+    source: "manual", source_metadata: {}, task_id: null,
+    task_title: null, agent_trace: null, status: "not_task",
+  };
+  const groups = exports.groupInputs([
+    { ...base, id: "first", content: "Research contact address of kjellhanken.de",
+      received_at: "2026-09-30T18:23:00Z" },
+    { ...base, id: "second", content: "Research contact address of https://kjellhanken.de",
+      received_at: "2026-09-30T18:24:00Z" },
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].members.map((row) => row.id).join(","), "second,first");
+});

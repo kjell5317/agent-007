@@ -60,8 +60,9 @@ def list_(
 
 # Group key mirrors the frontend's `inputGroupKey`: a shared task wins, so every
 # follow-up / duplicate of a task (incl. cross-thread, embedding-matched ones)
-# folds in with its anchor; then a thread for pre-task inputs; else the row
-# stands alone. Keeping the two in sync is what guarantees the rows we return
+# folds in with its anchor; then a thread for pre-task inputs; then unlinked
+# manual requests with normalized URL text; else the row stands alone.
+# Keeping the two in sync is what guarantees the rows we return
 # for N groups are exactly N whole groups on the client.
 _GROUPED_INPUT_IDS_SQL = text(
     """
@@ -78,6 +79,11 @@ _GROUPED_INPUT_IDS_SQL = text(
                     THEN 'thread:' || (source_metadata->>'thread_id')
                 WHEN COALESCE(source_metadata->>'thread_id', '') <> ''
                     THEN source || ':thread:' || (source_metadata->>'thread_id')
+                WHEN source = 'manual' AND btrim(content) <> ''
+                    THEN 'manual:' || regexp_replace(
+                        lower(btrim(regexp_replace(
+                            regexp_replace(content, 'https?://|www[.]', '', 'gi'),
+                            '[[:space:]]+', ' ', 'g'))), '/+$', '', 'g')
                 ELSE 'input:' || id::text
             END AS group_key
         FROM raw_inputs

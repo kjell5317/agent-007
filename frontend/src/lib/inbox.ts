@@ -130,7 +130,8 @@ export function inputTitle(data: RawInput): string {
 // Inputs that resolve to the same task belong together — so every follow-up
 // and duplicate (including cross-thread, embedding-matched ones) folds in with
 // its anchor. A shared task wins; then a source thread groups pre-task inputs;
-// else the row stands alone. Mirrors `_GROUPED_INPUT_IDS_SQL` on the backend.
+// unlinked manual requests with the same normalized text also share a group.
+// Mirrors `_GROUPED_INPUT_IDS_SQL` on the backend.
 export function inputGroupKey(r: RawInput): string {
   if (r.task_id) return `task:${r.task_id}`;
   const threadId = r.source_metadata?.thread_id;
@@ -139,6 +140,15 @@ export function inputGroupKey(r: RawInput): string {
     return threadId.startsWith("github:")
       ? `thread:${threadId}`
       : `${r.source}:thread:${threadId}`;
+  }
+  if (r.source === "manual") {
+    const normalized = r.content
+      .trim()
+      .toLowerCase()
+      .replace(/https?:\/\/|www\./g, "")
+      .replace(/\s+/g, " ")
+      .replace(/\/+$/, "");
+    if (normalized) return `manual:${normalized}`;
   }
   return `input:${r.id}`;
 }

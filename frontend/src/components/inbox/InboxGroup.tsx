@@ -20,6 +20,7 @@ import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
 import {
   activeKotxRun,
+  badgeKindLabel,
   isAgentTaskFollowup,
   isDismissibleKotxRun,
   isKotxRun,
@@ -190,7 +191,7 @@ export function InboxGroup({
                 {activeRun ? (
                   <InputStatusBadge input={activeRun} />
                 ) : taskBadge ? (
-                  <Badge variant={taskBadge}>{taskBadge}</Badge>
+                  <Badge variant={taskBadge}>{badgeKindLabel(taskBadge)}</Badge>
                 ) : (
                   <InputStatusBadge input={newest} />
                 )}
