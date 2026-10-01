@@ -1,5 +1,5 @@
 export type TaskStatus = "open" | "duplicate" | "closed" | "not_task";
-export type TaskScheduleStatus = "scheduled" | "unscheduled";
+export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled";
 
 export interface Task {
   id: string;

@@ -78,7 +78,9 @@ export function TaskCard({
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
   const cardBorderClass =
-    task.schedule_status === "unscheduled" || isTaskOverdue(task, now)
+    task.schedule_status === "pending"
+      ? "border-emerald-500/70"
+      : task.schedule_status === "unscheduled" || isTaskOverdue(task, now)
       ? "border-red-500/70"
       : task.kotx_task_id != null
         ? "border-primary/50"

@@ -44,6 +44,8 @@ async def research_link(url: str, settings) -> tuple[str, dict[str, Any] | None]
         queries = grounding.get("web_search_queries") or grounding.get("webSearchQueries") or []
         return response.text[:3000], {
             "url": url,
+            "result_markdown": response.text[:3000],
+            "queries": [str(query) for query in queries],
             "search_queries": len(queries) if queries else 1,
             "search_queries_estimated": not bool(queries),
             "llm": {

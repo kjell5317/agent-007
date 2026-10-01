@@ -46,6 +46,7 @@ async def extract_task_fields(
     precedent_candidates: list[SimilarInput] | None = None,
     include_trace: bool = False,
     harvest_notes: bool = True,
+    research: bool = True,
 ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
     """Ask the LLM to extract task fields from a raw input.
 
@@ -70,7 +71,7 @@ async def extract_task_fields(
     user_msg = _build_extract_message(session, raw, context_inputs, precedent_candidates)
     source_url = first_input_url(raw) if raw.source == "manual" else None
     web_trace = None
-    if source_url:
+    if source_url and research:
         web_context, web_trace = await research_link(source_url, settings)
         if web_context:
             user_msg += (

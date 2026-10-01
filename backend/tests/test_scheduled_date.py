@@ -20,7 +20,7 @@ from app.db.clients import tasks as tasks_store  # noqa: E402
 from app.db.clients import points as points_store  # noqa: E402
 from app.db.models.points_entry import PointsEntry  # noqa: E402
 from app.db.models.task import Task  # noqa: E402
-from app.db.schemas.task import TaskRead  # noqa: E402
+from app.db.schemas.task import TaskRawInputRead, TaskRead  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar import discover  # noqa: E402
 from app.services.calendar import events as calendar_events  # noqa: E402
@@ -108,6 +108,23 @@ def test_task_read_marks_open_task_without_calendar_event_unscheduled():
 
     assert read.scheduled_date == scheduled
     assert read.schedule_status == "unscheduled"
+
+
+def test_task_read_stays_pending_until_initial_schedule_finishes():
+    row = SimpleNamespace(
+        id=uuid.uuid4(), title="Write report", description=None, link=None,
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=None, calendar_event_id=None, estimation=30,
+        location=None, label=None,
+        created_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+    )
+    pending = TaskRawInputRead.model_construct(status="open", agent_trace={"scheduling": "pending"})
+    failed = TaskRawInputRead.model_construct(status="open", agent_trace={"scheduling": "failed"})
+
+    assert TaskRead.build(row, "open", True, raw_inputs=[pending]).schedule_status == "pending"
+    assert TaskRead.build(row, "open", True, scheduling="pending").schedule_status == "pending"
+    assert TaskRead.build(row, "open", True, raw_inputs=[failed]).schedule_status == "unscheduled"
 
 
 def test_task_read_marks_open_task_without_slot_unscheduled_despite_stale_mirror():

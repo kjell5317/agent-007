@@ -41,6 +41,7 @@ export function App() {
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [unseenTaskIds, setUnseenTaskIds] = useState<Set<string>>(() => new Set());
   const [unseenInputIds, setUnseenInputIds] = useState<Set<string>>(() => new Set());
+  const [pendingTasks, setPendingTasks] = useState<{ id: string; text: string; rawInputId?: string }[]>([]);
   const knownTaskIdsRef = useRef<Set<string> | null>(null);
   const knownInputIdsRef = useRef<Set<string> | null>(null);
   const newestInputReceivedAtRef = useRef<number | null>(null);
@@ -196,6 +197,16 @@ export function App() {
 
     knownTaskIdsRef.current = currentIds;
   }, [loading, tasks]);
+
+  useEffect(() => {
+    setPendingTasks((pending) => pending.filter((item) => {
+      if (!item.rawInputId) return true;
+      if (tasks.some((task) => task.raw_inputs.some((raw) => raw.id === item.rawInputId))) return false;
+      return !inputs.some((input) => input.id === item.rawInputId &&
+        (input.agent_trace?.outcome === "task_creation_failed" ||
+          (input.agent_trace?.manual_override as { outcome?: string } | undefined)?.outcome === "task_creation_failed"));
+    }));
+  }, [tasks, inputs]);
 
   useEffect(() => {
     if (loading) return;
@@ -389,6 +400,7 @@ export function App() {
             <TabsContent value="tasks">
               <TasksPanel
                 tasks={tasks}
+                pendingTasks={pendingTasks}
                 kotxTasks={kotxTasks}
                 onChanged={refresh}
                 onKotxChanged={runs.refresh}
@@ -426,7 +438,18 @@ export function App() {
           onOpenTask={openTask}
         />
       ) : view === "tasks" ? (
-        <Composer onCreated={refresh} onOpenTask={openTask} />
+        <Composer
+          onCreated={refresh}
+          onOpenTask={openTask}
+          onPending={(text) => {
+            const id = crypto.randomUUID();
+            setPendingTasks((pending) => [{ id, text }, ...pending]);
+            return id;
+          }}
+          onAccepted={(id, rawInputId) => setPendingTasks((pending) => pending.map((item) =>
+            item.id === id ? { ...item, rawInputId } : item))}
+          onSettled={(id) => setPendingTasks((pending) => pending.filter((item) => item.id !== id))}
+        />
       ) : null}
       <Toaster />
     </div>

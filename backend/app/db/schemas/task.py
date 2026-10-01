@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-TaskScheduleStatus = Literal["scheduled", "unscheduled"]
+TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled"]
 
 
 class TaskBase(BaseModel):
@@ -128,6 +128,7 @@ class TaskRead(TaskBase):
         is_manual: bool,
         source_url: str | None = None,
         raw_inputs: list[TaskRawInputRead] | None = None,
+        scheduling: str | None = None,
     ) -> "TaskRead":
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
@@ -139,7 +140,11 @@ class TaskRead(TaskBase):
         scheduled = task.scheduled_date is not None and bool(
             getattr(task, "calendar_event_id", None)
         )
-        schedule_status = "unscheduled" if status_ == "open" and not scheduled else "scheduled"
+        schedule_status: TaskScheduleStatus = "scheduled"
+        if status_ == "open" and not scheduled:
+            latest = next((item for item in (raw_inputs or []) if item.status != "duplicate"), None)
+            scheduling = scheduling if scheduling is not None else (latest.agent_trace or {}).get("scheduling") if latest else None
+            schedule_status = "pending" if scheduling in {"pending", "not_needed"} else "unscheduled"
         return cls.model_validate(
             {
                 "id": task.id,

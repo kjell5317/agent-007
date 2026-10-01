@@ -19,7 +19,7 @@ DEFAULT_DUE_HORIZON = timedelta(days=7)
 def is_manual_for(
     session: Session, task_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, bool]:
-    """Map each task to whether every one of its raw_inputs is `manual`."""
+    """Map each task to whether its inputs originated from manual entry."""
     if not task_ids:
         return {}
     rows = session.execute(
@@ -31,7 +31,7 @@ def is_manual_for(
     for r in rows:
         by_task.setdefault(r.task_id, []).append(r.source)
     return {
-        tid: all(s == "manual" for s in sources)
+        tid: all(s in {"manual", "web_research"} for s in sources)
         for tid, sources in by_task.items()
     }
 

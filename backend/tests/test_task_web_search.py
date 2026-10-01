@@ -34,4 +34,6 @@ async def test_task_web_search_records_query_count(monkeypatch):
     )
     assert context == "Useful details"
     assert trace["search_queries"] == 2
+    assert trace["queries"] == ["one", "two"]
+    assert trace["result_markdown"] == "Useful details"
     assert trace["search_queries_estimated"] is False

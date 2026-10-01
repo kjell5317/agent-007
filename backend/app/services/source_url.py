@@ -15,6 +15,10 @@ def source_url_for_raw_input(raw) -> str | None:
     if isinstance(permalink, str) and permalink.strip():
         return permalink.strip()
 
+    if raw.source == "web_research":
+        url = metadata.get("url")
+        return url.strip() if isinstance(url, str) and url.strip() else None
+
     if raw.source == "gmail":
         # Deep-link the thread in the Gmail web UI. For GitHub-relabelled
         # notifications the real Gmail thread id lives under `gmail_thread_id`

@@ -176,6 +176,9 @@ export function projectAgentTrace(trace: unknown, embeddingCost?: unknown): Trac
 // rate; monthly free quotas are not known per input.
 const MODEL_RATES: [RegExp, number, number, number?][] = [
   [/claude-opus-4-7/i, 5, 25, 0.5],
+  [/claude-sonnet-4-6/i, 3, 15, 0.3],
+  [/claude-haiku-4-5/i, 1, 5, 0.1],
+  [/claude-haiku-3-5/i, 0.8, 4, 0.08],
   [/gemini-3\.5-flash/i, 1.5, 9, 0.15],
 ];
 // ECB reference rate, 2026-09-30: 1 EUR = 1.1355 USD.
@@ -367,6 +370,20 @@ function evidenceFromRecord(
 
 function collectTools(trace: JsonRecord): ToolRow[] {
   const rows: ToolRow[] = [];
+  const webSearch = asRecord(trace.web_search);
+  if (webSearch) {
+    rows.push({
+      id: "web-search",
+      name: "web_search",
+      status: webSearch.status === "failed" ? "failed" : "success",
+      purpose: `Research ${stringValue(webSearch.url) ?? "input link"}`,
+      inputFields: arrayValue(webSearch.queries).map((query, index) => ({
+        label: `Query ${index + 1}`,
+        value: String(query),
+      })),
+      result: stringValue(webSearch.result_markdown),
+    });
+  }
   arrayValue(trace.iterations).forEach((entry, iterIndex) => {
     const iteration = asRecord(entry);
     if (!iteration) return;

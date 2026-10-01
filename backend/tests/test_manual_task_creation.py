@@ -288,10 +288,12 @@ async def test_manual_queue_passes_embedding_precedents_to_extractor(monkeypatch
         context_inputs,
         include_trace,
         precedent_candidates,
+        research,
     ):
         assert context_inputs == []
         assert include_trace is True
         assert precedent_candidates == [hit]
+        assert research is False
         return {
             "title": "Created from precedent",
             "estimation": 25,
@@ -690,6 +692,7 @@ async def test_creation_published_before_calendar_scheduling(monkeypatch, schedu
         assert events == ["commit", "task", "input"]
         assert raw.task_id == task_id
         assert raw.agent_trace["outcome"] == "task_created"
+        assert raw.agent_trace["scheduling"] == "pending"
         events.append("schedule")
         if scheduling_fails:
             raise RuntimeError("calendar unavailable")
@@ -707,10 +710,60 @@ async def test_creation_published_before_calendar_scheduling(monkeypatch, schedu
         "estimation": 30,
         "due_date": datetime(2026, 7, 3, 9, 0, tzinfo=timezone.utc),
     }
-    if scheduling_fails:
-        with pytest.raises(RuntimeError, match="calendar unavailable"):
-            await task_queue._process(raw_id, fields, [])
-        assert events == ["commit", "task", "input", "schedule"]
-    else:
-        await task_queue._process(raw_id, fields, [])
-        assert events == ["commit", "task", "input", "schedule", "task"]
+    await task_queue._process(raw_id, fields, [])
+    assert events == ["commit", "task", "input", "schedule", "commit", "input", "task"]
+    assert raw.agent_trace["scheduling"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_background_web_research_becomes_linked_followup(monkeypatch):
+    from app.agent.thread import runner as thread_runner
+
+    task_id = uuid.uuid4()
+    origin_id = uuid.uuid4()
+    task = SimpleNamespace(id=task_id)
+    rows = []
+    published = []
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def add(self, row):
+            row.id = uuid.uuid4()
+            rows.append(row)
+
+        def commit(self):
+            pass
+
+        def refresh(self, _row):
+            pass
+
+    async def fake_research(_url, _settings):
+        return "The contact page lists contact@example.org", {"url": "https://example.org", "result_markdown": "The contact page lists contact@example.org"}
+
+    async def fake_followup(_session, raw, target):
+        assert target is task
+        assert raw.source == "web_research"
+        assert raw.content == "The contact page lists contact@example.org"
+        raw.status = "duplicate"
+        raw.task_id = task_id
+        return {"branch": "thread_followup", "outcome": "updated"}
+
+    monkeypatch.setattr(task_queue, "SessionLocal", FakeSession)
+    monkeypatch.setattr(task_queue, "research_link", fake_research)
+    monkeypatch.setattr(task_queue.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(task_queue, "publish_input", lambda _session, row_id: published.append(("input", row_id)))
+    monkeypatch.setattr(task_queue, "publish_task", lambda _session, row_id: published.append(("task", row_id)))
+    monkeypatch.setattr(thread_runner, "run_thread_followup", fake_followup)
+
+    await task_queue._research_created_task(origin_id, task_id, "https://example.org")
+
+    assert len(rows) == 1
+    assert rows[0].source_metadata["origin_input_id"] == str(origin_id)
+    assert rows[0].task_id == task_id
+    assert rows[0].agent_trace["web_search"]["result_markdown"] == "The contact page lists contact@example.org"
+    assert published == [("input", rows[0].id), ("task", task_id), ("input", rows[0].id)]

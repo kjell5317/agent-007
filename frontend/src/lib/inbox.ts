@@ -60,7 +60,9 @@ export function senderName(data: RawInput): string {
     const repo = data.source_metadata?.repo;
     if (typeof repo === "string" && repo) return repo;
   }
-  return data.source === "manual" ? "Manual" : data.source;
+  if (data.source === "manual") return "Manual";
+  if (data.source === "web_research") return "Web research";
+  return data.source;
 }
 
 // A kotx transition carrying a run id. Its inbox card is a run breadcrumb, not

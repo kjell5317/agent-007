@@ -30,7 +30,7 @@ from app.db.clients import (
     tasks as tasks_store,
 )
 from app.db.schemas.raw_input import RawInputRead
-from app.db.schemas.task import TaskRead
+from app.db.schemas.task import TaskRawInputRead, TaskRead
 from app.events import bus
 from app.services.source_url import source_url_for_raw_input
 
@@ -49,11 +49,17 @@ def publish_task(session: Session, task_id: uuid.UUID) -> None:
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     raw = raw_inputs_store.latest_for_task(session, task_id)
+    linked_inputs = raw_inputs_store.list_for_task(session, task_id)
     data = TaskRead.build(
         row,
         status_,
         is_manual,
         source_url=source_url_for_raw_input(raw),
+        raw_inputs=[
+            TaskRawInputRead.build(linked, source_url=source_url_for_raw_input(linked))
+            for linked in linked_inputs
+        ],
+        scheduling=(raw.agent_trace or {}).get("scheduling") if raw else None,
     ).model_dump(mode="json")
     _emit({"type": "task", "data": data})
 

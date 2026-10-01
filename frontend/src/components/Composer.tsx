@@ -10,6 +10,9 @@ import type { SearchHit, SearchHitType } from "@/lib/types";
 interface Props {
   onCreated: () => Promise<void> | void;
   onOpenTask: (taskId: string) => void;
+  onPending: (text: string) => string;
+  onAccepted: (id: string, rawInputId: string) => void;
+  onSettled: (id: string) => void;
 }
 
 const SUGGEST_DEBOUNCE_MS = 150;
@@ -21,11 +24,12 @@ const SUGGEST_DEBOUNCE_MS = 150;
 const SUGGESTIBLE: ReadonlySet<SearchHitType> = new Set(["task", "document"]);
 const SUGGEST_TYPES: readonly SearchHitType[] = ["task", "document"];
 
-export function Composer({ onCreated, onOpenTask }: Props) {
+export function Composer({ onCreated, onOpenTask, onPending, onAccepted, onSettled }: Props) {
   const [value, setValue] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [suggestions, setSuggestions] = useState<SearchHit[]>([]);
   const [dismissed, setDismissed] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const postingText = useRef<Set<string>>(new Set());
   const listRef = useRef<HTMLUListElement>(null);
   // Stop in-flight polls when the component unmounts.
   const activePolls = useRef<Map<PollHandle, string | number>>(new Map());
@@ -74,7 +78,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [suggestions, showSuggestions]);
 
-  const trackPoll = (rawInputId: string, toastId: string | number) => {
+  const trackPoll = (rawInputId: string, toastId: string | number, pendingId: string) => {
     let handle: PollHandle | null = null;
     const finish = (run: () => void) => {
       toast.dismiss(toastId);
@@ -85,9 +89,12 @@ export function Composer({ onCreated, onOpenTask }: Props) {
       onSuccess: () =>
         finish(() => {
           toast.success("Task saved");
-          void onCreated();
+          void Promise.resolve(onCreated()).catch(() => {}).finally(() => onSettled(pendingId));
         }),
-      onFailure: (message) => finish(() => toast.error(message)),
+      onFailure: (message) => finish(() => {
+        onSettled(pendingId);
+        toast.error(message);
+      }),
       onTimeout: () =>
         finish(() => toast.error("Task is taking longer than expected")),
     });
@@ -96,23 +103,29 @@ export function Composer({ onCreated, onOpenTask }: Props) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const text = value.trim();
-    if (!text || submitting) return;
-    setSubmitting(true);
+    const text = inputRef.current?.value.trim() ?? value.trim();
+    if (!text || postingText.current.has(text)) return;
+    postingText.current.add(text);
+    const pendingId = onPending(text);
+    setValue("");
+    if (inputRef.current) inputRef.current.value = "";
+    setSuggestions([]);
     setDismissed(true);
+    inputRef.current?.focus();
     // Show the loading toast immediately — the POST itself takes a moment,
     // so without this the user gets no feedback until polling starts.
     const toastId = toast.loading("Saving task…", { duration: Infinity });
     try {
       const { raw_input_id } = await api.createTask(text);
-      setValue("");
-      setSuggestions([]);
-      trackPoll(raw_input_id, toastId);
+      onAccepted(pendingId, raw_input_id);
+      trackPoll(raw_input_id, toastId, pendingId);
     } catch (err) {
+      onSettled(pendingId);
+      setValue((current) => current || text);
       toast.dismiss(toastId);
       toast.error((err as Error).message);
     } finally {
-      setSubmitting(false);
+      postingText.current.delete(text);
     }
   };
 
@@ -150,6 +163,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
       >
         <div className="mx-auto flex max-w-2xl items-center gap-2 px-3 py-2.5">
           <Input
+            ref={inputRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onFocus={() => {
@@ -172,7 +186,7 @@ export function Composer({ onCreated, onOpenTask }: Props) {
             aria-autocomplete="list"
             className="h-10 rounded-full bg-secondary px-4 text-[15px]"
           />
-          <Button type="submit" disabled={submitting || !value.trim()} className="px-5">
+          <Button type="submit" disabled={!value.trim()} className="px-5">
             Add
           </Button>
         </div>

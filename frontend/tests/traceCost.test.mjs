@@ -35,6 +35,14 @@ test("zero-call and unknown-model traces get explicit costs", () => {
   assert.equal(exports.estimateTraceCost({ llm: { model: "other", usage: { input_tokens: 5 } } }), "Unavailable");
 });
 
+test("estimates production Claude Haiku 4.5 manual extraction", () => {
+  const trace = { iterations: [{ llm: {
+    provider: "anthropic", model: "claude-haiku-4-5",
+    usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 500 },
+  } }] };
+  assert.equal(exports.estimateTraceCost(trace), "€0.0014");
+});
+
 test("includes estimated embedding and grounded search charges", () => {
   const trace = { web_search: { search_queries: 2 } };
   const embedding = { model: "gemini-embedding-001", estimated_input_tokens: 1000 };

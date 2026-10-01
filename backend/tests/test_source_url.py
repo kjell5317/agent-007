@@ -3,6 +3,11 @@ from types import SimpleNamespace
 from app.services.source_url import source_url_for_raw_input
 
 
+def test_web_research_source_url_points_to_researched_page():
+    raw = SimpleNamespace(source="web_research", source_metadata={"url": "https://example.org/contact"})
+    assert source_url_for_raw_input(raw) == "https://example.org/contact"
+
+
 def test_gmail_source_url_links_thread_in_web_ui():
     raw = SimpleNamespace(
         source="gmail",
