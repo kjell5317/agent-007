@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { SearchResultRow } from "@/components/search/SearchResultRow";
+import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
 import { searchDistance } from "@/lib/searchRanking";
@@ -62,13 +63,13 @@ function searchRequests(query: string, filters: SearchFiltersState, submitted: b
 }
 
 export function SearchResults({
-  query, filters, tasks, submitted, onNoResults, onOpenTask,
+  query, filters, tasks, submitted, onAiSearch, onOpenTask,
 }: {
   query: string;
   filters: SearchFiltersState;
   tasks: Task[];
   submitted: boolean;
-  onNoResults: (query: string) => void;
+  onAiSearch: (query: string) => void;
   onOpenTask: (id: string) => void;
 }) {
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -76,8 +77,10 @@ export function SearchResults({
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [preview, setPreview] = useState<SearchHit | null>(null);
-  const onNoResultsRef = useRef(onNoResults);
-  onNoResultsRef.current = onNoResults;
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const onAiSearchRef = useRef(onAiSearch);
+  onAiSearchRef.current = onAiSearch;
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +93,7 @@ export function SearchResults({
       if (cancelled) return;
       const all = results.flatMap((result) => result.status === "fulfilled" ? result.value.hits : [])
         .filter((hit) => filterHit(hit, filters));
-      const taskMap = new Map(tasks.map((task) => [task.id, task]));
+      const taskMap = new Map(tasksRef.current.map((task) => [task.id, task]));
       const missingTaskIds = [...new Set(all.filter((hit) => hit.type === "task" && !taskMap.has(hit.id)).map((hit) => hit.id))];
       const fetchedTasks = await Promise.allSettled(missingTaskIds.map((id) => api.getTask(id)));
       if (cancelled) return;
@@ -108,11 +111,11 @@ export function SearchResults({
         return true;
       });
       const now = Date.now();
-      unique.sort((a, b) => searchDistance(a, taskMap, now) - searchDistance(b, taskMap, now) ||
+      unique.sort((a, b) => searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q) ||
         b.score - a.score || a.title.localeCompare(b.title));
       const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected");
       if (submitted && unique.length === 0 && !hadFailure) {
-        onNoResultsRef.current(q);
+        onAiSearchRef.current(q);
         return;
       }
       setFailed(unique.length === 0 && hadFailure);
@@ -121,7 +124,7 @@ export function SearchResults({
       setLoading(false);
     }, submitted ? 0 : 180);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [query, filters, submitted, tasks]);
+  }, [query, filters, submitted]);
 
   return (
     <div className="space-y-2">
@@ -133,7 +136,13 @@ export function SearchResults({
         submitted ? <p className="py-12 text-center text-sm text-muted-foreground">No matching results.</p> : null
       ) : (
         <div className="space-y-2">
-          <p className="px-1 text-xs font-medium text-muted-foreground">{hits.length} results</p>
+          <div className="flex items-center justify-between gap-3 px-1">
+            <p className="text-xs font-medium text-muted-foreground">{hits.length} results</p>
+            <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => onAiSearchRef.current(query.trim())}>
+              <Sparkles className="h-3.5 w-3.5" />
+              Ask AI
+            </Button>
+          </div>
           {hits.map((hit) => (
             <SearchResultRow
               key={`${hit.type}:${hit.id}`}

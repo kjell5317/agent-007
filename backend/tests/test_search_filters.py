@@ -125,6 +125,26 @@ def test_suggest_excludes_task_calendar_before_limit_and_returns_due_dates():
     assert captured["params"]["exclude_calendar_id"] == "007@example.com"
 
 
+def test_calendar_suggest_limits_nearest_occurrences_instead_of_far_future_matches():
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            captured["params"] = params
+            return SimpleNamespace(all=lambda: [])
+
+    assert search_client.suggest(
+        Session(), tsquery="meeting:*", branches=frozenset({DOCUMENT}),
+        source="calendar", limit=10, half_life_days=100,
+    ) == []
+    sql = captured["sql"]
+    assert "abs(extract(epoch from (ts - now()))) ASC NULLS LAST" in sql
+    assert "(ts < now()) ASC, score DESC LIMIT :limit" in sql
+    assert "exp(- abs(extract(epoch from (now() -" in sql
+    assert captured["params"]["limit"] == 10
+
+
 @pytest.mark.asyncio
 async def test_message_facets_use_stored_sources_and_exclude_chat(monkeypatch):
     from app.api import search as search_api

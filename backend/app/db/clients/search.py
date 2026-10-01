@@ -149,7 +149,9 @@ _HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, 
 
 def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
     b = _BRANCHES[corpus]
-    recency = f"exp(- extract(epoch from (now() - {b['ts']})) / (:half_life * 86400.0))"
+    # A future calendar occurrence must decay with distance just like a past
+    # one. Without abs(), far-future recurrences gain an exponential boost.
+    recency = f"exp(- abs(extract(epoch from (now() - {b['ts']}))) / (:half_life * 86400.0))"
     if match:
         tsq = "to_tsquery('english', :tsquery)"
         score = f"ts_rank_cd({b['fts']}, {tsq}) * {recency}"
@@ -267,8 +269,17 @@ def suggest(
     # Type the free-standing `:before`/`:after` params: they appear as
     # `:x IS NULL` with no column to infer from, so Postgres rejects the bare
     # (possibly NULL) parameter without a declared type.
+    # Calendar-only suggestions are displayed by distance from today. Apply
+    # that order before LIMIT so a distant recurrence cannot crowd out the
+    # next occurrence; prefer a future event when distances tie.
+    order = (
+        "abs(extract(epoch from (ts - now()))) ASC NULLS LAST, "
+        "(ts < now()) ASC, score DESC"
+        if active == [DOCUMENT] and source == "calendar"
+        else "score DESC, ts DESC NULLS LAST"
+    )
     sql = text(
-        f"SELECT * FROM ({union}) hits ORDER BY score DESC, ts DESC NULLS LAST LIMIT :limit"
+        f"SELECT * FROM ({union}) hits ORDER BY {order} LIMIT :limit"
     ).bindparams(
         bindparam("before", type_=String()),
         bindparam("after", type_=String()),

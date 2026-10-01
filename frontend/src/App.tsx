@@ -94,7 +94,7 @@ export function App() {
     }
   };
 
-  const runAiForEmptySearch = (query: string) => {
+  const runAiSearch = (query: string) => {
     chat.send(query);
     setSearchQuery("");
     setSearchFilters(EMPTY_SEARCH_FILTERS);
@@ -441,6 +441,7 @@ export function App() {
           <ChatComposer
             value={searchQuery}
             onChange={changeSearchQuery}
+            submitted={searchSubmitted}
             streaming={chat.streaming}
             onClose={leaveOverlay}
             onEnter={() => setSearchSubmitted(true)}
@@ -462,7 +463,7 @@ export function App() {
             {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={setSearchFilters} />}
             <div className={searchQuery.trim() || chat.messages.length === 0 ? "pt-3" : undefined}>
             {searchQuery.trim() ? (
-              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} submitted={searchSubmitted} onNoResults={runAiForEmptySearch} onOpenTask={openTask} />
+              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} submitted={searchSubmitted} onAiSearch={runAiSearch} onOpenTask={openTask} />
             ) : searchFilters.kind === "tasks" ? (
               loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters.label)
             ) : searchFilters.kind === "messages" ? (

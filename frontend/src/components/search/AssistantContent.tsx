@@ -417,7 +417,7 @@ export function DocCard({
       href={cite.url}
       onActivate={onActivate}
       onOpened={onOpened}
-      pills={[meta.mime, cite.ts ? fmtWhen(cite.ts) : null].filter((value): value is string => Boolean(value))}
+      pills={[cite.ts ? `Modified ${fmtWhen(cite.ts)}` : null, meta.mime].filter((value): value is string => Boolean(value))}
     />
   );
 }
@@ -519,19 +519,17 @@ function FallbackChip({ label }: { label: string }) {
 }
 
 // Fetches the full task by id and renders the same card the task view uses.
-// While loading: a skeleton; if the task can't be loaded (e.g. deleted): a
-// compact clickable fallback pill so the reference isn't lost.
+// If the task can't be loaded, keep a clickable reference to it.
 function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
   const [task, setTask] = useState<Task | null>(null);
   const [failed, setFailed] = useState(false);
 
-  const refetch = useCallback(async (opts: { background?: boolean } = {}) => {
+  const refetch = useCallback(async () => {
     try {
       const next = await api.getTask(taskId);
       setTask(next);
       setFailed(false);
-    } catch (e) {
-      if (opts.background && apiStatus(e) !== 404) return;
+    } catch {
       setTask(null);
       setFailed(true);
     }
@@ -555,36 +553,6 @@ function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
     });
   }, [taskId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let inFlight = false;
-
-    const safeRefetch = async () => {
-      if (inFlight || cancelled) return;
-      inFlight = true;
-      try {
-        await refetch({ background: true });
-      } catch {
-        // `refetch` owns state reconciliation; foreground refreshes stay quiet.
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") safeRefetch();
-    };
-
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", safeRefetch);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", safeRefetch);
-    };
-  }, [refetch]);
-
   if (failed) {
     const title = ctx.byTaskId.get(taskId)?.title ?? "Open task";
     return <WidgetShell Icon={ListTodo} title={title} onActivate={() => ctx.onOpenTask(taskId)} />;
@@ -604,12 +572,6 @@ function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
       onOpen={ctx.onOpenTask}
     />
   );
-}
-
-function apiStatus(e: unknown): number | null {
-  if (!e || typeof e !== "object" || !("status" in e)) return null;
-  const status = (e as { status: unknown }).status;
-  return typeof status === "number" ? status : null;
 }
 
 export function AssistantContent({

@@ -22,7 +22,7 @@ test("task and event dates use distance from today, not update time", () => {
   assert.equal(ranking.searchDistance(event, tasks, now), day);
 });
 
-test("notes, files and GitHub use last modified; contacts sort last", () => {
+test("notes, files and GitHub use last modified", () => {
   const tasks = new Map();
   const recent = "2026-10-01T11:00:00Z";
   const old = "2026-09-29T11:00:00Z";
@@ -31,5 +31,16 @@ test("notes, files and GitHub use last modified; contacts sort last", () => {
   const issue = { type: "github", ts: recent };
   assert.equal(ranking.searchDistance(note, tasks, now), ranking.searchDistance(issue, tasks, now));
   assert.ok(ranking.searchDistance(note, tasks, now) < ranking.searchDistance(file, tasks, now));
-  assert.equal(ranking.searchDistance({ type: "contact" }, tasks, now), Infinity);
+});
+
+test("contact match quality interleaves contacts with dated results", () => {
+  const tasks = new Map();
+  const exact = { type: "contact", title: "Alice Smith", meta: { emails: ["alice@example.com"] } };
+  const prefix = { type: "contact", title: "Alice Johnson", meta: { emails: [] } };
+  const weak = { type: "contact", title: "Bob", meta: { org: "Alice's Office" } };
+  const twoDayOldFile = { type: "drive", ts: new Date(now - day * 2).toISOString() };
+  assert.equal(ranking.searchDistance(exact, tasks, now, "Alice Smith"), 0);
+  assert.ok(ranking.searchDistance(prefix, tasks, now, "Alice") < ranking.searchDistance(twoDayOldFile, tasks, now));
+  assert.ok(ranking.searchDistance(weak, tasks, now, "Alice") > ranking.searchDistance(twoDayOldFile, tasks, now));
+  assert.equal(ranking.searchDistance(exact, tasks, now, "alice@example.com"), 0);
 });
