@@ -88,8 +88,9 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch):
     def fake_finalize(_session, raw_id, **kwargs):
         finalized.update({"raw_id": raw_id, **kwargs})
 
-    async def fake_research(url, _settings):
+    async def fake_research(url, _settings, **kwargs):
         assert url == "https://example.com/report"
+        assert kwargs["task_title"] == "Send the report."
         return "Page says to send the report.", {
             "url": url,
             "llm": {"provider": "google", "model": "gemini-3.5-flash", "usage": {"input_tokens": 100, "output_tokens": 20}},

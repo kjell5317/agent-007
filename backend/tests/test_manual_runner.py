@@ -176,6 +176,7 @@ async def test_manual_link_uses_separate_grounded_lookup(monkeypatch):
 
     assert calls[0][1]["web_search"] is True
     assert calls[0][1]["tools"] == []
+    assert "Task title: Register at" in calls[0][0][0].text
     assert "Page describes a registration deadline." in calls[1][0][0].text
     assert payload["link"] == "https://example.com/event"
 

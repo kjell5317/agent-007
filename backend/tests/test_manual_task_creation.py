@@ -809,7 +809,7 @@ async def test_background_web_research_becomes_linked_followup(monkeypatch):
 
     task_id = uuid.uuid4()
     origin_id = uuid.uuid4()
-    task = SimpleNamespace(id=task_id)
+    task = SimpleNamespace(id=task_id, title="Contact CSEE", description="Find the contact email")
     rows = []
     published = []
 
@@ -830,7 +830,9 @@ async def test_background_web_research_becomes_linked_followup(monkeypatch):
         def refresh(self, _row):
             pass
 
-    async def fake_research(_url, _settings):
+    async def fake_research(_url, _settings, **kwargs):
+        assert kwargs["task_title"] == task.title
+        assert kwargs["task_context"] == task.description
         return "The contact page lists contact@example.org", {"url": "https://example.org", "result_markdown": "The contact page lists contact@example.org"}
 
     async def fake_followup(_session, raw, target):

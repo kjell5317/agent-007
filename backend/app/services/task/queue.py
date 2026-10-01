@@ -294,7 +294,18 @@ async def _research_created_task(
     origin_id: uuid.UUID, task_id: uuid.UUID, url: str,
     scheduling_done: asyncio.Event | None = None,
 ) -> None:
-    context, web_trace = await research_link(url, get_settings())
+    with SessionLocal() as session:
+        task = tasks_store.get(session, task_id)
+        if task is None:
+            return
+        task_title = task.title
+        task_description = task.description
+    context, web_trace = await research_link(
+        url,
+        get_settings(),
+        task_title=task_title,
+        task_context=task_description,
+    )
     if scheduling_done is not None:
         await scheduling_done.wait()
     with SessionLocal() as session:
