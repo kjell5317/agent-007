@@ -31,7 +31,9 @@ export function useNotes(): NotesData {
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   const replaceNote = useCallback((note: Note) => {

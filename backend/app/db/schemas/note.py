@@ -23,6 +23,8 @@ class NoteRead(BaseModel):
     updated_at: datetime
     source_raw_input_ids: list[str] = Field(default_factory=list)
     needs_review: bool = False
+    content_update_count: int = 0
+    last_content_update_at: datetime | None = None
 
     @classmethod
     def from_item(cls, item: "NoteListItem") -> "NoteRead":
@@ -37,4 +39,16 @@ class NoteRead(BaseModel):
             updated_at=item.updated_at,
             source_raw_input_ids=item.source_raw_input_ids or [],
             needs_review=item.needs_review,
+            content_update_count=item.content_update_count,
+            last_content_update_at=item.last_content_update_at,
         )
+
+
+class NoteAuditRead(BaseModel):
+    action: str
+    actor: str
+    occurred_at: datetime
+    old_content: str | None
+    new_content: str | None
+    source_raw_input_id: uuid.UUID | None
+    needs_review: bool | None

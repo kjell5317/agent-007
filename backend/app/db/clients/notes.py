@@ -201,6 +201,8 @@ class NoteListItem:
     source_subject: str | None
     source_raw_input_ids: list[str] | None = None
     needs_review: bool = False
+    content_update_count: int = 0
+    last_content_update_at: datetime | None = None
 
 
 # Enriches each note with its originating raw_input's source + sender/subject
@@ -209,14 +211,24 @@ class NoteListItem:
 _LIST_NOTES_TEMPLATE = """
     SELECT
       n.id, n.content, n.source_raw_input_id, n.source_raw_input_ids,
-      n.needs_review, n.created_at, n.updated_at,
+      n.needs_review, n.created_at,
+      greatest(n.updated_at, coalesce(a.last_event_at, n.updated_at)) AS updated_at,
+      coalesce(a.content_update_count, 0) AS content_update_count,
+      a.last_content_update_at,
       r.source AS source,
       r.source_metadata->>'from' AS source_from,
       r.source_metadata->>'subject' AS source_subject
     FROM notes n
+    LEFT JOIN (
+      SELECT note_id,
+        count(*) FILTER (WHERE action = 'content_updated') AS content_update_count,
+        max(occurred_at) FILTER (WHERE action = 'content_updated') AS last_content_update_at,
+        max(occurred_at) AS last_event_at
+      FROM note_audit GROUP BY note_id
+    ) a ON a.note_id = n.id
     LEFT JOIN raw_inputs r ON r.id = n.source_raw_input_id
     {where}
-    ORDER BY n.updated_at DESC
+    ORDER BY updated_at DESC
     {limit}
 """
 
@@ -233,7 +245,30 @@ def _to_item(row) -> NoteListItem:
         source_subject=row.source_subject,
         source_raw_input_ids=row.source_raw_input_ids,
         needs_review=row.needs_review,
+        content_update_count=row.content_update_count,
+        last_content_update_at=row.last_content_update_at,
     )
+
+
+@dataclass
+class NoteAuditItem:
+    action: str
+    actor: str
+    occurred_at: datetime
+    old_content: str | None
+    new_content: str | None
+    source_raw_input_id: uuid.UUID | None
+    needs_review: bool | None
+
+
+def history(session: Session, note_id: uuid.UUID, *, limit: int = 100) -> list[NoteAuditItem]:
+    rows = session.execute(text("""
+        SELECT action, actor, occurred_at, old_content, new_content,
+               source_raw_input_id, needs_review
+        FROM note_audit WHERE note_id = :note_id
+        ORDER BY occurred_at DESC, id DESC LIMIT :limit
+    """), {"note_id": note_id, "limit": limit}).all()
+    return [NoteAuditItem(**row._mapping) for row in rows]
 
 
 def list_all(session: Session, *, limit: int = 500) -> list[NoteListItem]:

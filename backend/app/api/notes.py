@@ -11,11 +11,12 @@ this surface exists so the user can review and correct that memory by hand.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.db.clients import notes as notes_store
-from app.db.schemas.note import NoteRead, NoteUpdate
+from app.db.schemas.note import NoteAuditRead, NoteRead, NoteUpdate
 from app.services.input.embedding import embed
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -29,6 +30,17 @@ async def list_notes(
     return [NoteRead.from_item(item) for item in notes_store.list_all(session, limit=limit)]
 
 
+@router.get("/{note_id}/history", response_model=list[NoteAuditRead])
+def note_history(
+    note_id: uuid.UUID,
+    limit: int = Query(100, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> list[NoteAuditRead]:
+    return [NoteAuditRead.model_validate(item.__dict__) for item in notes_store.history(
+        session, note_id, limit=limit,
+    )]
+
+
 @router.patch("/{note_id}", response_model=NoteRead)
 async def update_note(
     note_id: uuid.UUID, payload: NoteUpdate, session: Session = Depends(get_session)
@@ -40,6 +52,7 @@ async def update_note(
     # Re-embed so future search_notes retrieval matches the edited text, not
     # the stale vector.
     embedding = await embed(content)
+    session.execute(text("SELECT set_config('app.note_actor', 'manual', true)"))
     if not notes_store.update(session, note_id, content=content, embedding=embedding):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
     session.commit()
@@ -52,6 +65,7 @@ async def update_note(
 async def delete_note(
     note_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> None:
+    session.execute(text("SELECT set_config('app.note_actor', 'manual', true)"))
     if not notes_store.delete(session, note_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
     session.commit()

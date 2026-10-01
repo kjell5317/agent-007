@@ -6,6 +6,7 @@ import type {
   Label,
   LinkPreview,
   Note,
+  NoteAudit,
   RawInput,
   SearchHit,
   SearchHitType,
@@ -158,6 +159,7 @@ export const api = {
     }),
 
   listNotes: (limit = 500) => request<Note[]>(`/notes?limit=${limit}`),
+  noteHistory: (id: string) => request<NoteAudit[]>(`/notes/${id}/history`),
   updateNote: (id: string, content: string) =>
     request<Note>(`/notes/${id}`, {
       method: "PATCH",

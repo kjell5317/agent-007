@@ -167,8 +167,20 @@ export interface Note {
   source_raw_input_id: string | null;
   source_raw_input_ids: string[];
   needs_review: boolean;
+  content_update_count: number;
+  last_content_update_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface NoteAudit {
+  action: string;
+  actor: string;
+  occurred_at: string;
+  old_content: string | null;
+  new_content: string | null;
+  source_raw_input_id: string | null;
+  needs_review: boolean | null;
 }
 
 export interface RawInput {
