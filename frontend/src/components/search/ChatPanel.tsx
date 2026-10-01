@@ -273,12 +273,11 @@ function ToolChip({ traces }: { traces: ChatToolTrace[] }) {
           >
             {traces.map((trace, i) => {
               const params = trace.params && Object.keys(trace.params).length > 0 ? trace.params : null;
-              const result = trace.result?.trim() || null;
+              const result = displayToolResult(trace);
               return (
                 <div key={i} className="space-y-1.5 border-b border-border pb-2.5 last:border-0 last:pb-0">
-                  <div className="font-medium">{trace.purpose || trace.name}</div>
-                  <div className="font-mono text-[11px] text-muted-foreground">{trace.name}</div>
-                  {params && <ToolDetailSection title="Parameters" body={JSON.stringify(params, null, 2)} />}
+                  {traces.length > 1 && <div className="font-medium">{trace.purpose || trace.name}</div>}
+                  {params && <ToolDetailSection title="Parameters" body={formatToolParams(params)} />}
                   {result && <ToolDetailSection title="Result" body={result} />}
                 </div>
               );
@@ -288,6 +287,28 @@ function ToolChip({ traces }: { traces: ChatToolTrace[] }) {
         )}
     </>
   );
+}
+
+function formatToolParams(params: Record<string, unknown>): string {
+  const lines: string[] = [];
+  const visit = (key: string, value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(`${key}[${index + 1}]`, item));
+    } else if (value !== null && typeof value === "object") {
+      Object.entries(value).forEach(([child, item]) => visit(`${key}.${child}`, item));
+    } else {
+      lines.push(`${key}: ${value === null ? "none" : String(value)}`);
+    }
+  };
+  Object.entries(params).forEach(([key, value]) => visit(key, value));
+  return lines.join("\n");
+}
+
+function displayToolResult(trace: ChatToolTrace): string | null {
+  const result = trace.result?.trim() || null;
+  if (!result) return null;
+  const heading = `${trace.purpose}:\n`;
+  return result.startsWith(heading) ? result.slice(heading.length).trimStart() : result;
 }
 
 function ToolDetailSection({ title, body }: { title: string; body: string }) {

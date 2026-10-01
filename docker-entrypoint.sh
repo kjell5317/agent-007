@@ -4,8 +4,10 @@
 # container picks up the postgres service hostname from compose.
 set -e
 
-echo "running alembic upgrade head…"
-alembic upgrade head
+echo "running alembic upgrade heads…"
+# `heads` also works when two migration branches are present in an older image.
+# A later merge revision converges both branches to one head.
+alembic upgrade heads
 
 echo "starting: $*"
 exec "$@"
