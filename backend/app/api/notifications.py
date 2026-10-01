@@ -1,24 +1,23 @@
-"""Webhook endpoint for Home Assistant action callbacks.
+"""Webhook endpoint for Home Assistant and ntfy action callbacks.
 
 The HA companion app sends `mobile_app_notification_action` events when
 the user taps an action button on one of our notifications. The user is
 expected to wire an HA automation that POSTs the relevant event fields
 here so we can act on the tap.
 
-Auth: `HOME_ASSISTANT_ACTION_SECRET`. When set, the request must include
-it via either `X-Notify-Secret` header or `?secret=` query param. When
-empty (local dev) the check is skipped.
+Home Assistant sends the shared secret in a header or query parameter. ntfy
+buttons carry a scoped signed payload; the permanent secret stays server-side.
 
-The endpoint is exempt from the email-allowlist middleware — HA has no
-session — so the shared secret IS the auth in production.
+The endpoint is exempt from the email-allowlist middleware.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -40,6 +39,7 @@ from app.services.notify import (
     ACTION_RESCHEDULE_TASK,
     clear_task_notification,
 )
+from app.services.ntfy import action_secret, verify_action
 from app.services.plan.schedule import schedule_task, scheduled_interval_for
 from app.services.points import adjust_points
 from app.services.task.close import close_task as close_task_svc
@@ -69,15 +69,27 @@ class ActionPayload(BaseModel):
     tag: str | None = None
     # Alternatively, the HA automation can pass `task_id` directly.
     task_id: str | None = None
+    expires: int | None = None
+    signature: str | None = None
 
 
-def _check_secret(request: Request) -> None:
-    expected = get_settings().home_assistant_action_secret
-    if not expected:
+def _check_secret(request: Request, payload: ActionPayload) -> None:
+    settings = get_settings()
+    secrets = tuple(filter(None, (
+        getattr(settings, "notify_action_secret", ""),
+        settings.home_assistant_action_secret,
+    )))
+    if not secrets:
         return
     provided = request.headers.get("x-notify-secret") or request.query_params.get("secret")
-    if provided != expected:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid notify secret")
+    if provided in secrets:
+        return
+    if payload.task_id is None and verify_action(
+        payload.action, payload.tag, payload.expires, payload.signature,
+        action_secret(settings),
+    ):
+        return
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid notify secret")
 
 
 def _resolve_task_id(payload: ActionPayload) -> uuid.UUID:
@@ -95,14 +107,43 @@ def _resolve_task_id(payload: ActionPayload) -> uuid.UUID:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid task id") from exc
 
 
+def _ntfy_cors_origin(request: Request) -> str | None:
+    settings = get_settings()
+    if getattr(settings, "notification_provider", "home_assistant") != "ntfy":
+        return None
+    parts = urlsplit(settings.ntfy_base_url)
+    allowed = f"{parts.scheme}://{parts.netloc}"
+    origin = request.headers.get("origin")
+    return allowed if origin == allowed else None
+
+
+@router.options("/actions", include_in_schema=False)
+def action_preflight(request: Request) -> Response:
+    origin = _ntfy_cors_origin(request)
+    if origin is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Origin not allowed")
+    return Response(status_code=204, headers={
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "600",
+        "Vary": "Origin",
+    })
+
+
 @router.post("/actions", status_code=status.HTTP_202_ACCEPTED)
 async def handle_action(
     payload: ActionPayload,
     request: Request,
+    response: Response = None,
     background_tasks: BackgroundTasks = None,
     session: Session = Depends(get_session),
 ) -> dict:
-    _check_secret(request)
+    _check_secret(request, payload)
+    origin = _ntfy_cors_origin(request)
+    if response is not None and origin is not None:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
 
     if payload.action == ACTION_DAY:
         schedule_day_action(background_tasks)

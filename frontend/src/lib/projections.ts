@@ -23,7 +23,7 @@ export interface EvidenceRow {
 export interface ToolRow {
   id: string;
   name: string;
-  status: "success" | "failed" | "skipped" | "denied" | "timed_out" | "called";
+  status: "success" | "failed" | "skipped" | "denied" | "timed_out" | "called" | "response";
   purpose: string;
   inputFields?: ProjectionField[];
   result?: string;
@@ -409,9 +409,20 @@ function toolRowsFromBlocks(
     resultQueues.set(name, [...(resultQueues.get(name) ?? []), result]);
   });
 
-  return arrayValue(blocks).flatMap((entry, index) => {
+  return arrayValue(blocks).flatMap<ToolRow>((entry, index) => {
     const block = asRecord(entry);
-    if (!block || stringValue(block.type) !== "tool_use") return [];
+    if (!block) return [];
+    if (block.type === "text") {
+      const text = stringValue(block.text);
+      return text ? [{
+        id: `${prefix}-response-${index + 1}`,
+        name: "model_response",
+        status: "response" as const,
+        purpose: "Model response",
+        result: text,
+      }] : [];
+    }
+    if (stringValue(block.type) !== "tool_use") return [];
     const name = stringValue(block.name) ?? "tool";
     const result = resultQueues.get(name)?.shift();
     const input = asRecord(block.input);

@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -211,6 +211,14 @@ class Settings(BaseSettings):
     commute_event_buffer_minutes: int = 5
     # Minimum gap between two events/tasks with no commute at the boundary.
     event_buffer_minutes: int = 15
+
+    # Push notification transport. HA remains the default for existing installs.
+    notification_provider: Literal["home_assistant", "ntfy", "none"] = "home_assistant"
+    ntfy_base_url: str = "https://ntfy.sh"
+    ntfy_topic: str = ""
+    ntfy_token: str = ""
+    notification_action_url: str = ""
+    notify_action_secret: str = ""
 
     # Home Assistant
     home_assistant_url: str = ""

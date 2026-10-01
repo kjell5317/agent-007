@@ -7,7 +7,7 @@
 
 `POST /points/adjust` is modeled on the notification-action webhook: it's
 exempt from the email-allowlist middleware so Home Assistant can call it with
-the shared `HOME_ASSISTANT_ACTION_SECRET` (via `X-Notify-Secret` header or
+the shared notification action secret (via `X-Notify-Secret` header or
 `?secret=`). A logged-in browser session (the topbar modal) is accepted too,
 so the secret never has to live in frontend code.
 """
@@ -70,11 +70,14 @@ def _check_access(request: Request) -> None:
     email = request.session.get("email") if hasattr(request, "session") else None
     if email and email.lower() in settings.auth_allowed_emails:
         return
-    expected = settings.home_assistant_action_secret
-    if not expected:
+    secrets = tuple(filter(None, (
+        getattr(settings, "notify_action_secret", ""),
+        settings.home_assistant_action_secret,
+    )))
+    if not secrets:
         return
     provided = request.headers.get("x-notify-secret") or request.query_params.get("secret")
-    if provided != expected:
+    if provided not in secrets:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid notify secret")
 
 

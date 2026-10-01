@@ -111,6 +111,9 @@ async def test_chat_normalizes_tools_messages_and_response(monkeypatch):
         "type": "tool",
         "name": "search_notes",
     }
+    assert llm._generation_kwargs("anthropic", 1024, force_tool="any")["tool_choice"] == {
+        "type": "any",
+    }
     # System message carries the ephemeral cache breakpoint so Anthropic caches
     # the tools → system prefix across iterations and runs.
     system_message = captured["messages"][0]

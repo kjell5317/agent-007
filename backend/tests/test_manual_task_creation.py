@@ -12,6 +12,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 from app.services.task import create as create_svc  # noqa: E402
 from app.services.task import queue as task_queue  # noqa: E402
 from app.agent.helpers import dispatch  # noqa: E402
+from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall  # noqa: E402
+from app.agent.manual import runner as manual_runner  # noqa: E402
 from app.db.clients.raw_inputs import SimilarInput  # noqa: E402
 
 
@@ -51,6 +53,92 @@ def _hit(**overrides) -> SimilarInput:
     }
     values.update(overrides)
     return SimilarInput(**values)
+
+
+@pytest.mark.asyncio
+async def test_manual_extraction_requires_terminal_tool_after_prose_with_candidates(monkeypatch):
+    candidate = _hit(status="closed", task_id=uuid.uuid4())
+    raw = SimpleNamespace(id=uuid.uuid4(), source="manual", content="Find my domain email",
+                          source_metadata={})
+    calls = []
+
+    async def fake_chat(messages, settings, **kwargs):
+        calls.append(kwargs)
+        tool_calls = () if len(calls) == 1 else (ToolCall(
+            id="create-1", name="create_task",
+            input={"title": "Find domain email address", "estimation": 15,
+                   "due_date": "2026-10-02T12:00:00-07:00"},
+        ),)
+        response = LLMMessage(role="assistant", text="I found no address" if not tool_calls else None,
+                              tool_calls=tool_calls)
+        return LLMResponse(message=response, tool_calls=tool_calls,
+                           text=response.text or "", stop_reason="stop", usage={},
+                           meta={}, provider="anthropic", model="test-model")
+
+    async def no_notes(*_args):
+        return None
+
+    monkeypatch.setattr(manual_runner, "chat", fake_chat)
+    monkeypatch.setattr(manual_runner, "_build_extract_message", lambda *_args: "task input")
+    monkeypatch.setattr(manual_runner, "save_notes", no_notes)
+    monkeypatch.setattr(manual_runner.labels_store, "agent_descriptions", lambda *_args: {})
+
+    fields, trace = await manual_runner.extract_task_fields(
+        SimpleNamespace(), raw, precedent_candidates=[candidate], include_trace=True,
+    )
+
+    assert fields["title"] == "Find domain email address"
+    assert calls[1]["force_tool"] == "any"
+    assert {tool["name"] for tool in calls[1]["tools"]} == {"create_task", "update_task"}
+    assert trace["iterations"][0]["blocks"] == [{"type": "text", "text": "I found no address"}]
+    assert len(trace["iterations"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_manual_extraction_failure_carries_prose_trace(monkeypatch):
+    raw = SimpleNamespace(id=uuid.uuid4(), source="manual", content="Find my domain email",
+                          source_metadata={})
+
+    async def prose_only(*_args, **_kwargs):
+        response = LLMMessage(role="assistant", text="No address found")
+        return LLMResponse(message=response, tool_calls=(), text="No address found",
+                           stop_reason="stop", usage={}, meta={},
+                           provider="anthropic", model="test-model")
+
+    monkeypatch.setattr(manual_runner, "chat", prose_only)
+    monkeypatch.setattr(manual_runner, "_build_extract_message", lambda *_args: "task input")
+    monkeypatch.setattr(manual_runner.labels_store, "agent_descriptions", lambda *_args: {})
+
+    with pytest.raises(manual_runner.ExtractionFailed) as exc:
+        await manual_runner.extract_task_fields(SimpleNamespace(), raw, include_trace=True)
+    assert len(exc.value.trace["iterations"]) == 2
+    assert exc.value.trace["iterations"][1]["blocks"][0]["text"] == "No address found"
+
+
+def test_failed_manual_creation_preserves_extraction_trace(monkeypatch):
+    raw = SimpleNamespace(id=uuid.uuid4(), task_id=None, processed_at=None,
+                          status="processing", agent_trace=None)
+
+    class FakeSessionLocal:
+        def __enter__(self):
+            return SimpleNamespace(commit=lambda: None)
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(task_queue, "SessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(task_queue.raw_inputs_store, "get", lambda *_args: raw)
+    monkeypatch.setattr(task_queue, "publish_input", lambda *_args: None)
+    error = manual_runner.ExtractionFailed("no terminal action", {
+        "branch": "manual",
+        "iterations": [{"blocks": [{"type": "text", "text": "No address found"}]}],
+    })
+
+    task_queue._mark_failed(raw.id, error)
+
+    assert raw.status == "not_task"
+    assert raw.agent_trace["outcome"] == "task_creation_failed"
+    assert raw.agent_trace["iterations"][0]["blocks"][0]["text"] == "No address found"
 
 
 @pytest.mark.asyncio

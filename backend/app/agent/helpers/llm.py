@@ -329,13 +329,16 @@ def _generation_kwargs(
             kwargs["thinking_level"] = thinking_level
         if force_tool:
             kwargs["tool_config"] = {
-                "function_calling_config": {"mode": "ANY", "allowed_function_names": [force_tool]}
+                "function_calling_config": {
+                    "mode": "ANY",
+                    **({} if force_tool == "any" else {"allowed_function_names": [force_tool]}),
+                }
             }
         return kwargs
     # Current Anthropic SDKs no longer accept sampling parameters.
     kwargs = {"max_tokens": max_tokens}
     if force_tool:
-        kwargs["tool_choice"] = _tool_choice(provider, force_tool)
+        kwargs["tool_choice"] = {"type": "any"} if force_tool == "any" else _tool_choice(provider, force_tool)
     return kwargs
 
 

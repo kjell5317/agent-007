@@ -293,7 +293,7 @@ function AgentTraceSection({ traceRecord, embeddingCost, title }: {
               </Section>
             )}
             {trace.tools.length > 0 && (
-              <Section title="Tool calls">
+              <Section title="Agent steps">
                 <div className="space-y-1">
                   {trace.tools.map((row) => (
                     <ToolItem key={row.id} row={row} />
@@ -445,7 +445,7 @@ function ToolItem({ row }: { row: ToolRow }) {
           {row.confidence}
         </span>
       )}
-      {row.status !== "success" && (
+      {row.status !== "success" && row.status !== "response" && (
         <span className="shrink-0 text-muted-foreground">
           {row.status.replace("_", " ")}
         </span>
@@ -495,6 +495,7 @@ function ToolItem({ row }: { row: ToolRow }) {
 }
 
 function toolStatusClass(status: ToolRow["status"]) {
+  if (status === "response") return "bg-slate-400";
   if (status === "success") return "bg-emerald-500";
   if (status === "failed" || status === "timed_out") return "bg-red-500";
   if (status === "denied") return "bg-orange-500";

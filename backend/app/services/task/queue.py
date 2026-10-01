@@ -97,9 +97,9 @@ async def _run(queue: asyncio.Queue[_QueueItem]) -> None:
             await _process(raw_input_id, user_fields, context_input_ids, followup_task_id)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 — never let one bad item kill the worker
+        except Exception as exc:  # noqa: BLE001 — never let one bad item kill the worker
             log.exception("task-creation failed · raw=%s", raw_input_id)
-            _mark_failed(raw_input_id)
+            _mark_failed(raw_input_id, exc)
         finally:
             queue.task_done()
 
@@ -429,7 +429,7 @@ def _attach_task_action_ref(
             result["result_summary"] = summary
 
 
-def _mark_failed(raw_input_id: uuid.UUID) -> None:
+def _mark_failed(raw_input_id: uuid.UUID, error: Exception | None = None) -> None:
     """Make sure clients polling on this raw_input don't spin forever.
 
     For a fresh manual create (processed_at=None) — flip to `not_task` so
@@ -443,15 +443,23 @@ def _mark_failed(raw_input_id: uuid.UUID) -> None:
             if raw is None:
                 return
             trace = dict(raw.agent_trace or {})
+            attempt_trace = getattr(error, "trace", None)
+            if not isinstance(attempt_trace, dict):
+                attempt_trace = {}
             pending_override = (trace.get("manual_override") or {}).get("outcome") == "processing"
             if raw.task_id is not None and not pending_override:
                 return
             if raw.processed_at is None:
                 raw.status = "not_task"
                 raw.processed_at = datetime.now(timezone.utc)
+                trace.update(attempt_trace)
                 trace["outcome"] = "task_creation_failed"
             else:
-                trace["manual_override"] = {"outcome": "task_creation_failed"}
+                trace["manual_override"] = {
+                    **(trace.get("manual_override") or {}),
+                    **attempt_trace,
+                    "outcome": "task_creation_failed",
+                }
             raw.agent_trace = trace
             session.commit()
             publish_input(session, raw_input_id)

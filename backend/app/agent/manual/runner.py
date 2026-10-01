@@ -38,6 +38,12 @@ from app.db.clients.raw_inputs import SimilarInput
 log = logging.getLogger(__name__)
 
 
+class ExtractionFailed(RuntimeError):
+    def __init__(self, message: str, trace: dict[str, Any]):
+        super().__init__(message)
+        self.trace = trace
+
+
 async def extract_task_fields(
     session: Session,
     raw,
@@ -101,13 +107,15 @@ async def extract_task_fields(
         trace["web_search"] = web_trace
     for attempt in range(MAX_TOOL_ITERATIONS - 1):
         is_last = attempt == MAX_TOOL_ITERATIONS - 2
-        # Only force creation when no existing task is a candidate.
+        # On the last turn, require a terminal action. Candidate matches need
+        # either create_task or update_task; without candidates only create_task fits.
+        call_tools = [create_tool, extract_tools[-1]] if is_last and candidate_task_ids else extract_tools
         resp = await chat(
             messages,
             settings,
             system_prompt=EXTRACT_FIELDS_SYSTEM_PROMPT,
-            tools=extract_tools,
-            force_tool="create_task" if is_last and not candidate_task_ids else None,
+            tools=call_tools,
+            force_tool=("any" if candidate_task_ids else "create_task") if is_last else None,
         )
         log.debug(
             "llm response · raw=%s attempt=%d stop_reason=%s input_tokens=%s output_tokens=%s",
@@ -127,9 +135,11 @@ async def extract_task_fields(
 
         tool_uses = list(resp.tool_calls)
         if not tool_uses:
-            raise RuntimeError(
-                "agent did not call any tool during field extraction"
-            )
+            if is_last:
+                raise ExtractionFailed("agent did not call a task tool during field extraction", trace)
+            messages.append(assistant_message(resp))
+            messages.append(user_message("Call create_task or update_task now. Do not reply in prose."))
+            continue
 
         # Execute search_notes calls before accepting a terminal create_task,
         # so mixed tool responses still leave a complete trace.
@@ -177,14 +187,17 @@ async def extract_task_fields(
             break
 
         if not search_uses:
-            raise RuntimeError(
+            raise ExtractionFailed(
                 f"unexpected tool calls during field extraction: "
-                f"{[tu.name for tu in tool_uses]}"
+                f"{[tu.name for tu in tool_uses]}", trace
             )
 
         # No terminal call yet — feed search_notes results back and continue.
         messages.append(assistant_message(resp))
         messages.extend(results)
+
+    if not payload:
+        raise ExtractionFailed("agent did not call a task tool during field extraction", trace)
 
     if "due_date" in payload:
         payload["due_date"] = normalize_agent_due_date(payload["due_date"])

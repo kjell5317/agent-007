@@ -48,3 +48,17 @@ test("includes estimated embedding and grounded search charges", () => {
   const embedding = { model: "gemini-embedding-001", estimated_input_tokens: 1000 };
   assert.equal(exports.estimateTraceCost(trace, embedding), "€0.0248");
 });
+
+test("projects prose in order with tool calls from failed extraction attempts", () => {
+  const trace = {
+    outcome: "task_creation_failed",
+    iterations: [{ blocks: [
+      { type: "tool_use", name: "search_notes", input: { query: "domain email" } },
+      { type: "text", text: "No address found" },
+    ] }],
+  };
+  const projected = exports.projectAgentTrace(trace);
+  assert.equal(projected.summary.find((field) => field.label === "Decision").value, "task_creation_failed");
+  assert.deepEqual(Array.from(projected.tools, (row) => row.name), ["search_notes", "model_response"]);
+  assert.equal(projected.tools[1].result, "No address found");
+});

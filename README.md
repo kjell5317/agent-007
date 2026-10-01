@@ -32,8 +32,8 @@ self-registering file, with no changes to the agent, storage, or API.
   blocked out, and rescheduling when an edit creates an overlap.
 - **Gamification** — a running points score (shown in the topbar) earned by
   completing tasks, adjustable by hand or from Home Assistant.
-- **Push notifications** — errors and updates are pushed via a Home Assistant
-  notify service (nothing fails silently).
+- **Push notifications** — errors and updates go through the selected Home
+  Assistant or ntfy provider, with task action buttons.
 - **Web UI** — a React/Vite single-page app for the inbox and tasks.
 
 ## Architecture
@@ -107,7 +107,10 @@ essentials:
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Google OAuth for SSO, Gmail, Calendar, and Google Health sleep access |
 | `SLACK_APPS` | Per-workspace Slack OAuth apps (JSON) |
 | `HOME_ADDRESS` | Origin/destination for commute planning |
-| `HOME_ASSISTANT_URL` / `_TOKEN` | Push notifications (optional) |
+| `NOTIFICATION_PROVIDER` | `home_assistant` (default), `ntfy`, or `none` |
+| `HOME_ASSISTANT_URL` / `_TOKEN` | Home Assistant notifications |
+| `NTFY_TOPIC` / `NTFY_BASE_URL` | ntfy topic and server; subscribe to the topic in the ntfy app |
+| `NOTIFY_ACTION_SECRET` | Signs ntfy action callbacks; required when using ntfy |
 | `AUTH_ALLOWED_EMAILS` / `SESSION_SECRET` | Google-SSO email allowlist for the UI |
 
 Runtime config that isn't secret lives in [`config/`](config/) — the personal,

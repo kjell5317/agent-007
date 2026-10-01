@@ -1,12 +1,11 @@
-"""Push notifications via Home Assistant's REST API.
+"""Compose notifications and route them to the configured push provider.
 
-Every task notification carries `tag="task-<id>"` so the HA companion app
-replaces stale notifications with fresh ones (one live notification per
-task). Tapping a task notification opens the task detail modal in the
-frontend.
+Every task notification carries `tag="task-<id>"` so supported clients can
+replace stale notifications with fresh ones. Tapping a task notification opens
+the task detail modal in the frontend.
 
 Fire-and-forget: a failure here MUST NOT propagate to the caller —
-otherwise a flaky HA install would turn into a flood of pipeline errors
+otherwise a flaky notification service would turn into a flood of pipeline errors
 that themselves want to fire notifications. We log and swallow.
 
 HA is disabled when either `HOME_ASSISTANT_URL` or `HOME_ASSISTANT_TOKEN`
@@ -67,7 +66,7 @@ async def notify(
     color: str | None = None,
     persistent: bool = False,
 ) -> None:
-    """Send a single notification through HA's notify.<service>.
+    """Send a single notification through the configured provider.
 
     `tag` lets the companion app replace stale notifications.
     `url` becomes `data.clickAction` (Android opens it on tap).
@@ -79,6 +78,20 @@ async def notify(
     requires a `tag`) — clear it programmatically via `clear_task_notification`.
     """
     s = get_settings()
+    if s.notification_provider == "none":
+        return
+    if s.notification_provider == "ntfy":
+        from app.services import ntfy
+
+        try:
+            await ntfy.send(
+                s, title, message, url=url, tag=tag,
+                actions=actions, importance=importance,
+            )
+            log.info("ntfy notify · sent title=%r tag=%r", title, tag)
+        except Exception as exc:  # noqa: BLE001 — notification failures must not break task work
+            log.warning("ntfy notify failed: %s", exc)
+        return
     if not s.home_assistant_url or not s.home_assistant_token:
         return
 
@@ -356,7 +369,7 @@ async def notify_calendar_event_updated(event) -> None:
 
 
 async def clear_notification_tag(tag: str) -> None:
-    """Remove a lingering tagged notification (companion-app magic payload)."""
+    """Remove a lingering tagged notification in the selected provider."""
     await notify(title="", message="clear_notification", tag=tag)
 
 
@@ -372,8 +385,7 @@ async def notify_points_penalty(task, *, points: int, reason: str) -> None:
 
 
 async def clear_task_notification(task_id: UUID | str) -> None:
-    """Tell the HA companion app to remove the lingering notification for a
-    task. Sent via the magic `message="clear_notification"` payload."""
+    """Remove a lingering task notification in the selected provider."""
     await notify(
         title="",
         message="clear_notification",

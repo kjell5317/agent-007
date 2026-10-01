@@ -70,6 +70,11 @@ async def _lifespan(_app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    if settings.notification_provider == "ntfy":
+        if not settings.ntfy_topic.strip():
+            raise RuntimeError("NTFY_TOPIC is required when NOTIFICATION_PROVIDER=ntfy")
+        if not (settings.notify_action_secret or settings.home_assistant_action_secret):
+            raise RuntimeError("NOTIFY_ACTION_SECRET is required when NOTIFICATION_PROVIDER=ntfy")
     _configure_logging(settings.log_level)
     observability.init_langfuse(settings)
     app = FastAPI(
