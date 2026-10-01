@@ -41,11 +41,6 @@ export function NotesPanel() {
 
   return (
     <div className="space-y-2">
-      <div className="flex justify-end">
-        <Button variant="ghost" size="sm" onClick={() => void refresh()}>
-          Refresh notes
-        </Button>
-      </div>
       {notes.map((note) => (
         <NoteCard
           key={note.id}

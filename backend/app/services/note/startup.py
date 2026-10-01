@@ -30,7 +30,7 @@ async def moderate_existing_notes() -> None:
                 )).one()
                 note = session.execute(text(
                     "SELECT id, created_at FROM notes WHERE "
-                    "(:last_at IS NULL OR (created_at, id) > "
+                    "(CAST(:last_at AS timestamptz) IS NULL OR (created_at, id) > "
                     "(CAST(:last_at AS timestamptz), CAST(:last_id AS uuid))) "
                     "ORDER BY created_at, id LIMIT 1"
                 ), {"last_at": checkpoint.last_created_at,

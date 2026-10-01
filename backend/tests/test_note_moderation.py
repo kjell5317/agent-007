@@ -5,6 +5,7 @@ import pytest
 
 from app.agent.helpers import llm
 from app.services.note import moderate
+from app.services.note import startup
 
 
 @pytest.mark.asyncio
@@ -25,6 +26,38 @@ async def test_exact_note_is_skipped_and_source_is_recorded(monkeypatch):
     )
     assert decision.action == "skip"
     assert linked == [(note_id, source_id)]
+
+
+@pytest.mark.asyncio
+async def test_historical_moderation_accepts_null_initial_checkpoint(monkeypatch):
+    class Session:
+        committed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "pg_try_advisory_xact_lock" in sql:
+                return SimpleNamespace(scalar=lambda: True)
+            if "FROM note_moderation_checkpoint" in sql:
+                return SimpleNamespace(one=lambda: SimpleNamespace(
+                    last_created_at=None, last_note_id=None,
+                ))
+            assert "CAST(:last_at AS timestamptz) IS NULL" in sql
+            assert params == {"last_at": None, "last_id": None}
+            return SimpleNamespace(first=lambda: None)
+
+        def commit(self):
+            self.committed = True
+
+    session = Session()
+    monkeypatch.setattr(startup, "SessionLocal", lambda: session)
+    await startup.moderate_existing_notes()
+    assert session.committed
 
 
 @pytest.mark.asyncio
