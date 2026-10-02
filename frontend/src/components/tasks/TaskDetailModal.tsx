@@ -68,7 +68,7 @@ const TEXT_LABEL: Record<TextField, string> = {
 };
 
 const TASK_SUMMARY_BADGE_BUTTON_CLASS =
-  "relative inline-flex h-8 items-center justify-center overflow-hidden rounded-full text-xs font-medium transition-colors before:pointer-events-none before:absolute before:inset-0 before:z-10 before:rounded-full before:bg-foreground/0 before:content-[''] before:transition-colors hover:before:bg-foreground/[0.06] disabled:pointer-events-none disabled:opacity-50 dark:hover:before:bg-white/[0.08]";
+  "relative isolate inline-flex h-8 items-center justify-center overflow-hidden rounded-full text-xs font-medium transition-colors before:pointer-events-none before:absolute before:inset-0 before:z-10 before:rounded-full before:bg-foreground/0 before:content-[''] before:transition-colors hover:before:bg-foreground/[0.06] disabled:pointer-events-none disabled:opacity-50 dark:hover:before:bg-white/[0.08]";
 const TASK_SUMMARY_BADGE_CONTENT_CLASS =
   "relative z-20 inline-flex h-full items-center gap-1 rounded-full border border-transparent px-3";
 const TASK_SUMMARY_MUTED_BADGE_CLASS = "bg-muted text-muted-foreground";
@@ -406,7 +406,7 @@ export function TaskDetailModal({
       backdropClassName="max-sm:p-0"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl max-sm:h-dvh max-sm:max-h-dvh max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:p-0"
       header={
-        <div className="relative z-30 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
+        <div className="relative z-50 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
           <div className="flex items-center gap-3">
             <Button type="button" size="icon" variant="ghost" onClick={onClose} aria-label={editingText || activePicker ? "Cancel and close" : "Back"} className="h-12 w-12 shrink-0">
               <ArrowLeft className="h-5 w-5" />
@@ -699,24 +699,11 @@ function TaskSummary({
                 onClose={onClosePicker}
                 onSave={onSavePicker}
                 busy={busy}
+                showSave={dateStep === "time"}
                 onEditDate={
                   dateStep === "time"
                     ? () => onDateStepChange("date")
                     : undefined
-                }
-                footer={
-                  pickerDue && !task.is_container ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => onPickerDueChange(null)}
-                      disabled={busy}
-                    >
-                      Clear due date
-                    </Button>
-                  ) : null
                 }
               >
                 <DatePicker
@@ -1256,7 +1243,7 @@ function PickerAnchor({
   }, [open, onClose]);
 
   return (
-    <div ref={anchorRef} className="relative inline-flex">
+    <div ref={anchorRef} className={cn("relative inline-flex", open && "z-40")}>
       {children}
       {open && panel}
     </div>
@@ -1266,29 +1253,29 @@ function PickerAnchor({
 function InlinePickerPanel({
   title,
   children,
-  footer,
   onEditDate,
   onClose,
   onSave,
   busy,
+  showSave = true,
 }: {
   title: string;
   children: ReactNode;
-  footer?: ReactNode;
   onEditDate?: () => void;
   onClose: () => void;
   onSave: () => void;
   busy: boolean;
+  showSave?: boolean;
 }) {
   return (
     <div
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
-      className="fixed inset-x-0 bottom-0 top-[72px] z-20 flex items-start justify-center overflow-y-auto bg-card p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:block sm:overflow-visible sm:p-0"
+      className="fixed inset-x-0 bottom-0 top-[72px] z-40 flex items-start justify-center overflow-y-auto bg-card p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:block sm:overflow-visible sm:p-0"
     >
       <div
-        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
+        className="isolate flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
       >
         <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
           <div>
@@ -1311,11 +1298,12 @@ function InlinePickerPanel({
         </div>
         <div className="min-h-0 space-y-3 overflow-y-auto">
           {children}
-          {footer}
         </div>
-        <Button type="button" onClick={onSave} disabled={busy} className="mt-3 w-full shrink-0">
-          Save
-        </Button>
+        {showSave && (
+          <Button type="button" onClick={onSave} disabled={busy} className="mt-3 w-full shrink-0">
+            Save
+          </Button>
+        )}
       </div>
     </div>
   );
