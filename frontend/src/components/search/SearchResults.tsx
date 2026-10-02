@@ -111,12 +111,11 @@ export function SearchResults({
       fetchedInputs.forEach((result) => {
         if (result.status === "fulfilled") inputMap.set(result.value.id, result.value);
       });
-      const openTaskIds = new Set(tasksRef.current.filter((task) => task.status === "open").map((task) => task.id));
       const available = all.filter((hit) => {
         if (hit.type === "task") return taskMap.has(hit.id);
         if (hit.type !== "input") return true;
         const input = inputMap.get(hit.id);
-        return Boolean(input && (input.source === "subtask" || (input.status !== "open" && (!input.task_id || !openTaskIds.has(input.task_id)))));
+        return Boolean(input && !input.task_id && input.status !== "open");
       });
       const taskIds = new Set(available.filter((hit) => hit.type === "task").map((hit) => hit.id));
       const seen = new Set<string>();

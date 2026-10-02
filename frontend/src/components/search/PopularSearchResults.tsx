@@ -42,7 +42,7 @@ export function PopularSearchResults({ tasks, inputs, onOpenTask, onChanged }: {
         if (hit.type === "task") return taskMap.has(hit.id);
         if (hit.type === "input") return inputMap.has(hit.id);
         return !hit.task_id || !shownTaskIds.has(hit.task_id);
-      }).slice(0, 10));
+      }).slice(0, 5));
     }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -51,7 +51,6 @@ export function PopularSearchResults({ tasks, inputs, onOpenTask, onChanged }: {
 
   return (
     <div className="space-y-2">
-      <p className="px-1 text-xs font-medium text-muted-foreground">Most opened</p>
       {hits.map((hit) => (
         <SearchResultRow
           key={`${hit.type}:${hit.id}`}

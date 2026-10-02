@@ -12,7 +12,6 @@ import {
   Github,
   Link2,
   MapPin,
-  Pencil,
   RefreshCw,
   RotateCcw,
   Timer,
@@ -407,8 +406,8 @@ export function TaskDetailModal({
       backdropClassName="max-sm:p-0"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl max-sm:h-dvh max-sm:max-h-dvh max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:p-0"
       header={
-        <div className="relative z-30 flex h-[72px] shrink-0 items-center justify-between border-b bg-card px-4 sm:mb-3 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
-          <div className="flex items-center gap-1">
+        <div className="relative z-30 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:mb-3 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
+          <div className="flex items-center gap-3">
             <Button type="button" size="icon" variant="ghost" onClick={onClose} aria-label={editingText || activePicker ? "Cancel and close" : "Back"} className="h-12 w-12 shrink-0">
               <ArrowLeft className="h-5 w-5" />
             </Button>
@@ -418,7 +417,17 @@ export function TaskDetailModal({
               </Button>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-3">
+            {current.status !== "open" && !kotxTask && (
+              <TaskSummaryIconButton
+                label="Re-open task"
+                disabled={busy}
+                onClick={reopenCurrentTask}
+                className="h-12 w-12 shrink-0 text-muted-foreground hover:text-primary"
+              >
+                <RotateCcw className="h-5 w-5" />
+              </TaskSummaryIconButton>
+            )}
             {current.status === "open" && !current.is_container && (
               <Button
                 type="button"
@@ -445,6 +454,7 @@ export function TaskDetailModal({
                   label="Split into subtasks"
                   disabled={busy}
                   onClick={splitCurrentTask}
+                  className="h-12 w-12 shrink-0"
                 >
                   <GitFork className="h-5 w-5" />
                 </TaskSummaryIconButton>
@@ -456,7 +466,7 @@ export function TaskDetailModal({
                   label="Mark not a task"
                   disabled={busy}
                   onClick={dismissTask}
-                  className="hover:text-destructive"
+                  className="h-12 w-12 shrink-0 hover:text-destructive"
                 >
                   <Trash2 className="h-5 w-5" />
                 </TaskSummaryIconButton>
@@ -503,7 +513,6 @@ export function TaskDetailModal({
           onPickerDueChange={setPickerDue}
           onPickerEstimationChange={setPickerEstimation}
           onPickerLabelChange={setPickerLabel}
-          onReopenTask={reopenCurrentTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
           onKotxActionPendingChange={setKotxActionPending}
@@ -549,7 +558,6 @@ function TaskTitleHeader({
       className="group flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1 text-left text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
     >
       <span className="min-w-0 flex-1 break-words">{task.title}</span>
-      <Pencil className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   );
 }
@@ -583,7 +591,6 @@ function TaskSummary({
   onPickerDueChange,
   onPickerEstimationChange,
   onPickerLabelChange,
-  onReopenTask,
   onReschedule,
   onCreateGithubIssue,
   onKotxActionPendingChange,
@@ -616,7 +623,6 @@ function TaskSummary({
   onPickerDueChange: (value: string | null) => void;
   onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
-  onReopenTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
   onKotxActionPendingChange: (pending: boolean) => void;
@@ -647,17 +653,6 @@ function TaskSummary({
       <div className="space-y-5">
         {title}
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
-          {task.status !== "open" && !kotxTask ? (
-            <TaskSummaryIconButton
-              label="Re-open task"
-              disabled={busy}
-              onClick={onReopenTask}
-              className="text-muted-foreground hover:text-primary"
-            >
-              <RotateCcw className="h-5 w-5" />
-            </TaskSummaryIconButton>
-          ) : null}
-
           <PickerAnchor
             open={activePicker === "label"}
             panel={
@@ -978,13 +973,26 @@ function EditableTextBlock({
     );
   }
 
-  // Rendered markdown can contain links, so it can't sit inside the click-to-
-  // edit <button> (nested <a>, and clicks would trigger an edit). Lay it out as
-  // a plain block with a dedicated edit pencil instead. Empty descriptions fall
-  // through to the button below so "Add description" stays one tap.
+  // Rendered markdown can contain links, so keep its edit target outside a button.
+  // Links remain clickable; the rest of the block opens the editor.
   if (markdown && value) {
     return (
-      <div className="group relative flex w-full min-w-0 items-start gap-3 rounded-lg p-2 transition-colors hover:bg-accent/60">
+      <div
+        role="button"
+        tabIndex={busy ? -1 : 0}
+        aria-label={`Edit ${TEXT_LABEL[field]}`}
+        aria-disabled={busy}
+        onClick={(event) => {
+          if (!busy && !(event.target as HTMLElement).closest("a,button")) onEdit();
+        }}
+        onKeyDown={(event) => {
+          if (!busy && event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            onEdit();
+          }
+        }}
+        className="flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-lg p-2 transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         {icon && (
           <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
         )}
@@ -994,15 +1002,6 @@ function EditableTextBlock({
           </span>
           <Markdown content={value} className="mt-1" />
         </span>
-        <button
-          type="button"
-          onClick={onEdit}
-          disabled={busy}
-          aria-label={`Edit ${TEXT_LABEL[field]}`}
-          className="shrink-0 self-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
-        >
-          <Pencil className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-        </button>
       </div>
     );
   }
@@ -1036,7 +1035,6 @@ function EditableTextBlock({
           </span>
         )}
       </span>
-      <Pencil className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   );
 }
@@ -1096,7 +1094,6 @@ function LinksSection({
             {task.link || "Add link"}
           </span>
         </span>
-        <Pencil className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </button>
       <div className="flex flex-col items-start gap-0.5">
         {task.link && (

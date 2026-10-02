@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, Pencil, Trash2 } from "lucide-react";
+import { Check, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,31 +22,29 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   const [mode, setMode] = useState<Mode>("view");
   const [draft, setDraft] = useState(note.content);
   const [busy, setBusy] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [history, setHistory] = useState<NoteAudit[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const hasHistory = note.history_count > 0;
 
-  const toggleHistory = async () => {
-    if (!hasHistory || loadingHistory) return;
-    if (showHistory) {
-      setShowHistory(false);
-      return;
-    }
+  const loadHistory = async () => {
+    if (!hasHistory || loadingHistory || history !== null) return;
     setHistoryError(null);
     setLoadingHistory(true);
     try {
       const entries = await api.noteHistory(note.id);
       setHistory(entries);
-      setShowHistory(entries.length > 0);
     } catch (e) {
       setHistoryError((e as Error).message);
-      setShowHistory(true);
     } finally {
       setLoadingHistory(false);
     }
+  };
+
+  const toggleExpanded = () => {
+    if (!expanded) void loadHistory();
+    setExpanded(!expanded);
   };
 
   const startEdit = () => {
@@ -68,7 +66,6 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
     try {
       const updated = await api.updateNote(note.id, content);
       onSaved(updated);
-      setShowHistory(false);
       setHistory(null);
       toast.success("Note updated");
       setMode("view");
@@ -134,13 +131,13 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
         className="cursor-pointer"
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          setExpanded((current) => !current);
+          toggleExpanded();
         }}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setExpanded((current) => !current);
+            toggleExpanded();
           }
         }}
       >
@@ -171,14 +168,8 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
             disabled={busy}
             onClick={startEdit}
           />
-          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} aria-hidden="true" />
         </div>
-        {expanded && hasHistory && (
-          <Button type="button" variant="ghost" size="sm" className="ml-8 mt-2" onClick={(e) => { e.stopPropagation(); void toggleHistory(); }}>
-            {showHistory ? "Hide history" : "History"}
-          </Button>
-        )}
-        <Collapsible open={expanded && showHistory}>
+        <Collapsible open={expanded && hasHistory}>
           <div className="mt-3 space-y-2 border-t pt-3 text-xs" onClick={(e) => e.stopPropagation()}>
             {historyError && <p className="text-destructive">{historyError}</p>}
             {history?.length === 100 && (
@@ -193,7 +184,6 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
                 {entry.action === "content_updated" && (
                   <div className="space-y-1 text-muted-foreground">
                     <div className="whitespace-pre-wrap break-words">Before: {entry.old_content}</div>
-                    <div className="whitespace-pre-wrap break-words">After: {entry.new_content}</div>
                   </div>
                 )}
               </div>
