@@ -116,7 +116,7 @@ export function SearchResults({
         if (hit.type === "task") return taskMap.has(hit.id);
         if (hit.type !== "input") return true;
         const input = inputMap.get(hit.id);
-        return Boolean(input && (input.source === "subtask" || !input.task_id || !openTaskIds.has(input.task_id)));
+        return Boolean(input && (input.source === "subtask" || (input.status !== "open" && (!input.task_id || !openTaskIds.has(input.task_id)))));
       });
       const taskIds = new Set(available.filter((hit) => hit.type === "task").map((hit) => hit.id));
       const seen = new Set<string>();
