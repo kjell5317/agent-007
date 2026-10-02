@@ -54,6 +54,7 @@ class Task(Base):
     )
     is_container: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     due_date_derived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    subtask_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Link to the kotx coding-agent task driving this work, when there is one.
     # One 007 task per kotx task; transitions arrive via webhook/poll and are

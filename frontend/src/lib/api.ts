@@ -66,6 +66,13 @@ export const api = {
     request<Task[]>(`/tasks${status ? `?status=${status}` : ""}`),
   getTask: (id: string) => request<Task>(`/tasks/${id}`),
   splitTask: (id: string) => request<Task>(`/tasks/${id}/split`, { method: "POST" }),
+  splitTaskDeterministic: (id: string) => request<Task>(`/tasks/${id}/split_deterministic`, { method: "POST" }),
+  addSubtask: (id: string, title: string) => request<Task>(`/tasks/${id}/subtasks`, {
+    method: "POST", body: JSON.stringify({ title }),
+  }),
+  reorderSubtasks: (id: string, order: string[]) => request<Task>(`/tasks/${id}/subtasks/order`, {
+    method: "PUT", body: JSON.stringify(order),
+  }),
   createTask: (text: string) =>
     request<TaskCreationAccepted>("/tasks", {
       method: "POST",

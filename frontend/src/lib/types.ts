@@ -30,6 +30,7 @@ export interface Task {
   depends_on_task_id: string | null;
   is_container: boolean;
   due_date_derived: boolean;
+  subtask_order: number | null;
   subtasks: SubtaskSummary[];
   status: TaskStatus;
   is_manual: boolean;

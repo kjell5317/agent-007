@@ -31,6 +31,7 @@ class TaskBase(BaseModel):
     depends_on_task_id: uuid.UUID | None = None
     is_container: bool = False
     due_date_derived: bool = False
+    subtask_order: int | None = None
 
 
 class TaskCreate(TaskBase):
@@ -192,6 +193,7 @@ class TaskRead(TaskBase):
                 "depends_on_task_id": getattr(task, "depends_on_task_id", None),
                 "is_container": getattr(task, "is_container", False),
                 "due_date_derived": getattr(task, "due_date_derived", False),
+                "subtask_order": getattr(task, "subtask_order", None),
                 "status": status_,
                 "is_manual": is_manual,
                 "kotx_task_id": getattr(task, "kotx_task_id", None),

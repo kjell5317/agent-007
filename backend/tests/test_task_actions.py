@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
@@ -69,9 +69,10 @@ def _patch_read_helpers(monkeypatch, task):
 
 
 @pytest.mark.asyncio
-async def test_reschedule_task_calls_scheduler_and_publishes(monkeypatch):
+async def test_reschedule_returns_before_scheduler_runs(monkeypatch):
     task = _task()
     session = FakeSession()
+    queued = BackgroundTasks()
     calls = []
     published = []
 
@@ -80,37 +81,49 @@ async def test_reschedule_task_calls_scheduler_and_publishes(monkeypatch):
         row.scheduled_date = datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc)
         return (row.scheduled_date, datetime(2026, 7, 1, 14, 30, tzinfo=timezone.utc))
 
+    class SessionContext:
+        def __enter__(self): return session
+        def __exit__(self, *_args): return None
+
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
     monkeypatch.setattr(tasks_api, "schedule_task", fake_schedule_task)
     monkeypatch.setattr(tasks_api, "publish_task", lambda _session, task_id: published.append(task_id))
     _patch_read_helpers(monkeypatch, task)
 
-    read = await tasks_api.reschedule_task(task.id, session=session)
-
+    read = await tasks_api.reschedule_task(task.id, queued, session=session)
+    assert calls == []
+    assert read.scheduled_date == datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    await queued()
     assert len(calls) == 1
     assert calls[0][:2] == (session, task)
-    # The reschedule button must block the task's current slot so the planner
-    # can't re-pick it — otherwise reschedule is a no-op on a task with free time.
     assert calls[0][2] is not None
     assert published == [task.id]
-    assert read.scheduled_date == datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
-async def test_reschedule_task_returns_clear_error_when_unschedulable(monkeypatch):
+async def test_reschedule_failure_notifies(monkeypatch):
     task = _task()
+    notifications = []
+    session = FakeSession()
+
+    class SessionContext:
+        def __enter__(self): return session
+        def __exit__(self, *_args): return None
 
     async def fake_schedule_task(_session, _task, *, block=None):
         return None
 
+    async def fake_notify(title, exc, *, context=None):
+        notifications.append((title, str(exc), context))
+
+    from app.services import notify
+    monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
     monkeypatch.setattr(tasks_api, "schedule_task", fake_schedule_task)
-
-    with pytest.raises(HTTPException) as exc:
-        await tasks_api.reschedule_task(task.id, session=FakeSession())
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "Task could not be scheduled"
+    monkeypatch.setattr(notify, "notify_error", fake_notify)
+    await tasks_api._reschedule_in_background(task.id)
+    assert notifications == [("Task rescheduling failed", "Task could not be scheduled", task.title)]
 
 
 @pytest.mark.asyncio

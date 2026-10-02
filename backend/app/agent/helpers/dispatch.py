@@ -24,7 +24,7 @@ from app.services.event_context import apply_event_context
 # stripped before patching (`status` drives the lifecycle, not a column;
 # `notes` is long-term memory the runners persist separately).
 _NON_PATCH_FIELDS = frozenset(
-    {"existing_task_id", "reason", "confidence", "status", "notes", "due_date_is_explicit"}
+    {"existing_task_id", "reason", "confidence", "status", "notes", "due_date_is_explicit", "manually_set_duration"}
 )
 
 
@@ -67,7 +67,8 @@ async def apply_task_action(
             # update service, which owns the "Task created" / warning-clear
             # notification. Non-plan edits are intentionally silent.
             try:
-                await update_task_svc(session, task.id, patch)
+                options = {"auto_split": False} if tu_input.get("manually_set_duration") else {}
+                await update_task_svc(session, task.id, patch, **options)
             except LookupError:
                 pass
 

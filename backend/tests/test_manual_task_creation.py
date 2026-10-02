@@ -761,12 +761,14 @@ async def test_manual_queue_preserves_prior_trace_under_manual_override(monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheduling_fails", [False, True])
-async def test_creation_published_before_calendar_scheduling(monkeypatch, scheduling_fails):
+@pytest.mark.parametrize("estimation", [30, 240])
+async def test_creation_published_before_calendar_scheduling(monkeypatch, scheduling_fails, estimation):
     raw_id, task_id = uuid.uuid4(), uuid.uuid4()
     raw = SimpleNamespace(
         id=raw_id, task_id=None, processed_at=None, agent_trace=None, status="processing"
     )
     events = []
+    split_calls = []
     session = SimpleNamespace(commit=lambda: events.append("commit"))
 
     class FakeSessionLocal:
@@ -791,13 +793,18 @@ async def test_creation_published_before_calendar_scheduling(monkeypatch, schedu
         task_queue.tasks_store, "create", lambda *_: SimpleNamespace(id=task_id)
     )
     monkeypatch.setattr(task_queue, "schedule_task", schedule)
+    async def maybe_split(_session, _task):
+        split_calls.append(_task.id)
+        return []
+    monkeypatch.setattr(task_queue, "maybe_split_task", maybe_split)
     monkeypatch.setattr(task_queue, "publish_task", lambda *_: events.append("task"))
     monkeypatch.setattr(task_queue, "publish_input", lambda *_: events.append("input"))
     fields = {
         "title": "Test task",
-        "estimation": 30,
+        "estimation": estimation,
         "due_date": datetime(2026, 7, 3, 9, 0, tzinfo=timezone.utc),
     }
     await task_queue._process(raw_id, fields, [])
     assert events == ["commit", "task", "input", "schedule", "commit", "input", "task"]
+    assert split_calls == ([] if estimation > 180 else [task_id])
     assert raw.agent_trace["scheduling"] == "failed"

@@ -5,6 +5,7 @@ interface Props {
   // Minutes, or null when no estimate is set.
   value: number | null;
   onChange: (next: number | null) => void;
+  allowNone?: boolean;
 }
 
 const STEP_MIN = 5;
@@ -18,10 +19,10 @@ function fmt(value: number | null): string {
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
-export function EstimationPicker({ value, onChange }: Props) {
+export function EstimationPicker({ value, onChange, allowNone = true }: Props) {
   const shift = (delta: number) => {
     const base = value ?? 0;
-    const next = Math.max(0, base + delta);
+    const next = Math.max(allowNone ? 0 : STEP_MIN, base + delta);
     onChange(next === 0 ? null : next);
   };
 
@@ -32,7 +33,7 @@ export function EstimationPicker({ value, onChange }: Props) {
           <StepButton
             label="Decrease"
             onClick={() => shift(-STEP_MIN)}
-            disabled={(value ?? 0) === 0}
+            disabled={(value ?? 0) <= (allowNone ? 0 : STEP_MIN)}
           >
             <Minus className="h-4 w-4" />
           </StepButton>
@@ -66,18 +67,20 @@ export function EstimationPicker({ value, onChange }: Props) {
               </button>
             );
           })}
-          <button
-            type="button"
-            onClick={() => onChange(null)}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-              value === null
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-input text-muted-foreground hover:bg-accent hover:text-foreground",
-            )}
-          >
-            None
-          </button>
+          {allowNone && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                value === null
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-input text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              None
+            </button>
+          )}
         </div>
       </div>
 

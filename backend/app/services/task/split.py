@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -147,13 +148,101 @@ async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
 
 
 def _deadlines(parent_due: datetime, plans: list[SubtaskPlan]) -> list[datetime]:
-    due = [min(parent_due, p.due_date) if p.due_date else parent_due for p in plans]
+    due = [parent_due] * len(plans)
+    cursor = parent_due
     for index in range(len(plans) - 1, -1, -1):
-        predecessor = plans[index].depends_on
-        if predecessor is not None:
-            latest = due[index] - timedelta(minutes=plans[index].estimation + 15)
-            due[predecessor] = min(due[predecessor], latest)
+        due[index] = cursor
+        cursor -= timedelta(minutes=plans[index].estimation + 15)
     return due
+
+
+def reflow_children(session: Session, parent: Task, children: list[Task] | None = None) -> list[Task]:
+    """Keep the final child at the parent deadline and space earlier children backwards."""
+    children = children if children is not None else tasks_store.children(session, parent.id)
+    cursor = parent.due_date
+    for index in range(len(children) - 1, -1, -1):
+        child = children[index]
+        child.subtask_order = index
+        child.due_date = cursor
+        child.due_date_derived = True
+        child.depends_on_task_id = children[index - 1].id if index else None
+        cursor -= timedelta(minutes=(getattr(child, "estimation", None) or 30) + 15)
+    parent.estimation = sum(getattr(child, "estimation", None) or 30 for child in children)
+    session.commit()
+    publish_task(session, parent.id)
+    for child in children:
+        publish_task(session, child.id)
+    return children
+
+
+def roman(number: int) -> str:
+    result = ""
+    for value, symbol in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+                          (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+                          (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        count, number = divmod(number, value)
+        result += symbol * count
+    return result
+
+
+def create_subtask(session: Session, parent: Task, title: str) -> Task:
+    title = title.strip()
+    if not title:
+        raise ValueError("Subtask title is required")
+    children = tasks_store.children(session, parent.id)
+    child = tasks_store.create(session, TaskCreate(
+        title=title[:512], description=parent.description, link=parent.link,
+        due_date=parent.due_date, estimation=30, location=parent.location,
+        label=parent.label, parent_task_id=parent.id, due_date_derived=True,
+        related_event_id=parent.related_event_id,
+        related_event_calendar_id=parent.related_event_calendar_id,
+        related_event_due_derived=False,
+        subtask_order=len(children),
+    ))
+    session.add(RawInput(
+        source="subtask", content=title, status="open", task_id=child.id,
+        source_metadata={"parent_task_id": str(parent.id), "parent_title": parent.title},
+        processed_at=datetime.now(timezone.utc),
+    ))
+    parent.is_container = True
+    if not children:
+        parent.scheduled_date = None
+    reflow_children(session, parent, [*children, child])
+    return child
+
+
+def split_deterministically(session: Session, task: Task) -> list[Task]:
+    if task.parent_task_id or task.is_container:
+        raise ValueError("Only a standalone task can be split")
+    duration = task.estimation or 0
+    if duration <= 0:
+        raise ValueError("Set a duration before splitting")
+    count = max(2, math.ceil(duration / 60))
+    quotient, remainder = divmod(duration, count)
+    children = []
+    for index in range(count):
+        estimate = quotient + (1 if index < remainder else 0)
+        suffix = f" {roman(index + 1)}"
+        child = tasks_store.create(session, TaskCreate(
+            title=f"{task.title[:512 - len(suffix)]}{suffix}",
+            description=task.description, link=task.link, location=task.location,
+            label=task.label, due_date=task.due_date, estimation=estimate,
+            parent_task_id=task.id, due_date_derived=True,
+            related_event_id=task.related_event_id,
+            related_event_calendar_id=task.related_event_calendar_id,
+            related_event_due_derived=False,
+            subtask_order=index,
+        ))
+        session.add(RawInput(
+            source="subtask", content=child.title, status="open", task_id=child.id,
+            source_metadata={"parent_task_id": str(task.id), "parent_title": task.title},
+            processed_at=datetime.now(timezone.utc),
+        ))
+        children.append(child)
+    task.is_container = True
+    task.scheduled_date = None
+    reflow_children(session, task, children)
+    return children
 
 
 async def split_task(
@@ -182,6 +271,7 @@ async def split_task(
             parent_task_id=task.id,
             depends_on_task_id=children[plan.depends_on].id if plan.depends_on is not None else None,
             due_date_derived=plan.due_date is None,
+            subtask_order=index,
         ))
         children.append(child)
         session.add(RawInput(
@@ -192,6 +282,7 @@ async def split_task(
         ))
     task.is_container = True
     task.due_date = children[-1].due_date
+    task.estimation = sum(getattr(child, "estimation", None) or 30 for child in children)
     session.commit()
     if task.calendar_event_id:
         await delete_task_event(session, task)
@@ -215,64 +306,3 @@ async def maybe_split_task(session: Session, task: Task) -> list[Task]:
     except Exception:  # noqa: BLE001 — original task remains actionable
         log.exception("automatic task split failed · task=%s", task.id)
         return []
-
-
-async def refresh_child_deadlines(session: Session, parent: Task) -> None:
-    children = tasks_store.children(session, parent.id)
-    if not children:
-        return
-    index = {child.id: position for position, child in enumerate(children)}
-    plans = [SubtaskPlan(
-        title=child.title, description=child.description,
-        estimation=child.estimation or 30,
-        depends_on=index.get(child.depends_on_task_id),
-        due_date=None if child.due_date_derived else child.due_date,
-    ) for child in children]
-    deadlines = _deadlines(parent.due_date, plans)
-    from app.services.task.update import update_task
-    for child, due in zip(children, deadlines):
-        if child.due_date_derived and child.due_date != due:
-            await update_task(
-                session, child.id,
-                {"due_date": due, "due_date_derived": True},
-                cascade_deadline=False,
-            )
-    await sync_parent_deadline(session, parent, children)
-
-
-async def sync_parent_deadline(
-    session: Session, parent: Task, children: list[Task] | None = None
-) -> None:
-    """The container deadline is the deadline of its last child."""
-    children = children if children is not None else tasks_store.children(session, parent.id)
-    if children and parent.due_date != children[-1].due_date:
-        from app.services.task.update import update_task
-
-        await update_task(
-            session, parent.id, {"due_date": children[-1].due_date},
-            cascade_deadline=False,
-        )
-
-
-async def shift_group_deadlines(
-    session: Session, parent: Task, delta: timedelta, *, edited_child_id=None
-) -> None:
-    """Move child dates together and keep the parent on the last child."""
-    from app.services.task.update import update_task
-
-    children = tasks_store.children(session, parent.id)
-    for child in children:
-        if child.id == edited_child_id:
-            continue
-        if not delta:
-            continue
-        await update_task(
-            session, child.id,
-            {
-                "due_date": child.due_date + delta,
-                # A manual child edit overrides the generated sibling timeline.
-                "due_date_derived": child.due_date_derived if edited_child_id is None else False,
-            },
-            cascade_deadline=False,
-        )
-    await sync_parent_deadline(session, parent, children)

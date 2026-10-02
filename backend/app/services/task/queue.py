@@ -181,6 +181,7 @@ async def _process(
             action_fields = {
                 **agent_fields,
                 **user_fields,
+                "manually_set_duration": (user_fields.get("estimation") or 0) > 180,
                 "existing_task_id": str(target_id),
                 "reason": agent_trace.get("reason"),
                 "confidence": agent_trace.get("confidence"),
@@ -269,7 +270,10 @@ async def _process(
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
         try:
-            children = await maybe_split_task(session, task)
+            children = (
+                [] if (user_fields.get("estimation") or 0) > 180
+                else await maybe_split_task(session, task)
+            )
             if not children:
                 await schedule_task(session, task)
         except Exception:

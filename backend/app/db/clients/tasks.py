@@ -53,6 +53,7 @@ def create(session: Session, payload: TaskCreate) -> Task:
         depends_on_task_id=payload.depends_on_task_id,
         is_container=payload.is_container,
         due_date_derived=payload.due_date_derived,
+        subtask_order=payload.subtask_order,
     )
     session.add(row)
     session.flush()
@@ -65,7 +66,8 @@ def get(session: Session, task_id: uuid.UUID) -> Task | None:
 
 def children(session: Session, parent_id: uuid.UUID) -> list[Task]:
     return list(session.execute(
-        select(Task).where(Task.parent_task_id == parent_id).order_by(Task.created_at, Task.id)
+        select(Task).where(Task.parent_task_id == parent_id)
+        .order_by(Task.subtask_order.asc().nulls_last(), Task.created_at, Task.id)
     ).scalars())
 
 

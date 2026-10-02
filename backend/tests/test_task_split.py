@@ -56,122 +56,138 @@ async def test_split_step_requires_parent_evidence(monkeypatch):
         await split.propose_subtasks(task)
 
 
+def test_deadlines_follow_order_and_later_durations():
+    due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    plans = [
+        split.SubtaskPlan("First", None, 20),
+        split.SubtaskPlan("Second", None, 50),
+        split.SubtaskPlan("Third", None, 35),
+    ]
+    assert split._deadlines(due, plans) == [
+        due - timedelta(minutes=115),
+        due - timedelta(minutes=50),
+        due,
+    ]
+
+
+def test_reflow_reorders_using_durations_and_updates_parent_sum(monkeypatch):
+    due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    parent = SimpleNamespace(id=uuid.uuid4(), due_date=due, estimation=0)
+    first = SimpleNamespace(id=uuid.uuid4(), estimation=20)
+    second = SimpleNamespace(id=uuid.uuid4(), estimation=50)
+    third = SimpleNamespace(id=uuid.uuid4(), estimation=35)
+    published = []
+    monkeypatch.setattr(split, "publish_task", lambda _s, id: published.append(id))
+    session = SimpleNamespace(commit=lambda: None)
+
+    split.reflow_children(session, parent, [third, first, second])
+
+    assert [third.subtask_order, first.subtask_order, second.subtask_order] == [0, 1, 2]
+    assert [third.due_date, first.due_date, second.due_date] == [
+        due - timedelta(minutes=100), due - timedelta(minutes=65), due,
+    ]
+    assert parent.estimation == 105
+    assert first.depends_on_task_id == third.id
+    assert second.depends_on_task_id == first.id
+    assert published == [parent.id, third.id, first.id, second.id]
+
+
 @pytest.mark.asyncio
-async def test_split_sets_parent_deadline_to_last_child(monkeypatch):
+async def test_parent_due_date_edit_reflows_children(monkeypatch):
+    due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    parent = SimpleNamespace(id=uuid.uuid4(), due_date=due, is_container=True, parent_task_id=None)
+    first = SimpleNamespace(id=uuid.uuid4(), estimation=20, parent_task_id=parent.id, is_container=False)
+    last = SimpleNamespace(id=uuid.uuid4(), estimation=50, parent_task_id=parent.id, is_container=False)
+    rows = {row.id: row for row in (parent, first, last)}
+    monkeypatch.setattr(task_update.tasks_store, "get", lambda _s, id: rows[id])
+    monkeypatch.setattr(task_update.tasks_store, "update", lambda _s, id, **fields: _assign(rows[id], fields))
+    monkeypatch.setattr(task_update.tasks_store, "children", lambda _s, _id: [first, last])
+    monkeypatch.setattr(split, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(task_update, "publish_task", lambda *_args: None)
+
+    requested = due + timedelta(days=1)
+    await task_update.update_task(SimpleNamespace(commit=lambda: None), parent.id,
+                                  {"due_date": requested}, sync_calendar=False)
+    assert last.due_date == requested
+    assert first.due_date == requested - timedelta(minutes=65)
+    assert parent.estimation == 70
+
+
+@pytest.mark.asyncio
+async def test_child_duration_edit_moves_previous_deadline(monkeypatch):
+    due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    parent = SimpleNamespace(id=uuid.uuid4(), due_date=due, is_container=True, parent_task_id=None)
+    first = SimpleNamespace(id=uuid.uuid4(), estimation=20, parent_task_id=parent.id, is_container=False)
+    last = SimpleNamespace(id=uuid.uuid4(), estimation=50, parent_task_id=parent.id, is_container=False)
+    rows = {row.id: row for row in (parent, first, last)}
+    monkeypatch.setattr(task_update.tasks_store, "get", lambda _s, id: rows[id])
+    monkeypatch.setattr(task_update.tasks_store, "update", lambda _s, id, **fields: _assign(rows[id], fields))
+    monkeypatch.setattr(task_update.tasks_store, "children", lambda _s, _id: [first, last])
+    monkeypatch.setattr(split, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(task_update, "publish_task", lambda *_args: None)
+    session = SimpleNamespace(commit=lambda: None)
+    await task_update.update_task(session, last.id, {"estimation": 80}, sync_calendar=False)
+    assert first.due_date == due - timedelta(minutes=95)
+    assert last.due_date == due
+    assert parent.estimation == 100
+    with pytest.raises(ValueError, match="Subtask due dates"):
+        await task_update.update_task(session, first.id, {"due_date": due})
+
+
+def _assign(row, fields):
+    for key, value in fields.items():
+        setattr(row, key, value)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_manual_duration_edit_does_not_auto_split(monkeypatch):
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="Long task", estimation=90,
+        is_container=False, parent_task_id=None,
+    )
+    called = []
+    async def fake_split(*_args):
+        called.append(True)
+        return []
+    monkeypatch.setattr(task_update.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(task_update.tasks_store, "update", lambda _s, _id, **fields: _assign(task, fields))
+    monkeypatch.setattr(task_update, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(split, "maybe_split_task", fake_split)
+    await task_update.update_task(
+        SimpleNamespace(commit=lambda: None), task.id,
+        {"estimation": 240}, sync_calendar=False, auto_split=False,
+    )
+    assert task.estimation == 240
+    assert called == []
+
+
+@pytest.mark.parametrize("duration, expected", [
+    (35, [18, 17]),
+    (125, [42, 42, 41]),
+])
+def test_roman_and_deterministic_piece_lengths(monkeypatch, duration, expected):
     due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
     parent = SimpleNamespace(
-        id=uuid.uuid4(), due_date=due, title="Draft and send proposal",
-        estimation=90, parent_task_id=None, calendar_event_id=None,
-        scheduled_date=due, location=None, link=None, label=None, is_container=False,
+        id=uuid.uuid4(), title="Draft", description="Details", link="https://example.com",
+        location="Office", label="Work", estimation=duration, due_date=due,
+        is_container=False, parent_task_id=None, scheduled_date=due,
+        related_event_id=None, related_event_calendar_id=None,
+        related_event_due_derived=False,
     )
-    plans = [
-        split.SubtaskPlan("Draft proposal", None, 45, due_date=due - timedelta(days=2)),
-        split.SubtaskPlan("Send proposal", None, 15, due_date=due - timedelta(days=1)),
-    ]
     created = []
-
     def fake_create(_session, payload):
-        child = SimpleNamespace(id=uuid.uuid4(), due_date=payload.due_date)
+        child = SimpleNamespace(id=uuid.uuid4(), **payload.model_dump())
         created.append(child)
         return child
-
-    async def fake_plan(*_args):
-        return plans
-
-    async def no_schedule(*_args):
-        return None
-
-    monkeypatch.setattr(split, "propose_subtasks", fake_plan)
-    monkeypatch.setattr(split.tasks_store, "children", lambda *_args: [])
     monkeypatch.setattr(split.tasks_store, "create", fake_create)
-    monkeypatch.setattr(split, "schedule_task", no_schedule)
+    monkeypatch.setattr(split.tasks_store, "children", lambda *_args: [])
     monkeypatch.setattr(split, "publish_task", lambda *_args: None)
     session = SimpleNamespace(add=lambda *_args: None, commit=lambda: None)
-
-    result = await split.split_task(session, parent)
-
-    assert result == created
-    assert parent.is_container is True
-    assert parent.due_date == created[-1].due_date == due - timedelta(days=1)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("edit_parent", [False, True])
-@pytest.mark.parametrize("days", [-1, 1])
-async def test_editing_a_split_deadline_shifts_the_whole_group(monkeypatch, edit_parent, days):
-    due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
-    parent = SimpleNamespace(id=uuid.uuid4(), due_date=due - timedelta(days=1), is_container=True, parent_task_id=None)
-    first = SimpleNamespace(
-        id=uuid.uuid4(), due_date=due - timedelta(days=2),
-        is_container=False, parent_task_id=parent.id, due_date_derived=True,
-    )
-    second = SimpleNamespace(
-        id=uuid.uuid4(), due_date=due - timedelta(days=1),
-        is_container=False, parent_task_id=parent.id, due_date_derived=True,
-    )
-    rows = {row.id: row for row in (parent, first, second)}
-    before = {row.id: row.due_date for row in rows.values()}
-    commits = []
-
-    def fake_update(_session, task_id, **fields):
-        row = rows[task_id]
-        for key, value in fields.items():
-            setattr(row, key, value)
-        if "due_date" in fields and "due_date_derived" not in fields and row.parent_task_id:
-            row.due_date_derived = False
-        return row
-
-    async def no_calendar(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(task_update.tasks_store, "get", lambda _session, task_id: rows.get(task_id))
-    monkeypatch.setattr(task_update.tasks_store, "update", fake_update)
-    monkeypatch.setattr(task_update.tasks_store, "children", lambda _session, _id: [first, second])
-    monkeypatch.setattr(task_update, "update_task_to_calendar", no_calendar)
-    monkeypatch.setattr(task_update, "publish_task", lambda *_args: None)
-    session = SimpleNamespace(commit=lambda: commits.append(True))
-    edited = parent if edit_parent else first
-    delta = timedelta(days=days)
-
-    await task_update.update_task(session, edited.id, {"due_date": edited.due_date + delta})
-
-    assert parent.due_date == before[parent.id] + delta
-    assert parent.due_date == second.due_date
-    assert first.due_date == before[first.id] + delta
-    assert second.due_date == before[second.id] + delta
-    assert first.due_date_derived is edit_parent
-    assert second.due_date_derived is edit_parent
-    assert len(commits) == 3
-
-
-@pytest.mark.asyncio
-async def test_parent_edit_anchors_to_last_child_even_if_legacy_dates_differ(monkeypatch):
-    parent = SimpleNamespace(
-        id=uuid.uuid4(), due_date=datetime(2026, 10, 10, tzinfo=timezone.utc),
-        is_container=True, parent_task_id=None,
-    )
-    last = SimpleNamespace(
-        id=uuid.uuid4(), due_date=datetime(2026, 10, 9, tzinfo=timezone.utc),
-        is_container=False, parent_task_id=parent.id, due_date_derived=True,
-    )
-    rows = {parent.id: parent, last.id: last}
-
-    def fake_update(_session, task_id, **fields):
-        row = rows[task_id]
-        for key, value in fields.items():
-            setattr(row, key, value)
-        return row
-
-    async def no_calendar(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(task_update.tasks_store, "get", lambda _session, task_id: rows[task_id])
-    monkeypatch.setattr(task_update.tasks_store, "update", fake_update)
-    monkeypatch.setattr(task_update.tasks_store, "children", lambda _session, _id: [last])
-    monkeypatch.setattr(task_update, "update_task_to_calendar", no_calendar)
-    monkeypatch.setattr(task_update, "publish_task", lambda *_args: None)
-
-    requested = datetime(2026, 10, 12, tzinfo=timezone.utc)
-    await task_update.update_task(SimpleNamespace(commit=lambda: None), parent.id, {"due_date": requested})
-
-    assert parent.due_date == last.due_date == requested
+    children = split.split_deterministically(session, parent)
+    assert [c.title for c in children] == ["Draft I", "Draft II", "Draft III"][:len(expected)]
+    assert [c.estimation for c in children] == expected
+    assert children[0].due_date == due - timedelta(minutes=sum(expected[1:]) + 15 * (len(expected) - 1))
+    assert all(c.description == "Details" and c.location == "Office" for c in children)
+    assert parent.estimation == duration
+    assert split.roman(14) == "XIV"

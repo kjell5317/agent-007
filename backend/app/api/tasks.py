@@ -14,11 +14,12 @@ the HTTP surface.
 """
 
 import uuid
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.db.clients import route_cache as route_cache_store
 from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
@@ -47,10 +48,68 @@ from app.services.task.create import create_manual_task
 from app.services.task.dismiss import dismiss_task
 from app.services.task.open import open_task_from_input
 from app.services.task.reopen import enqueue_reopen_task
-from app.services.task.split import split_task as split_task_svc
-from app.services.task.update import update_task as update_task_svc
+from app.services.task.split import (
+    create_subtask as create_subtask_svc, reflow_children,
+    split_deterministically, split_task as split_task_svc,
+)
+from app.services.task.update import affected_tasks, sync_external, update_task as update_task_svc
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+log = logging.getLogger(__name__)
+
+
+async def _sync_task_changes(updates: list[tuple[uuid.UUID, set[str]]], parent_id: uuid.UUID | None = None) -> None:
+    with SessionLocal() as session:
+        try:
+            if parent_id is not None:
+                parent = tasks_store.get(session, parent_id)
+                if parent is not None and parent.calendar_event_id:
+                    from app.services.calendar import delete_task_event
+                    from app.config import get_settings
+                    await delete_task_event(session, parent)
+                    if parent.calendar_event_id and get_settings().google_calendar_id:
+                        from app.services.notify import notify_error
+                        await notify_error(
+                            "Task calendar update failed",
+                            RuntimeError("Could not remove the parent calendar event"),
+                            context=parent.title,
+                        )
+            await sync_external(session, updates)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("task calendar update failed · parent=%s", parent_id)
+            from app.services.notify import notify_error
+            await notify_error("Task calendar update failed", exc)
+
+
+async def _reschedule_in_background(task_id: uuid.UUID) -> None:
+    with SessionLocal() as session:
+        row = tasks_store.get(session, task_id)
+        if row is None:
+            return
+        try:
+            result = await schedule_task(session, row, block=scheduled_interval_for(row))
+            if result is None:
+                raise RuntimeError("Task could not be scheduled")
+            publish_task(session, task_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("task rescheduling failed · task=%s", task_id)
+            from app.services.notify import notify_error
+            await notify_error("Task rescheduling failed", exc, context=row.title)
+
+
+async def _split_in_background(task_id: uuid.UUID) -> None:
+    with SessionLocal() as session:
+        row = tasks_store.get(session, task_id)
+        if row is None:
+            return
+        try:
+            children = await split_task_svc(session, row, force=True)
+            if not children:
+                raise ValueError("This task could not be split")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("task split failed · task=%s", task_id)
+            from app.services.notify import notify_error
+            await notify_error("Task split failed", exc, context=row.title)
 
 
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
@@ -112,20 +171,85 @@ async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) 
     return _to_read(row, status_, is_manual, session)
 
 
-@router.post("/{task_id}/split", response_model=TaskRead)
-async def split_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+@router.post("/{task_id}/split", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
+async def split_task(
+    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
+) -> TaskRead:
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    if row.parent_task_id or row.is_container:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This task cannot be split")
+    background_tasks.add_task(_split_in_background, task_id)
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual, session)
+
+
+@router.post("/{task_id}/split_deterministic", response_model=TaskRead)
+async def split_task_deterministic(
+    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
+) -> TaskRead:
     row = tasks_store.get(session, task_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     try:
-        children = await split_task_svc(session, row, force=True)
+        children = split_deterministically(session, row)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    if not children:
-        raise HTTPException(status.HTTP_409_CONFLICT, "This task cannot be split")
+    background_tasks.add_task(
+        _sync_task_changes, [(child.id, {"due_date", "estimation"}) for child in children], task_id
+    )
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return _to_read(row, status_, is_manual, session)
+
+
+@router.post("/{task_id}/subtasks", response_model=TaskRead)
+async def add_subtask(
+    task_id: uuid.UUID, payload: dict[str, str], background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    parent = tasks_store.get(session, task_id)
+    if parent is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    if parent.parent_task_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A subtask cannot have subtasks")
+    try:
+        children = tasks_store.children(session, task_id)
+        new_child = create_subtask_svc(session, parent, payload.get("title", ""))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    background_tasks.add_task(
+        _sync_task_changes,
+        [(child.id, {"due_date"}) for child in children] +
+        [(new_child.id, {"due_date", "estimation"})],
+        task_id if not children else None,
+    )
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(parent, status_, is_manual, session)
+
+
+@router.put("/{task_id}/subtasks/order", response_model=TaskRead)
+async def reorder_subtasks(
+    task_id: uuid.UUID, order: list[uuid.UUID], background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    parent = tasks_store.get(session, task_id)
+    if parent is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    children = tasks_store.children(session, task_id)
+    by_id = {child.id: child for child in children}
+    if len(order) != len(children) or set(order) != set(by_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Order must contain every subtask once")
+    reflow_children(session, parent, [by_id[child_id] for child_id in order])
+    background_tasks.add_task(
+        _sync_task_changes, [(child_id, {"due_date"}) for child_id in order]
+    )
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(parent, status_, is_manual, session)
 
 
 @router.post(
@@ -179,29 +303,33 @@ async def create_task_from_input(
 
 @router.patch("/{task_id}", response_model=TaskRead)
 async def update_task(
-    task_id: uuid.UUID, payload: TaskUpdate, session: Session = Depends(get_session)
+    task_id: uuid.UUID, payload: TaskUpdate, background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session)
 ) -> TaskRead:
     fields = payload.model_dump(exclude_unset=True)
     try:
-        row = await update_task_svc(session, task_id, fields)
+        row = await update_task_svc(
+            session, task_id, fields, sync_calendar=False, auto_split=False
+        )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    background_tasks.add_task(_sync_task_changes, affected_tasks(session, row, set(fields)))
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return _to_read(row, status_, is_manual, session)
 
 
-@router.post("/{task_id}/reschedule", response_model=TaskRead)
-async def reschedule_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+@router.post("/{task_id}/reschedule", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
+async def reschedule_task(
+    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
+) -> TaskRead:
     row = tasks_store.get(session, task_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
 
-    result = await schedule_task(session, row, block=scheduled_interval_for(row))
-    if result is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task could not be scheduled")
-
-    publish_task(session, task_id)
+    background_tasks.add_task(_reschedule_in_background, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return _to_read(row, status_, is_manual, session)

@@ -9,6 +9,7 @@ import {
   CircleCheckBig,
   ExternalLink,
   GitFork,
+  GripVertical,
   Github,
   Link2,
   MapPin,
@@ -103,11 +104,27 @@ export function TaskDetailModal({
   const [textDraft, setTextDraft] = useState("");
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [subtaskDetails, setSubtaskDetails] = useState<Record<string, Task>>({});
+  const [parentTask, setParentTask] = useState<Task | null>(null);
+  const [newSubtask, setNewSubtask] = useState("");
+  const [draggedSubtask, setDraggedSubtask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [splitPending, setSplitPending] = useState(false);
   const [kotxActionPending, setKotxActionPending] = useState(false);
   const locationSuggestionRequestRef = useRef(0);
   const activeReopenPoll = useRef<PollHandle | null>(null);
+  const pendingEdits = useRef<Array<{ taskId: string; patch: Partial<Task> }>>([]);
+  const savingEdits = useRef(false);
+  const mountedRef = useRef(true);
   const subtaskIds = current.subtasks.map((child) => child.id).join("|");
+
+  useEffect(() => {
+    if (!current.parent_task_id) { setParentTask(null); return; }
+    let cancelled = false;
+    void api.getTask(current.parent_task_id).then((parent) => {
+      if (!cancelled) setParentTask(parent);
+    }).catch(() => { if (!cancelled) toast.error("Could not load parent task"); });
+    return () => { cancelled = true; };
+  }, [current.parent_task_id]);
 
   useEffect(() => {
     if (!subtaskIds) return;
@@ -134,12 +151,22 @@ export function TaskDetailModal({
     setPickerEstimation(task.estimation);
     setPickerLabel(task.label ?? "");
     setKotxActionPending(false);
+  }, [task.id]);
+
+  useEffect(() => {
+    if (!editingText && !activePicker) setCurrent(task);
+  // External task updates arrive through props; editor state is handled locally.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task]);
 
   useEffect(
-    () => () => {
+    () => {
+      mountedRef.current = true;
+      return () => {
+      mountedRef.current = false;
       activeReopenPoll.current?.cancel();
       activeReopenPoll.current = null;
+      };
     },
     [],
   );
@@ -181,17 +208,71 @@ export function TaskDetailModal({
     setPickerLabel(saved.label ?? "");
   };
 
-  async function splitCurrentTask() {
-    setBusy(true);
+  async function splitCurrentTask(deterministic = false) {
+    if (splitPending) return;
+    setSplitPending(true);
     try {
-      const saved = await api.splitTask(current.id);
-      syncTaskState(saved);
-      toast.success(`Created ${saved.subtasks.length} subtasks`);
+      const saved = deterministic
+        ? await api.splitTaskDeterministic(current.id)
+        : await api.splitTask(current.id);
+      let count = saved.subtasks.length;
+      if (deterministic) {
+        syncTaskState(saved);
+      } else {
+        let result: Task | null = null;
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          if (!mountedRef.current) return;
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          if (!mountedRef.current) return;
+          const latest = await api.getTask(current.id);
+          if (latest.subtasks.length > 0) { result = latest; break; }
+        }
+        if (!result) throw new Error("Split is taking longer than expected");
+        syncTaskState(result);
+        count = result.subtasks.length;
+      }
+      toast.success(`Created ${count} subtasks`);
       await onChanged();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
-      setBusy(false);
+      setSplitPending(false);
+    }
+  }
+
+  async function addNewSubtask() {
+    const title = newSubtask.trim();
+    if (!title) return;
+    setNewSubtask("");
+    try {
+      const saved = await api.addSubtask(current.id, title);
+      syncTaskState(saved);
+      void Promise.resolve().then(onChanged).catch(() => toast.error("Task saved, but refresh failed"));
+    } catch (e) {
+      setNewSubtask(title);
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function moveSubtask(sourceId: string, targetId: string) {
+    if (sourceId === targetId) return;
+    const ids = current.subtasks.map((child) => child.id);
+    const from = ids.indexOf(sourceId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, sourceId);
+    setCurrent((previous) => ({
+      ...previous,
+      subtasks: ids.map((id) => previous.subtasks.find((child) => child.id === id)!),
+    }));
+    try {
+      const saved = await api.reorderSubtasks(current.id, ids);
+      syncTaskState(saved);
+      void Promise.resolve().then(onChanged).catch(() => toast.error("Task saved, but refresh failed"));
+    } catch (e) {
+      toast.error((e as Error).message);
+      void refreshAfterSubtaskChange();
     }
   }
 
@@ -201,21 +282,49 @@ export function TaskDetailModal({
     await onChanged();
   };
 
-  async function savePatch(patch: Partial<Task>, message = "Saved") {
-    setBusy(true);
-    try {
-      const saved = await api.updateTask(current.id, patch);
-      syncTaskState(saved);
-      toast.success(message);
-      await onChanged();
-      return saved;
-    } catch (e) {
-      toast.error((e as Error).message);
-      return null;
-    } finally {
-      setBusy(false);
-    }
-  }
+  const autoSavePatch = (patch: Partial<Task>) => {
+    const taskId = current.id;
+    setCurrent((previous) => ({ ...previous, ...patch }));
+    const last = pendingEdits.current[pendingEdits.current.length - 1];
+    if (last?.taskId === taskId) last.patch = { ...last.patch, ...patch };
+    else pendingEdits.current.push({ taskId, patch });
+    if (savingEdits.current) return;
+    savingEdits.current = true;
+    void (async () => {
+      while (pendingEdits.current.length) {
+        const next = pendingEdits.current.shift()!;
+        let saved: Task;
+        try {
+          saved = await api.updateTask(next.taskId, next.patch);
+        } catch (e) {
+          toast.error(`Could not save task: ${(e as Error).message}`);
+          try {
+            const persisted = await api.getTask(next.taskId);
+            setCurrent((previous) => previous.id === next.taskId ? persisted : previous);
+          } catch { /* keep local draft */ }
+          continue;
+        }
+        const unsent = pendingEdits.current
+          .filter((item) => item.taskId === next.taskId)
+          .reduce((combined, item) => ({ ...combined, ...item.patch }), {} as Partial<Task>);
+        setCurrent((previous) => previous.id === next.taskId
+          ? { ...previous, ...saved, ...unsent } : previous);
+        if (saved.parent_task_id) {
+          void api.getTask(saved.parent_task_id).then(setParentTask).catch(() => {});
+        }
+        try { await onChanged(); } catch { toast.error("Task saved, but refresh failed"); }
+      }
+      savingEdits.current = false;
+    })();
+  };
+
+  const onTextDraftChange = (value: string) => {
+    setTextDraft(value);
+    if (!editingText) return;
+    const normalized = editingText === "title" ? value.trim() : normalizeOptional(value);
+    if (editingText === "title" && !normalized) return;
+    autoSavePatch({ [editingText]: normalized } as Partial<Task>);
+  };
 
   async function runTaskAction(action: () => Promise<Task>, message: string) {
     setBusy(true);
@@ -236,7 +345,7 @@ export function TaskDetailModal({
   }
 
   const rescheduleCurrent = () =>
-    runTaskAction(() => api.rescheduleTask(current.id), "Task rescheduled");
+    runTaskAction(() => api.rescheduleTask(current.id), "Rescheduling started");
 
   const createGithubIssue = () =>
     runTaskAction(
@@ -368,8 +477,8 @@ export function TaskDetailModal({
     else if (field === "link") patch = { link: normalizeOptional(textDraft) };
     else patch = { location: normalizeOptional(textDraft) };
 
-    const saved = await savePatch(patch);
-    if (saved) closeTextEditor();
+    if ((current[field] ?? "") !== (patch[field] ?? "")) autoSavePatch(patch);
+    closeTextEditor();
   };
 
   const openPicker = (field: PickerField) => {
@@ -393,14 +502,27 @@ export function TaskDetailModal({
       : activePicker === "estimation"
         ? { estimation: pickerEstimation }
         : { label: pickerLabel || null };
-    const saved = await savePatch(patch);
-    if (saved) setActivePicker(null);
+    if (activePicker === "due_date" && patch.due_date !== current.due_date ||
+        activePicker === "estimation" && patch.estimation !== current.estimation ||
+        activePicker === "label" && patch.label !== current.label) autoSavePatch(patch);
+    setActivePicker(null);
+  };
+
+  const closeModal = () => {
+    if (editingText) {
+      if (editingText === "title" && !textDraft.trim()) {
+        toast.error("Title is required");
+        return;
+      }
+      void saveTextEditor(editingText);
+    }
+    onClose();
   };
 
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={closeModal}
       title={current.title}
       titleLabel={current.title}
       backdropClassName="max-sm:p-0"
@@ -408,12 +530,12 @@ export function TaskDetailModal({
       header={
         <div className="relative z-50 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
           <div className="flex items-center gap-3">
-            <Button type="button" size="icon" variant="ghost" onClick={onClose} aria-label={editingText || activePicker ? "Cancel and close" : "Back"} className="h-12 w-12 shrink-0">
+            <Button type="button" size="icon" variant="ghost" onClick={closeModal} aria-label="Back" className="h-12 w-12 shrink-0">
               <ArrowLeft className="h-5 w-5" />
             </Button>
             {editingText && (
               <Button type="button" size="sm" onClick={() => { void saveActiveEdit(); }} disabled={busy}>
-                Save
+                Done
               </Button>
             )}
           </div>
@@ -452,13 +574,23 @@ export function TaskDetailModal({
               !kotxTask && (
                 <TaskSummaryIconButton
                   label="Split into subtasks"
-                  disabled={busy}
-                  onClick={splitCurrentTask}
+                  disabled={busy || splitPending}
+                  onClick={() => { void splitCurrentTask(); }}
                   className="h-12 w-12 shrink-0"
                 >
                   <GitFork className="h-5 w-5" />
                 </TaskSummaryIconButton>
               )}
+            {current.status === "open" && !current.is_container && !current.parent_task_id && !kotxTask && (
+              <TaskSummaryIconButton
+                label="Split into equal subtasks"
+                disabled={busy || splitPending}
+                onClick={() => { void splitCurrentTask(true); }}
+                className="h-12 w-12 shrink-0"
+              >
+                <span className="text-sm font-semibold">1h</span>
+              </TaskSummaryIconButton>
+            )}
             {current.status === "open" &&
               !current.is_container &&
               !kotxTask && (
@@ -483,12 +615,19 @@ export function TaskDetailModal({
               draft={textDraft}
               busy={busy}
               onEdit={() => openTextEditor("title")}
-              onChange={setTextDraft}
+              onChange={onTextDraftChange}
             />
           }
           task={current}
           knownTasks={knownTasks}
           subtaskDetails={subtaskDetails}
+          parentTask={parentTask}
+          newSubtask={newSubtask}
+          onNewSubtaskChange={setNewSubtask}
+          onAddSubtask={() => { void addNewSubtask(); }}
+          draggedSubtask={draggedSubtask}
+          onDragSubtask={setDraggedSubtask}
+          onMoveSubtask={(source, target) => { void moveSubtask(source, target); }}
           onSubtaskChanged={refreshAfterSubtaskChange}
           kotxTask={kotxTask}
           onKotxChanged={onKotxChanged}
@@ -505,16 +644,16 @@ export function TaskDetailModal({
           pickerEstimation={pickerEstimation}
           pickerLabel={pickerLabel}
           onEditText={openTextEditor}
-          onChangeText={setTextDraft}
+          onChangeText={onTextDraftChange}
           locationSuggestions={locationSuggestions}
-          onSelectLocationSuggestion={setTextDraft}
+          onSelectLocationSuggestion={onTextDraftChange}
           onEditPicker={openPicker}
           onClosePicker={() => setActivePicker(null)}
           onSavePicker={() => { void saveActiveEdit(); }}
           onDateStepChange={setDateStep}
-          onPickerDueChange={setPickerDue}
-          onPickerEstimationChange={setPickerEstimation}
-          onPickerLabelChange={setPickerLabel}
+          onPickerDueChange={(value) => { setPickerDue(value); autoSavePatch({ due_date: value }); }}
+          onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
+          onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
           onKotxActionPendingChange={setKotxActionPending}
@@ -569,6 +708,13 @@ function TaskSummary({
   task,
   knownTasks,
   subtaskDetails,
+  parentTask,
+  newSubtask,
+  onNewSubtaskChange,
+  onAddSubtask,
+  draggedSubtask,
+  onDragSubtask,
+  onMoveSubtask,
   onSubtaskChanged,
   kotxTask,
   onKotxChanged,
@@ -603,6 +749,13 @@ function TaskSummary({
   task: Task;
   knownTasks: Task[];
   subtaskDetails: Record<string, Task>;
+  parentTask: Task | null;
+  newSubtask: string;
+  onNewSubtaskChange: (value: string) => void;
+  onAddSubtask: () => void;
+  draggedSubtask: string | null;
+  onDragSubtask: (id: string | null) => void;
+  onMoveSubtask: (source: string, target: string) => void;
   onSubtaskChanged: () => Promise<void>;
   kotxTask: KotxTask | null;
   onKotxChanged?: () => Promise<void> | void;
@@ -718,8 +871,9 @@ function TaskSummary({
             <button
               type="button"
               onClick={() => onEditPicker("due_date")}
-              disabled={busy}
+              disabled={busy || !!task.parent_task_id}
               title={
+                task.parent_task_id ? "Due date is set by the parent task" :
                 task.due_date ? `Due ${fmtDue(task.due_date)}` : "Set due date"
               }
               className={cn(
@@ -742,6 +896,7 @@ function TaskSummary({
                 <EstimationPicker
                   value={pickerEstimation}
                   onChange={onPickerEstimationChange}
+                  allowNone={!task.parent_task_id}
                 />
               </InlinePickerPanel>
             }
@@ -801,25 +956,46 @@ function TaskSummary({
           )}
         </div>
 
-        {task.subtasks.length > 0 && (
+        {parentTask && (
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold">Parent task</h3>
+            <TaskCard task={parentTask} onChanged={onSubtaskChanged} onKotxChanged={onSubtaskChanged} onOpen={onOpenTask} />
+          </section>
+        )}
+
+        {task.is_container && (
           <section className="space-y-2">
             <h3 className="text-sm font-semibold">Subtasks</h3>
             {task.subtasks.map((child) => {
               const fullTask = knownTasks.find((candidate) => candidate.id === child.id) ?? subtaskDetails[child.id];
               return fullTask ? (
-                <TaskCard
-                  key={child.id}
-                  task={{ ...fullTask, title: child.title, status: child.status, due_date: child.due_date, estimation: child.estimation }}
-                  onChanged={onSubtaskChanged}
-                  onKotxChanged={onSubtaskChanged}
-                  onOpen={onOpenTask}
-                />
+                <div key={child.id} className="flex items-center gap-1" onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => { event.preventDefault(); if (draggedSubtask) onMoveSubtask(draggedSubtask, child.id); onDragSubtask(null); }}>
+                  <span draggable aria-label={`Reorder ${child.title}`} title="Drag to reorder"
+                    onDragStart={() => onDragSubtask(child.id)} onDragEnd={() => onDragSubtask(null)}
+                    className="cursor-grab rounded p-1 text-muted-foreground active:cursor-grabbing">
+                    <GripVertical className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <TaskCard
+                      task={{ ...fullTask, title: child.title, status: child.status, due_date: child.due_date, estimation: child.estimation }}
+                      onChanged={onSubtaskChanged}
+                      onKotxChanged={onSubtaskChanged}
+                      onOpen={onOpenTask}
+                    />
+                  </div>
+                </div>
               ) : (
                 <div key={child.id} className="rounded-xl border bg-card p-3 text-sm text-muted-foreground" role="status">
                   Loading {child.title}…
                 </div>
               );
             })}
+            <form onSubmit={(event) => { event.preventDefault(); onAddSubtask(); }} className="flex gap-2">
+              <Input value={newSubtask} onChange={(event) => onNewSubtaskChange(event.target.value)}
+                placeholder="New subtask" aria-label="New subtask" />
+              <Button type="submit" disabled={!newSubtask.trim()}>Add</Button>
+            </form>
           </section>
         )}
 
@@ -883,7 +1059,7 @@ function TaskSummary({
         )}
 
         <LinkedInputsSection
-          inputs={task.raw_inputs ?? []}
+          inputs={(task.raw_inputs ?? []).filter((input) => !task.parent_task_id || input.task_id !== task.parent_task_id)}
           currentTaskId={task.id}
           parentTaskId={task.parent_task_id}
           onOpenTask={onOpenTask}
@@ -1301,7 +1477,7 @@ function InlinePickerPanel({
         </div>
         {showSave && (
           <Button type="button" onClick={onSave} disabled={busy} className="mt-3 w-full shrink-0">
-            Save
+            Done
           </Button>
         )}
       </div>
