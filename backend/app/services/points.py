@@ -64,6 +64,8 @@ def award_for_task(
     was already awarded. A reopened task starts a new cycle and can earn points
     again. A negative factor is allowed and subtracts points on completion.
     """
+    if getattr(task, "is_container", False):
+        return False
     factor = (
         KOTX_TASK_DONE_FACTOR
         if getattr(task, "kotx_task_id", None) is not None
@@ -88,6 +90,8 @@ def award_for_task(
 
 
 def subtract_scheduled_overdue_penalty(session: Session, task, *, scheduled_date: datetime) -> bool:
+    if getattr(task, "is_container", False):
+        return False
     period_key = "scheduled:" + _utc_key(scheduled_date)
     entry = points_store.add_penalty_entry_once(
         session,
@@ -95,6 +99,7 @@ def subtract_scheduled_overdue_penalty(session: Session, task, *, scheduled_date
         action_name=SCHEDULED_OVERDUE_ACTION,
         period_key=period_key,
         amount=-float(PENALTY_POINTS),
+        task_title=task.title,
     )
     if entry is None:
         return False

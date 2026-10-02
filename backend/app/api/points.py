@@ -165,7 +165,8 @@ def _reason_for(entry: PointsEntry) -> str:
     if entry.source == "task":
         return action or "Completed task"
     if entry.source == "penalty":
-        return _penalty_reason(action, entry.period_key)
+        reason = _penalty_reason(action, entry.period_key)
+        return f"{reason} · {entry.task_title}" if entry.task_title else reason
     return action or entry.source.replace("_", " ").title()
 
 

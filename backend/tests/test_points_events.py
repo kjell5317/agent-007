@@ -184,6 +184,42 @@ def test_points_log_paginates_and_serializes_task_id(monkeypatch):
     assert [entry.id for entry in all_rows.entries] == [newest.id, task.id, old.id]
 
 
+def test_penalty_log_keeps_task_title_after_task_is_deleted(monkeypatch):
+    session = _sqlite_session()
+    _open_access(monkeypatch)
+    task = _task(estimation=30)
+    session.add(task)
+    session.commit()
+
+    assert points_service.subtract_scheduled_overdue_penalty(
+        session, task, scheduled_date=task.scheduled_date,
+    )
+    session.delete(task)
+    session.commit()
+
+    log = points_api.get_points_log(SimpleNamespace(session={}), session=session)
+    assert log.entries[0].reason == "Scheduled task overdue · Write report"
+    assert log.entries[0].task_id == task.id
+
+
+def test_parent_task_does_not_earn_or_lose_points(monkeypatch):
+    session = _sqlite_session()
+    task = _task(estimation=30)
+    task.is_container = True
+    session.add(task)
+    session.commit()
+    monkeypatch.setattr(
+        points_service, "get_settings",
+        lambda: SimpleNamespace(points_task_done_factor=-0.5),
+    )
+
+    assert not points_service.subtract_scheduled_overdue_penalty(
+        session, task, scheduled_date=task.scheduled_date,
+    )
+    assert not points_service.award_for_task(session, task)
+    assert points_store.total(session) == 0
+
+
 def test_points_log_formats_legacy_day_and_night_reasons(monkeypatch):
     session = _sqlite_session()
     _open_access(monkeypatch)

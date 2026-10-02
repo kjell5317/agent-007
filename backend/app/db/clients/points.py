@@ -61,6 +61,7 @@ def add_entry(
     action_name: str | None = None,
     period_key: str | None = None,
     task_id: uuid.UUID | None = None,
+    task_title: str | None = None,
 ) -> PointsEntry:
     entry = PointsEntry(
         source=source,
@@ -71,6 +72,7 @@ def add_entry(
         action_name=action_name,
         period_key=period_key,
         task_id=task_id,
+        task_title=task_title,
     )
     session.add(entry)
     session.commit()
@@ -105,6 +107,7 @@ def add_penalty_entry_once(
     period_key: str,
     amount: float,
     section: str = "overdue",
+    task_title: str | None = None,
 ) -> PointsEntry | None:
     if has_penalty_entry(
         session,
@@ -121,6 +124,7 @@ def add_penalty_entry_once(
             action_name=action_name,
             period_key=period_key,
             task_id=task_id,
+            task_title=task_title,
             factor=float(amount),
             quantity=1.0,
             amount=float(amount),

@@ -25,6 +25,7 @@ class PointsEntry(Base):
     action_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     period_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    task_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # factor (e.g. 0.2 points/min) and quantity (minutes) stay fractional;
     # amount is the whole-number points the total is summed from — rounded at

@@ -251,6 +251,7 @@ def overdue_scheduled_open(
         select(Task)
         .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
         .where(Task.scheduled_date <= cutoff)
+        .where(Task.is_container.is_(False))
         .where(func.coalesce(latest.c.status, "open") == "open")
         .order_by(Task.scheduled_date.asc())
         .limit(limit)

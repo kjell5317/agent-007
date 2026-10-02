@@ -406,12 +406,12 @@ export function TaskDetailModal({
       backdropClassName="max-sm:p-0"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl max-sm:h-dvh max-sm:max-h-dvh max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:p-0"
       header={
-        <div className="relative z-30 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:mb-3 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
+        <div className="relative z-30 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
           <div className="flex items-center gap-3">
             <Button type="button" size="icon" variant="ghost" onClick={onClose} aria-label={editingText || activePicker ? "Cancel and close" : "Back"} className="h-12 w-12 shrink-0">
               <ArrowLeft className="h-5 w-5" />
             </Button>
-            {(editingText || activePicker) && (
+            {editingText && (
               <Button type="button" size="sm" onClick={() => { void saveActiveEdit(); }} disabled={busy}>
                 Save
               </Button>
@@ -509,6 +509,8 @@ export function TaskDetailModal({
           locationSuggestions={locationSuggestions}
           onSelectLocationSuggestion={setTextDraft}
           onEditPicker={openPicker}
+          onClosePicker={() => setActivePicker(null)}
+          onSavePicker={() => { void saveActiveEdit(); }}
           onDateStepChange={setDateStep}
           onPickerDueChange={setPickerDue}
           onPickerEstimationChange={setPickerEstimation}
@@ -538,13 +540,13 @@ function TaskTitleHeader({
 }) {
   if (editing) {
     return (
-      <div className="text-left text-sm font-normal leading-normal">
+      <div className="text-center text-sm font-normal leading-normal">
         <InlineTextEditor
           label={TEXT_LABEL.title}
           value={draft}
           busy={busy}
           onChange={onChange}
-          inputClassName="text-2xl font-semibold leading-tight"
+          inputClassName="text-center text-2xl font-semibold leading-tight"
         />
       </div>
     );
@@ -555,7 +557,7 @@ function TaskTitleHeader({
       type="button"
       onClick={onEdit}
       disabled={busy}
-      className="group flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1 text-left text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+      className="group flex w-full min-w-0 items-center justify-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
     >
       <span className="min-w-0 flex-1 break-words">{task.title}</span>
     </button>
@@ -587,6 +589,8 @@ function TaskSummary({
   locationSuggestions,
   onSelectLocationSuggestion,
   onEditPicker,
+  onClosePicker,
+  onSavePicker,
   onDateStepChange,
   onPickerDueChange,
   onPickerEstimationChange,
@@ -619,6 +623,8 @@ function TaskSummary({
   locationSuggestions: string[];
   onSelectLocationSuggestion: (value: string) => void;
   onEditPicker: (field: PickerField) => void;
+  onClosePicker: () => void;
+  onSavePicker: () => void;
   onDateStepChange: (step: "date" | "time") => void;
   onPickerDueChange: (value: string | null) => void;
   onPickerEstimationChange: (value: number | null) => void;
@@ -655,8 +661,9 @@ function TaskSummary({
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
           <PickerAnchor
             open={activePicker === "label"}
+            onClose={onClosePicker}
             panel={
-              <InlinePickerPanel title="Label">
+              <InlinePickerPanel title="Label" onClose={onClosePicker} onSave={onSavePicker} busy={busy}>
                 <LabelPicker
                   value={pickerLabel}
                   onChange={onPickerLabelChange}
@@ -685,9 +692,13 @@ function TaskSummary({
 
           <PickerAnchor
             open={activePicker === "due_date"}
+            onClose={onClosePicker}
             panel={
               <InlinePickerPanel
                 title="Due date"
+                onClose={onClosePicker}
+                onSave={onSavePicker}
+                busy={busy}
                 onEditDate={
                   dateStep === "time"
                     ? () => onDateStepChange("date")
@@ -738,8 +749,9 @@ function TaskSummary({
 
           <PickerAnchor
             open={!task.is_container && activePicker === "estimation"}
+            onClose={onClosePicker}
             panel={
-              <InlinePickerPanel title="Estimate">
+              <InlinePickerPanel title="Estimate" onClose={onClosePicker} onSave={onSavePicker} busy={busy}>
                 <EstimationPicker
                   value={pickerEstimation}
                   onChange={onPickerEstimationChange}
@@ -1225,13 +1237,26 @@ function PickerAnchor({
   open,
   panel,
   children,
+  onClose,
 }: {
   open: boolean;
   panel: ReactNode;
   children: ReactNode;
+  onClose: () => void;
 }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) onClose();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
+  }, [open, onClose]);
+
   return (
-    <div className="relative inline-flex">
+    <div ref={anchorRef} className="relative inline-flex">
       {children}
       {open && panel}
     </div>
@@ -1243,15 +1268,24 @@ function InlinePickerPanel({
   children,
   footer,
   onEditDate,
+  onClose,
+  onSave,
+  busy,
 }: {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
   onEditDate?: () => void;
+  onClose: () => void;
+  onSave: () => void;
+  busy: boolean;
 }) {
   return (
     <div
-      className="fixed inset-x-0 bottom-0 top-[72px] z-20 flex items-start justify-center overflow-y-auto bg-card p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:block sm:overflow-visible sm:bg-transparent sm:p-0"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      className="fixed inset-x-0 bottom-0 top-[72px] z-20 flex items-start justify-center overflow-y-auto bg-card p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:block sm:overflow-visible sm:p-0"
     >
       <div
         className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
@@ -1279,6 +1313,9 @@ function InlinePickerPanel({
           {children}
           {footer}
         </div>
+        <Button type="button" onClick={onSave} disabled={busy} className="mt-3 w-full shrink-0">
+          Save
+        </Button>
       </div>
     </div>
   );
