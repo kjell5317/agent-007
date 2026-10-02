@@ -185,7 +185,7 @@ export function InboxCard({
               className="mt-3 space-y-3 border-t pt-3 text-sm"
               onClick={(e) => e.stopPropagation()}
             >
-              <InputBody data={data} />
+              <InputBody data={data} onOpenTask={onOpenTask} />
             </div>
           </Collapsible>
         )}
@@ -239,7 +239,7 @@ export function hasInputDetails(data: RawInput): boolean {
   return Boolean(trace);
 }
 
-export function InputBody({ data }: { data: RawInput }) {
+export function InputBody({ data, onOpenTask }: { data: RawInput; onOpenTask?: (id: string) => void }) {
   const traceRecord = data.agent_trace as Record<string, unknown> | null;
   const override = traceRecord?.manual_override;
 
@@ -253,19 +253,20 @@ export function InputBody({ data }: { data: RawInput }) {
         </Section>
       )}
       {traceRecord && (
-        <AgentTraceSection traceRecord={traceRecord} embeddingCost={data.source_metadata?.embedding_cost} title="Agent trace" />
+        <AgentTraceSection traceRecord={traceRecord} embeddingCost={data.source_metadata?.embedding_cost} title="Agent trace" onOpenTask={onOpenTask} />
       )}
       {override && typeof override === "object" && (
-        <AgentTraceSection traceRecord={override} title="Manual action trace" />
+        <AgentTraceSection traceRecord={override} title="Manual action trace" onOpenTask={onOpenTask} />
       )}
     </>
   );
 }
 
-function AgentTraceSection({ traceRecord, embeddingCost, title }: {
+function AgentTraceSection({ traceRecord, embeddingCost, title, onOpenTask }: {
   traceRecord: unknown;
   embeddingCost?: unknown;
   title: string;
+  onOpenTask?: (id: string) => void;
 }) {
   const trace = projectAgentTrace(traceRecord, embeddingCost);
   const eventWarning = traceRecord && typeof (traceRecord as Record<string, unknown>).event_warning === "string"
@@ -293,7 +294,7 @@ function AgentTraceSection({ traceRecord, embeddingCost, title }: {
               <Section title="Precedents">
                 <div className="space-y-1">
                   {evidence.map((row) => (
-                    <EvidenceItem key={row.id} row={row} />
+                    <EvidenceItem key={row.id} row={row} onOpenTask={onOpenTask} />
                   ))}
                 </div>
               </Section>
@@ -386,17 +387,15 @@ function FieldGrid({ fields }: { fields: ProjectionField[] }) {
   );
 }
 
-function EvidenceItem({ row }: { row: EvidenceRow }) {
+function EvidenceItem({ row, onOpenTask }: { row: EvidenceRow; onOpenTask?: (id: string) => void }) {
   const when = row.receivedAt ? fmtWhen(row.receivedAt) : null;
-
-  return (
-    <div
-      id={row.id}
-      className={cn(
-        "rounded-md border bg-background px-2 py-1.5 text-xs",
-        row.selected && "border-primary/50 bg-primary/5",
-      )}
-    >
+  const className = cn(
+    "block w-full rounded-md border bg-background px-2 py-1.5 text-left text-xs",
+    row.selected && "border-primary/50 bg-primary/5",
+    row.taskId && onOpenTask && "cursor-pointer transition-colors hover:bg-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+  );
+  const content = (
+    <>
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
         {row.status && (
@@ -426,7 +425,15 @@ function EvidenceItem({ row }: { row: EvidenceRow }) {
           </span>
         )}
       </div>
-    </div>
+    </>
+  );
+
+  return row.taskId && onOpenTask ? (
+    <button type="button" id={row.id} className={className} onClick={() => onOpenTask(row.taskId!)} aria-label={`Open task: ${row.title}`}>
+      {content}
+    </button>
+  ) : (
+    <div id={row.id} className={className}>{content}</div>
   );
 }
 

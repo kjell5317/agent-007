@@ -30,9 +30,16 @@ import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
 import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { hasInputDetails, InputBody, MetaDot } from "@/components/inbox/InboxCard";
+import {
+  hasInputDetails,
+  InputBody,
+  MetaDot,
+} from "@/components/inbox/InboxCard";
 import { KotxRunSection } from "@/components/tasks/KotxRunSection";
-import { InputStatusBadge, RunStatusBadge } from "@/components/runs/RunStatusBadge";
+import {
+  InputStatusBadge,
+  RunStatusBadge,
+} from "@/components/runs/RunStatusBadge";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
@@ -232,7 +239,10 @@ export function TaskDetailModal({
     runTaskAction(() => api.rescheduleTask(current.id), "Task rescheduled");
 
   const createGithubIssue = () =>
-    runTaskAction(() => api.createGithubIssue(current.id), "GitHub issue created");
+    runTaskAction(
+      () => api.createGithubIssue(current.id),
+      "GitHub issue created",
+    );
 
   async function runClosingTaskAction(
     action: () => Promise<void>,
@@ -353,7 +363,8 @@ export function TaskDetailModal({
 
     let patch: Partial<Task>;
     if (field === "title") patch = { title: trimmed };
-    else if (field === "description") patch = { description: normalizeOptional(textDraft) };
+    else if (field === "description")
+      patch = { description: normalizeOptional(textDraft) };
     else if (field === "link") patch = { link: normalizeOptional(textDraft) };
     else patch = { location: normalizeOptional(textDraft) };
 
@@ -385,20 +396,44 @@ export function TaskDetailModal({
           </TaskSummaryIconButton>
           <div className="flex items-center gap-1">
             {current.status === "open" && !current.is_container && (
-              <TaskSummaryIconButton label={kotxTask ? (kotxTask.canDiscard ? "Dismiss run" : "Mark not a task") : "Mark done"} disabled={busy} onClick={kotxTask ? dismissRun : markDone}>
+              <TaskSummaryIconButton
+                label={
+                  kotxTask
+                    ? kotxTask.canDiscard
+                      ? "Dismiss run"
+                      : "Mark not a task"
+                    : "Mark done"
+                }
+                disabled={busy}
+                onClick={kotxTask ? dismissRun : markDone}
+              >
                 <CircleCheckBig className="h-5 w-5" />
               </TaskSummaryIconButton>
             )}
-            {current.status === "open" && !current.is_container && !current.parent_task_id && !kotxTask && (
-              <TaskSummaryIconButton label="Split into subtasks" disabled={busy} onClick={splitCurrentTask}>
-                <Scissors className="h-5 w-5" />
-              </TaskSummaryIconButton>
-            )}
-            {current.status === "open" && !current.is_container && !kotxTask && (
-              <TaskSummaryIconButton label="Mark not a task" disabled={busy} onClick={dismissTask} className="hover:text-destructive">
-                <Trash2 className="h-5 w-5" />
-              </TaskSummaryIconButton>
-            )}
+            {current.status === "open" &&
+              !current.is_container &&
+              !current.parent_task_id &&
+              !kotxTask && (
+                <TaskSummaryIconButton
+                  label="Split into subtasks"
+                  disabled={busy}
+                  onClick={splitCurrentTask}
+                >
+                  <Scissors className="h-5 w-5" />
+                </TaskSummaryIconButton>
+              )}
+            {current.status === "open" &&
+              !current.is_container &&
+              !kotxTask && (
+                <TaskSummaryIconButton
+                  label="Mark not a task"
+                  disabled={busy}
+                  onClick={dismissTask}
+                  className="hover:text-destructive"
+                >
+                  <Trash2 className="h-5 w-5" />
+                </TaskSummaryIconButton>
+              )}
           </div>
         </div>
       }
@@ -674,7 +709,11 @@ function TaskSummary({
               <InlinePickerPanel
                 title="Due date"
                 onClose={onClosePicker}
-                onBack={dateStep === "time" ? () => onDateStepChange("date") : undefined}
+                onBack={
+                  dateStep === "time"
+                    ? () => onDateStepChange("date")
+                    : undefined
+                }
                 footer={
                   pickerDue && !task.is_container ? (
                     <Button
@@ -704,7 +743,9 @@ function TaskSummary({
               type="button"
               onClick={() => onEditPicker("due_date")}
               disabled={busy}
-              title={task.due_date ? `Due ${fmtDue(task.due_date)}` : "Set due date"}
+              title={
+                task.due_date ? `Due ${fmtDue(task.due_date)}` : "Set due date"
+              }
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
                 task.due_date ? dueClass : TASK_SUMMARY_MUTED_BADGE_CLASS,
@@ -733,7 +774,11 @@ function TaskSummary({
               type="button"
               onClick={() => onEditPicker("estimation")}
               disabled={busy || task.is_container}
-              title={task.is_container ? "Duration is set by subtasks" : "Set duration"}
+              title={
+                task.is_container
+                  ? "Duration is set by subtasks"
+                  : "Set duration"
+              }
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
                 TASK_SUMMARY_MUTED_BADGE_CLASS,
@@ -741,32 +786,36 @@ function TaskSummary({
             >
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                 <Timer className="h-3 w-3" />
-                {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+                {task.estimation != null
+                  ? `${task.estimation} min`
+                  : "No estimate"}
               </span>
             </button>
           </PickerAnchor>
 
-          {!task.is_container && <button
-            type="button"
-            onClick={onReschedule}
-            disabled={busy}
-            title={scheduledBadgeLabel}
-            aria-label={scheduledBadgeLabel}
-            className={cn(
-              TASK_SUMMARY_BADGE_BUTTON_CLASS,
-              task.schedule_status === "unscheduled"
-                ? TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS
-                : task.scheduled_date
-                ? TASK_SUMMARY_SCHEDULED_BADGE_CLASS
-                : TASK_SUMMARY_MUTED_BADGE_CLASS,
-            )}
-          >
-            <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
-              <CalendarClock className="h-3 w-3" />
-              {scheduledBadgeText}
-              <RefreshCw className="h-3 w-3 opacity-70" />
-            </span>
-          </button>}
+          {!task.is_container && (
+            <button
+              type="button"
+              onClick={onReschedule}
+              disabled={busy}
+              title={scheduledBadgeLabel}
+              aria-label={scheduledBadgeLabel}
+              className={cn(
+                TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                task.schedule_status === "unscheduled"
+                  ? TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS
+                  : task.scheduled_date
+                    ? TASK_SUMMARY_SCHEDULED_BADGE_CLASS
+                    : TASK_SUMMARY_MUTED_BADGE_CLASS,
+              )}
+            >
+              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                <CalendarClock className="h-3 w-3" />
+                {scheduledBadgeText}
+                <RefreshCw className="h-3 w-3 opacity-70" />
+              </span>
+            </button>
+          )}
 
           {kotxTask && (
             <RunStatusBadge
@@ -774,7 +823,6 @@ function TaskSummary({
               className="h-8 shrink-0 justify-center rounded-full border-transparent px-3 py-0 text-xs font-medium leading-none"
             />
           )}
-
         </div>
 
         {task.subtasks.length > 0 && (
@@ -790,18 +838,34 @@ function TaskSummary({
                   }}
                 >
                   <TaskSummaryIconButton
-                    label={child.status === "closed" ? `${child.title} done` : `Mark ${child.title} done`}
+                    label={
+                      child.status === "closed"
+                        ? `${child.title} done`
+                        : `Mark ${child.title} done`
+                    }
                     disabled={busy || child.status !== "open"}
                     onClick={() => onCloseSubtask(child.id)}
                     className="text-muted-foreground hover:text-primary"
                   >
-                    {child.status === "closed" ? <CircleCheckBig className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
+                    {child.status === "closed" ? (
+                      <CircleCheckBig className="h-5 w-5" />
+                    ) : (
+                      <Circle className="h-5 w-5" />
+                    )}
                   </TaskSummaryIconButton>
-                  <button type="button" onClick={() => onOpenTask(child.id)} className="min-w-0 flex-1 text-left">
-                    <span className="block truncate text-base font-medium leading-snug">{child.title}</span>
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(child.id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <span className="block truncate text-base font-medium leading-snug">
+                      {child.title}
+                    </span>
                     <span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{fmtDue(child.due_date)}</span>
-                      {child.estimation != null && <span>{child.estimation} min</span>}
+                      {child.estimation != null && (
+                        <span>{child.estimation} min</span>
+                      )}
                     </span>
                   </button>
                 </CardContent>
@@ -823,35 +887,40 @@ function TaskSummary({
             above holds that context, so the fields stay hidden entirely. */}
         {task.kotx_task_id == null && (
           <div className="space-y-1.5">
-            <div className={cn("grid gap-1.5", !task.is_container && "grid-cols-2")}>
-            {!task.is_container && (
-              <EditableTextBlock
-                field="location"
-                icon={<MapPin className="h-4 w-4" />}
-                value={task.location}
-                fallback="Add location"
-                editing={editingText === "location"}
+            <div
+              className={cn(
+                "grid gap-1.5",
+                !task.is_container && "grid-cols-2",
+              )}
+            >
+              {!task.is_container && (
+                <EditableTextBlock
+                  field="location"
+                  icon={<MapPin className="h-4 w-4" />}
+                  value={task.location}
+                  fallback="Add location"
+                  editing={editingText === "location"}
+                  draft={textDraft}
+                  busy={busy}
+                  onEdit={() => onEditText("location")}
+                  onChange={onChangeText}
+                  suggestions={locationSuggestions}
+                  onSelectSuggestion={onSelectLocationSuggestion}
+                  onCancel={onCancelText}
+                  onSave={() => onSaveText("location")}
+                />
+              )}
+              <LinksSection
+                task={task}
+                editing={editingText === "link"}
                 draft={textDraft}
                 busy={busy}
-                onEdit={() => onEditText("location")}
+                onEdit={() => onEditText("link")}
                 onChange={onChangeText}
-                suggestions={locationSuggestions}
-                onSelectSuggestion={onSelectLocationSuggestion}
                 onCancel={onCancelText}
-                onSave={() => onSaveText("location")}
+                onSave={() => onSaveText("link")}
+                onCreateGithubIssue={onCreateGithubIssue}
               />
-            )}
-            <LinksSection
-              task={task}
-              editing={editingText === "link"}
-              draft={textDraft}
-              busy={busy}
-              onEdit={() => onEditText("link")}
-              onChange={onChangeText}
-              onCancel={onCancelText}
-              onSave={() => onSaveText("link")}
-              onCreateGithubIssue={onCreateGithubIssue}
-            />
             </div>
             <EditableTextBlock
               field="description"
@@ -872,6 +941,7 @@ function TaskSummary({
 
         <LinkedInputsSection
           inputs={task.raw_inputs ?? []}
+          currentTaskId={task.id}
           parentTaskId={task.parent_task_id}
           onOpenTask={onOpenTask}
           muted={kotxActionPending}
@@ -974,7 +1044,9 @@ function EditableTextBlock({
   if (markdown && value) {
     return (
       <div className="group relative flex w-full min-w-0 items-start gap-3 rounded-lg p-2 transition-colors hover:bg-accent/60">
-        {icon && <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>}
+        {icon && (
+          <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
+        )}
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-medium uppercase text-muted-foreground">
             {TEXT_LABEL[field]}
@@ -1001,7 +1073,9 @@ function EditableTextBlock({
       disabled={busy}
       className="group flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
     >
-      {icon && <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>}
+      {icon && (
+        <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
+      )}
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-medium uppercase text-muted-foreground">
           {TEXT_LABEL[field]}
@@ -1016,7 +1090,9 @@ function EditableTextBlock({
             {value}
           </span>
         ) : (
-          <span className="block text-sm text-muted-foreground">{fallback}</span>
+          <span className="block text-sm text-muted-foreground">
+            {fallback}
+          </span>
         )}
       </span>
       <Pencil className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
@@ -1082,7 +1158,7 @@ function LinksSection({
               !task.link && "text-muted-foreground",
             )}
           >
-            {task.link || "Add provided link"}
+            {task.link || "Add link"}
           </span>
         </span>
         <Pencil className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
@@ -1167,7 +1243,13 @@ function LocationTextEditor({
         </div>
       )}
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onCancel}
+          disabled={busy}
+        >
           Cancel
         </Button>
         <Button type="button" size="sm" onClick={onSave} disabled={busy}>
@@ -1226,7 +1308,13 @@ function InlineTextEditor({
         )}
       </label>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onCancel}
+          disabled={busy}
+        >
           Cancel
         </Button>
         <Button type="button" size="sm" onClick={onSave} disabled={busy}>
@@ -1289,7 +1377,9 @@ function InlinePickerPanel({
               </button>
             )}
           </div>
-          <div className="truncate text-center text-sm font-semibold">{title}</div>
+          <div className="truncate text-center text-sm font-semibold">
+            {title}
+          </div>
           <button
             type="button"
             aria-label="Close picker"
@@ -1310,11 +1400,13 @@ function InlinePickerPanel({
 
 function LinkedInputsSection({
   inputs,
+  currentTaskId,
   parentTaskId,
   onOpenTask,
   muted = false,
 }: {
   inputs: TaskRawInput[];
+  currentTaskId: string;
   parentTaskId: string | null;
   onOpenTask: (id: string) => void;
   muted?: boolean;
@@ -1337,57 +1429,86 @@ function LinkedInputsSection({
         className="flex w-full items-center justify-between text-left text-xs font-medium uppercase text-muted-foreground"
       >
         <span>Linked inputs ({inputs.length})</span>
-        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        {open ? (
+          <ChevronDown className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
       </button>
-      {open && <div className="space-y-2">
-        {inputs.map((input) => (
-          <div
-            key={input.id}
-            role={parentTaskId && input.task_id === parentTaskId ? "button" : undefined}
-            tabIndex={parentTaskId && input.task_id === parentTaskId ? 0 : undefined}
-            aria-label={parentTaskId && input.task_id === parentTaskId ? `Open parent task: ${input.task_title ?? "Parent task"}` : undefined}
-            onClick={(event) => {
-              if (!parentTaskId || input.task_id !== parentTaskId) return;
-              const interactive = (event.target as HTMLElement).closest("a,button,[role='button']");
-              if (interactive && interactive !== event.currentTarget) return;
-              onOpenTask(parentTaskId);
-            }}
-            onKeyDown={(event) => {
-              if (!parentTaskId || input.task_id !== parentTaskId || event.target !== event.currentTarget) return;
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onOpenTask(parentTaskId);
-              }
-            }}
-            className={cn(
-              "rounded-lg border p-3",
-              parentTaskId && input.task_id === parentTaskId && "cursor-pointer transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-            )}
-          >
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{inputTitle(input)}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                  <InputStatusBadge input={input} />
-                  <span className="truncate font-medium">{senderName(input)}</span>
-                  <MetaDot />
-                  <span className="font-medium">{fmtWhen(input.received_at)}</span>
+      {open && (
+        <div className="space-y-2">
+          {inputs.map((input) => {
+            const targetTaskId =
+              input.source === "subtask" && parentTaskId
+                ? parentTaskId
+                : input.task_id && input.task_id !== currentTaskId
+                  ? input.task_id
+                  : null;
+            return (
+              <div
+                key={input.id}
+                role={targetTaskId ? "button" : undefined}
+                tabIndex={targetTaskId ? 0 : undefined}
+                aria-label={
+                  targetTaskId
+                    ? `Open ${targetTaskId === parentTaskId ? "parent task" : "linked task"}: ${targetTaskId === parentTaskId && typeof input.source_metadata.parent_title === "string" ? input.source_metadata.parent_title : (input.task_title ?? inputTitle(input))}`
+                    : undefined
+                }
+                onClick={(event) => {
+                  if (!targetTaskId) return;
+                  const interactive = (event.target as HTMLElement).closest(
+                    "a,button,[role='button']",
+                  );
+                  if (interactive && interactive !== event.currentTarget)
+                    return;
+                  onOpenTask(targetTaskId);
+                }}
+                onKeyDown={(event) => {
+                  if (!targetTaskId || event.target !== event.currentTarget)
+                    return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onOpenTask(targetTaskId);
+                  }
+                }}
+                className={cn(
+                  "rounded-lg border p-3",
+                  targetTaskId &&
+                    "cursor-pointer transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                )}
+              >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">
+                      {inputTitle(input)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <InputStatusBadge input={input} />
+                      <span className="truncate font-medium">
+                        {senderName(input)}
+                      </span>
+                      <MetaDot />
+                      <span className="font-medium">
+                        {fmtWhen(input.received_at)}
+                      </span>
+                    </div>
+                  </div>
+                  {input.source_url && (
+                    <OpenLink href={input.source_url} disabled={muted}>
+                      Open source
+                    </OpenLink>
+                  )}
                 </div>
+                {hasInputDetails(input) && (
+                  <div className="mt-3 space-y-3 border-t pt-3 text-sm">
+                    <InputBody data={input} onOpenTask={onOpenTask} />
+                  </div>
+                )}
               </div>
-              {input.source_url && (
-                <OpenLink href={input.source_url} disabled={muted}>
-                  Open source
-                </OpenLink>
-              )}
-            </div>
-            {hasInputDetails(input) && (
-              <div className="mt-3 space-y-3 border-t pt-3 text-sm">
-                <InputBody data={input} />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>}
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -1432,7 +1553,10 @@ function normalizeOptional(value: string) {
 }
 
 function canCreateGithubIssue(task: Task) {
-  return (task.label === "CSEE" || task.label === "SocialAI") && !hasGithubUrl(task.link);
+  return (
+    (task.label === "CSEE" || task.label === "SocialAI") &&
+    !hasGithubUrl(task.link)
+  );
 }
 
 function hasGithubUrl(value: string | null) {

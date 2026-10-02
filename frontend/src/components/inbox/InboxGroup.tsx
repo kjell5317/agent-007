@@ -283,7 +283,7 @@ function GroupMember({ data, onOpenTask }: { data: RawInput; onOpenTask: (id: st
       </button>
       <Collapsible open={open}>
         <div className="space-y-3 border-t px-2 pb-2 pt-2 text-sm">
-          <InputBody data={data} />
+          <InputBody data={data} onOpenTask={onOpenTask} />
         </div>
       </Collapsible>
     </div>

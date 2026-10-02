@@ -20,7 +20,7 @@ import { useRuns } from "@/hooks/useRuns";
 import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
 import { getUserTimezone, setUserTimezone } from "@/lib/dates";
-import { clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
+import { clearDeepLink, parseDeepLink, pushDeepLink, replaceDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
 import type { Task } from "@/lib/types";
@@ -108,9 +108,13 @@ export function App() {
   };
 
   const leaveOverlay = useCallback(() => {
+    if (selectedTaskId) {
+      clearDeepLink();
+      setSelectedTaskId(null);
+    }
     if (view === "chat") closeSearchTo();
     else setView("tasks");
-  }, [closeSearchTo, view]);
+  }, [closeSearchTo, selectedTaskId, view]);
 
   const clearPendingTaskIds = useCallback(() => {
     const pending = pendingClearTaskIdsRef.current;
@@ -333,9 +337,11 @@ export function App() {
   // Opening a task keeps the current view — from the inbox the modal shows on
   // top of it, so closing lands back where the click happened.
   const openTask = useCallback((id: string) => {
-    pushDeepLink({ kind: "task", id });
+    if (selectedTaskId === id) return;
+    if (selectedTaskId) replaceDeepLink({ kind: "task", id });
+    else pushDeepLink({ kind: "task", id });
     setSelectedTaskId(id);
-  }, []);
+  }, [selectedTaskId]);
 
   const selectedTaskSnapshot = useRef<Task | null>(null);
   const [fetchedTask, setFetchedTask] = useState<Task | null>(null);

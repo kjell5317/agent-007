@@ -32,10 +32,14 @@ export function pushDeepLink(link: DeepLink) {
   window.history.pushState(null, "", deepLinkHash(link));
 }
 
+export function replaceDeepLink(link: DeepLink) {
+  window.history.replaceState(null, "", deepLinkHash(link));
+}
+
 export function clearDeepLink() {
   const params = new URLSearchParams(window.location.search);
   params.delete("task");
   params.delete("run");
   const query = params.toString();
-  window.history.pushState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
 }
