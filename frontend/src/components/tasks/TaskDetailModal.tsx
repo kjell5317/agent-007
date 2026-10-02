@@ -1,34 +1,32 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlarmClock,
+  ArrowLeft,
   CalendarClock,
+  CalendarDays,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  Circle,
   CircleCheckBig,
   ExternalLink,
+  GitFork,
   Github,
   Link2,
   MapPin,
   Pencil,
   RefreshCw,
   RotateCcw,
-  Scissors,
   Timer,
   Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { TaskCard } from "@/components/tasks/TaskCard";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { Input } from "@/components/ui/input";
 import { LabelPicker } from "@/components/ui/label-picker";
 import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
-import { ModalSkeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   hasInputDetails,
@@ -52,6 +50,7 @@ import type { Label, Task, TaskRawInput } from "@/lib/types";
 
 interface Props {
   task: Task;
+  knownTasks: Task[];
   kotxTask?: KotxTask | null;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
@@ -87,6 +86,7 @@ const TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS =
 
 export function TaskDetailModal({
   task,
+  knownTasks,
   kotxTask = null,
   onClose,
   onChanged,
@@ -103,11 +103,28 @@ export function TaskDetailModal({
   const [pickerLabel, setPickerLabel] = useState(task.label ?? "");
   const [textDraft, setTextDraft] = useState("");
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [subtaskDetails, setSubtaskDetails] = useState<Record<string, Task>>({});
   const [busy, setBusy] = useState(false);
   const [kotxActionPending, setKotxActionPending] = useState(false);
   const locationSuggestionRequestRef = useRef(0);
   const activeReopenPoll = useRef<PollHandle | null>(null);
+  const subtaskIds = current.subtasks.map((child) => child.id).join("|");
+
+  useEffect(() => {
+    if (!subtaskIds) return;
+    let cancelled = false;
+    void Promise.allSettled(subtaskIds.split("|").map((id) => api.getTask(id))).then((results) => {
+      if (cancelled) return;
+      setSubtaskDetails((previous) => {
+        const next = { ...previous };
+        for (const result of results) {
+          if (result.status === "fulfilled") next[result.value.id] = result.value;
+        }
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [subtaskIds]);
 
   useEffect(() => {
     setCurrent(task);
@@ -119,12 +136,6 @@ export function TaskDetailModal({
     setPickerLabel(task.label ?? "");
     setKotxActionPending(false);
   }, [task]);
-
-  useEffect(() => {
-    if (!loading) return;
-    const timer = window.setTimeout(() => setLoading(false), 120);
-    return () => window.clearTimeout(timer);
-  }, [loading]);
 
   useEffect(
     () => () => {
@@ -185,21 +196,11 @@ export function TaskDetailModal({
     }
   }
 
-  async function closeSubtask(childId: string) {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await api.closeTask(childId);
-      const saved = await api.getTask(current.id);
-      syncTaskState(saved);
-      toast.success("Subtask marked done");
-      await onChanged();
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const refreshAfterSubtaskChange = async () => {
+    const saved = await api.getTask(current.id);
+    syncTaskState(saved);
+    await onChanged();
+  };
 
   async function savePatch(patch: Partial<Task>, message = "Saved") {
     setBusy(true);
@@ -381,6 +382,22 @@ export function TaskDetailModal({
     setPickerLabel(current.label ?? "");
   };
 
+  const saveActiveEdit = async () => {
+    if (busy) return;
+    if (editingText) {
+      await saveTextEditor(editingText);
+      return;
+    }
+    if (!activePicker) return;
+    const patch: Partial<Task> = activePicker === "due_date"
+      ? { due_date: pickerDue }
+      : activePicker === "estimation"
+        ? { estimation: pickerEstimation }
+        : { label: pickerLabel || null };
+    const saved = await savePatch(patch);
+    if (saved) setActivePicker(null);
+  };
+
   return (
     <Modal
       open
@@ -390,14 +407,23 @@ export function TaskDetailModal({
       backdropClassName="max-sm:p-0"
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl max-sm:h-dvh max-sm:max-h-dvh max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:p-0"
       header={
-        <div className="flex shrink-0 items-center justify-between border-b px-3 py-2 max-sm:pt-[max(0.5rem,env(safe-area-inset-top))] sm:mb-3 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
-          <TaskSummaryIconButton label="Back" onClick={onClose}>
-            <ChevronLeft className="h-5 w-5" />
-          </TaskSummaryIconButton>
+        <div className="relative z-30 flex h-[72px] shrink-0 items-center justify-between border-b bg-card px-4 sm:mb-3 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
+          <div className="flex items-center gap-1">
+            <Button type="button" size="icon" variant="ghost" onClick={onClose} aria-label={editingText || activePicker ? "Cancel and close" : "Back"} className="h-12 w-12 shrink-0">
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+            {(editingText || activePicker) && (
+              <Button type="button" size="sm" onClick={() => { void saveActiveEdit(); }} disabled={busy}>
+                Save
+              </Button>
+            )}
+          </div>
           <div className="flex items-center gap-1">
             {current.status === "open" && !current.is_container && (
-              <TaskSummaryIconButton
-                label={
+              <Button
+                type="button"
+                size="icon"
+                aria-label={
                   kotxTask
                     ? kotxTask.canDiscard
                       ? "Dismiss run"
@@ -406,9 +432,10 @@ export function TaskDetailModal({
                 }
                 disabled={busy}
                 onClick={kotxTask ? dismissRun : markDone}
+                className="h-12 w-12 shrink-0 rounded-full"
               >
                 <CircleCheckBig className="h-5 w-5" />
-              </TaskSummaryIconButton>
+              </Button>
             )}
             {current.status === "open" &&
               !current.is_container &&
@@ -419,7 +446,7 @@ export function TaskDetailModal({
                   disabled={busy}
                   onClick={splitCurrentTask}
                 >
-                  <Scissors className="h-5 w-5" />
+                  <GitFork className="h-5 w-5" />
                 </TaskSummaryIconButton>
               )}
             {current.status === "open" &&
@@ -438,12 +465,7 @@ export function TaskDetailModal({
         </div>
       }
     >
-      {loading ? (
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <ModalSkeleton />
-        </div>
-      ) : (
-        <TaskSummary
+      <TaskSummary
           title={
             <TaskTitleHeader
               task={current}
@@ -452,16 +474,16 @@ export function TaskDetailModal({
               busy={busy}
               onEdit={() => openTextEditor("title")}
               onChange={setTextDraft}
-              onCancel={closeTextEditor}
-              onSave={() => saveTextEditor("title")}
             />
           }
           task={current}
+          knownTasks={knownTasks}
+          subtaskDetails={subtaskDetails}
+          onSubtaskChanged={refreshAfterSubtaskChange}
           kotxTask={kotxTask}
           onKotxChanged={onKotxChanged}
           onKotxActionDone={onClose}
           onOpenTask={onOpenTask}
-          onCloseSubtask={closeSubtask}
           labels={labels}
           busy={busy}
           kotxActionPending={kotxActionPending}
@@ -473,39 +495,19 @@ export function TaskDetailModal({
           pickerEstimation={pickerEstimation}
           pickerLabel={pickerLabel}
           onEditText={openTextEditor}
-          onCancelText={closeTextEditor}
           onChangeText={setTextDraft}
           locationSuggestions={locationSuggestions}
           onSelectLocationSuggestion={setTextDraft}
-          onSaveText={saveTextEditor}
           onEditPicker={openPicker}
-          onClosePicker={() => setActivePicker(null)}
           onDateStepChange={setDateStep}
           onPickerDueChange={setPickerDue}
           onPickerEstimationChange={setPickerEstimation}
           onPickerLabelChange={setPickerLabel}
-          onSaveDue={async () => {
-            const saved = await savePatch({ due_date: pickerDue });
-            if (saved) setActivePicker(null);
-          }}
-          onClearDue={async () => {
-            const saved = await savePatch({ due_date: null });
-            if (saved) setActivePicker(null);
-          }}
-          onSaveEstimation={async () => {
-            const saved = await savePatch({ estimation: pickerEstimation });
-            if (saved) setActivePicker(null);
-          }}
-          onSaveLabel={async () => {
-            const saved = await savePatch({ label: pickerLabel || null });
-            if (saved) setActivePicker(null);
-          }}
           onReopenTask={reopenCurrentTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
           onKotxActionPendingChange={setKotxActionPending}
-        />
-      )}
+      />
     </Modal>
   );
 }
@@ -517,8 +519,6 @@ function TaskTitleHeader({
   busy,
   onEdit,
   onChange,
-  onCancel,
-  onSave,
 }: {
   task: Task;
   editing: boolean;
@@ -526,8 +526,6 @@ function TaskTitleHeader({
   busy: boolean;
   onEdit: () => void;
   onChange: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
 }) {
   if (editing) {
     return (
@@ -537,8 +535,6 @@ function TaskTitleHeader({
           value={draft}
           busy={busy}
           onChange={onChange}
-          onCancel={onCancel}
-          onSave={onSave}
           inputClassName="text-2xl font-semibold leading-tight"
         />
       </div>
@@ -561,11 +557,13 @@ function TaskTitleHeader({
 function TaskSummary({
   title,
   task,
+  knownTasks,
+  subtaskDetails,
+  onSubtaskChanged,
   kotxTask,
   onKotxChanged,
   onKotxActionDone,
   onOpenTask,
-  onCloseSubtask,
   labels,
   busy,
   kotxActionPending,
@@ -577,21 +575,14 @@ function TaskSummary({
   pickerEstimation,
   pickerLabel,
   onEditText,
-  onCancelText,
   onChangeText,
   locationSuggestions,
   onSelectLocationSuggestion,
-  onSaveText,
   onEditPicker,
-  onClosePicker,
   onDateStepChange,
   onPickerDueChange,
   onPickerEstimationChange,
   onPickerLabelChange,
-  onSaveDue,
-  onClearDue,
-  onSaveEstimation,
-  onSaveLabel,
   onReopenTask,
   onReschedule,
   onCreateGithubIssue,
@@ -599,11 +590,13 @@ function TaskSummary({
 }: {
   title: ReactNode;
   task: Task;
+  knownTasks: Task[];
+  subtaskDetails: Record<string, Task>;
+  onSubtaskChanged: () => Promise<void>;
   kotxTask: KotxTask | null;
   onKotxChanged?: () => Promise<void> | void;
   onKotxActionDone: () => void;
   onOpenTask: (id: string) => void;
-  onCloseSubtask: (id: string) => void;
   labels: Label[];
   busy: boolean;
   kotxActionPending: boolean;
@@ -615,21 +608,14 @@ function TaskSummary({
   pickerEstimation: number | null;
   pickerLabel: string;
   onEditText: (field: TextField) => void;
-  onCancelText: () => void;
   onChangeText: (value: string) => void;
   locationSuggestions: string[];
   onSelectLocationSuggestion: (value: string) => void;
-  onSaveText: (field: TextField) => void;
   onEditPicker: (field: PickerField) => void;
-  onClosePicker: () => void;
   onDateStepChange: (step: "date" | "time") => void;
   onPickerDueChange: (value: string | null) => void;
   onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
-  onSaveDue: () => void;
-  onClearDue: () => void;
-  onSaveEstimation: () => void;
-  onSaveLabel: () => void;
   onReopenTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
@@ -675,11 +661,10 @@ function TaskSummary({
           <PickerAnchor
             open={activePicker === "label"}
             panel={
-              <InlinePickerPanel title="Label" onClose={onClosePicker}>
+              <InlinePickerPanel title="Label">
                 <LabelPicker
                   value={pickerLabel}
                   onChange={onPickerLabelChange}
-                  onSave={onSaveLabel}
                   labels={labels}
                   defaultOpen
                 />
@@ -708,8 +693,7 @@ function TaskSummary({
             panel={
               <InlinePickerPanel
                 title="Due date"
-                onClose={onClosePicker}
-                onBack={
+                onEditDate={
                   dateStep === "time"
                     ? () => onDateStepChange("date")
                     : undefined
@@ -721,7 +705,7 @@ function TaskSummary({
                       variant="ghost"
                       size="sm"
                       className="w-full"
-                      onClick={onClearDue}
+                      onClick={() => onPickerDueChange(null)}
                       disabled={busy}
                     >
                       Clear due date
@@ -732,7 +716,6 @@ function TaskSummary({
                 <DatePicker
                   value={pickerDue}
                   onChange={onPickerDueChange}
-                  onSave={onSaveDue}
                   step={dateStep}
                   onStepChange={onDateStepChange}
                 />
@@ -761,11 +744,10 @@ function TaskSummary({
           <PickerAnchor
             open={!task.is_container && activePicker === "estimation"}
             panel={
-              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
+              <InlinePickerPanel title="Estimate">
                 <EstimationPicker
                   value={pickerEstimation}
                   onChange={onPickerEstimationChange}
-                  onSave={onSaveEstimation}
                 />
               </InlinePickerPanel>
             }
@@ -828,49 +810,22 @@ function TaskSummary({
         {task.subtasks.length > 0 && (
           <section className="space-y-2">
             <h3 className="text-sm font-semibold">Subtasks</h3>
-            {task.subtasks.map((child) => (
-              <Card key={child.id}>
-                <CardContent
-                  className="flex cursor-pointer items-center gap-2"
-                  onClick={(event) => {
-                    if ((event.target as HTMLElement).closest("button")) return;
-                    onOpenTask(child.id);
-                  }}
-                >
-                  <TaskSummaryIconButton
-                    label={
-                      child.status === "closed"
-                        ? `${child.title} done`
-                        : `Mark ${child.title} done`
-                    }
-                    disabled={busy || child.status !== "open"}
-                    onClick={() => onCloseSubtask(child.id)}
-                    className="text-muted-foreground hover:text-primary"
-                  >
-                    {child.status === "closed" ? (
-                      <CircleCheckBig className="h-5 w-5" />
-                    ) : (
-                      <Circle className="h-5 w-5" />
-                    )}
-                  </TaskSummaryIconButton>
-                  <button
-                    type="button"
-                    onClick={() => onOpenTask(child.id)}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <span className="block truncate text-base font-medium leading-snug">
-                      {child.title}
-                    </span>
-                    <span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{fmtDue(child.due_date)}</span>
-                      {child.estimation != null && (
-                        <span>{child.estimation} min</span>
-                      )}
-                    </span>
-                  </button>
-                </CardContent>
-              </Card>
-            ))}
+            {task.subtasks.map((child) => {
+              const fullTask = knownTasks.find((candidate) => candidate.id === child.id) ?? subtaskDetails[child.id];
+              return fullTask ? (
+                <TaskCard
+                  key={child.id}
+                  task={{ ...fullTask, title: child.title, status: child.status, due_date: child.due_date, estimation: child.estimation }}
+                  onChanged={onSubtaskChanged}
+                  onKotxChanged={onSubtaskChanged}
+                  onOpen={onOpenTask}
+                />
+              ) : (
+                <div key={child.id} className="rounded-xl border bg-card p-3 text-sm text-muted-foreground" role="status">
+                  Loading {child.title}…
+                </div>
+              );
+            })}
           </section>
         )}
 
@@ -906,8 +861,6 @@ function TaskSummary({
                   onChange={onChangeText}
                   suggestions={locationSuggestions}
                   onSelectSuggestion={onSelectLocationSuggestion}
-                  onCancel={onCancelText}
-                  onSave={() => onSaveText("location")}
                 />
               )}
               <LinksSection
@@ -917,8 +870,6 @@ function TaskSummary({
                 busy={busy}
                 onEdit={() => onEditText("link")}
                 onChange={onChangeText}
-                onCancel={onCancelText}
-                onSave={() => onSaveText("link")}
                 onCreateGithubIssue={onCreateGithubIssue}
               />
             </div>
@@ -933,8 +884,6 @@ function TaskSummary({
               markdown
               onEdit={() => onEditText("description")}
               onChange={onChangeText}
-              onCancel={onCancelText}
-              onSave={() => onSaveText("description")}
             />
           </div>
         )}
@@ -987,8 +936,6 @@ function EditableTextBlock({
   onEdit,
   onChange,
   onSelectSuggestion,
-  onCancel,
-  onSave,
 }: {
   field: TextField;
   icon?: ReactNode;
@@ -1003,8 +950,6 @@ function EditableTextBlock({
   onEdit: () => void;
   onChange: (value: string) => void;
   onSelectSuggestion?: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
 }) {
   if (editing) {
     return (
@@ -1018,8 +963,6 @@ function EditableTextBlock({
             suggestions={suggestions}
             onChange={onChange}
             onSelectSuggestion={onSelectSuggestion ?? onChange}
-            onCancel={onCancel}
-            onSave={onSave}
           />
         ) : (
           <InlineTextEditor
@@ -1029,8 +972,6 @@ function EditableTextBlock({
             multiline={multiline}
             placeholder={fallback}
             onChange={onChange}
-            onCancel={onCancel}
-            onSave={onSave}
           />
         )}
       </div>
@@ -1107,8 +1048,6 @@ function LinksSection({
   busy,
   onEdit,
   onChange,
-  onCancel,
-  onSave,
   onCreateGithubIssue,
 }: {
   task: Task;
@@ -1117,8 +1056,6 @@ function LinksSection({
   busy: boolean;
   onEdit: () => void;
   onChange: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
   onCreateGithubIssue: () => void;
 }) {
   if (editing) {
@@ -1130,8 +1067,6 @@ function LinksSection({
           busy={busy}
           placeholder="https://..."
           onChange={onChange}
-          onCancel={onCancel}
-          onSave={onSave}
         />
       </div>
     );
@@ -1199,8 +1134,6 @@ function LocationTextEditor({
   suggestions,
   onChange,
   onSelectSuggestion,
-  onCancel,
-  onSave,
 }: {
   label: string;
   value: string;
@@ -1209,8 +1142,6 @@ function LocationTextEditor({
   suggestions: string[];
   onChange: (value: string) => void;
   onSelectSuggestion: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -1242,20 +1173,6 @@ function LocationTextEditor({
           ))}
         </div>
       )}
-      <div className="flex justify-end gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onCancel}
-          disabled={busy}
-        >
-          Cancel
-        </Button>
-        <Button type="button" size="sm" onClick={onSave} disabled={busy}>
-          Save
-        </Button>
-      </div>
     </div>
   );
 }
@@ -1268,8 +1185,6 @@ function InlineTextEditor({
   placeholder,
   inputClassName,
   onChange,
-  onCancel,
-  onSave,
 }: {
   label: string;
   value: string;
@@ -1278,8 +1193,6 @@ function InlineTextEditor({
   placeholder?: string;
   inputClassName?: string;
   onChange: (value: string) => void;
-  onCancel: () => void;
-  onSave: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -1307,20 +1220,6 @@ function InlineTextEditor({
           />
         )}
       </label>
-      <div className="flex justify-end gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onCancel}
-          disabled={busy}
-        >
-          Cancel
-        </Button>
-        <Button type="button" size="sm" onClick={onSave} disabled={busy}>
-          Save
-        </Button>
-      </div>
     </div>
   );
 }
@@ -1346,48 +1245,38 @@ function InlinePickerPanel({
   title,
   children,
   footer,
-  onBack,
-  onClose,
+  onEditDate,
 }: {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
-  onBack?: () => void;
-  onClose: () => void;
+  onEditDate?: () => void;
 }) {
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:z-20 sm:mt-2 sm:block sm:bg-transparent sm:p-0"
-      onClick={onClose}
+      className="fixed inset-x-0 bottom-0 top-[72px] z-20 flex items-start justify-center overflow-y-auto bg-card p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:block sm:overflow-visible sm:bg-transparent sm:p-0"
     >
       <div
         className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
           <div>
-            {onBack && (
+            {onEditDate && (
               <button
                 type="button"
-                aria-label="Back"
-                onClick={onBack}
+                aria-label="Edit date"
+                title="Edit date"
+                onClick={onEditDate}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
-                <ChevronLeft className="h-4 w-4" />
+                <CalendarDays className="h-4 w-4" />
               </button>
             )}
           </div>
           <div className="truncate text-center text-sm font-semibold">
             {title}
           </div>
-          <button
-            type="button"
-            aria-label="Close picker"
-            onClick={onClose}
-            className="inline-flex h-7 w-7 items-center justify-center justify-self-end rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <span aria-hidden="true" />
         </div>
         <div className="min-h-0 space-y-3 overflow-y-auto">
           {children}

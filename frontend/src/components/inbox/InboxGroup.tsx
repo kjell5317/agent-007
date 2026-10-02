@@ -35,6 +35,7 @@ interface Props {
   group: GroupData;
   onChanged: () => Promise<void> | void;
   onOpenTask: (id: string) => void;
+  onActivate?: () => void;
   unseenMemberIds: string[];
   onVisible: (ids: string[]) => void;
 }
@@ -43,6 +44,7 @@ export function InboxGroup({
   group,
   onChanged,
   onOpenTask,
+  onActivate,
   unseenMemberIds,
   onVisible,
 }: Props) {
@@ -64,7 +66,9 @@ export function InboxGroup({
   // its own outcome badge; groups with no task fall back to the newest member.
   const activeRun = activeKotxRun(members);
   const taskBadge = liveTask ? "open" : closedTask ? "closed" : dismissedTask ? "not_task" : null;
-  const taskId =
+  const taskId = isSplitGroup && group.key.startsWith("task:")
+    ? group.key.slice(5)
+    :
     liveTask?.task_id ??
     closedTask?.task_id ??
     dismissedTask?.task_id ??
@@ -118,7 +122,13 @@ export function InboxGroup({
   // task from thread"; a run already terminal gets no action. Mixed
   // gmail+kotx github threads keep the promote path.
   const kotxRunThread = !liveTask && !closedTask && !dismissedTask && members.every(isKotxRun);
-  const action = isSplitGroup ? null : kotxRunThread
+  const action = isSplitGroup
+    ? liveTask && taskId
+      ? { label: "Dismiss task", Icon: Trash2, run: () => runTaskAction(taskId, api.markNotTask, "Task dismissed") }
+      : (closedTask || dismissedTask) && taskId
+        ? { label: "Re-open task", Icon: RotateCcw, run: () => reopenTask(taskId) }
+        : null
+    : kotxRunThread
     ? isDismissibleKotxRun(newest)
       ? {
           label: "Dismiss run",
@@ -168,6 +178,7 @@ export function InboxGroup({
             ) {
               return;
             }
+            onActivate?.();
             onOpenTask(taskId);
           }}
         >
@@ -211,7 +222,7 @@ export function InboxGroup({
             type="button"
             aria-label={open ? "Collapse thread" : "Expand thread"}
             title={open ? "Collapse thread" : "Expand thread"}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => { onActivate?.(); setOpen((v) => !v); }}
             className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
           >
             <Chevron className="h-4 w-4" />

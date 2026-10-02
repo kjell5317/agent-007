@@ -1,13 +1,14 @@
-import { CalendarDays, FileText, GitPullRequest, Inbox, ListTodo, UserRound } from "lucide-react";
+import { CalendarDays, FileText, GitPullRequest, Inbox, ListTodo, NotebookPen, UserRound } from "lucide-react";
 import { useCallback, useState, type ComponentType } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
+import { InboxCard } from "@/components/inbox/InboxCard";
 import { ContactCard, DocCard, EventCard } from "@/components/search/AssistantContent";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { fmtWhen } from "@/lib/dates";
 import { api } from "@/lib/api";
 import { badgeKindLabel } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
-import type { ChatCitation, SearchHit, SearchHitType, Task } from "@/lib/types";
+import type { ChatCitation, RawInput, SearchHit, SearchHitType, Task } from "@/lib/types";
 
 const TYPE_ICON: Record<
   SearchHitType,
@@ -15,7 +16,7 @@ const TYPE_ICON: Record<
 > = {
   task: ListTodo,
   input: Inbox,
-  note: FileText,
+  note: NotebookPen,
   document: FileText,
   drive: FileText,
   contact: UserRound,
@@ -70,6 +71,8 @@ function metaPills(hit: SearchHit): string[] {
 export function SearchResultRow({
   hit,
   task,
+  input,
+  onChanged,
   onOpenTask,
   onActivate,
   onShowContent,
@@ -77,6 +80,8 @@ export function SearchResultRow({
 }: {
   hit: SearchHit;
   task?: Task;
+  input?: RawInput;
+  onChanged?: () => Promise<void> | void;
   onOpenTask: (taskId: string) => void;
   // Fired after activation when embedded in another view.
   onActivate?: () => void;
@@ -90,6 +95,18 @@ export function SearchResultRow({
       hit={hit} initialTask={task} onOpenTask={onOpenTask} onActivate={onActivate}
       preventBlur={preventBlur}
     />;
+  }
+  if (hit.type === "input" && input) {
+    return <div onMouseDown={preventBlur ? (event) => event.preventDefault() : undefined}>
+      <InboxCard
+        item={{ id: input.id, sort: input.received_at, data: input }}
+        onChanged={onChanged ?? (() => {})}
+        unseen={false}
+        onVisible={() => {}}
+        onOpenTask={onOpenTask}
+        onActivate={onActivate}
+      />
+    </div>;
   }
   if (hit.type === "contact" || hit.type === "drive"
       || (hit.type === "document" && !hit.task_id)) {

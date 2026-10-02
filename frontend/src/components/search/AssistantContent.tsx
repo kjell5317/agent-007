@@ -26,7 +26,12 @@ import { fmtWhen } from "@/lib/dates";
 import { labelChipStyle } from "@/lib/labels";
 import { subscribeEvents } from "@/lib/events";
 import { cn } from "@/lib/utils";
-import type { ChatCitation, ChatCitationMeta, LinkPreview, Task } from "@/lib/types";
+import type {
+  ChatCitation,
+  ChatCitationMeta,
+  LinkPreview,
+  Task,
+} from "@/lib/types";
 
 // A small inline renderer for streamed assistant text. Unlike the block-level
 // Markdown component, this keeps inline widgets (loc:{}, Notion links) inline
@@ -127,7 +132,14 @@ const RULES: Rule[] = [
     render: (m, key) => {
       const place = m[1].trim();
       if (/^<[^>]+>$/.test(place)) {
-        return <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[0]}</code>;
+        return (
+          <code
+            key={key}
+            className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+          >
+            {m[0]}
+          </code>
+        );
       }
       return (
         <a
@@ -145,9 +157,17 @@ const RULES: Rule[] = [
   },
   {
     re: /copy:\{([^}]+)\}/,
-    render: (m, key) => /^<[^>]+>$/.test(m[1].trim())
-      ? <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[0]}</code>
-      : <CopyChip key={key} value={m[1].trim()} />,
+    render: (m, key) =>
+      /^<[^>]+>$/.test(m[1].trim()) ? (
+        <code
+          key={key}
+          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+        >
+          {m[0]}
+        </code>
+      ) : (
+        <CopyChip key={key} value={m[1].trim()} />
+      ),
   },
   // Markdown link — before the citation rule so `[x](url)` never reads as one.
   // A Notion link renders as a compact page chip instead of a bare link.
@@ -171,7 +191,9 @@ const RULES: Rule[] = [
   // A bare Notion URL (no markdown link wrapper).
   {
     re: /(https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site)\/[^\s)]+)/i,
-    render: (m, key) => <NotionChip key={key} href={m[1]} label="Notion page" />,
+    render: (m, key) => (
+      <NotionChip key={key} href={m[1]} label="Notion page" />
+    ),
   },
   {
     // Bracketed citation tags ([T1], [N2, N4]) — citation chips were removed, so
@@ -182,7 +204,10 @@ const RULES: Rule[] = [
   {
     re: /`([^`]+)`/,
     render: (m, key) => (
-      <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+      <code
+        key={key}
+        className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+      >
         {m[1]}
       </code>
     ),
@@ -268,10 +293,12 @@ function widgetKey(value: string): string {
 
 function isWidgetRef(kind: WidgetKind, key: string): boolean {
   if (kind === "task") return UUID.test(key) || /^T\d+$/i.test(key);
-  if (kind === "contact") return /^C\d+$/i.test(key) || /^people\/[^\s{}]+$/.test(key);
+  if (kind === "contact")
+    return /^C\d+$/i.test(key) || /^people\/[^\s{}]+$/.test(key);
   if (kind === "event") return /^E\d+$/i.test(key);
-  return /^[DG]\d+$/i.test(key) || (
-    /^[A-Za-z0-9_-]{20,}$/.test(key) && !UUID.test(key)
+  return (
+    /^[DG]\d+$/i.test(key) ||
+    (/^[A-Za-z0-9_-]{20,}$/.test(key) && !UUID.test(key))
   );
 }
 
@@ -281,23 +308,41 @@ function hasBlockWidget(line: string): boolean {
   );
 }
 
-function renderWidget(w: { kind: WidgetKind; value: string }, ctx: Ctx): ReactNode {
+function renderWidget(
+  w: { kind: WidgetKind; value: string },
+  ctx: Ctx,
+): ReactNode {
   const key = widgetKey(w.value);
   if (w.kind === "task") {
     // Prefer a real id; if the model passed a citation tag, resolve it.
     const cite = ctx.byTag.get(key);
-    return <ChatTaskCard taskId={cite ? (cite.task_id ?? cite.id) : key} ctx={ctx} />;
+    return (
+      <ChatTaskCard taskId={cite ? (cite.task_id ?? cite.id) : key} ctx={ctx} />
+    );
   }
   // Models sometimes use the source id from a search result instead of its
   // citation tag. Both identify the same retrieved item.
   const cite = ctx.byTag.get(key) ?? ctx.bySourceId.get(key);
-  if (!cite && w.kind === "doc" && /^[A-Za-z0-9_-]{20,}$/.test(key)
-    && !UUID.test(key)) {
-    return <WidgetShell Icon={FileText} title={key} href={`https://drive.google.com/open?id=${encodeURIComponent(key)}`} />;
+  if (
+    !cite &&
+    w.kind === "doc" &&
+    /^[A-Za-z0-9_-]{20,}$/.test(key) &&
+    !UUID.test(key)
+  ) {
+    return (
+      <WidgetShell
+        Icon={FileText}
+        title={key}
+        href={`https://drive.google.com/open?id=${encodeURIComponent(key)}`}
+      />
+    );
   }
   if (!cite) return <FallbackChip label={key} />;
   if (w.kind === "contact") return <ContactCard cite={cite} />;
-  if (w.kind === "event") return <EventCard cite={cite} onShowContent={() => ctx.onShowContent(cite)} />;
+  if (w.kind === "event")
+    return (
+      <EventCard cite={cite} onShowContent={() => ctx.onShowContent(cite)} />
+    );
   return <DocCard cite={cite} onShowContent={() => ctx.onShowContent(cite)} />;
 }
 
@@ -364,19 +409,35 @@ function WidgetShell({
         clickable && "cursor-pointer hover:border-primary/40 hover:bg-accent",
       )}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+      <span
+        className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground"
+        aria-hidden="true"
+      >
         <Icon className="h-5 w-5" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-base font-medium leading-snug" title={title}>{title}</div>
+        <div
+          className="truncate text-base font-medium leading-snug"
+          title={title}
+        >
+          {title}
+        </div>
         <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
           {label && (
-            <span className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground" style={labelChipStyle(label.color)} title={label.text}>
+            <span
+              className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+              style={labelChipStyle(label.color)}
+              title={label.text}
+            >
               {label.text}
             </span>
           )}
           {pills.filter(Boolean).map((pill, index) => (
-            <span key={`${pill}:${index}`} title={pill} className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            <span
+              key={`${pill}:${index}`}
+              title={pill}
+              className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+            >
               {pill}
             </span>
           ))}
@@ -386,20 +447,43 @@ function WidgetShell({
   );
 }
 
-export function ContactCard({ cite, onOpened }: { cite: ChatCitation; onOpened?: () => void }) {
+export function ContactCard({
+  cite,
+  onOpened,
+}: {
+  cite: ChatCitation;
+  onOpened?: () => void;
+}) {
   const meta = citeMeta(cite);
   const emails = meta.emails ?? [];
   const phones = meta.phones ?? [];
-  const details = [meta.org, emails[0], phones[0], meta.birthday, meta.addresses?.[0]]
-    .filter((value): value is string => Boolean(value));
+  const details = [
+    meta.org,
+    emails[0],
+    phones[0],
+    meta.birthday,
+    meta.addresses?.[0],
+  ].filter((value): value is string => Boolean(value));
   return (
-    <WidgetShell Icon={UserRound} title={cite.title || "Contact"} href={cite.url} onOpened={onOpened} pills={details.slice(0, 2)} />
+    <WidgetShell
+      Icon={UserRound}
+      title={cite.title || "Contact"}
+      href={cite.url}
+      onOpened={onOpened}
+      pills={details.slice(0, 2)}
+    />
   );
 }
 
 export function EventCard({
-  cite, onShowContent, onOpened,
-}: { cite: ChatCitation; onShowContent?: () => void; onOpened?: () => void }) {
+  cite,
+  onShowContent,
+  onOpened,
+}: {
+  cite: ChatCitation;
+  onShowContent?: () => void;
+  onOpened?: () => void;
+}) {
   const labels = useLabels();
   const meta = citeMeta(cite);
   const eventLabel = labels.find((label) => label.google_id === meta.label_id);
@@ -414,14 +498,22 @@ export function EventCard({
       onActivate={onActivate}
       onOpened={onOpened}
       label={{ text: eventLabel?.name ?? "Event", color: eventLabel?.color }}
-      pills={[when, location].filter((value): value is string => Boolean(value))}
+      pills={[when, location].filter((value): value is string =>
+        Boolean(value),
+      )}
     />
   );
 }
 
 export function DocCard({
-  cite, onShowContent, onOpened,
-}: { cite: ChatCitation; onShowContent?: () => void; onOpened?: () => void }) {
+  cite,
+  onShowContent,
+  onOpened,
+}: {
+  cite: ChatCitation;
+  onShowContent?: () => void;
+  onOpened?: () => void;
+}) {
   const meta = citeMeta(cite);
   const onActivate = cite.url ? undefined : onShowContent;
   return (
@@ -431,7 +523,9 @@ export function DocCard({
       href={cite.url}
       onActivate={onActivate}
       onOpened={onOpened}
-      pills={[cite.ts ? `Modified ${fmtWhen(cite.ts)}` : null, meta.mime].filter((value): value is string => Boolean(value))}
+      pills={[cite.ts ? `${fmtWhen(cite.ts)}` : null, meta.mime].filter(
+        (value): value is string => Boolean(value),
+      )}
     />
   );
 }
@@ -471,7 +565,11 @@ function CopyChip({ value }: { value: string }) {
       title={copied ? "Copied" : `Copy ${value}`}
       className="inline-flex max-w-full items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 align-middle text-[0.9em] text-foreground hover:bg-accent"
     >
-      {copied ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}
+      {copied ? (
+        <Check className="h-3 w-3 shrink-0" />
+      ) : (
+        <Copy className="h-3 w-3 shrink-0" />
+      )}
       <span className="truncate">{value}</span>
     </button>
   );
@@ -505,7 +603,9 @@ function LinkPreviewCard({ url }: { url: string }) {
   }, [url]);
 
   if (!done) {
-    return <div className="my-1.5 h-[76px] animate-pulse rounded-xl border bg-muted/40" />;
+    return (
+      <div className="my-1.5 h-[76px] animate-pulse rounded-xl border bg-muted/40" />
+    );
   }
   if (!preview) return null;
 
@@ -515,7 +615,9 @@ function LinkPreviewCard({ url }: { url: string }) {
         Icon={Globe}
         title={preview.title}
         href={url}
-        pills={[preview.site_name || safeHost(url), preview.description].filter((value): value is string => Boolean(value))}
+        pills={[preview.site_name || safeHost(url), preview.description].filter(
+          (value): value is string => Boolean(value),
+        )}
       />
     </div>
   );
@@ -569,7 +671,13 @@ function ChatTaskCard({ taskId, ctx }: { taskId: string; ctx: Ctx }) {
 
   if (failed) {
     const title = ctx.byTaskId.get(taskId)?.title ?? "Open task";
-    return <WidgetShell Icon={ListTodo} title={title} onActivate={() => ctx.onOpenTask(taskId)} />;
+    return (
+      <WidgetShell
+        Icon={ListTodo}
+        title={title}
+        onActivate={() => ctx.onOpenTask(taskId)}
+      />
+    );
   }
 
   if (!task) {
@@ -604,16 +712,23 @@ export function AssistantContent({
 }) {
   // A previous length-limited answer can end halfway through a task UUID.
   // Resolve it only when the prefix identifies exactly one cited task.
-  const displayContent = caret ? content : content.replace(
-    /task:\{([0-9a-f-]{8,})$/gim,
-    (partial, prefix: string) => {
-      const matches = citations.filter((cite) => (cite.type === "task" || cite.task_id)
-        && (cite.task_id ?? cite.id).toLowerCase().startsWith(prefix.toLowerCase()));
-      return matches.length === 1
-        ? `task:{${matches[0].task_id ?? matches[0].id}}`
-        : partial;
-    },
-  );
+  const displayContent = caret
+    ? content
+    : content.replace(
+        /task:\{([0-9a-f-]{8,})$/gim,
+        (partial, prefix: string) => {
+          const matches = citations.filter(
+            (cite) =>
+              (cite.type === "task" || cite.task_id) &&
+              (cite.task_id ?? cite.id)
+                .toLowerCase()
+                .startsWith(prefix.toLowerCase()),
+          );
+          return matches.length === 1
+            ? `task:{${matches[0].task_id ?? matches[0].id}}`
+            : partial;
+        },
+      );
   const byTag = new Map(citations.map((c) => [c.tag, c]));
   const bySourceId = new Map(citations.map((c) => [c.id, c]));
   const byTaskId = new Map<string, ChatCitation>();
@@ -644,7 +759,8 @@ export function AssistantContent({
   const cardedTitles = new Set<string>();
   for (const c of citations) {
     const target = c.task_id ?? (c.type === "task" ? c.id : null);
-    const carded = cardedTags.has(c.tag) || (target != null && cardedTaskIds.has(target));
+    const carded =
+      cardedTags.has(c.tag) || (target != null && cardedTaskIds.has(target));
     if (carded && c.title) cardedTitles.add(normalizeTitle(c.title));
   }
 
@@ -701,10 +817,18 @@ export function AssistantContent({
     }
     // List runs — bullet (`-`/`*`) or ordered (`1.`), but only lines without a
     // card widget; a widget breaks out into its own block below.
-    const listMarker = BULLET.test(line) ? BULLET : ORDERED.test(line) ? ORDERED : null;
+    const listMarker = BULLET.test(line)
+      ? BULLET
+      : ORDERED.test(line)
+        ? ORDERED
+        : null;
     if (listMarker && !hasWidget) {
       const items: string[] = [];
-      while (i < lines.length && listMarker.test(lines[i]) && !hasBlockWidget(lines[i]))
+      while (
+        i < lines.length &&
+        listMarker.test(lines[i]) &&
+        !hasBlockWidget(lines[i])
+      )
         items.push(lines[i++].replace(listMarker, ""));
       // Drop items that just repeat a carded item's title.
       const kept = items.filter((it) => !isDuplicateTitle(it, ctx));
@@ -729,7 +853,9 @@ export function AssistantContent({
     }
     if (hasWidget) {
       // Drop any leading bullet marker; the card stands on its own.
-      blocks.push(...renderWidgetLine(line.replace(/^\s*[-*]\s+/, ""), `wl${key++}`, ctx));
+      blocks.push(
+        ...renderWidgetLine(line.replace(/^\s*[-*]\s+/, ""), `wl${key++}`, ctx),
+      );
       pushPreviews(line);
       i++;
       continue;
@@ -750,7 +876,11 @@ export function AssistantContent({
 
   if (caret) appendCaret(blocks);
 
-  return <div className="space-y-2 break-words text-[15px] leading-relaxed">{blocks}</div>;
+  return (
+    <div className="space-y-2 break-words text-[15px] leading-relaxed">
+      {blocks}
+    </div>
+  );
 }
 
 // Attach the streaming caret inline to the final text block (a <p>, incl.
@@ -758,8 +888,15 @@ export function AssistantContent({
 function appendCaret(blocks: ReactNode[]): void {
   const last = blocks[blocks.length - 1];
   if (isValidElement(last) && last.type === "p") {
-    const kids = Children.toArray((last.props as { children?: ReactNode }).children);
-    blocks[blocks.length - 1] = cloneElement(last, undefined, ...kids, <Caret key="caret" />);
+    const kids = Children.toArray(
+      (last.props as { children?: ReactNode }).children,
+    );
+    blocks[blocks.length - 1] = cloneElement(
+      last,
+      undefined,
+      ...kids,
+      <Caret key="caret" />,
+    );
   } else {
     blocks.push(
       <p key="caret" className="whitespace-pre-wrap">

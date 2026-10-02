@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
 import { searchDistance } from "@/lib/searchRanking";
-import type { Note, SearchHit, Task } from "@/lib/types";
+import type { Note, RawInput, SearchHit, Task } from "@/lib/types";
 import type { SearchFiltersState } from "@/components/search/SearchFilters";
 
 function noteHit(note: Note): SearchHit {
@@ -63,22 +63,27 @@ function searchRequests(query: string, filters: SearchFiltersState, submitted: b
 }
 
 export function SearchResults({
-  query, filters, tasks, submitted, onAiSearch, onOpenTask,
+  query, filters, tasks, inputs, submitted, onAiSearch, onOpenTask, onChanged,
 }: {
   query: string;
   filters: SearchFiltersState;
   tasks: Task[];
+  inputs: RawInput[];
   submitted: boolean;
   onAiSearch: (query: string) => void;
   onOpenTask: (id: string) => void;
+  onChanged: () => Promise<void> | void;
 }) {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [taskDetails, setTaskDetails] = useState<ReadonlyMap<string, Task>>(new Map());
+  const [inputDetails, setInputDetails] = useState<ReadonlyMap<string, RawInput>>(new Map());
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [preview, setPreview] = useState<SearchHit | null>(null);
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
+  const inputsRef = useRef(inputs);
+  inputsRef.current = inputs;
   const onAiSearchRef = useRef(onAiSearch);
   onAiSearchRef.current = onAiSearch;
 
@@ -96,11 +101,23 @@ export function SearchResults({
       const taskMap = new Map(tasksRef.current.map((task) => [task.id, task]));
       const missingTaskIds = [...new Set(all.filter((hit) => hit.type === "task" && !taskMap.has(hit.id)).map((hit) => hit.id))];
       const fetchedTasks = await Promise.allSettled(missingTaskIds.map((id) => api.getTask(id)));
+      const inputMap = new Map(inputsRef.current.map((input) => [input.id, input]));
+      const missingInputIds = [...new Set(all.filter((hit) => hit.type === "input" && !inputMap.has(hit.id)).map((hit) => hit.id))];
+      const fetchedInputs = await Promise.allSettled(missingInputIds.map((id) => api.getInput(id)));
       if (cancelled) return;
       fetchedTasks.forEach((result) => {
         if (result.status === "fulfilled") taskMap.set(result.value.id, result.value);
       });
-      const available = all.filter((hit) => hit.type !== "task" || taskMap.has(hit.id));
+      fetchedInputs.forEach((result) => {
+        if (result.status === "fulfilled") inputMap.set(result.value.id, result.value);
+      });
+      const openTaskIds = new Set(tasksRef.current.filter((task) => task.status === "open").map((task) => task.id));
+      const available = all.filter((hit) => {
+        if (hit.type === "task") return taskMap.has(hit.id);
+        if (hit.type !== "input") return true;
+        const input = inputMap.get(hit.id);
+        return Boolean(input && (input.source === "subtask" || !input.task_id || !openTaskIds.has(input.task_id)));
+      });
       const taskIds = new Set(available.filter((hit) => hit.type === "task").map((hit) => hit.id));
       const seen = new Set<string>();
       const unique = available.filter((hit) => {
@@ -113,13 +130,14 @@ export function SearchResults({
       const now = Date.now();
       unique.sort((a, b) => searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q) ||
         b.score - a.score || a.title.localeCompare(b.title));
-      const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected");
+      const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected") || fetchedInputs.some((result) => result.status === "rejected");
       if (submitted && unique.length === 0 && !hadFailure) {
         onAiSearchRef.current(q);
         return;
       }
       setFailed(unique.length === 0 && hadFailure);
       setTaskDetails(taskMap);
+      setInputDetails(inputMap);
       setHits(unique);
       setLoading(false);
     }, submitted ? 0 : 180);
@@ -128,7 +146,7 @@ export function SearchResults({
 
   return (
     <div className="space-y-2">
-      {loading ? (
+      {loading && hits.length === 0 ? (
         <div className="flex justify-center py-12" role="status" aria-label="Searching"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : failed ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Search is unavailable right now.</p>
@@ -148,7 +166,9 @@ export function SearchResults({
               key={`${hit.type}:${hit.id}`}
               hit={hit}
               task={hit.type === "task" ? taskDetails.get(hit.id) : undefined}
-              onActivate={() => { void api.recordSearchClick(hit).catch(() => {}); }}
+              input={hit.type === "input" ? inputDetails.get(hit.id) : undefined}
+              onChanged={onChanged}
+              onActivate={() => { if (hit.type !== "task") void api.recordSearchClick(hit).catch(() => {}); }}
               onOpenTask={onOpenTask}
               onShowContent={() => setPreview(hit)}
             />

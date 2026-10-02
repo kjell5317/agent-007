@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { LabelsPanel } from "@/components/labels/LabelsPanel";
@@ -20,10 +21,11 @@ import { useRuns } from "@/hooks/useRuns";
 import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
 import { getUserTimezone, setUserTimezone } from "@/lib/dates";
+import { inputTitle, senderName } from "@/lib/inbox";
 import { clearDeepLink, parseDeepLink, pushDeepLink, replaceDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
-import type { Task } from "@/lib/types";
+import type { RawInput, SearchHit, Task } from "@/lib/types";
 
 export function App() {
   const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
@@ -46,6 +48,7 @@ export function App() {
   const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
   const inboxOpen = view === "chat" && !searchQuery.trim() && searchFilters.kind === "messages";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const taskNavigationRequestRef = useRef(0);
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
   // load so it can resolve to the adopting task.
   const [pendingRunId, setPendingRunId] = useState<number | null>(null);
@@ -108,6 +111,7 @@ export function App() {
   };
 
   const leaveOverlay = useCallback(() => {
+    taskNavigationRequestRef.current += 1;
     if (selectedTaskId) {
       clearDeepLink();
       setSelectedTaskId(null);
@@ -162,6 +166,7 @@ export function App() {
   }, [loadInboxUnread]);
 
   const applyLocation = useCallback(() => {
+    taskNavigationRequestRef.current += 1;
     const link = parseDeepLink();
     if (!link) {
       setSelectedTaskId(null);
@@ -338,14 +343,31 @@ export function App() {
   // top of it, so closing lands back where the click happened.
   const openTask = useCallback((id: string) => {
     if (selectedTaskId === id) return;
-    if (selectedTaskId) replaceDeepLink({ kind: "task", id });
-    else pushDeepLink({ kind: "task", id });
-    setSelectedTaskId(id);
-  }, [selectedTaskId]);
+    const requestId = ++taskNavigationRequestRef.current;
+    const listedTask = tasks.find((candidate) => candidate.id === id);
+    const finish = (loadedTask?: Task) => {
+      if (requestId !== taskNavigationRequestRef.current) return;
+      const openedTask = loadedTask ?? listedTask;
+      if (openedTask) void api.recordSearchClick(taskSearchHit(openedTask)).catch(() => {});
+      if (selectedTaskId) replaceDeepLink({ kind: "task", id });
+      else pushDeepLink({ kind: "task", id });
+      if (loadedTask) setFetchedTask(loadedTask);
+      setSelectedTaskId(id);
+    };
+    if (listedTask) finish();
+    else void api.getTask(id).then(finish).catch((error) => {
+      if (requestId === taskNavigationRequestRef.current) toast.error((error as Error).message);
+    });
+  }, [selectedTaskId, tasks]);
+
+  const recordInputClick = useCallback((input: RawInput) => {
+    void api.recordSearchClick(inputSearchHit(input)).catch(() => {});
+  }, []);
 
   const selectedTaskSnapshot = useRef<Task | null>(null);
   const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const closeSelectedModal = useCallback(() => {
+    taskNavigationRequestRef.current += 1;
     clearDeepLink();
     selectedTaskSnapshot.current = null;
     setFetchedTask(null);
@@ -359,7 +381,7 @@ export function App() {
   const selectedTask = selectedTaskId
     ? selectedListTask ??
       (fetchedTask?.id === selectedTaskId ? fetchedTask : null) ??
-      (selectedTaskSnapshot.current?.id === selectedTaskId ? selectedTaskSnapshot.current : null)
+      selectedTaskSnapshot.current
     : null;
   if (selectedTask) selectedTaskSnapshot.current = selectedTask;
 
@@ -409,6 +431,7 @@ export function App() {
       unseenInputIds={unseenInputIds}
       onInputsVisible={markInputsVisible}
       onOpenTask={openTask}
+      onActivate={recordInputClick}
     />
   );
 
@@ -475,7 +498,7 @@ export function App() {
             {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={setSearchFilters} />}
             <div className={searchQuery.trim() || chat.messages.length === 0 ? "pt-3" : undefined}>
             {searchQuery.trim() ? (
-              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} submitted={searchSubmitted} onAiSearch={runAiSearch} onOpenTask={openTask} />
+              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} inputs={inputs} submitted={searchSubmitted} onAiSearch={runAiSearch} onOpenTask={openTask} onChanged={refresh} />
             ) : searchFilters.kind === "tasks" ? (
               loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters.label)
             ) : searchFilters.kind === "messages" ? (
@@ -491,7 +514,7 @@ export function App() {
                 onLoadChat={chat.loadChat}
               />
             ) : searchFilters.kind === null ? (
-              <PopularSearchResults tasks={tasks} onOpenTask={openTask} />
+              <PopularSearchResults tasks={tasks} inputs={inputs} onOpenTask={openTask} onChanged={refresh} />
             ) : (
               null
             )}
@@ -503,6 +526,7 @@ export function App() {
         <TaskDetailModal
           key={selectedTask.id}
           task={selectedTask}
+          knownTasks={tasks}
           kotxTask={selectedKotxTask}
           onClose={closeSelectedModal}
           onChanged={refresh}
@@ -526,6 +550,22 @@ function newestTimestamp(values: string[]): number | null {
     if (newest == null || time > newest) newest = time;
   }
   return newest;
+}
+
+function taskSearchHit(task: Task): SearchHit {
+  return {
+    type: "task", id: task.id, title: task.title, snippet: task.description,
+    url: task.link, task_id: task.id, source: null, sender: null,
+    status: task.status, ts: task.updated_at, score: 0,
+  };
+}
+
+function inputSearchHit(input: RawInput): SearchHit {
+  return {
+    type: "input", id: input.id, title: inputTitle(input), snippet: input.content,
+    url: null, task_id: input.task_id, source: input.source,
+    sender: senderName(input), status: input.status, ts: input.received_at, score: 0,
+  };
 }
 
 function addAll<T>(source: ReadonlySet<T>, values: T[]): Set<T> {

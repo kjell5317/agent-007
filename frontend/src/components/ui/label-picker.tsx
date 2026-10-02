@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { labelDotStyle } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import type { Label } from "@/lib/types";
@@ -8,7 +7,6 @@ import type { Label } from "@/lib/types";
 interface Props {
   value: string;
   onChange: (v: string) => void;
-  onSave: () => void;
   labels: Label[];
   defaultOpen?: boolean;
 }
@@ -16,7 +14,6 @@ interface Props {
 export function LabelPicker({
   value,
   onChange,
-  onSave,
   labels,
   defaultOpen = false,
 }: Props) {
@@ -93,9 +90,6 @@ export function LabelPicker({
         )}
       </div>
 
-      <Button type="button" onClick={onSave} className="w-full">
-        Save
-      </Button>
     </div>
   );
 }

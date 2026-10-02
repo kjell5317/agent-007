@@ -1,12 +1,10 @@
 import { Minus, Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface Props {
   // Minutes, or null when no estimate is set.
   value: number | null;
   onChange: (next: number | null) => void;
-  onSave: () => void;
 }
 
 const STEP_MIN = 5;
@@ -20,7 +18,7 @@ function fmt(value: number | null): string {
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
-export function EstimationPicker({ value, onChange, onSave }: Props) {
+export function EstimationPicker({ value, onChange }: Props) {
   const shift = (delta: number) => {
     const base = value ?? 0;
     const next = Math.max(0, base + delta);
@@ -83,9 +81,6 @@ export function EstimationPicker({ value, onChange, onSave }: Props) {
         </div>
       </div>
 
-      <Button type="button" onClick={onSave} className="w-full">
-        Save
-      </Button>
     </div>
   );
 }

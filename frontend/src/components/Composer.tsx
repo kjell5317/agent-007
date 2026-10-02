@@ -96,7 +96,7 @@ export function Composer({ onCreated }: Props) {
                 className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               />
             </div>
-            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 rounded-full p-0 shadow-sm">
+            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 rounded-full p-0 shadow-sm disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100">
               <Plus className="h-5 w-5" />
             </Button>
           </div>

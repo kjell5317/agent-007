@@ -8,7 +8,6 @@ interface Props {
   // ISO datetime string or null. Emits the same format.
   value: string | null;
   onChange: (next: string | null) => void;
-  onSave: () => void;
   // Step is controlled by the parent so it can render a Back arrow into
   // the surrounding Modal's left-action slot when on the time step.
   step: "date" | "time";
@@ -71,7 +70,6 @@ function toWallTime(d: Date | null): string {
 export function DatePicker({
   value,
   onChange,
-  onSave,
   step,
   onStepChange,
 }: Props) {
@@ -123,7 +121,7 @@ export function DatePicker({
         )}
       </div>
 
-      {step === "date" ? (
+      {step === "date" && (
         <Button
           type="button"
           onClick={() => onStepChange("time")}
@@ -131,10 +129,6 @@ export function DatePicker({
           className="w-full"
         >
           Next
-        </Button>
-      ) : (
-        <Button type="button" onClick={onSave} className="w-full">
-          Save
         </Button>
       )}
     </div>

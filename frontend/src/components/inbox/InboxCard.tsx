@@ -47,6 +47,7 @@ interface Props {
   unseen: boolean;
   onVisible: (id: string) => void;
   onOpenTask: (id: string) => void;
+  onActivate?: () => void;
 }
 
 export function InboxCard({
@@ -55,6 +56,7 @@ export function InboxCard({
   unseen,
   onVisible,
   onOpenTask,
+  onActivate,
 }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -140,10 +142,12 @@ export function InboxCard({
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           if (data.task_id) {
+            onActivate?.();
             onOpenTask(data.task_id);
             return;
           }
           if (!expandable) return;
+          onActivate?.();
           setOpen((v) => !v);
         }}
       >
