@@ -6,7 +6,6 @@ import {
   MapPin,
   RotateCcw,
   Timer,
-  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -391,17 +390,6 @@ export function TaskCard({
                 {kotxAction}
               </Button>
             )
-          ) : task.status === "open" ? (
-            <IconButton
-              label="Mark not a task"
-              disabled={busy || crossing}
-              onClick={() =>
-                withBusy(() => api.markNotTask(task.id), "Marked not a task")
-              }
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="h-4 w-4" />
-            </IconButton>
           ) : null}
         </div>
       </CardContent>

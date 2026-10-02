@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlarmClock,
   CalendarClock,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Circle,
   CircleCheckBig,
   ExternalLink,
@@ -12,12 +14,14 @@ import {
   Pencil,
   RefreshCw,
   RotateCcw,
+  Scissors,
   Timer,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { Input } from "@/components/ui/input";
@@ -95,9 +99,6 @@ export function TaskDetailModal({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [kotxActionPending, setKotxActionPending] = useState(false);
-  const [closingAction, setClosingAction] = useState<"done" | "dismiss" | null>(
-    null,
-  );
   const locationSuggestionRequestRef = useRef(0);
   const activeReopenPoll = useRef<PollHandle | null>(null);
 
@@ -109,7 +110,6 @@ export function TaskDetailModal({
     setPickerDue(task.due_date);
     setPickerEstimation(task.estimation);
     setPickerLabel(task.label ?? "");
-    setClosingAction(null);
     setKotxActionPending(false);
   }, [task]);
 
@@ -237,11 +237,9 @@ export function TaskDetailModal({
   async function runClosingTaskAction(
     action: () => Promise<void>,
     message: string,
-    nextClosingAction: "done" | "dismiss",
   ) {
     if (busy) return;
     setBusy(true);
-    setClosingAction(nextClosingAction);
     try {
       await action();
       toast.success(message);
@@ -250,18 +248,16 @@ export function TaskDetailModal({
     } catch (e) {
       toast.error((e as Error).message);
       setBusy(false);
-      setClosingAction(null);
     }
   }
 
   const markDone = () =>
-    runClosingTaskAction(() => api.closeTask(current.id), "Marked done", "done");
+    runClosingTaskAction(() => api.closeTask(current.id), "Marked done");
 
   const dismissTask = () =>
     runClosingTaskAction(
       () => api.markNotTask(current.id),
       "Marked not a task",
-      "dismiss",
     );
 
   // kotx tasks: done is handled through kotx, so the check-off dismisses —
@@ -279,7 +275,6 @@ export function TaskDetailModal({
         }
       },
       kotxTask.canDiscard ? "Run discarded" : "Marked not a task",
-      "done",
     );
   };
 
@@ -379,21 +374,34 @@ export function TaskDetailModal({
     <Modal
       open
       onClose={onClose}
-      title={
-        <TaskTitleHeader
-          task={current}
-          editing={editingText === "title"}
-          draft={textDraft}
-          busy={busy}
-          onEdit={() => openTextEditor("title")}
-          onChange={setTextDraft}
-          onCancel={closeTextEditor}
-          onSave={() => saveTextEditor("title")}
-        />
-      }
+      title={current.title}
       titleLabel={current.title}
-      titleClassName="text-2xl font-semibold leading-tight"
-      className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl"
+      backdropClassName="max-sm:p-0"
+      className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl max-sm:h-dvh max-sm:max-h-dvh max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:p-0"
+      header={
+        <div className="flex shrink-0 items-center justify-between border-b px-3 py-2 max-sm:pt-[max(0.5rem,env(safe-area-inset-top))] sm:mb-3 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
+          <TaskSummaryIconButton label="Back" onClick={onClose}>
+            <ChevronLeft className="h-5 w-5" />
+          </TaskSummaryIconButton>
+          <div className="flex items-center gap-1">
+            {current.status === "open" && !current.is_container && (
+              <TaskSummaryIconButton label={kotxTask ? (kotxTask.canDiscard ? "Dismiss run" : "Mark not a task") : "Mark done"} disabled={busy} onClick={kotxTask ? dismissRun : markDone}>
+                <CircleCheckBig className="h-5 w-5" />
+              </TaskSummaryIconButton>
+            )}
+            {current.status === "open" && !current.is_container && !current.parent_task_id && !kotxTask && (
+              <TaskSummaryIconButton label="Split into subtasks" disabled={busy} onClick={splitCurrentTask}>
+                <Scissors className="h-5 w-5" />
+              </TaskSummaryIconButton>
+            )}
+            {current.status === "open" && !current.is_container && !kotxTask && (
+              <TaskSummaryIconButton label="Mark not a task" disabled={busy} onClick={dismissTask} className="hover:text-destructive">
+                <Trash2 className="h-5 w-5" />
+              </TaskSummaryIconButton>
+            )}
+          </div>
+        </div>
+      }
     >
       {loading ? (
         <div className="min-h-0 flex-1 overflow-hidden">
@@ -401,16 +409,26 @@ export function TaskDetailModal({
         </div>
       ) : (
         <TaskSummary
+          title={
+            <TaskTitleHeader
+              task={current}
+              editing={editingText === "title"}
+              draft={textDraft}
+              busy={busy}
+              onEdit={() => openTextEditor("title")}
+              onChange={setTextDraft}
+              onCancel={closeTextEditor}
+              onSave={() => saveTextEditor("title")}
+            />
+          }
           task={current}
           kotxTask={kotxTask}
           onKotxChanged={onKotxChanged}
           onKotxActionDone={onClose}
           onOpenTask={onOpenTask}
-          onSplitTask={splitCurrentTask}
           onCloseSubtask={closeSubtask}
           labels={labels}
           busy={busy}
-          closingAction={closingAction}
           kotxActionPending={kotxActionPending}
           editingText={editingText}
           textDraft={textDraft}
@@ -447,9 +465,6 @@ export function TaskDetailModal({
             const saved = await savePatch({ label: pickerLabel || null });
             if (saved) setActivePicker(null);
           }}
-          onMarkDone={markDone}
-          onDismissTask={dismissTask}
-          onDismissRun={dismissRun}
           onReopenTask={reopenCurrentTask}
           onReschedule={rescheduleCurrent}
           onCreateGithubIssue={createGithubIssue}
@@ -500,26 +515,24 @@ function TaskTitleHeader({
       type="button"
       onClick={onEdit}
       disabled={busy}
-      className="group grid w-full min-w-0 grid-cols-[1.25rem_minmax(0,1fr)_1.25rem] items-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+      className="group flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1 text-left text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
     >
-      <span aria-hidden="true" />
-      <span className="min-w-0 break-words">{task.title}</span>
-      <Pencil className="h-4 w-4 justify-self-end text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      <span className="min-w-0 flex-1 break-words">{task.title}</span>
+      <Pencil className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   );
 }
 
 function TaskSummary({
+  title,
   task,
   kotxTask,
   onKotxChanged,
   onKotxActionDone,
   onOpenTask,
-  onSplitTask,
   onCloseSubtask,
   labels,
   busy,
-  closingAction,
   kotxActionPending,
   editingText,
   textDraft,
@@ -544,24 +557,20 @@ function TaskSummary({
   onClearDue,
   onSaveEstimation,
   onSaveLabel,
-  onMarkDone,
-  onDismissTask,
-  onDismissRun,
   onReopenTask,
   onReschedule,
   onCreateGithubIssue,
   onKotxActionPendingChange,
 }: {
+  title: ReactNode;
   task: Task;
   kotxTask: KotxTask | null;
   onKotxChanged?: () => Promise<void> | void;
   onKotxActionDone: () => void;
   onOpenTask: (id: string) => void;
-  onSplitTask: () => void;
   onCloseSubtask: (id: string) => void;
   labels: Label[];
   busy: boolean;
-  closingAction: "done" | "dismiss" | null;
   kotxActionPending: boolean;
   editingText: TextField | null;
   textDraft: string;
@@ -586,9 +595,6 @@ function TaskSummary({
   onClearDue: () => void;
   onSaveEstimation: () => void;
   onSaveLabel: () => void;
-  onMarkDone: () => void;
-  onDismissTask: () => void;
-  onDismissRun: () => void;
   onReopenTask: () => void;
   onReschedule: () => void;
   onCreateGithubIssue: () => void;
@@ -616,33 +622,11 @@ function TaskSummary({
         : "Reschedule task";
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto pr-1 pt-2">
+    <div className="min-h-0 flex-1 overflow-auto px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-4 sm:px-4">
       <div className="space-y-5">
+        {title}
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
-          {/* Only actions that apply to the current state: open → check-off
-              (which dismisses on kotx tasks — done is handled through kotx),
-              closed/dismissed non-kotx → re-open. A non-open kotx task gets no
-              lifecycle button; its run section carries the applicable actions. */}
-          {task.status === "open" && !task.is_container ? (
-            <TaskSummaryIconButton
-              label={
-                kotxTask
-                  ? kotxTask.canDiscard
-                    ? "Dismiss run"
-                    : "Mark not a task"
-                  : "Mark done"
-              }
-              disabled={busy}
-              onClick={kotxTask ? onDismissRun : onMarkDone}
-              className="text-muted-foreground hover:text-primary"
-            >
-              {closingAction === "done" ? (
-                <CircleCheckBig className="h-5 w-5 text-primary" />
-              ) : (
-                <Circle className="h-5 w-5" />
-              )}
-            </TaskSummaryIconButton>
-          ) : task.status !== "open" && !kotxTask ? (
+          {task.status !== "open" && !kotxTask ? (
             <TaskSummaryIconButton
               label="Re-open task"
               disabled={busy}
@@ -791,57 +775,39 @@ function TaskSummary({
             />
           )}
 
-          {task.status === "open" && !kotxTask && !task.is_container && (
-            <TaskSummaryIconButton
-              label="Mark not a task"
-              disabled={busy}
-              onClick={onDismissTask}
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <Trash2
-                className={cn(
-                  "h-4 w-4",
-                  closingAction === "dismiss" && "text-destructive",
-                )}
-              />
-            </TaskSummaryIconButton>
-          )}
         </div>
 
         {task.subtasks.length > 0 && (
-          <section className="space-y-2 rounded-lg border p-3">
+          <section className="space-y-2">
             <h3 className="text-sm font-semibold">Subtasks</h3>
             {task.subtasks.map((child) => (
-              <div
-                key={child.id}
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent"
-              >
-                <button
-                  type="button"
-                  aria-label={child.status === "closed" ? `${child.title} done` : `Mark ${child.title} done`}
-                  title={child.status === "closed" ? "Done" : "Mark done"}
-                  disabled={busy || child.status !== "open"}
-                  onClick={() => onCloseSubtask(child.id)}
-                  className="shrink-0 rounded-full text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-60"
+              <Card key={child.id}>
+                <CardContent
+                  className="flex cursor-pointer items-center gap-2"
+                  onClick={(event) => {
+                    if ((event.target as HTMLElement).closest("button")) return;
+                    onOpenTask(child.id);
+                  }}
                 >
-                  {child.status === "closed" ? <CircleCheckBig className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onOpenTask(child.id)}
-                  className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
-                >
-                  <span className="min-w-0 truncate">{child.title}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{fmtDue(child.due_date)}</span>
-                </button>
-              </div>
+                  <TaskSummaryIconButton
+                    label={child.status === "closed" ? `${child.title} done` : `Mark ${child.title} done`}
+                    disabled={busy || child.status !== "open"}
+                    onClick={() => onCloseSubtask(child.id)}
+                    className="text-muted-foreground hover:text-primary"
+                  >
+                    {child.status === "closed" ? <CircleCheckBig className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
+                  </TaskSummaryIconButton>
+                  <button type="button" onClick={() => onOpenTask(child.id)} className="min-w-0 flex-1 text-left">
+                    <span className="block truncate text-base font-medium leading-snug">{child.title}</span>
+                    <span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>{fmtDue(child.due_date)}</span>
+                      {child.estimation != null && <span>{child.estimation} min</span>}
+                    </span>
+                  </button>
+                </CardContent>
+              </Card>
             ))}
           </section>
-        )}
-        {task.status === "open" && !task.is_container && !task.parent_task_id && !kotxTask && (
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSplitTask}>
-            Split into subtasks
-          </Button>
         )}
 
         {kotxTask && (
@@ -857,6 +823,7 @@ function TaskSummary({
             above holds that context, so the fields stay hidden entirely. */}
         {task.kotx_task_id == null && (
           <div className="space-y-1.5">
+            <div className={cn("grid gap-1.5", !task.is_container && "grid-cols-2")}>
             {!task.is_container && (
               <EditableTextBlock
                 field="location"
@@ -885,6 +852,7 @@ function TaskSummary({
               onSave={() => onSaveText("link")}
               onCreateGithubIssue={onCreateGithubIssue}
             />
+            </div>
             <EditableTextBlock
               field="description"
               value={task.description}
@@ -1351,6 +1319,7 @@ function LinkedInputsSection({
   onOpenTask: (id: string) => void;
   muted?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   if (inputs.length === 0) return null;
 
   return (
@@ -1361,10 +1330,16 @@ function LinkedInputsSection({
       )}
       aria-disabled={muted}
     >
-      <div className="text-xs font-medium uppercase text-muted-foreground">
-        Linked inputs
-      </div>
-      <div className="space-y-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between text-left text-xs font-medium uppercase text-muted-foreground"
+      >
+        <span>Linked inputs ({inputs.length})</span>
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      </button>
+      {open && <div className="space-y-2">
         {inputs.map((input) => (
           <div
             key={input.id}
@@ -1412,7 +1387,7 @@ function LinkedInputsSection({
             )}
           </div>
         ))}
-      </div>
+      </div>}
     </section>
   );
 }

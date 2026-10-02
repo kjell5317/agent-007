@@ -10,6 +10,8 @@ interface Props {
   children: ReactNode;
   className?: string;
   titleClassName?: string;
+  header?: ReactNode;
+  backdropClassName?: string;
   // Optional content for the top-left of the header (e.g. a back arrow).
   // Sized for a 32-px square button to balance the close X on the right.
   leftAction?: ReactNode;
@@ -23,6 +25,8 @@ export function Modal({
   children,
   className,
   titleClassName,
+  header,
+  backdropClassName,
   leftAction,
 }: Props) {
   const accessibleTitle = typeof title === "string" ? title : titleLabel;
@@ -64,7 +68,7 @@ export function Modal({
         if (pressedOnBackdrop.current && e.target === e.currentTarget) onClose();
         pressedOnBackdrop.current = false;
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className={cn("fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4", backdropClassName)}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -73,7 +77,7 @@ export function Modal({
           className,
         )}
       >
-        <div className="mb-3 grid shrink-0 grid-cols-[2rem_1fr_2rem] items-center">
+        {header ?? <div className="mb-3 grid shrink-0 grid-cols-[2rem_1fr_2rem] items-center">
           <div className="justify-self-start">{leftAction}</div>
           <div
             className={cn(
@@ -96,7 +100,7 @@ export function Modal({
           >
             <X className="h-4 w-4" />
           </button>
-        </div>
+        </div>}
         {children}
       </div>
     </div>
