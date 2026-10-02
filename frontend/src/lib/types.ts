@@ -64,6 +64,13 @@ export interface AgentTrace {
 
 export type SearchHitType = "task" | "note" | "input" | "document" | "drive" | "contact" | "github";
 
+export interface ChatSearchScope {
+  kind: "tasks" | "messages" | "notes" | "events" | "files" | "contacts";
+  label?: string;
+  source?: string;
+  format?: string;
+}
+
 export interface SearchHit {
   type: SearchHitType;
   id: string;
@@ -117,6 +124,7 @@ export interface ChatCitationMeta {
   location?: string;
   mime?: string;
   due_date?: string;
+  label_id?: string;
   similarity?: number;
   [k: string]: unknown;
 }

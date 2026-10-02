@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import type {
   ChatCitation,
   ChatMessage,
+  ChatSearchScope,
   ChatSummary,
   ChatToolTrace,
 } from "@/lib/types";
@@ -14,7 +15,7 @@ interface SearchChat {
   messages: ChatMessage[];
   streaming: boolean;
   recent: ChatSummary[];
-  send: (text: string) => void;
+  send: (text: string, scope?: ChatSearchScope) => void;
   newChat: () => void;
   loadChat: (id: string) => void;
 }
@@ -110,7 +111,7 @@ export function useSearchChat(): SearchChat {
   }, []);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, scope?: ChatSearchScope) => {
       const trimmed = text.trim();
       if (!trimmed || streaming) return;
 
@@ -168,7 +169,7 @@ export function useSearchChat(): SearchChat {
               content: m.content + (m.content ? "\n\n" : "") + `⚠️ ${msg}`,
               pending: false,
             })),
-        })
+        }, scope)
         .catch((err) => {
           if (controller.signal.aborted) return;
           patchLast((m) => ({

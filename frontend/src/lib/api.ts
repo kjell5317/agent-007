@@ -1,6 +1,7 @@
 import type {
   ChatCitation,
   ChatMessage,
+  ChatSearchScope,
   ChatSummary,
   ChatToolTrace,
   Label,
@@ -229,11 +230,12 @@ async function chatStream(
   }[],
   signal: AbortSignal,
   handlers: ChatStreamHandlers,
+  scope?: ChatSearchScope,
 ): Promise<void> {
   const res = await fetch("/search/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, ...(scope ? { scope } : {}) }),
     signal,
   });
   if (!res.ok || !res.body) {

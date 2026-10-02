@@ -14,7 +14,7 @@ from app.agent.chat.runner import ChatTurn, Citations, run_chat
 from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall
 from app.config import get_settings
 from app.db.clients.chat_answers import SimilarAnswer
-from app.db.schemas.search import SearchHit
+from app.db.schemas.search import ChatSearchScope, SearchHit
 
 
 def _hit(type_: str, id_: str, title: str, **kw) -> SearchHit:
@@ -151,6 +151,87 @@ async def test_run_chat_streams_citations_tools_and_tokens(monkeypatch):
 
     tokens = "".join(d["text"] for e, d in events if e == "token")
     assert "one open task" in tokens
+
+
+@pytest.mark.asyncio
+async def test_scoped_chat_uses_only_selected_source_and_skips_unfiltered_context(monkeypatch):
+    seen = {}
+
+    async def must_not_retrieve(*args, **kwargs):
+        raise AssertionError("unfiltered retrieval must not run")
+
+    async def fake_stream(messages, settings, *, tools, on_delta, **kwargs):
+        seen["tools"] = {tool["name"] for tool in tools}
+        seen["messages"] = messages
+        await on_delta("No matching messages.")
+        return _resp(text="No matching messages.")
+
+    monkeypatch.setattr(chat_runner, "retrieve", must_not_retrieve)
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", must_not_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    await run_chat(
+        object(),
+        [ChatTurn(role="user", content="old task question"),
+         ChatTurn(role="assistant", content="A task from before"),
+         ChatTurn(role="user", content="invoice")],
+        emit=_noop_emit,
+        scope=ChatSearchScope(kind="messages", source="gmail"),
+    )
+
+    assert seen["tools"] == {"messages_search"}
+    assert len(seen["messages"]) == 1
+    assert "Only source 'gmail'" in seen["messages"][0].text
+    assert "old task question" not in seen["messages"][0].text
+
+
+@pytest.mark.asyncio
+async def test_scoped_chat_enforces_child_filters(monkeypatch):
+    captured = {}
+
+    async def fake_tasks(session, **kwargs):
+        captured["tasks"] = kwargs
+        return []
+
+    async def fake_messages(session, query, **kwargs):
+        captured["messages"] = kwargs
+        return []
+
+    async def fake_notes(session, query, **kwargs):
+        captured["notes"] = kwargs
+        return []
+
+    async def fake_drive(session, query, **kwargs):
+        captured["files"] = kwargs
+        return []
+
+    monkeypatch.setattr(chat_runner, "find_tasks", fake_tasks)
+    monkeypatch.setattr(chat_runner, "search_messages", fake_messages)
+    monkeypatch.setattr(chat_runner, "search_notes", fake_notes)
+    monkeypatch.setattr(chat_runner, "search_drive", fake_drive)
+    cases = [
+        ("tasks_search", {"query": "invoice", "label": "Wrong"}, ChatSearchScope(kind="tasks", label="Work")),
+        ("messages_search", {"query": "invoice", "source": "slack"}, ChatSearchScope(kind="messages", source="gmail")),
+        ("search_notes", {"query": "invoice"}, ChatSearchScope(kind="notes", source="chat")),
+        ("drive_search", {"query": "invoice"}, ChatSearchScope(kind="files", format="PDF")),
+    ]
+    for name, params, scope in cases:
+        await chat_runner._dispatch(
+            object(), Citations(), ToolCall(id="1", name=name, input=params),
+            get_settings(), _noop_emit, scope=scope,
+        )
+
+    assert captured["tasks"]["label"] == "Work"
+    assert captured["messages"]["source"] == "gmail"
+    assert captured["notes"]["source"] == "chat"
+    assert captured["files"]["mime_label"] == "PDF"
+    blocked, _ = await chat_runner._dispatch(
+        object(), Citations(), ToolCall(id="2", name="tasks_search", input={"query": "invoice"}),
+        get_settings(), _noop_emit, scope=ChatSearchScope(kind="messages"),
+    )
+    assert "outside the selected messages filter" in blocked
 
 
 @pytest.mark.asyncio

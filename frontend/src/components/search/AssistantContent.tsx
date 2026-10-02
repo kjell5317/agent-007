@@ -21,7 +21,9 @@ import {
 } from "lucide-react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { api } from "@/lib/api";
+import { useLabels } from "@/hooks/useLabels";
 import { fmtWhen } from "@/lib/dates";
+import { labelChipStyle } from "@/lib/labels";
 import { subscribeEvents } from "@/lib/events";
 import { cn } from "@/lib/utils";
 import type { ChatCitation, ChatCitationMeta, LinkPreview, Task } from "@/lib/types";
@@ -66,8 +68,8 @@ interface Ctx {
 type WidgetKind = "task" | "contact" | "event" | "doc";
 
 // Card widgets, pulled to their own block. `loc:` stays inline (a map link).
-const BLOCK_WIDGET = /(task|contact|event|doc):\{([^}]+)\}/;
-const BLOCK_WIDGET_G = /(task|contact|event|doc):\{([^}]+)\}/g;
+const BLOCK_WIDGET = /\b(task|contact|event|doc)\s*:\s*\{\s*([^}]+?)\s*\}/i;
+const BLOCK_WIDGET_G = /\b(task|contact|event|doc)\s*:\s*\{\s*([^}]+?)\s*\}/gi;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEADING = /^(#{1,6})\s+(.+)$/;
 const BULLET = /^\s*[-*]\s+/;
@@ -238,9 +240,10 @@ function renderWidgetLine(text: string, prefix: string, ctx: Ctx): ReactNode[] {
   let stripped = "";
   let last = 0;
   for (const m of text.matchAll(BLOCK_WIDGET_G)) {
-    if (!isWidgetRef(m[1] as WidgetKind, widgetKey(m[2]))) continue;
+    const kind = m[1].toLowerCase() as WidgetKind;
+    if (!isWidgetRef(kind, widgetKey(m[2]))) continue;
     stripped += text.slice(last, m.index);
-    widgets.push({ kind: m[1] as WidgetKind, value: m[2].trim() });
+    widgets.push({ kind, value: m[2].trim() });
     last = (m.index ?? 0) + m[0].length;
   }
   stripped += text.slice(last);
@@ -259,7 +262,8 @@ function renderWidgetLine(text: string, prefix: string, ctx: Ctx): ReactNode[] {
 // The value inside a widget token. The model is told to pass an `id` for tasks
 // and a `[C#]`-style tag for the rest; tolerate stray brackets/spaces either way.
 function widgetKey(value: string): string {
-  return value.replace(/[[\]\s]/g, "");
+  const key = value.replace(/[\[\]<>`\s]/g, "");
+  return /^[TCEDG]\d+$/i.test(key) ? key.toUpperCase() : key;
 }
 
 function isWidgetRef(kind: WidgetKind, key: string): boolean {
@@ -273,7 +277,7 @@ function isWidgetRef(kind: WidgetKind, key: string): boolean {
 
 function hasBlockWidget(line: string): boolean {
   return [...line.matchAll(BLOCK_WIDGET_G)].some((m) =>
-    isWidgetRef(m[1] as WidgetKind, widgetKey(m[2])),
+    isWidgetRef(m[1].toLowerCase() as WidgetKind, widgetKey(m[2])),
   );
 }
 
@@ -323,6 +327,7 @@ function WidgetShell({
   onActivate,
   onOpened,
   pills = [],
+  label,
 }: {
   Icon: ComponentType<{ className?: string }>;
   title: string;
@@ -330,6 +335,7 @@ function WidgetShell({
   onActivate?: () => void;
   onOpened?: () => void;
   pills?: string[];
+  label?: { text: string; color?: string | null };
 }) {
   const clickable = Boolean(href || onActivate);
   const activate = () => {
@@ -364,6 +370,11 @@ function WidgetShell({
       <div className="min-w-0 flex-1">
         <div className="truncate text-base font-medium leading-snug" title={title}>{title}</div>
         <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+          {label && (
+            <span className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground" style={labelChipStyle(label.color)} title={label.text}>
+              {label.text}
+            </span>
+          )}
           {pills.filter(Boolean).map((pill, index) => (
             <span key={`${pill}:${index}`} title={pill} className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               {pill}
@@ -389,7 +400,9 @@ export function ContactCard({ cite, onOpened }: { cite: ChatCitation; onOpened?:
 export function EventCard({
   cite, onShowContent, onOpened,
 }: { cite: ChatCitation; onShowContent?: () => void; onOpened?: () => void }) {
+  const labels = useLabels();
   const meta = citeMeta(cite);
+  const eventLabel = labels.find((label) => label.google_id === meta.label_id);
   const when = fmtWhen(meta.start ?? cite.ts ?? null);
   const location = meta.location ?? null;
   const onActivate = cite.url ? undefined : onShowContent;
@@ -400,6 +413,7 @@ export function EventCard({
       href={cite.url}
       onActivate={onActivate}
       onOpened={onOpened}
+      label={{ text: eventLabel?.name ?? "Event", color: eventLabel?.color }}
       pills={[when, location].filter((value): value is string => Boolean(value))}
     />
   );
@@ -613,7 +627,7 @@ export function AssistantContent({
   const cardedTaskIds = new Set<string>();
   const cardedTags = new Set<string>();
   for (const m of displayContent.matchAll(BLOCK_WIDGET_G)) {
-    const kind = m[1] as WidgetKind;
+    const kind = m[1].toLowerCase() as WidgetKind;
     const key = widgetKey(m[2]);
     if (!isWidgetRef(kind, key)) continue;
     if (kind === "task") {

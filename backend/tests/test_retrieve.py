@@ -81,6 +81,19 @@ def test_searchhit_build_maps_similarity_to_meta():
     assert SearchHit.build(_suggest("note", "n3", similarity=0.0)).meta is None
 
 
+def test_calendar_hits_carry_label_id_for_event_badge():
+    suggest = _suggest("document", "event-1")
+    suggest.source = "calendar"
+    suggest.label_id = "label-7"
+    assert SearchHit.build(suggest).meta == {"label_id": "label-7"}
+
+    match = CalendarMatch(
+        event_id="event-1", calendar_id="calendar-1", summary="Meeting",
+        location=None, starts_at=None, similarity=0.8, label_id="label-7",
+    )
+    assert retrieve_mod._calendar_match_hit(match).meta["label_id"] == "label-7"
+
+
 @pytest.mark.asyncio
 async def test_search_messages_restricts_to_inputs_with_filters(monkeypatch):
     calls: list[dict] = []
@@ -142,6 +155,9 @@ async def test_search_calendar_query_mode_carries_event_id(monkeypatch):
     hits = await retrieve_mod.search_calendar(object(), query="standup", time_max="2026-08-01")
     assert seen["time_max"] == "2026-08-01"
     assert [(h.type, h.id, h.source) for h in hits] == [("document", "e1", "calendar")]
+
+    await retrieve_mod.search_calendar(object(), query="standup", exclude_task_calendar=True)
+    assert seen["exclude_calendar_id"] == get_settings().google_calendar_id
 
 
 @pytest.mark.asyncio

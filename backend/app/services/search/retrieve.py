@@ -176,7 +176,7 @@ async def search_tasks(
     return hits
 
 
-async def search_notes(session: Session, query: str, *, k: int = 5) -> list[SearchHit]:
+async def search_notes(session: Session, query: str, *, k: int = 5, source: str | None = None) -> list[SearchHit]:
     """Search the agent's long-term memory (notes) by hybrid similarity + keyword."""
     query = (query or "").strip()
     if not query:
@@ -189,6 +189,7 @@ async def search_notes(session: Session, query: str, *, k: int = 5) -> list[Sear
         embedding=embedding,
         query=query,
         k=k,
+        source=source,
         min_similarity=get_settings().notes_semantic_min_similarity,
     )
     return [_note_hit(h) for h in hits]
@@ -200,6 +201,7 @@ async def search_calendar(
     query: str | None = None,
     time_min: str | None = None,
     time_max: str | None = None,
+    exclude_task_calendar: bool = False,
 ) -> list[SearchHit]:
     """Find calendar events. With a `query`, hybrid-match cached events by
     meaning (upcoming only unless `time_min` overrides the floor); without one,
@@ -218,8 +220,11 @@ async def search_calendar(
             min_similarity=settings.calendar_semantic_min_similarity,
             time_min=floor,
             time_max=time_max,
+            exclude_calendar_id=settings.google_calendar_id if exclude_task_calendar else None,
         )
         return [_calendar_match_hit(m) for m in matches]
+    if exclude_task_calendar:
+        return []
     return await _calendar_window(session, tz, time_min, time_max)
 
 
@@ -332,6 +337,8 @@ def _calendar_match_hit(m) -> SearchHit:
     meta.update(_similarity_meta(m.similarity))
     if m.calendar_id:
         meta["calendar_id"] = m.calendar_id
+    if m.label_id:
+        meta["label_id"] = m.label_id
     return SearchHit(
         type="document",
         id=m.event_id,
@@ -357,7 +364,11 @@ def _calendar_event_hit(e: CalendarEvent) -> SearchHit:
         status="event",
         ts=e.start,
         score=0.0,
-        meta={**(_calendar_meta(e.start, e.location) or {}), "calendar_id": e.calendar_id},
+        meta={
+            **(_calendar_meta(e.start, e.location) or {}),
+            "calendar_id": e.calendar_id,
+            **({"label_id": e.raw["eventLabelId"]} if e.raw.get("eventLabelId") else {}),
+        },
     )
 
 

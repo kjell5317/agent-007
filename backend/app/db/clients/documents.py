@@ -75,6 +75,7 @@ class CalendarMatch:
     similarity: float
     url: str | None = None
     description: str | None = None
+    label_id: str | None = None
 
 
 # Hybrid: fuse a pgvector nearest-neighbour ranking with a Postgres FTS ranking
@@ -94,6 +95,8 @@ _CALENDAR_HYBRID_SQL = text(
                row_number() OVER (ORDER BY d.embedding <=> CAST(:emb AS vector)) AS rnk
         FROM documents d
         WHERE d.provider = 'calendar'
+          AND (CAST(:exclude_calendar_id AS text) IS NULL OR
+               coalesce(d.metadata->>'calendar_id', '') <> :exclude_calendar_id)
           AND d.embedding IS NOT NULL
           AND (1.0 - (d.embedding <=> CAST(:emb AS vector))) >= :min_sim
           AND (:time_min IS NULL OR d.starts_at >= CAST(:time_min AS timestamptz))
@@ -106,6 +109,8 @@ _CALENDAR_HYBRID_SQL = text(
                row_number() OVER (ORDER BY ts_rank_cd(d.tsv_simple, q.tsq) DESC) AS rnk
         FROM documents d, q
         WHERE d.provider = 'calendar'
+          AND (CAST(:exclude_calendar_id AS text) IS NULL OR
+               coalesce(d.metadata->>'calendar_id', '') <> :exclude_calendar_id)
           AND q.tsq @@ d.tsv_simple
           AND (:time_min IS NULL OR d.starts_at >= CAST(:time_min AS timestamptz))
           AND (:time_max IS NULL OR d.starts_at < CAST(:time_max AS timestamptz))
@@ -121,6 +126,7 @@ _CALENDAR_HYBRID_SQL = text(
     SELECT
       d.metadata->>'event_id' AS event_id,
       d.metadata->>'calendar_id' AS calendar_id,
+      d.metadata->>'label_id' AS label_id,
       d.title AS summary,
       d.content AS description,
       d.metadata->>'location' AS location,
@@ -136,6 +142,7 @@ _CALENDAR_HYBRID_SQL = text(
     bindparam("raw_q", type_=String()),
     bindparam("time_min", type_=String()),
     bindparam("time_max", type_=String()),
+    bindparam("exclude_calendar_id", type_=String()),
 )
 
 
@@ -148,6 +155,7 @@ def search_calendar_semantic(
     min_similarity: float = 0.0,
     time_min: str | None = None,
     time_max: str | None = None,
+    exclude_calendar_id: str | None = None,
 ) -> list[CalendarMatch]:
     """Cached calendar events by hybrid similarity + keyword (RRF over pgvector
     and Postgres FTS). The vector side is gated by `min_similarity`; keyword
@@ -168,6 +176,7 @@ def search_calendar_semantic(
             "min_sim": min_similarity,
             "time_min": time_min,
             "time_max": time_max,
+            "exclude_calendar_id": exclude_calendar_id,
         },
     ).all()
     return [
@@ -180,6 +189,7 @@ def search_calendar_semantic(
             similarity=float(r.similarity) if r.similarity is not None else 0.0,
             url=r.url,
             description=r.description,
+            label_id=r.label_id,
         )
         for r in rows
         if r.event_id

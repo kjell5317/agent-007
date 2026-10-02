@@ -212,7 +212,7 @@ async def chat(body: ChatRequest) -> EventSourceResponse:
 
         async def run() -> None:
             try:
-                await run_chat(session, turns, emit=emit, session_id=body.conversation_id)
+                await run_chat(session, turns, emit=emit, session_id=body.conversation_id, scope=body.scope)
             except Exception as exc:  # noqa: BLE001 — surface as an SSE error frame
                 log.exception("chat stream failed")
                 await queue.put(("error", {"message": str(exc)}))

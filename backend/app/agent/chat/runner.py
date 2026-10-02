@@ -60,7 +60,7 @@ from app.db.clients import labels as labels_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
-from app.db.schemas.search import SearchHit
+from app.db.schemas.search import ChatSearchScope, SearchHit
 from app.db.schemas.task import TaskCreate
 from app.services import github, notion_mcp
 from app.services.input.embedding import embed
@@ -88,6 +88,27 @@ _CHIP_QUERY_MAX = 48
 # Cap on a cached prior answer injected into context — a long answer shouldn't
 # crowd out the turn's fresh retrieval.
 _PRIOR_ANSWER_MAX = 1200
+
+_SCOPE_TOOLS = {
+    "tasks": {"tasks_search"},
+    "messages": {"messages_search"},
+    "notes": {"search_notes"},
+    "events": {"calendar_search"},
+    "files": {"drive_search"},
+    "contacts": {"contacts_search"},
+}
+
+
+def _scope_instruction(scope: ChatSearchScope) -> str:
+    details = [f"Search only {scope.kind}."]
+    if scope.kind == "tasks" and scope.label:
+        details.append(f"Only label {scope.label!r}.")
+    if scope.kind in {"messages", "notes"} and scope.source:
+        details.append(f"Only source {scope.source!r}.")
+    if scope.kind == "files" and scope.format:
+        details.append(f"Only format {scope.format!r}.")
+    details.append("Use the scoped search tool before answering. Do not use other sources.")
+    return " ".join(details)
 
 # Citation tag prefixes by hit type. "E" = calendar event (a document with
 # source=calendar); "G" = Google Drive file; "C" = contact. "D" is kept for any
@@ -291,7 +312,8 @@ def _context_block(
 
 
 async def run_chat(
-    session: Session, turns: list[ChatTurn], *, emit: Emit, session_id: str | None = None
+    session: Session, turns: list[ChatTurn], *, emit: Emit,
+    session_id: str | None = None, scope: ChatSearchScope | None = None,
 ) -> None:
     settings = get_settings()
     history = turns[-settings.search_chat_history_messages :]
@@ -301,6 +323,9 @@ async def run_chat(
         history = history[1:]
     last_user_idx = _last_user_index(history)
     query = history[last_user_idx].content if last_user_idx is not None else ""
+    if scope is not None and last_user_idx is not None:
+        history = history[last_user_idx:]
+        last_user_idx = 0
 
     # Root span groups every LLM turn + tool call of this answer into one named,
     # session-scoped trace. `session_id` (the conversation id) lets the Langfuse
@@ -314,15 +339,20 @@ async def run_chat(
         # external calls. Everything else is a per-source tool the model calls on
         # demand. `retrieve` degrades to [] on an embed failure rather than sinking
         # the answer.
-        entries = cites.add(await retrieve(session, query))
+        initial_hits = await retrieve(session, query) if scope is None else []
+        entries = cites.add(initial_hits)
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
 
         # Semantic answer cache: pull the nearest recent answer to a similarly
         # phrased question in as a hint (the model reuses it or re-derives). The
         # embedding comes back too, reused to store this turn's answer at the end.
-        prior_embedding, prior = await retrieve_prior_answer(session, query)
+        prior_embedding, prior = (
+            await retrieve_prior_answer(session, query) if scope is None else (None, None)
+        )
 
         context = _context_block(settings.user_timezone, entries, prior)
+        if scope is not None:
+            context += "\n" + _scope_instruction(scope)
         messages = _build_messages(history, last_user_idx, context)
 
         # Optional integrations expose their read-only tools only when connected, so
@@ -335,6 +365,8 @@ async def run_chat(
             tools += NOTION_CHAT_TOOLS
         if github.is_connected():
             tools += GITHUB_CHAT_TOOLS
+        if scope is not None:
+            tools = [tool for tool in tools if tool["name"] in _SCOPE_TOOLS[scope.kind]]
 
         async def on_delta(text: str) -> None:
             answer_parts.append(text)
@@ -393,7 +425,7 @@ async def run_chat(
                     messages.append(tool_result_message(tc, completed_queries[query_key]))
                     continue
                 used_web_search = used_web_search or tc.name == "web_search"
-                result_text, trace = await _dispatch(session, cites, tc, settings, emit)
+                result_text, trace = await _dispatch(session, cites, tc, settings, emit, scope=scope)
                 if query_key is not None:
                     completed_queries[query_key] = result_text
                 # Surface the raw call + full result so the UI can expand the
@@ -529,20 +561,24 @@ def _opt(tin: dict[str, Any], key: str) -> str | None:
 
 
 async def _dispatch(
-    session: Session, cites: Citations, tc: ToolCall, settings, emit: Emit
+    session: Session, cites: Citations, tc: ToolCall, settings, emit: Emit,
+    scope: ChatSearchScope | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run one tool call. Returns (text_for_llm, trace). Tool errors degrade to
     a failed trace + explanatory text rather than aborting the chat."""
     name = tc.name
     tin = tc.input or {}
     q = str(tin.get("query") or "")
+    if scope is not None and name not in _SCOPE_TOOLS[scope.kind]:
+        message = f"{name} is outside the selected {scope.kind} filter."
+        return message, _trace(name, purpose="scoped search", summary=message, status="failed")
     try:
         if name == "tasks_search":
             hits = await find_tasks(
                 session,
                 query=_opt(tin, "query"),
                 status=_opt(tin, "status"),
-                label=_opt(tin, "label"),
+                label=scope.label if scope and scope.kind == "tasks" and scope.label else _opt(tin, "label"),
                 due_after=_opt(tin, "due_after"),
                 due_before=_opt(tin, "due_before"),
             )
@@ -550,7 +586,8 @@ async def _dispatch(
             return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
 
         if name == "search_notes":
-            hits = await search_notes(session, q)
+            note_options = {"source": scope.source} if scope and scope.kind == "notes" and scope.source else {}
+            hits = await search_notes(session, q, **note_options)
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("notes", q))
 
         if name == "split_task":
@@ -589,18 +626,20 @@ async def _dispatch(
             hits = await search_messages(
                 session,
                 q,
-                source=(_opt(tin, "source") or "").lower() or None,
+                source=scope.source if scope and scope.kind == "messages" and scope.source else (_opt(tin, "source") or "").lower() or None,
                 before=_opt(tin, "before"),
                 after=_opt(tin, "after"),
             )
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("messages", q))
 
         if name == "calendar_search":
+            calendar_options = {"exclude_task_calendar": True} if scope and scope.kind == "events" else {}
             hits = await search_calendar(
                 session,
                 query=_opt(tin, "query"),
                 time_min=_opt(tin, "time_min"),
                 time_max=_opt(tin, "time_max"),
+                **calendar_options,
             )
             purpose = _purpose("calendar", _opt(tin, "query"), fallback="calendar")
             return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
@@ -614,6 +653,7 @@ async def _dispatch(
             return out, _trace(name, purpose="read calendar event", summary=out)
 
         if name == "drive_search":
+            drive_options = {"mime_label": scope.format} if scope and scope.kind == "files" and scope.format else {}
             hits = await search_drive(
                 session,
                 q,
@@ -621,6 +661,7 @@ async def _dispatch(
                 timeout=settings.search_drive_timeout_seconds,
                 after=_opt(tin, "after"),
                 before=_opt(tin, "before"),
+                **drive_options,
             )
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("drive", q))
 

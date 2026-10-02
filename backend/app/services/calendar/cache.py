@@ -56,6 +56,7 @@ def _metadata(event: CalendarEvent) -> dict:
         "calendar_id": event.calendar_id,
         "location": event.location,
         "all_day": event.all_day,
+        "label_id": event.raw.get("eventLabelId"),
     }
     return {k: v for k, v in meta.items() if v is not None}
 

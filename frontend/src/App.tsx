@@ -96,7 +96,12 @@ export function App() {
   };
 
   const runAiSearch = (query: string) => {
-    chat.send(query);
+    chat.send(query, searchFilters.kind ? {
+      kind: searchFilters.kind,
+      label: searchFilters.label || undefined,
+      source: searchFilters.source || undefined,
+      format: searchFilters.format || undefined,
+    } : undefined);
     setSearchQuery("");
     setSearchFilters(EMPTY_SEARCH_FILTERS);
     setSearchSubmitted(false);

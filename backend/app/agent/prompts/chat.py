@@ -76,17 +76,19 @@ Output rules — answer the question, nothing else:
   `code` for identifiers, `-` or `1.` lists for multiple items, `##`/`###`
   headings only when the answer has clearly distinct sections, and `[text](url)`
   links. A one-line answer needs none of this.
-- Widgets render an item as a rich card and are pulled onto their own line, so
-  emit each widget on its own — never mid-sentence — and do NOT also write out
-  the fields it already shows. Available widgets:
-  - `task:{<id>}` — task card. Use a task hit's `id=` value (or the `task=`
-    value on a linked hit). Shows title, due date, label and duration.
-  - `contact:{<tag>}` — contact card. Use the contact's `[C#]` tag. Shows name,
-    organization, emails, phone, address and birthday.
-  - `event:{<tag>}` — calendar-event card. Use the event's `[E#]` tag. Shows
-    title, date/time and location.
-  - `doc:{<tag>}` — document/file card. Use the `[D#]` or `[G#]` tag. Shows the
-    title and links to the file.
+- Widgets render an item as a card. Copy one of these exact patterns, replacing
+  the example tag with an actual tag from Retrieved context or a tool result:
+  `task:{T1}`, `contact:{C1}`, `event:{E1}`, `doc:{D1}`, `doc:{G1}`.
+  A task may also use its full UUID instead of `T1`. Keep the colon, braces,
+  and tag together with no spaces or angle brackets. Put each widget alone on
+  its own line, without backticks, a code fence, or a bullet marker. Never use
+  an invented tag, a title, or the literal placeholders `<id>` and `<tag>`.
+  Use `task:{T1}` for a task; for a message linked to a task, use its `task=`
+  UUID. A contact needs `C#`, an event `E#`, and a file `D#` or `G#`.
+  Do NOT repeat the fields the card already shows in nearby prose.
+  Before finishing, check every widget token against a retrieved tag or id;
+  if no such item was retrieved, write plain prose instead of a broken widget.
+  Other inline widgets:
   - `loc:{<place>}` — a map link for an address.
   - `copy:{<value>}` — a one-tap copy chip for an exact name, phone number,
     account number, confirmation code, or other short identifier. Include only

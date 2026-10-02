@@ -50,6 +50,7 @@ class SuggestHit:
     # today); None for keyword-only hits, which carry no meaningful cosine.
     similarity: float | None = None
     due_date: datetime | None = None
+    label_id: str | None = None
 
 
 # Per-corpus SQL fragments. `fts` is the stored, GIN-indexed tsvector column;
@@ -79,7 +80,7 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "'task' AS type, t.id::text AS id, t.title AS title, "
             "left(coalesce(t.description,''), 200) AS snippet, t.link AS url, "
             "t.id::text AS task_id, li.source AS source, li.sender AS sender, "
-            "coalesce(li.status, 'open') AS status, t.due_date AS due_date"
+            "coalesce(li.status, 'open') AS status, t.due_date AS due_date, NULL::text AS label_id"
         ),
     },
     INPUT: {
@@ -92,7 +93,7 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "left(coalesce(r.content,''), 80)) AS title, "
             "left(coalesce(r.content,''), 200) AS snippet, NULL::text AS url, "
             "r.task_id::text AS task_id, r.source AS source, "
-            "r.source_metadata->>'from' AS sender, r.status AS status, NULL::timestamptz AS due_date"
+            "r.source_metadata->>'from' AS sender, r.status AS status, NULL::timestamptz AS due_date, NULL::text AS label_id"
         ),
     },
     DOCUMENT: {
@@ -112,7 +113,8 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "coalesce(d.snippet, left(coalesce(d.content,''), 200)) AS snippet, "
             "coalesce(kt.link, d.url) AS url, kt.id::text AS task_id, "
             "d.provider AS source, NULL::text AS sender, "
-            "CASE WHEN d.provider = 'calendar' THEN 'event'::text END AS status, NULL::timestamptz AS due_date"
+            "CASE WHEN d.provider = 'calendar' THEN 'event'::text END AS status, "
+            "NULL::timestamptz AS due_date, d.metadata->>'label_id' AS label_id"
         ),
     },
 }
@@ -144,7 +146,7 @@ _INPUT_SELECT_TEMPLATE = (
     "r.source_metadata->>'from' AS sender, r.status AS status"
 )
 
-_HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, due_date, ts, score"
+_HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, due_date, label_id, ts, score"
 
 
 def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
@@ -314,6 +316,7 @@ def suggest(
             ts=r.ts,
             score=float(r.score) if r.score is not None else 0.0,
             due_date=r.due_date,
+            label_id=r.label_id,
         )
         for r in rows
     ]

@@ -20,6 +20,23 @@ def test_numeric_note_query_types_null_cursor(monkeypatch):
     assert notes.search_similar(Session(), embedding=[0.1, 0.2], query="3. Januar") == []
 
 
+def test_note_source_filter_applies_to_both_search_pools():
+    class Result:
+        def all(self):
+            return []
+
+    class Session:
+        def execute(self, statement, params):
+            sql = str(statement)
+            assert sql.count("coalesce(sr.source, 'chat') = :source") == 2
+            assert params["source"] == "gmail"
+            return Result()
+
+    assert notes.search_similar(
+        Session(), embedding=[0.1, 0.2], query="invoice", source="gmail"
+    ) == []
+
+
 def test_numeric_message_search_builds_input_branch():
     sql = search._branch_sql(search.INPUT, match=True, filters_sql="")
     assert "r.source <> 'chat'" in sql

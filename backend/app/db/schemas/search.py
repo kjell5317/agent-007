@@ -31,6 +31,8 @@ class SearchHit(BaseModel):
         meta = {"similarity": round(sim, 2)} if sim and sim > 0 else None
         if hit.due_date:
             meta = {**(meta or {}), "due_date": hit.due_date.isoformat()}
+        if hit.label_id:
+            meta = {**(meta or {}), "label_id": hit.label_id}
         return cls(
             type=hit.type,
             id=hit.id,
@@ -67,8 +69,16 @@ class ChatMessageIn(BaseModel):
     tools: list[ChatToolIn] = []
 
 
+class ChatSearchScope(BaseModel):
+    kind: Literal["tasks", "messages", "notes", "events", "files", "contacts"]
+    label: str | None = None
+    source: str | None = None
+    format: str | None = None
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessageIn]
+    scope: ChatSearchScope | None = None
     # Optional: the persisted conversation id. Threaded to Langfuse as the trace
     # `session_id` so multi-turn conversations group in the Sessions view.
     conversation_id: str | None = None

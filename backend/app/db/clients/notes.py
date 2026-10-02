@@ -98,8 +98,10 @@ _SIMILAR_NOTES_SQL = text(
     vec AS (
         SELECT n.id, row_number() OVER (ORDER BY n.embedding <=> CAST(:emb AS vector)) AS rnk
         FROM notes n
+        LEFT JOIN raw_inputs sr ON sr.id = n.source_raw_input_id
         WHERE n.embedding IS NOT NULL
           AND NOT n.needs_review
+          AND (CAST(:source AS text) IS NULL OR coalesce(sr.source, 'chat') = :source)
           AND (CAST(:before_at AS timestamptz) IS NULL OR (n.created_at, n.id) <
                (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
           AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :min_sim
@@ -108,9 +110,11 @@ _SIMILAR_NOTES_SQL = text(
     ),
     kw AS (
         SELECT n.id, row_number() OVER (ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC) AS rnk
-        FROM notes n, q
+        FROM notes n CROSS JOIN q
+        LEFT JOIN raw_inputs sr ON sr.id = n.source_raw_input_id
         WHERE q.tsq @@ n.tsv
           AND NOT n.needs_review
+          AND (CAST(:source AS text) IS NULL OR coalesce(sr.source, 'chat') = :source)
           AND (CAST(:before_at AS timestamptz) IS NULL OR (n.created_at, n.id) <
                (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
         ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC
@@ -151,6 +155,7 @@ def search_similar(
     k: int = 5,
     min_similarity: float = 0.0,
     before: Note | None = None,
+    source: str | None = None,
 ) -> list[SimilarNote]:
     """Top-k notes by hybrid similarity + keyword (RRF over pgvector and FTS),
     re-ranked with a mild recency decay. `min_similarity` gates the vector side
@@ -166,6 +171,7 @@ def search_similar(
             "pool": _NOTE_POOL,
             "half_life_days": half_life_days,
             "min_sim": min_similarity,
+            "source": source,
             "before_at": before.created_at.isoformat() if before else None,
             "before_id": str(before.id) if before else None,
         },
