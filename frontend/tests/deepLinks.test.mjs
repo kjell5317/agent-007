@@ -40,3 +40,39 @@ test("closing and switching task modals do not leave stale task routes in histor
   assert.deepEqual(entries, ["/app", "/app"]);
   assert.equal(window.location.hash, "");
 });
+
+test("browser and modal Back return from a subtask to its parent", () => {
+  const entries = [{ url: "/app", state: null }];
+  let index = 0;
+  const location = { pathname: "/app", search: "", hash: "" };
+  const setUrl = (url) => {
+    location.hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+  };
+  const history = {
+    get state() { return entries[index].state; },
+    pushState: (state, _title, url) => {
+      entries.splice(++index, Infinity, { url, state });
+      setUrl(url);
+    },
+    replaceState: (state, _title, url) => {
+      entries[index] = { url, state };
+      setUrl(url);
+    },
+    back: () => {
+      if (index > 0) setUrl(entries[--index].url);
+    },
+  };
+  const exports = {};
+  vm.runInNewContext(outputText, { exports, window: { location, history }, URLSearchParams });
+
+  exports.pushDeepLink({ kind: "task", id: "parent" });
+  exports.pushDeepLink({ kind: "task", id: "child" });
+  assert.equal(location.hash, "#task/child");
+
+  // The modal Back button uses the same history transition as browser Back.
+  assert.equal(exports.backFromDeepLink(), true);
+  assert.equal(location.hash, "#task/parent");
+  history.back();
+  assert.equal(location.hash, "");
+  assert.equal(exports.backFromDeepLink(), false);
+});

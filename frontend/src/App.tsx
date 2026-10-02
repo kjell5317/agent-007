@@ -22,7 +22,7 @@ import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
 import { getUserTimezone, setUserTimezone } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
-import { clearDeepLink, parseDeepLink, pushDeepLink, replaceDeepLink } from "@/lib/deepLinks";
+import { backFromDeepLink, clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
 import type { RawInput, SearchHit, Task } from "@/lib/types";
@@ -48,6 +48,7 @@ export function App() {
   const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
   const inboxOpen = view === "chat" && !searchQuery.trim() && searchFilters.kind === "messages";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const taskCacheRef = useRef(new Map<string, Task>());
   const taskNavigationRequestRef = useRef(0);
   // A #run/<kotxId> deep link (legacy runs modal) waiting for the task list to
   // load so it can resolve to the adopting task.
@@ -170,13 +171,15 @@ export function App() {
     const link = parseDeepLink();
     if (!link) {
       setSelectedTaskId(null);
+      setFetchedTask(null);
       setPendingRunId(null);
       return;
     }
     if (link.kind === "task") {
+      setFetchedTask(taskCacheRef.current.get(link.id) ?? null);
       setSelectedTaskId(link.id);
       setPendingRunId(null);
-      setView("tasks");
+      if (window.history.state?.appDeepLink !== true) setView("tasks");
       return;
     }
     setPendingRunId(link.id);
@@ -344,14 +347,14 @@ export function App() {
   const openTask = useCallback((id: string) => {
     if (selectedTaskId === id) return;
     const requestId = ++taskNavigationRequestRef.current;
-    const listedTask = tasks.find((candidate) => candidate.id === id);
+    const listedTask = tasks.find((candidate) => candidate.id === id) ?? taskCacheRef.current.get(id);
     const finish = (loadedTask?: Task) => {
       if (requestId !== taskNavigationRequestRef.current) return;
       const openedTask = loadedTask ?? listedTask;
       if (openedTask) void api.recordSearchClick(taskSearchHit(openedTask)).catch(() => {});
-      if (selectedTaskId) replaceDeepLink({ kind: "task", id });
-      else pushDeepLink({ kind: "task", id });
+      pushDeepLink({ kind: "task", id });
       if (loadedTask) setFetchedTask(loadedTask);
+      if (openedTask) taskCacheRef.current.set(id, openedTask);
       setSelectedTaskId(id);
     };
     if (listedTask) finish();
@@ -364,12 +367,11 @@ export function App() {
     void api.recordSearchClick(inputSearchHit(input)).catch(() => {});
   }, []);
 
-  const selectedTaskSnapshot = useRef<Task | null>(null);
   const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const closeSelectedModal = useCallback(() => {
     taskNavigationRequestRef.current += 1;
+    if (backFromDeepLink()) return;
     clearDeepLink();
-    selectedTaskSnapshot.current = null;
     setFetchedTask(null);
     setSelectedTaskId(null);
   }, []);
@@ -381,12 +383,12 @@ export function App() {
   const selectedTask = selectedTaskId
     ? selectedListTask ??
       (fetchedTask?.id === selectedTaskId ? fetchedTask : null) ??
-      selectedTaskSnapshot.current
+      taskCacheRef.current.get(selectedTaskId) ?? null
     : null;
-  if (selectedTask) selectedTaskSnapshot.current = selectedTask;
+  if (selectedTask) taskCacheRef.current.set(selectedTask.id, selectedTask);
 
   useEffect(() => {
-    if (!selectedTaskId || selectedListTask || selectedTaskSnapshot.current?.id === selectedTaskId) {
+    if (!selectedTaskId || selectedListTask) {
       setFetchedTask(null);
       return;
     }

@@ -29,11 +29,17 @@ export function deepLinkHash(link: DeepLink): string {
 }
 
 export function pushDeepLink(link: DeepLink) {
-  window.history.pushState(null, "", deepLinkHash(link));
+  window.history.pushState({ appDeepLink: true }, "", deepLinkHash(link));
 }
 
 export function replaceDeepLink(link: DeepLink) {
-  window.history.replaceState(null, "", deepLinkHash(link));
+  window.history.replaceState({ appDeepLink: true }, "", deepLinkHash(link));
+}
+
+export function backFromDeepLink(): boolean {
+  if (window.history.state?.appDeepLink !== true) return false;
+  window.history.back();
+  return true;
 }
 
 export function clearDeepLink() {
