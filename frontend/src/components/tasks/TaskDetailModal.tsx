@@ -17,6 +17,7 @@ import {
   RotateCcw,
   Timer,
   Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -463,11 +464,11 @@ export function TaskDetailModal({
     setLocationSuggestions([]);
   };
 
-  const saveTextEditor = async (field: TextField) => {
+  const closeTextEdit = (field: TextField): boolean => {
     const trimmed = textDraft.trim();
     if (field === "title" && !trimmed) {
       toast.error("Title is required");
-      return;
+      return false;
     }
 
     let patch: Partial<Task>;
@@ -479,6 +480,7 @@ export function TaskDetailModal({
 
     if ((current[field] ?? "") !== (patch[field] ?? "")) autoSavePatch(patch);
     closeTextEditor();
+    return true;
   };
 
   const openPicker = (field: PickerField) => {
@@ -490,32 +492,14 @@ export function TaskDetailModal({
     setPickerLabel(current.label ?? "");
   };
 
-  const saveActiveEdit = async () => {
-    if (busy) return;
-    if (editingText) {
-      await saveTextEditor(editingText);
-      return;
-    }
-    if (!activePicker) return;
-    const patch: Partial<Task> = activePicker === "due_date"
-      ? { due_date: pickerDue }
-      : activePicker === "estimation"
-        ? { estimation: pickerEstimation }
-        : { label: pickerLabel || null };
-    if (activePicker === "due_date" && patch.due_date !== current.due_date ||
-        activePicker === "estimation" && patch.estimation !== current.estimation ||
-        activePicker === "label" && patch.label !== current.label) autoSavePatch(patch);
-    setActivePicker(null);
+  const closeModal = () => {
+    if (editingText && !closeTextEdit(editingText)) return;
+    onClose();
   };
 
-  const closeModal = () => {
-    if (editingText) {
-      if (editingText === "title" && !textDraft.trim()) {
-        toast.error("Title is required");
-        return;
-      }
-      void saveTextEditor(editingText);
-    }
+  const backFromModal = () => {
+    if (editingText) { closeTextEdit(editingText); return; }
+    if (activePicker) { setActivePicker(null); return; }
     onClose();
   };
 
@@ -530,14 +514,9 @@ export function TaskDetailModal({
       header={
         <div className="relative z-50 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
           <div className="flex items-center gap-3">
-            <Button type="button" size="icon" variant="ghost" onClick={closeModal} aria-label="Back" className="h-12 w-12 shrink-0">
+            <Button type="button" size="icon" variant="ghost" onClick={backFromModal} aria-label="Back" className="h-12 w-12 shrink-0">
               <ArrowLeft className="h-5 w-5" />
             </Button>
-            {editingText && (
-              <Button type="button" size="sm" onClick={() => { void saveActiveEdit(); }} disabled={busy}>
-                Done
-              </Button>
-            )}
           </div>
           <div className="flex items-center gap-3">
             {current.status !== "open" && !kotxTask && (
@@ -649,7 +628,6 @@ export function TaskDetailModal({
           onSelectLocationSuggestion={onTextDraftChange}
           onEditPicker={openPicker}
           onClosePicker={() => setActivePicker(null)}
-          onSavePicker={() => { void saveActiveEdit(); }}
           onDateStepChange={setDateStep}
           onPickerDueChange={(value) => { setPickerDue(value); autoSavePatch({ due_date: value }); }}
           onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
@@ -736,7 +714,6 @@ function TaskSummary({
   onSelectLocationSuggestion,
   onEditPicker,
   onClosePicker,
-  onSavePicker,
   onDateStepChange,
   onPickerDueChange,
   onPickerEstimationChange,
@@ -777,7 +754,6 @@ function TaskSummary({
   onSelectLocationSuggestion: (value: string) => void;
   onEditPicker: (field: PickerField) => void;
   onClosePicker: () => void;
-  onSavePicker: () => void;
   onDateStepChange: (step: "date" | "time") => void;
   onPickerDueChange: (value: string | null) => void;
   onPickerEstimationChange: (value: number | null) => void;
@@ -816,7 +792,7 @@ function TaskSummary({
             open={activePicker === "label"}
             onClose={onClosePicker}
             panel={
-              <InlinePickerPanel title="Label" onClose={onClosePicker} onSave={onSavePicker} busy={busy}>
+              <InlinePickerPanel title="Label" onClose={onClosePicker}>
                 <LabelPicker
                   value={pickerLabel}
                   onChange={onPickerLabelChange}
@@ -850,9 +826,6 @@ function TaskSummary({
               <InlinePickerPanel
                 title="Due date"
                 onClose={onClosePicker}
-                onSave={onSavePicker}
-                busy={busy}
-                showSave={dateStep === "time"}
                 onEditDate={
                   dateStep === "time"
                     ? () => onDateStepChange("date")
@@ -892,7 +865,7 @@ function TaskSummary({
             open={!task.is_container && activePicker === "estimation"}
             onClose={onClosePicker}
             panel={
-              <InlinePickerPanel title="Estimate" onClose={onClosePicker} onSave={onSavePicker} busy={busy}>
+              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
                 <EstimationPicker
                   value={pickerEstimation}
                   onChange={onPickerEstimationChange}
@@ -1431,17 +1404,11 @@ function InlinePickerPanel({
   children,
   onEditDate,
   onClose,
-  onSave,
-  busy,
-  showSave = true,
 }: {
   title: string;
   children: ReactNode;
   onEditDate?: () => void;
   onClose: () => void;
-  onSave: () => void;
-  busy: boolean;
-  showSave?: boolean;
 }) {
   return (
     <div
@@ -1470,16 +1437,14 @@ function InlinePickerPanel({
           <div className="truncate text-center text-sm font-semibold">
             {title}
           </div>
-          <span aria-hidden="true" />
+          <button type="button" onClick={onClose} aria-label={`Close ${title} picker`}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <div className="min-h-0 space-y-3 overflow-y-auto">
           {children}
         </div>
-        {showSave && (
-          <Button type="button" onClick={onSave} disabled={busy} className="mt-3 w-full shrink-0">
-            Done
-          </Button>
-        )}
       </div>
     </div>
   );
