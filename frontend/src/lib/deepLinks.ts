@@ -19,6 +19,8 @@ export function parseDeepLink(location: Location = window.location): DeepLink | 
     const id = Number(runId);
     return Number.isInteger(id) && id > 0 ? { kind: "run", id } : null;
   }
+  const pathId = location.pathname.match(/^\/([A-Z]{3}\d*)\/?$/)?.[1];
+  if (pathId) return { kind: "task", id: pathId };
   return null;
 }
 
@@ -47,5 +49,6 @@ export function clearDeepLink() {
   params.delete("task");
   params.delete("run");
   const query = params.toString();
-  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  const pathname = /^\/[A-Z]{3}\d*\/?$/.test(window.location.pathname) ? "/" : window.location.pathname;
+  window.history.replaceState(null, "", `${pathname}${query ? `?${query}` : ""}`);
 }

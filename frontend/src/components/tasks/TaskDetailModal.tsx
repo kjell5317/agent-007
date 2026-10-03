@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { TaskCard } from "@/components/tasks/TaskCard";
+import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { Input } from "@/components/ui/input";
@@ -52,6 +53,7 @@ import type { Label, Task, TaskRawInput } from "@/lib/types";
 interface Props {
   task: Task;
   knownTasks: Task[];
+  cachedParentTask?: Task | null;
   kotxTask?: KotxTask | null;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
@@ -88,6 +90,7 @@ const TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS =
 export function TaskDetailModal({
   task,
   knownTasks,
+  cachedParentTask = null,
   kotxTask = null,
   onClose,
   onChanged,
@@ -105,7 +108,7 @@ export function TaskDetailModal({
   const [textDraft, setTextDraft] = useState("");
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [subtaskDetails, setSubtaskDetails] = useState<Record<string, Task>>({});
-  const [parentTask, setParentTask] = useState<Task | null>(null);
+  const [parentTask, setParentTask] = useState<Task | null>(cachedParentTask ?? task.parent_card);
   const [newSubtask, setNewSubtask] = useState("");
   const [draggedSubtask, setDraggedSubtask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121,11 +124,16 @@ export function TaskDetailModal({
   useEffect(() => {
     if (!current.parent_task_id) { setParentTask(null); return; }
     let cancelled = false;
+    const available = cachedParentTask?.id === current.parent_task_id ? cachedParentTask : current.parent_card;
+    if (available?.id === current.parent_task_id) {
+      setParentTask(available);
+      return;
+    }
     void api.getTask(current.parent_task_id).then((parent) => {
       if (!cancelled) setParentTask(parent);
     }).catch(() => { if (!cancelled) toast.error("Could not load parent task"); });
     return () => { cancelled = true; };
-  }, [current.parent_task_id]);
+  }, [current.parent_task_id, current.parent_card, cachedParentTask]);
 
   useEffect(() => {
     if (!subtaskIds) return;
@@ -255,14 +263,8 @@ export function TaskDetailModal({
     }
   }
 
-  async function moveSubtask(sourceId: string, targetId: string) {
-    if (sourceId === targetId) return;
-    const ids = current.subtasks.map((child) => child.id);
-    const from = ids.indexOf(sourceId);
-    const to = ids.indexOf(targetId);
-    if (from < 0 || to < 0) return;
-    ids.splice(from, 1);
-    ids.splice(to, 0, sourceId);
+  async function moveSubtask(ids: string[]) {
+    if (ids.join("|") === current.subtasks.map((child) => child.id).join("|")) return;
     setCurrent((previous) => ({
       ...previous,
       subtasks: ids.map((id) => previous.subtasks.find((child) => child.id === id)!),
@@ -377,7 +379,7 @@ export function TaskDetailModal({
   const dismissTask = () =>
     runClosingTaskAction(
       () => api.markNotTask(current.id),
-      "Marked not a task",
+      current.is_container ? "Deleted parent and dismissed subtasks" : "Marked not a task",
     );
 
   // kotx tasks: done is handled through kotx, so the check-off dismisses —
@@ -570,11 +572,9 @@ export function TaskDetailModal({
                 <span className="text-sm font-semibold">1h</span>
               </TaskSummaryIconButton>
             )}
-            {current.status === "open" &&
-              !current.is_container &&
-              !kotxTask && (
+            {current.status === "open" && !kotxTask && (
                 <TaskSummaryIconButton
-                  label="Mark not a task"
+                  label={current.is_container ? "Delete parent and dismiss subtasks" : "Mark not a task"}
                   disabled={busy}
                   onClick={dismissTask}
                   className="h-12 w-12 shrink-0 hover:text-destructive"
@@ -606,7 +606,7 @@ export function TaskDetailModal({
           onAddSubtask={() => { void addNewSubtask(); }}
           draggedSubtask={draggedSubtask}
           onDragSubtask={setDraggedSubtask}
-          onMoveSubtask={(source, target) => { void moveSubtask(source, target); }}
+          onMoveSubtask={(order) => { void moveSubtask(order); }}
           onSubtaskChanged={refreshAfterSubtaskChange}
           kotxTask={kotxTask}
           onKotxChanged={onKotxChanged}
@@ -670,14 +670,17 @@ function TaskTitleHeader({
   }
 
   return (
-    <button
-      type="button"
-      onClick={onEdit}
-      disabled={busy}
-      className="group flex w-full min-w-0 items-center justify-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
-    >
-      <span className="min-w-0 flex-1 break-words">{task.title}</span>
-    </button>
+    <div className="flex min-w-0 items-center justify-center gap-2">
+      <TaskIdPill id={task.public_id} />
+      <button
+        type="button"
+        onClick={onEdit}
+        disabled={busy}
+        className="group flex w-full min-w-0 items-center justify-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+      >
+        <span className="min-w-0 flex-1 break-words">{task.title}</span>
+      </button>
+    </div>
   );
 }
 
@@ -732,7 +735,7 @@ function TaskSummary({
   onAddSubtask: () => void;
   draggedSubtask: string | null;
   onDragSubtask: (id: string | null) => void;
-  onMoveSubtask: (source: string, target: string) => void;
+  onMoveSubtask: (order: string[]) => void;
   onSubtaskChanged: () => Promise<void>;
   kotxTask: KotxTask | null;
   onKotxChanged?: () => Promise<void> | void;
@@ -762,6 +765,30 @@ function TaskSummary({
   onCreateGithubIssue: () => void;
   onKotxActionPendingChange: (pending: boolean) => void;
 }) {
+  const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
+  const previewOrderRef = useRef<string[] | null>(null);
+  const displayedSubtasks = previewOrder
+    ? previewOrder.map((id) => task.subtasks.find((child) => child.id === id)).filter((child): child is Task["subtasks"][number] => Boolean(child))
+    : task.subtasks;
+  const previewMove = (targetId: string, after: boolean) => {
+    if (!draggedSubtask || draggedSubtask === targetId) return;
+    const original = previewOrderRef.current ?? task.subtasks.map((child) => child.id);
+    const next = original.filter((id) => id !== draggedSubtask);
+    const targetIndex = next.indexOf(targetId);
+    if (targetIndex < 0) return;
+    next.splice(targetIndex + (after ? 1 : 0), 0, draggedSubtask);
+    if (next.join("|") !== original.join("|")) {
+      previewOrderRef.current = next;
+      setPreviewOrder(next);
+    }
+  };
+  const finishDrag = (commit: boolean) => {
+    const order = previewOrderRef.current;
+    previewOrderRef.current = null;
+    setPreviewOrder(null);
+    onDragSubtask(null);
+    if (commit && order) onMoveSubtask(order);
+  };
   const labelMeta = labels.find((l) => l.name === task.label);
   const dueOverdue = isOverdue(task.due_date);
   const dueUrgent = isUrgent(task.due_date, task.estimation);
@@ -937,15 +964,29 @@ function TaskSummary({
         )}
 
         {task.is_container && (
-          <section className="space-y-2">
+          <section className="space-y-2" onDrop={(event) => { event.preventDefault(); finishDrag(true); }}>
             <h3 className="text-sm font-semibold">Subtasks</h3>
-            {task.subtasks.map((child) => {
+            {displayedSubtasks.map((child) => {
               const fullTask = knownTasks.find((candidate) => candidate.id === child.id) ?? subtaskDetails[child.id];
               return fullTask ? (
-                <div key={child.id} className="flex items-center gap-1" onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => { event.preventDefault(); if (draggedSubtask) onMoveSubtask(draggedSubtask, child.id); onDragSubtask(null); }}>
+                <div key={child.id} className={cn("flex items-center gap-1 transition-opacity", draggedSubtask === child.id && "opacity-35")}
+                  onDragOver={(event) => {
+                    if (!draggedSubtask) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    previewMove(child.id, event.clientY > bounds.top + bounds.height / 2);
+                  }}>
                   <span draggable aria-label={`Reorder ${child.title}`} title="Drag to reorder"
-                    onDragStart={() => onDragSubtask(child.id)} onDragEnd={() => onDragSubtask(null)}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", child.id);
+                      const card = event.currentTarget.nextElementSibling?.firstElementChild;
+                      if (card instanceof HTMLElement) event.dataTransfer.setDragImage(card, 24, 24);
+                      previewOrderRef.current = task.subtasks.map((item) => item.id);
+                      setPreviewOrder(previewOrderRef.current);
+                      onDragSubtask(child.id);
+                    }} onDragEnd={() => finishDrag(false)}
                     className="cursor-grab rounded p-1 text-muted-foreground active:cursor-grabbing">
                     <GripVertical className="h-4 w-4" />
                   </span>

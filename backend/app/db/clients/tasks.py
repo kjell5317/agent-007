@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+import secrets
+import string
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, case, func, select, text
@@ -38,7 +40,30 @@ def is_manual_for(
 
 def create(session: Session, payload: TaskCreate) -> Task:
     due_date = payload.due_date or datetime.now(timezone.utc) + DEFAULT_DUE_HORIZON
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        # The tiny public-code namespace needs one allocator at a time.
+        session.execute(select(func.pg_advisory_xact_lock(744177)))
+    if payload.parent_task_id:
+        parent = session.get(Task, payload.parent_task_id)
+        if parent is None or not parent.public_id:
+            raise ValueError("Parent task has no identifier")
+        siblings = session.execute(select(Task.public_id).where(Task.parent_task_id == parent.id)).scalars()
+        used_numbers = {int(code[len(parent.public_id):]) for code in siblings
+                        if code and code.startswith(parent.public_id) and code[len(parent.public_id):].isdigit()}
+        suffix = max(used_numbers, default=0) + 1
+        public_id = f"{parent.public_id}{suffix}"
+    else:
+        used = set(session.execute(select(Task.public_id).where(Task.parent_task_id.is_(None))).scalars())
+        alphabet = string.ascii_uppercase
+        candidates = {"".join(secrets.choice(alphabet) for _ in range(3)) for _ in range(96)} - used
+        if not candidates:
+            candidates = {f"{a}{b}{c}" for a in alphabet for b in alphabet for c in alphabet} - used
+        recent = list(session.execute(select(Task.public_id).where(Task.parent_task_id.is_(None))
+                                      .order_by(Task.created_at.desc()).limit(30)).scalars())
+        public_id = max(candidates, key=lambda code: (min((sum(x != y for x, y in zip(code, old))
+                                                          for old in recent if old), default=3), secrets.randbelow(1000)))
     row = Task(
+        public_id=public_id,
         title=payload.title,
         description=payload.description,
         link=payload.link,
@@ -62,6 +87,10 @@ def create(session: Session, payload: TaskCreate) -> Task:
 
 def get(session: Session, task_id: uuid.UUID) -> Task | None:
     return session.get(Task, task_id)
+
+
+def get_by_public_id(session: Session, public_id: str) -> Task | None:
+    return session.execute(select(Task).where(Task.public_id == public_id.upper())).scalar_one_or_none()
 
 
 def children(session: Session, parent_id: uuid.UUID) -> list[Task]:

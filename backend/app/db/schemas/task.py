@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 from typing import Literal
@@ -9,6 +11,7 @@ TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled"]
 
 class SubtaskSummary(BaseModel):
     id: uuid.UUID
+    public_id: str | None = None
     title: str
     due_date: datetime
     estimation: int | None
@@ -129,6 +132,8 @@ class TaskRawInputRead(BaseModel):
 
 class TaskRead(TaskBase):
     id: uuid.UUID
+    public_id: str | None = None
+    parent_card: TaskRead | None = None
     scheduled_date: datetime | None = None
     schedule_status: TaskScheduleStatus
     source_url: str | None = None
@@ -153,6 +158,7 @@ class TaskRead(TaskBase):
         raw_inputs: list[TaskRawInputRead] | None = None,
         subtasks: list[SubtaskSummary] | None = None,
         scheduling: str | None = None,
+        parent_card: TaskRead | None = None,
     ) -> "TaskRead":
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
@@ -174,6 +180,8 @@ class TaskRead(TaskBase):
         return cls.model_validate(
             {
                 "id": task.id,
+                "public_id": getattr(task, "public_id", None),
+                "parent_card": parent_card,
                 "title": task.title,
                 "description": task.description,
                 "link": task.link,

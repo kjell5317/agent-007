@@ -76,3 +76,13 @@ test("browser and modal Back return from a subtask to its parent", () => {
   assert.equal(location.hash, "");
   assert.equal(exports.backFromDeepLink(), false);
 });
+
+test("an uppercase public task ID in the path opens its task", () => {
+  const exports = {};
+  vm.runInNewContext(outputText, { exports, window: {}, URLSearchParams });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(exports.parseDeepLink({ pathname: "/QRT12", search: "", hash: "" }))),
+    { kind: "task", id: "QRT12" },
+  );
+  assert.equal(exports.parseDeepLink({ pathname: "/app", search: "", hash: "" }), null);
+});

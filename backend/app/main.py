@@ -120,6 +120,14 @@ def create_app() -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(_STATIC_DIR / "index.html")
 
+    @app.get("/{public_id}", include_in_schema=False)
+    def task_deep_link(public_id: str) -> FileResponse:
+        import re
+        from fastapi import HTTPException
+        if not re.fullmatch(r"[A-Z]{3}[0-9]*", public_id):
+            raise HTTPException(status_code=404)
+        return FileResponse(_STATIC_DIR / "index.html")
+
     # Middleware order matters: add_middleware wraps the existing stack, so
     # the LAST added is the OUTERMOST (runs first on the way in). We need
     # SessionMiddleware to populate request.session BEFORE AuthMiddleware

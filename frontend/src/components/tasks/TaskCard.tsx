@@ -6,6 +6,7 @@ import {
   MapPin,
   RotateCcw,
   Timer,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import { isTaskOverdue } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
+import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
 
 interface Props {
@@ -80,7 +82,7 @@ export function TaskCard({
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
   const cardBorderClass =
-    task.schedule_status === "pending"
+    task.is_container ? null : task.schedule_status === "pending"
       ? "border-emerald-500/70"
       : task.schedule_status === "unscheduled" || isTaskOverdue(task, now)
       ? "border-red-500/70"
@@ -210,6 +212,10 @@ export function TaskCard({
   // through kotx), but keeps the same icon and animation as every other task.
   const crossOff = () => {
     if (task.status !== "open" || crossing || busy) return;
+    if (task.is_container) {
+      void withBusy(() => api.markNotTask(task.id), "Deleted parent and dismissed subtasks");
+      return;
+    }
     setCrossing(true);
     setTimeout(() => {
       if (kotxTask) {
@@ -300,14 +306,16 @@ export function TaskCard({
                   ? kotxTask.canDiscard
                     ? "Dismiss run"
                     : "Mark not a task"
-                  : "Mark done"
+                  : task.is_container ? "Delete parent and dismiss subtasks" : "Mark done"
               }
               disabled={busy || crossing}
               onClick={crossOff}
-              className="text-muted-foreground hover:text-primary"
+              className={task.is_container ? "text-muted-foreground hover:text-destructive" : "text-muted-foreground hover:text-primary"}
             >
               {crossing ? (
                 <CircleCheckBig className="h-5 w-5 text-primary" />
+              ) : task.is_container ? (
+                <Trash2 className="h-5 w-5" />
               ) : (
                 <Circle className="h-5 w-5" />
               )}
@@ -328,6 +336,7 @@ export function TaskCard({
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
+              <TaskIdPill id={task.public_id} />
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-base font-medium leading-snug transition-all duration-300",

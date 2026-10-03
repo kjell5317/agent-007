@@ -167,7 +167,7 @@ export function App() {
   }, [loadInboxUnread]);
 
   const applyLocation = useCallback(() => {
-    taskNavigationRequestRef.current += 1;
+    const requestId = ++taskNavigationRequestRef.current;
     const link = parseDeepLink();
     if (!link) {
       setSelectedTaskId(null);
@@ -176,6 +176,23 @@ export function App() {
       return;
     }
     if (link.kind === "task") {
+      if (/^[A-Z]{3}\d*$/i.test(link.id)) {
+        const cached = [...taskCacheRef.current.values()].find((task) => task.public_id === link.id);
+        setSelectedTaskId(cached?.id ?? null);
+        setFetchedTask(cached ?? null);
+        setPendingRunId(null);
+        if (window.history.state?.appDeepLink !== true) setView("tasks");
+        if (cached) return;
+        void api.getTask(link.id).then((task) => {
+          if (requestId !== taskNavigationRequestRef.current) return;
+          taskCacheRef.current.set(task.id, task);
+          setFetchedTask(task);
+          setSelectedTaskId(task.id);
+        }).catch((error) => {
+          if (requestId === taskNavigationRequestRef.current) toast.error((error as Error).message);
+        });
+        return;
+      }
       setFetchedTask(taskCacheRef.current.get(link.id) ?? null);
       setSelectedTaskId(link.id);
       setPendingRunId(null);
@@ -392,6 +409,7 @@ export function App() {
       setFetchedTask(null);
       return;
     }
+    if (fetchedTask?.id === selectedTaskId) return;
     let cancelled = false;
     api
       .getTask(selectedTaskId)
@@ -404,7 +422,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [closeSelectedModal, selectedListTask, selectedTaskId]);
+  }, [closeSelectedModal, fetchedTask?.id, selectedListTask, selectedTaskId]);
 
   const selectedKotxTask =
     selectedTask && selectedTask.kotx_task_id != null
@@ -529,6 +547,7 @@ export function App() {
           key={selectedTask.id}
           task={selectedTask}
           knownTasks={tasks}
+          cachedParentTask={selectedTask.parent_task_id ? taskCacheRef.current.get(selectedTask.parent_task_id) ?? null : null}
           kotxTask={selectedKotxTask}
           onClose={closeSelectedModal}
           onChanged={refresh}

@@ -3,6 +3,7 @@ export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled";
 
 export interface SubtaskSummary {
   id: string;
+  public_id: string | null;
   title: string;
   due_date: string;
   estimation: number | null;
@@ -12,6 +13,8 @@ export interface SubtaskSummary {
 
 export interface Task {
   id: string;
+  public_id: string | null;
+  parent_card: Task | null;
   title: string;
   description: string | null;
   link: string | null;

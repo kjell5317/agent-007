@@ -45,7 +45,7 @@ from app.services.plan import schedule_task, scheduled_interval_for
 from app.services.source_url import source_url_for_raw_input
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
-from app.services.task.dismiss import dismiss_task
+from app.services.task.dismiss import cleanup_dismissed_container, dismiss_container, dismiss_task
 from app.services.task.open import open_task_from_input
 from app.services.task.reopen import enqueue_reopen_task
 from app.services.task.split import (
@@ -115,15 +115,23 @@ async def _split_in_background(task_id: uuid.UUID) -> None:
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
     raw = raw_inputs_store.latest_for_task(session, task.id)
     linked_inputs = raw_inputs_store.list_for_task(session, task.id)
+    parent_card = None
     if parent_id := getattr(task, "parent_task_id", None):
         # The parent's original input is the source of each derived subtask.
-        linked_inputs.extend(raw_inputs_store.list_for_task(session, parent_id))
+        parent_inputs = raw_inputs_store.list_for_task(session, parent_id)
+        linked_inputs.extend(parent_inputs)
+        parent = tasks_store.get(session, parent_id)
+        if parent is not None:
+            parent_status = next((item.status for item in parent_inputs if item.status != "duplicate"), "open")
+            parent_manual = bool(parent_inputs) and all(item.source in {"manual", "web_research"} for item in parent_inputs)
+            parent_card = TaskRead.build(parent, parent_status, parent_manual)
     children = tasks_store.children(session, task.id) if getattr(task, "is_container", False) else []
     child_statuses = tasks_store.latest_status_for(session, [child.id for child in children])
     return TaskRead.build(
         task,
         status_,
         is_manual,
+        parent_card=parent_card,
         source_url=source_url_for_raw_input(raw),
         raw_inputs=[
             TaskRawInputRead.build(
@@ -133,7 +141,7 @@ def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
             for linked in linked_inputs
         ],
         subtasks=[SubtaskSummary(
-            id=child.id, title=child.title, due_date=child.due_date,
+            id=child.id, public_id=child.public_id, title=child.title, due_date=child.due_date,
             estimation=child.estimation,
             status=child_statuses.get(child.id, "open"),
             depends_on_task_id=child.depends_on_task_id,
@@ -162,12 +170,16 @@ async def location_suggestions(
 
 
 @router.get("/{task_id}", response_model=TaskRead)
-async def get_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
-    row = tasks_store.get(session, task_id)
+async def get_task(task_id: str, session: Session = Depends(get_session)) -> TaskRead:
+    try:
+        parsed_id = uuid.UUID(task_id)
+    except ValueError:
+        parsed_id = None
+    row = tasks_store.get(session, parsed_id) if parsed_id else tasks_store.get_by_public_id(session, task_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    status_ = tasks_store.latest_status_for(session, [row.id]).get(row.id, "open")
+    is_manual = tasks_store.is_manual_for(session, [row.id]).get(row.id, False)
     return _to_read(row, status_, is_manual, session)
 
 
@@ -371,9 +383,14 @@ async def close_task(task_id: uuid.UUID, session: Session = Depends(get_session)
 
 
 @router.post("/{task_id}/not_task", status_code=status.HTTP_204_NO_CONTENT)
-async def mark_not_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
+async def mark_not_task(task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)) -> None:
     try:
-        await dismiss_task(session, task_id)
+        row = tasks_store.get(session, task_id)
+        if row is not None and row.is_container:
+            ids = dismiss_container(session, task_id)
+            background_tasks.add_task(cleanup_dismissed_container, ids)
+        else:
+            await dismiss_task(session, task_id)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
