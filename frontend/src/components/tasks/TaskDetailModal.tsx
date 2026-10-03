@@ -655,31 +655,29 @@ function TaskTitleHeader({
   onEdit: () => void;
   onChange: (value: string) => void;
 }) {
-  if (editing) {
-    return (
-      <div className="text-center text-sm font-normal leading-normal">
-        <InlineTextEditor
-          label={TEXT_LABEL.title}
-          value={draft}
-          busy={busy}
-          onChange={onChange}
-          inputClassName="text-center text-2xl font-semibold leading-tight"
-        />
-      </div>
-    );
-  }
-
   return (
-    <div className="flex min-w-0 items-center justify-center gap-2">
+    <div className="flex min-w-0 flex-col items-start gap-1.5">
       <TaskIdPill id={task.public_id} />
-      <button
-        type="button"
-        onClick={onEdit}
-        disabled={busy}
-        className="group flex w-full min-w-0 items-center justify-center rounded-lg px-2 py-1 text-center text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
-      >
-        <span className="min-w-0 flex-1 break-words">{task.title}</span>
-      </button>
+      {editing ? (
+        <div className="w-full text-left text-sm font-normal leading-normal">
+          <InlineTextEditor
+            label={TEXT_LABEL.title}
+            value={draft}
+            busy={busy}
+            onChange={onChange}
+            inputClassName="text-left text-2xl font-semibold leading-tight"
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onEdit}
+          disabled={busy}
+          className="group w-full min-w-0 rounded-lg py-1 text-left text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+        >
+          <span className="block min-w-0 break-words">{task.title}</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -767,6 +765,21 @@ function TaskSummary({
 }) {
   const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
   const previewOrderRef = useRef<string[] | null>(null);
+  const dragPreviewRef = useRef<{ node: HTMLElement; image: HTMLCanvasElement; offsetY: number } | null>(null);
+  useEffect(() => {
+    if (!draggedSubtask) return;
+    const movePreview = (event: DragEvent) => {
+      const preview = dragPreviewRef.current;
+      if (preview && event.clientY > 0) preview.node.style.top = `${event.clientY - preview.offsetY}px`;
+    };
+    document.addEventListener("dragover", movePreview);
+    return () => {
+      document.removeEventListener("dragover", movePreview);
+      dragPreviewRef.current?.node.remove();
+      dragPreviewRef.current?.image.remove();
+      dragPreviewRef.current = null;
+    };
+  }, [draggedSubtask]);
   const displayedSubtasks = previewOrder
     ? previewOrder.map((id) => task.subtasks.find((child) => child.id === id)).filter((child): child is Task["subtasks"][number] => Boolean(child))
     : task.subtasks;
@@ -784,6 +797,9 @@ function TaskSummary({
   };
   const finishDrag = (commit: boolean) => {
     const order = previewOrderRef.current;
+    dragPreviewRef.current?.node.remove();
+    dragPreviewRef.current?.image.remove();
+    dragPreviewRef.current = null;
     previewOrderRef.current = null;
     setPreviewOrder(null);
     onDragSubtask(null);
@@ -982,7 +998,28 @@ function TaskSummary({
                       event.dataTransfer.effectAllowed = "move";
                       event.dataTransfer.setData("text/plain", child.id);
                       const card = event.currentTarget.nextElementSibling?.firstElementChild;
-                      if (card instanceof HTMLElement) event.dataTransfer.setDragImage(card, 24, 24);
+                      if (card instanceof HTMLElement) {
+                        const bounds = card.getBoundingClientRect();
+                        const preview = card.cloneNode(true) as HTMLElement;
+                        preview.setAttribute("aria-hidden", "true");
+                        preview.inert = true;
+                        Object.assign(preview.style, {
+                          position: "fixed", left: `${bounds.left}px`, top: `${bounds.top}px`,
+                          width: `${bounds.width}px`, height: `${bounds.height}px`,
+                          zIndex: "100", pointerEvents: "none", opacity: "0.95",
+                          boxShadow: "0 12px 28px rgba(0, 0, 0, 0.18)", transition: "none",
+                        });
+                        document.body.appendChild(preview);
+                        const blank = document.createElement("canvas");
+                        blank.width = 1;
+                        blank.height = 1;
+                        Object.assign(blank.style, {
+                          position: "fixed", left: "0", top: "0", opacity: "0", pointerEvents: "none",
+                        });
+                        document.body.appendChild(blank);
+                        dragPreviewRef.current = { node: preview, image: blank, offsetY: event.clientY - bounds.top };
+                        event.dataTransfer.setDragImage(blank, 0, 0);
+                      }
                       previewOrderRef.current = task.subtasks.map((item) => item.id);
                       setPreviewOrder(previewOrderRef.current);
                       onDragSubtask(child.id);

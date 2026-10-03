@@ -335,7 +335,7 @@ export function TaskCard({
             </span>
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <TaskIdPill id={task.public_id} />
               <span
                 className={cn(

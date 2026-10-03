@@ -25,6 +25,7 @@ import { inputTitle, senderName } from "@/lib/inbox";
 import { backFromDeepLink, clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
+import { compareTasksByDue } from "@/lib/tasks";
 import type { RawInput, SearchHit, Task } from "@/lib/types";
 
 export function App() {
@@ -457,7 +458,7 @@ export function App() {
 
   const renderFlatTasks = (label: string) => {
     const filtered = tasks.filter((task) => !task.is_container &&
-      (!label || task.label?.toLowerCase() === label.toLowerCase()));
+      (!label || task.label?.toLowerCase() === label.toLowerCase())).sort(compareTasksByDue);
     return filtered.length ? (
       <div className="space-y-2">
         {filtered.map((task) => (

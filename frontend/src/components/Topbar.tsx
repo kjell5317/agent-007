@@ -164,7 +164,7 @@ export function Topbar({
   };
 
   return (
-    <header className="sticky top-0 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
+    <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/75">
       <div className="mx-auto flex max-w-2xl items-center gap-2 px-4 py-3">
         {mode === "chat" || mode === "points" ? (
           <>
@@ -222,9 +222,9 @@ export function Topbar({
             <div className="relative shrink-0">
               <Button
                 size="sm"
-                variant="ghost"
+                variant="secondary"
                 onClick={onPointsOpen}
-                className="h-12 w-14 gap-1 px-1 tabular-nums"
+                className={cn("h-12 w-14 gap-1 px-1 tabular-nums", mode === "points" && "bg-accent")}
                 title={points == null ? "Points unavailable" : "Points"}
                 aria-label={
                   points == null

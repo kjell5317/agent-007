@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
 import { searchDistance } from "@/lib/searchRanking";
+import { compareTasksByDue } from "@/lib/tasks";
 import type { Note, RawInput, SearchHit, Task } from "@/lib/types";
 import type { SearchFiltersState } from "@/components/search/SearchFilters";
 
@@ -127,8 +128,10 @@ export function SearchResults({
         return true;
       });
       const now = Date.now();
-      unique.sort((a, b) => searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q) ||
-        b.score - a.score || a.title.localeCompare(b.title));
+      unique.sort((a, b) => filters.kind === "tasks"
+        ? compareTasksByDue(taskMap.get(a.id)!, taskMap.get(b.id)!) || a.title.localeCompare(b.title)
+        : searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q) ||
+          b.score - a.score || a.title.localeCompare(b.title));
       const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected") || fetchedInputs.some((result) => result.status === "rejected");
       if (submitted && unique.length === 0 && !hadFailure) {
         onAiSearchRef.current(q);
