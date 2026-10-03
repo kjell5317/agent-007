@@ -128,10 +128,17 @@ async def _process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         if prior is not None and prior.task_id is not None:
             task = tasks.get(session, prior.task_id)
             if task is not None:
+                parent_id = getattr(task, "parent_task_id", None)
+                parent = tasks.get(session, parent_id) if parent_id else None
+                container = parent if parent is not None and parent.is_container else task
                 log.info(
                     "branch=thread_followup · raw=%s task=%s (prior_raw=%s)",
-                    raw_input_id, task.id, prior.id,
+                    raw_input_id, container.id, prior.id,
                 )
+                if container.is_container:
+                    return await run_thread_followup(
+                        session, raw, container, subtasks=tasks.children(session, container.id)
+                    )
                 return await run_thread_followup(session, raw, task)
 
     # --- 2. Pull the embedding the input service computed at insert time. ---

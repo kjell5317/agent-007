@@ -383,7 +383,7 @@ def _precedent_lines(session: Session, candidates: list[SimilarInput]) -> list[s
     for hit in candidates:
         if hit.task_id and hit.status in ("open", "closed"):
             task = tasks.get(session, hit.task_id)
-            if task is not None:
+            if task is not None and not getattr(task, "is_container", False):
                 task_candidates.append((hit, task))
     rendered: list[str] = []
     for hit, task in task_candidates:

@@ -351,6 +351,10 @@ _SIMILAR_INPUTS_SQL = text(
           AND ri.processed_at IS NOT NULL
           AND ri.status = ANY(:statuses)
           AND ri.id <> :exclude_id
+          AND NOT EXISTS (
+              SELECT 1 FROM tasks candidate_task
+              WHERE candidate_task.id = ri.task_id AND candidate_task.is_container IS TRUE
+          )
         ORDER BY ri.embedding <=> CAST(:emb AS vector)
         LIMIT :pool
     ),
@@ -360,6 +364,10 @@ _SIMILAR_INPUTS_SQL = text(
         WHERE ri.processed_at IS NOT NULL
           AND ri.status = ANY(:statuses)
           AND ri.id <> :exclude_id
+          AND NOT EXISTS (
+              SELECT 1 FROM tasks candidate_task
+              WHERE candidate_task.id = ri.task_id AND candidate_task.is_container IS TRUE
+          )
           AND q.tsq @@ ri.tsv
         ORDER BY ts_rank_cd(ri.tsv, q.tsq) DESC
         LIMIT :pool

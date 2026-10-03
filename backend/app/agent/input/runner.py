@@ -77,7 +77,7 @@ async def run_new_input_agent(
     for hit in candidates:
         if hit.task_id and hit.status in ("open", "closed") and hit.task_id not in seen_tasks:
             t = tasks.get(session, hit.task_id)
-            if t is not None:
+            if t is not None and not getattr(t, "is_container", False):
                 seen_tasks.add(hit.task_id)
                 task_candidates.append((hit, t))
     not_task_signals = [h for h in candidates if h.status == "not_task"]
