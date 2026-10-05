@@ -116,6 +116,9 @@ export function InboxGroup({
   // existing task from a follow-up (reopened / updated / closed / no_change):
   // that task is real, so promoting would duplicate it.
   const agentActed = members.some(isAgentTaskFollowup) && members.some((m) => m.task_id);
+  // A dismissed task is shown as "no task" in the group header. Use the add
+  // icon there while keeping the existing task available to reopen.
+  const reopenIcon = dismissedTask ? CirclePlus : RotateCcw;
   // A task-less thread whose members are all kotx transitions is a kotx run
   // (or successive runs on the same issue) that hasn't produced a task yet.
   // Offer "Dismiss run" (discard the newest run upstream) instead of "Make a
@@ -126,7 +129,7 @@ export function InboxGroup({
     ? liveTask && taskId
       ? { label: "Dismiss task", Icon: Trash2, run: () => runTaskAction(taskId, api.markNotTask, "Task dismissed") }
       : (closedTask || dismissedTask) && taskId
-        ? { label: "Re-open task", Icon: RotateCcw, run: () => reopenTask(taskId) }
+        ? { label: "Re-open task", Icon: reopenIcon, run: () => reopenTask(taskId) }
         : null
     : kotxRunThread
     ? isDismissibleKotxRun(newest)
@@ -157,7 +160,7 @@ export function InboxGroup({
         : closedTask || dismissedTask
           ? {
               label: "Re-open task",
-              Icon: RotateCcw,
+              Icon: reopenIcon,
               run: () => reopenTask((closedTask ?? dismissedTask)!.task_id!),
             }
           : null;
