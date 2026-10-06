@@ -21,6 +21,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.auth.google_tokens import GoogleTokenError, get_fresh_google_token
+from app.db.engine import release_read_connection
 from app.db.schemas.search import SearchHit
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ async def search_contacts(
         return []
     try:
         token = await get_fresh_google_token(session)
+        release_read_connection(session)
         people = await asyncio.wait_for(
             ContactsClient(token.access_token, timeout=timeout).search(query, limit=k),
             timeout=timeout,

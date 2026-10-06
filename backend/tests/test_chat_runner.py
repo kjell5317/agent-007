@@ -8,6 +8,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import QueuePool
 
 from app.agent.chat import runner as chat_runner
 from app.agent.chat.runner import ChatTurn, Citations, run_chat
@@ -37,6 +40,46 @@ def _resp(text: str = "", tool_calls: tuple[ToolCall, ...] = ()) -> LLMResponse:
 
 async def _noop_emit(event, data):
     return None
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_connection_to_pool_while_waiting_for_model(monkeypatch):
+    engine = create_engine("sqlite://", poolclass=QueuePool, pool_size=1, max_overflow=0,
+                           pool_timeout=0.1)
+    model_calls = 0
+
+    async def fake_retrieve(session, _query):
+        session.execute(text("SELECT 1"))
+        return []
+
+    async def fake_find_tasks(session, **_kwargs):
+        session.execute(text("SELECT 1"))
+        return []
+
+    async def fake_stream(*_args, **_kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        # The chat session has made a DB query before each model call. A
+        # second request must still be able to check out the sole connection.
+        with Session(engine) as other:
+            assert other.execute(text("SELECT 1")).scalar() == 1
+        if model_calls == 1:
+            return _resp(tool_calls=(ToolCall(id="1", name="tasks_search",
+                                          input={"query": "milk"}),))
+        return _resp(text="Done")
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "find_tasks", fake_find_tasks)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    try:
+        with Session(engine) as session:
+            await run_chat(session, [ChatTurn(role="user", content="milk")], emit=_noop_emit)
+        assert model_calls == 2
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture(autouse=True)

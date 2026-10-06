@@ -56,6 +56,7 @@ from app.agent.tools import (
 )
 from app import observability as obs
 from app.config import get_settings
+from app.db.engine import release_read_connection
 from app.db.clients import labels as labels_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
@@ -342,6 +343,7 @@ async def run_chat(
         initial_hits = await retrieve(session, query) if scope is None else []
         entries = cites.add(initial_hits)
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in entries]})
+        release_read_connection(session)
 
         # Semantic answer cache: pull the nearest recent answer to a similarly
         # phrased question in as a hint (the model reuses it or re-derives). The
@@ -367,6 +369,11 @@ async def run_chat(
             tools += GITHUB_CHAT_TOOLS
         if scope is not None:
             tools = [tool for tool in tools if tool["name"] in _SCOPE_TOOLS[scope.kind]]
+
+        # The initial lookups have been materialized into SearchHits, a cache
+        # record, and tool definitions. Keep the session for later tool calls,
+        # but return its connection to the pool while the model streams.
+        release_read_connection(session)
 
         async def on_delta(text: str) -> None:
             answer_parts.append(text)
@@ -425,7 +432,12 @@ async def run_chat(
                     messages.append(tool_result_message(tc, completed_queries[query_key]))
                     continue
                 used_web_search = used_web_search or tc.name == "web_search"
-                result_text, trace = await _dispatch(session, cites, tc, settings, emit, scope=scope)
+                try:
+                    result_text, trace = await _dispatch(session, cites, tc, settings, emit, scope=scope)
+                finally:
+                    # Successful tool writes commit before returning; read-only
+                    # tools can return their connection between calls as well.
+                    release_read_connection(session)
                 if query_key is not None:
                     completed_queries[query_key] = result_text
                 # Surface the raw call + full result so the UI can expand the

@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.auth.google_tokens import GoogleTokenError, get_fresh_google_token
+from app.db.engine import release_read_connection
 from app.db.schemas.search import SearchHit
 from app.services.search.extract import extract_text
 
@@ -175,6 +176,7 @@ async def search_drive(
 async def available_drive_formats(session: Session, *, timeout: float) -> list[str]:
     try:
         token = await get_fresh_google_token(session)
+        release_read_connection(session)
         return await asyncio.wait_for(
             DriveClient(token.access_token).available_formats(), timeout=timeout,
         )
@@ -188,6 +190,7 @@ async def _search(
     mime_label: str | None,
 ) -> list[SearchHit]:
     token = await get_fresh_google_token(session)
+    release_read_connection(session)
     files = await DriveClient(token.access_token).search(query, limit=k, after=after, before=before, mime_label=mime_label)
     return [_to_hit(f) for f in files]
 
@@ -200,6 +203,7 @@ async def get_drive_file(session: Session, file_id: str, *, max_chars: int) -> s
         return "get_drive_file: a `file_id` is required."
     try:
         token = await get_fresh_google_token(session)
+        release_read_connection(session)
         return await DriveClient(token.access_token).file_text(file_id, max_chars=max_chars)
     except (GoogleTokenError, httpx.HTTPError) as exc:
         log.info("get_drive_file failed · %s: %s", type(exc).__name__, exc)

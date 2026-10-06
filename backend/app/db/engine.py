@@ -22,3 +22,13 @@ def get_session() -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+def release_read_connection(session: Session) -> None:
+    """Return a completed read's connection before slow async work begins.
+
+    Call only after the result has been materialized. Pending ORM writes keep
+    their transaction, so this cannot silently discard a caller's changes.
+    """
+    if isinstance(session, Session) and not (session.new or session.dirty or session.deleted):
+        session.rollback()

@@ -1,9 +1,13 @@
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import QueuePool
 
 from app.api import search as search_api
 from app.db.schemas.search import SearchHit
+from app.services.search import contacts
 
 
 @pytest.mark.asyncio
@@ -57,3 +61,31 @@ async def test_github_external_suggestions_use_github_only(monkeypatch):
     result = await search_api.suggest_external("Fix", limit=10, kind="github")
     assert [hit.id for hit in result.hits] == ["acme/widgets#1"]
     assert calls == [("Fix", 10)]
+
+
+@pytest.mark.asyncio
+async def test_contact_search_releases_token_connection_before_network_call(monkeypatch):
+    engine = create_engine("sqlite://", poolclass=QueuePool, pool_size=1, max_overflow=0,
+                           pool_timeout=0.1)
+
+    async def fake_token(session):
+        session.execute(text("SELECT 1"))
+        return SimpleNamespace(access_token="test")
+
+    class FakeContactsClient:
+        def __init__(self, _token, *, timeout):
+            pass
+
+        async def search(self, _query, *, limit):
+            with Session(engine) as other:
+                assert other.execute(text("SELECT 1")).scalar() == 1
+            return []
+
+    monkeypatch.setattr(contacts, "get_fresh_google_token", fake_token)
+    monkeypatch.setattr(contacts, "ContactsClient", FakeContactsClient)
+
+    try:
+        with Session(engine) as session:
+            assert await contacts.search_contacts(session, "Kjell", k=3, timeout=1) == []
+    finally:
+        engine.dispose()
