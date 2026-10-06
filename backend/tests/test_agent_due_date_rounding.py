@@ -103,7 +103,7 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch, rese
         return "Page says to send the report.", {
             "url": url,
             "status": "success",
-            "llm": {"provider": "google", "model": "gemini-3.5-flash", "usage": {"input_tokens": 100, "output_tokens": 20}},
+            "llm": {"provider": "google", "model": "gemini-3.8-flash", "usage": {"input_tokens": 100, "output_tokens": 20}},
         }
 
     monkeypatch.setattr(input_runner, "get_settings", lambda: SimpleNamespace(

@@ -39,7 +39,7 @@ async def test_chat_web_search_returns_grounded_sources(monkeypatch):
     monkeypatch.setattr(web.genai, "Client", lambda **kwargs: Client())
     result = await web.research_web(
         " first iPhone announcement date ",
-        SimpleNamespace(gemini_api_key="test", chat_llm_model="gemini-3.5-flash"),
+        SimpleNamespace(gemini_api_key="test", chat_llm_model="gemini-3.8-flash"),
     )
     assert captured["contents"] == "first iPhone announcement date"
     assert len(captured["config"].tools) == 1
@@ -73,7 +73,7 @@ async def test_chat_web_search_rejects_unverified_answer(monkeypatch):
 
     monkeypatch.setattr(web.genai, "Client", lambda **kwargs: Client())
     result = await web.research_web(
-        "public fact", SimpleNamespace(gemini_api_key="test", chat_llm_model="gemini-3.5-flash")
+        "public fact", SimpleNamespace(gemini_api_key="test", chat_llm_model="gemini-3.8-flash")
     )
     assert result.startswith("Web search failed: no grounded search results")
 
@@ -98,7 +98,7 @@ async def test_task_web_search_records_query_count(monkeypatch):
         return SimpleNamespace(
             text="Useful details",
             provider="google",
-            model="gemini-3.5-flash",
+            model="gemini-3.8-flash",
             usage={"input_tokens": 10},
             meta={"grounding_metadata": {"web_search_queries": ["one", "two"]}},
         )
@@ -106,7 +106,7 @@ async def test_task_web_search_records_query_count(monkeypatch):
     monkeypatch.setattr(web, "chat", fake_chat)
     context, trace = await web.research_link(
         "https://example.org",
-        SimpleNamespace(task_web_search=True, gemini_api_key="key", chat_llm_model="gemini-3.5-flash"),
+        SimpleNamespace(task_web_search=True, gemini_api_key="key", chat_llm_model="gemini-3.8-flash"),
         task_title="Prepare for XY",
         task_context="Prepare slides before the XY meeting",
     )

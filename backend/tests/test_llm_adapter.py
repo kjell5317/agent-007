@@ -44,6 +44,7 @@ def test_settings_default_buffers():
 
     assert settings.commute_event_buffer_minutes == 5
     assert settings.event_buffer_minutes == 15
+    assert settings.llm_target("chat") == ("google", "gemini-3.8-flash")
 
 
 @pytest.mark.asyncio
@@ -236,5 +237,8 @@ async def test_anthropic_sdk_request_omits_removed_sampling_parameters(monkeypat
         generator.client.close()
 
 
-def test_google_keeps_temperature():
-    assert llm._generation_kwargs("google", 1024)["temperature"] == llm.TEMPERATURE
+def test_google_generation_uses_supported_gemini_38_settings():
+    assert llm._generation_kwargs("google", 1024, thinking_level="low") == {
+        "max_output_tokens": 1024,
+        "thinking_level": "low",
+    }

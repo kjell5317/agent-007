@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # needed) while the background extraction agent stays on the cached Anthropic
     # path. Uses GEMINI_API_KEY for the google provider.
     chat_llm_provider: str = "google"
-    chat_llm_model: str = "gemini-3.5-flash"
+    chat_llm_model: str = "gemini-3.8-flash"
     # Chat reasoning depth and optional isolated Google Search tool. Search runs
     # in its own grounded call so its server-side steps cannot corrupt chat's
     # custom tool and widget output.

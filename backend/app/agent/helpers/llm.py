@@ -27,7 +27,6 @@ log = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 3
 MAX_TOKENS = 1024
-TEMPERATURE = 0.4
 
 # Anthropic caches the tools → system prefix up to the first cache breakpoint,
 # so a single ephemeral marker on the system message covers both the tool
@@ -328,11 +327,10 @@ def _generation_kwargs(
     thinking_level: str | None = None,
 ) -> dict[str, Any]:
     """Per-provider generation kwargs. Anthropic takes `max_tokens`; Google's
-    GenerateContentConfig takes `max_output_tokens` and `thinking_level`
-    ('low'/'high'/'minimal'). `force_tool` also differs in shape — it's used only
-    by the extraction flows, which stay on Anthropic."""
+    GenerateContentConfig takes `max_output_tokens` and `thinking_level`.
+    `force_tool` also differs in shape; extraction flows use Anthropic."""
     if provider in ("google", "gemini"):
-        kwargs: dict[str, Any] = {"max_output_tokens": max_tokens, "temperature": TEMPERATURE}
+        kwargs: dict[str, Any] = {"max_output_tokens": max_tokens}
         if thinking_level:
             kwargs["thinking_level"] = thinking_level
         if force_tool:
