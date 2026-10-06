@@ -284,7 +284,7 @@ def _obs_output(response: LLMResponse) -> dict[str, Any]:
 
 def _usage_details(usage: dict[str, Any]) -> dict[str, int]:
     """Map Haystack/Anthropic token counts onto Langfuse's usage keys (input/
-    output/total) so cost is auto-calculated from the model name."""
+    output/total) for token usage reporting."""
     out: dict[str, int] = {}
     for src, dst in (
         ("prompt_tokens", "input"),

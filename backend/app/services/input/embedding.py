@@ -14,7 +14,6 @@ Two pieces live here together because they're always used as a pair:
 from __future__ import annotations
 
 import logging
-import math
 from functools import lru_cache
 from typing import Literal
 
@@ -24,15 +23,6 @@ from haystack_integrations.components.embedders.google_genai import GoogleGenAIT
 from app.config import get_settings
 
 log = logging.getLogger(__name__)
-
-
-def embedding_cost_metadata(text: str) -> dict[str, object]:
-    """Approximate billable input tokens; the embedder returns no usage count."""
-    settings = get_settings()
-    return {
-        "model": settings.embedding_model,
-        "estimated_input_tokens": math.ceil(len(text.strip()[:MAX_INPUT_CHARS]) / 4),
-    }
 
 
 # --- Text builder ------------------------------------------------------------

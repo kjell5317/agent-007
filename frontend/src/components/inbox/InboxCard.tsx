@@ -257,7 +257,7 @@ export function InputBody({ data, onOpenTask }: { data: RawInput; onOpenTask?: (
         </Section>
       )}
       {traceRecord && (
-        <AgentTraceSection traceRecord={traceRecord} embeddingCost={data.source_metadata?.embedding_cost} title="Agent trace" onOpenTask={onOpenTask} />
+        <AgentTraceSection traceRecord={traceRecord} title="Agent trace" onOpenTask={onOpenTask} />
       )}
       {override && typeof override === "object" && (
         <AgentTraceSection traceRecord={override} title="Manual action trace" onOpenTask={onOpenTask} />
@@ -266,18 +266,17 @@ export function InputBody({ data, onOpenTask }: { data: RawInput; onOpenTask?: (
   );
 }
 
-function AgentTraceSection({ traceRecord, embeddingCost, title, onOpenTask }: {
+function AgentTraceSection({ traceRecord, title, onOpenTask }: {
   traceRecord: unknown;
-  embeddingCost?: unknown;
   title: string;
   onOpenTask?: (id: string) => void;
 }) {
-  const trace = projectAgentTrace(traceRecord, embeddingCost);
+  const trace = projectAgentTrace(traceRecord);
   const eventWarning = traceRecord && typeof (traceRecord as Record<string, unknown>).event_warning === "string"
     ? (traceRecord as Record<string, unknown>).event_warning as string : null;
   const evidence = useResolvedEvidence(trace.evidence ?? NO_EVIDENCE);
   return (
-          <CollapsibleSection title={title} detail={`Est. cost ${trace.estimatedCost}`}>
+          <CollapsibleSection title={title}>
             {eventWarning && <Section title="Due date conflict"><div className="text-xs text-amber-600">{eventWarning}</div></Section>}
             {trace.reason && (
               <Section title="Reason">
@@ -339,11 +338,9 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 function CollapsibleSection({
   title,
-  detail,
   children,
 }: {
   title: string;
-  detail?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -359,14 +356,6 @@ function CollapsibleSection({
         <span className="min-w-0 flex-1">
           <SectionLabel title={title} />
         </span>
-        {detail && (
-          <span
-            className="text-[11px] text-muted-foreground"
-            title="Estimated paid rates for model tokens, embedding input, and grounded search queries; free quotas excluded. Converted using the ECB 30 Sep 2026 rate."
-          >
-            {detail}
-          </span>
-        )}
         <Chevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </button>
       <Collapsible open={open}>

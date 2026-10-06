@@ -341,11 +341,6 @@ async def _collect_extraction_precedents(
             )
             return []
         raw_inputs_store.set_embedding(session, raw_input_id, query_embedding)
-        from app.services.input.embedding import embedding_cost_metadata
-        raw.source_metadata = {
-            **(raw.source_metadata or {}),
-            "embedding_cost": embedding_cost_metadata(query_text),
-        }
 
     hits = search_raw_inputs(
         session,

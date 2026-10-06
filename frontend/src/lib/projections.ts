@@ -32,7 +32,6 @@ export interface ToolRow {
 }
 
 export interface TraceProjection {
-  estimatedCost: string;
   summary: ProjectionField[];
   currentTask: ProjectionField[];
   reason?: string;
@@ -129,7 +128,7 @@ export function projectSourceMetadata(
   return { fields };
 }
 
-export function projectAgentTrace(trace: unknown, embeddingCost?: unknown): TraceProjection {
+export function projectAgentTrace(trace: unknown): TraceProjection {
   const record = asRecord(trace) ?? {};
   const evidence = collectEvidence(record);
   const tools = collectTools(record);
@@ -161,7 +160,6 @@ export function projectAgentTrace(trace: unknown, embeddingCost?: unknown): Trac
   }
 
   return {
-    estimatedCost: estimateTraceCost(record, embeddingCost),
     summary,
     currentTask: currentTaskFields(record),
     reason,
@@ -169,78 +167,6 @@ export function projectAgentTrace(trace: unknown, embeddingCost?: unknown): Trac
     evidence,
     tools,
   };
-}
-
-// USD per million tokens. Rates: platform.claude.com/docs/en/about-claude/pricing
-// and ai.google.dev/gemini-api/docs/pricing. Search uses the paid marginal
-// rate; monthly free quotas are not known per input.
-const MODEL_RATES: [RegExp, number, number, number?][] = [
-  [/claude-opus-4-7/i, 5, 25, 0.5],
-  [/claude-sonnet-4-6/i, 3, 15, 0.3],
-  [/claude-haiku-4-5/i, 1, 5, 0.1],
-  [/claude-haiku-3-5/i, 0.8, 4, 0.08],
-  [/gemini-3\.5-flash/i, 1.5, 9, 0.15],
-];
-// ECB reference rate, 2026-09-30: 1 EUR = 1.1355 USD.
-// https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html
-const USD_PER_EUR = 1.1355;
-
-export function estimateTraceCost(trace: JsonRecord, embeddingCost?: unknown): string {
-  let total = 0;
-  let unknown = false;
-  let calls = 0;
-  const visitLlm = (value: unknown) => {
-    const llm = asRecord(value);
-    if (!llm) return;
-    const usage = asRecord(llm.usage);
-    if (!usage) return;
-    calls += 1;
-    const rates = MODEL_RATES.find(([pattern]) => pattern.test(stringValue(llm.model) ?? ""));
-    const input = tokenCount(usage.input_tokens ?? usage.prompt_tokens);
-    const output = tokenCount(usage.output_tokens ?? usage.completion_tokens);
-    if (!rates || (input === null && output === null)) {
-      unknown = true;
-      return;
-    }
-    const cached = tokenCount(usage.cache_read_input_tokens ?? usage.cached_content_token_count) ?? 0;
-    const cacheWrite = tokenCount(usage.cache_creation_input_tokens) ?? 0;
-    const uncached = stringValue(llm.provider) === "anthropic"
-      ? (input ?? 0)
-      : Math.max(0, (input ?? 0) - cached);
-    const thinking = stringValue(llm.provider) === "google"
-      ? tokenCount(usage.thoughts_token_count) ?? 0
-      : 0;
-    total += (uncached * rates[1] + ((output ?? 0) + thinking) * rates[2] + cached * (rates[3] ?? rates[1]) + cacheWrite * rates[1] * 1.25) / 1_000_000;
-  };
-  const visitTrace = (item: JsonRecord) => {
-    visitLlm(item.llm);
-    const search = asRecord(item.web_search);
-    visitLlm(search?.llm);
-    if (search) {
-      const queries = tokenCount(search.search_queries);
-      if (queries !== null) total += queries * 0.014;
-    }
-    arrayValue(item.iterations).forEach((iteration) => visitLlm(asRecord(iteration)?.llm));
-  };
-  visitTrace(trace);
-  const embedding = asRecord(embeddingCost);
-  if (embedding) {
-    const tokens = tokenCount(embedding.estimated_input_tokens);
-    const model = stringValue(embedding.model) ?? "";
-    const rate = /gemini-embedding-001/i.test(model) ? 0.15
-      : /gemini-embedding-2/i.test(model) ? 0.20 : null;
-    if (tokens !== null && rate !== null) total += tokens * rate / 1_000_000;
-    else unknown = true;
-  }
-  if (unknown) return "Unavailable";
-  if (calls === 0 && total === 0) return "€0.00";
-  const euros = total / USD_PER_EUR;
-  const decimals = euros < 0.0001 ? 6 : euros < 1 ? 4 : 2;
-  return euros === 0 ? "€0.00" : `€${euros.toFixed(decimals)}`;
-}
-
-function tokenCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function currentTaskFields(trace: JsonRecord): ProjectionField[] {
