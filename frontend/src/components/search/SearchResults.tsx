@@ -133,10 +133,6 @@ export function SearchResults({
         : searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q) ||
           b.score - a.score || a.title.localeCompare(b.title));
       const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected") || fetchedInputs.some((result) => result.status === "rejected");
-      if (submitted && unique.length === 0 && !hadFailure) {
-        onAiSearchRef.current(q);
-        return;
-      }
       setFailed(unique.length === 0 && hadFailure);
       setTaskDetails(taskMap);
       setInputDetails(inputMap);
@@ -153,7 +149,15 @@ export function SearchResults({
       ) : failed ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Search is unavailable right now.</p>
       ) : hits.length === 0 ? (
-        submitted ? <p className="py-12 text-center text-sm text-muted-foreground">No matching results.</p> : null
+        submitted ? (
+          <div className="flex flex-col items-center gap-3 py-12">
+            <p className="text-center text-sm text-muted-foreground">No matching results.</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => onAiSearchRef.current(query.trim())}>
+              <Sparkles className="h-3.5 w-3.5" />
+              Ask AI
+            </Button>
+          </div>
+        ) : null
       ) : (
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3 px-1">
