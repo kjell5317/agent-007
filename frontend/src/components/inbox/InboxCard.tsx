@@ -127,8 +127,10 @@ export function InboxCard({
       : { label: "Make a task", Icon: CirclePlus, run: () => promote(item.id) }
     : data.status === "open"
       ? { label: "Dismiss task", Icon: Trash2, run: dismiss }
-      : data.status === "closed" || data.status === "not_task"
+      : data.status === "closed"
         ? { label: "Re-open task", Icon: RotateCcw, run: reopen }
+        : data.status === "not_task"
+          ? { label: "Open task", Icon: CirclePlus, run: reopen }
         : null;
 
   const expandable = !data.task_id && hasInputDetails(data);
