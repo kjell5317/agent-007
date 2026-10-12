@@ -1584,6 +1584,7 @@ async def test_cascading_victim_shifts_compact_the_day(monkeypatch):
         ),
     )
 
+    monkeypatch.setattr(schedule_service.tasks_store, "latest_status_for", lambda *_args: {})
     result = await schedule_service.schedule_task(None, sd, _depth=1)
 
     assert result == (_day_at(15, 15), _day_at(16, 15))

@@ -31,9 +31,10 @@ def affected_tasks(session: Session, row: Task, changed: set[str]) -> list[tuple
 
 
 async def sync_external(session: Session, updates: list[tuple[uuid.UUID, set[str]]]) -> None:
+    statuses = tasks_store.latest_status_for(session, [task_id for task_id, _ in updates])
     for task_id, changed in updates:
         row = tasks_store.get(session, task_id)
-        if row is None or row.is_container:
+        if row is None or row.is_container or statuses.get(task_id) == "closed":
             continue
         try:
             if changed & PLAN_TRIGGER_FIELDS:

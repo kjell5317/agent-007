@@ -1147,6 +1147,25 @@ async def test_discover_reschedules_deleted_task_event_blocking_old_slot(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_closed_task_is_not_scheduled(monkeypatch):
+    task = SimpleNamespace(
+        id=uuid.uuid4(), is_container=False,
+        due_date=datetime(2026, 10, 12, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        schedule_service.tasks_store, "latest_status_for",
+        lambda _session, ids: {task_id: "closed" for task_id in ids},
+    )
+
+    async def unexpected_schedule(*_args, **_kwargs):
+        pytest.fail("closed task reached the calendar planner")
+
+    monkeypatch.setattr(schedule_service, "_schedule_task_locked", unexpected_schedule)
+
+    assert await schedule_service.schedule_task(SimpleNamespace(), task) is None
+
+
+@pytest.mark.asyncio
 async def test_schedule_task_serializes_across_tasks(monkeypatch):
     # Two different tasks scheduled concurrently must not overlap. The global
     # lock forces the second plan to run only after the first has been written,
@@ -1168,6 +1187,7 @@ async def test_schedule_task_serializes_across_tasks(monkeypatch):
 
     monkeypatch.setattr(schedule_service, "plan_task_slot", fake_plan)
     monkeypatch.setattr("app.services.calendar.add_task_event", fake_add)
+    monkeypatch.setattr(schedule_service.tasks_store, "latest_status_for", lambda *_args: {})
 
     def make_task():
         return SimpleNamespace(

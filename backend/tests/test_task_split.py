@@ -134,6 +134,37 @@ async def test_child_duration_edit_moves_previous_deadline(monkeypatch):
         await task_update.update_task(session, first.id, {"due_date": due})
 
 
+@pytest.mark.asyncio
+async def test_closed_sibling_is_not_synced_after_child_duration_edit(monkeypatch):
+    due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    parent = SimpleNamespace(id=uuid.uuid4(), due_date=due, is_container=True, parent_task_id=None)
+    closed = SimpleNamespace(id=uuid.uuid4(), estimation=20, parent_task_id=parent.id, is_container=False)
+    active = SimpleNamespace(id=uuid.uuid4(), estimation=50, parent_task_id=parent.id, is_container=False)
+    rows = {row.id: row for row in (parent, closed, active)}
+    synced = []
+
+    async def fake_calendar_sync(_session, row, *, changed_fields):
+        synced.append((row.id, changed_fields))
+
+    monkeypatch.setattr(task_update.tasks_store, "get", lambda _s, task_id: rows[task_id])
+    monkeypatch.setattr(task_update.tasks_store, "update", lambda _s, task_id, **fields: _assign(rows[task_id], fields))
+    monkeypatch.setattr(task_update.tasks_store, "children", lambda _s, _id: [closed, active])
+    monkeypatch.setattr(
+        task_update.tasks_store, "latest_status_for",
+        lambda _s, _ids: {closed.id: "closed", active.id: "open"},
+    )
+    monkeypatch.setattr(task_update, "update_task_to_calendar", fake_calendar_sync)
+    monkeypatch.setattr(split, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(task_update, "publish_task", lambda *_args: None)
+
+    await task_update.update_task(
+        SimpleNamespace(commit=lambda: None), active.id,
+        {"estimation": 80}, auto_split=False,
+    )
+
+    assert synced == [(active.id, {"due_date", "estimation"})]
+
+
 def _assign(row, fields):
     for key, value in fields.items():
         setattr(row, key, value)

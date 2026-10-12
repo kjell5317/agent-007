@@ -179,6 +179,8 @@ async def schedule_task(
     """
     if getattr(task, "is_container", False):
         return None
+    if tasks_store.latest_status_for(session, [task.id]).get(task.id) == "closed":
+        return None
     if task.due_date is None:
         log.debug("plan.schedule · task=%s has no due_date", task.id)
         return None
