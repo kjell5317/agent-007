@@ -10,7 +10,6 @@ import {
   ExternalLink,
   GitFork,
   GripVertical,
-  Github,
   Link2,
   MapPin,
   RefreshCw,
@@ -350,12 +349,6 @@ export function TaskDetailModal({
   const rescheduleCurrent = () =>
     runTaskAction(() => api.rescheduleTask(current.id), "Rescheduling started");
 
-  const createGithubIssue = () =>
-    runTaskAction(
-      () => api.createGithubIssue(current.id),
-      "GitHub issue created",
-    );
-
   async function runClosingTaskAction(
     action: () => Promise<void>,
     message: string,
@@ -633,7 +626,6 @@ export function TaskDetailModal({
           onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
           onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
           onReschedule={rescheduleCurrent}
-          onCreateGithubIssue={createGithubIssue}
           onKotxActionPendingChange={setKotxActionPending}
       />
     </Modal>
@@ -720,7 +712,6 @@ function TaskSummary({
   onPickerEstimationChange,
   onPickerLabelChange,
   onReschedule,
-  onCreateGithubIssue,
   onKotxActionPendingChange,
 }: {
   title: ReactNode;
@@ -760,7 +751,6 @@ function TaskSummary({
   onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
   onReschedule: () => void;
-  onCreateGithubIssue: () => void;
   onKotxActionPendingChange: (pending: boolean) => void;
 }) {
   const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
@@ -1091,7 +1081,6 @@ function TaskSummary({
                 busy={busy}
                 onEdit={() => onEditText("link")}
                 onChange={onChangeText}
-                onCreateGithubIssue={onCreateGithubIssue}
               />
             </div>
             <EditableTextBlock
@@ -1272,7 +1261,6 @@ function LinksSection({
   busy,
   onEdit,
   onChange,
-  onCreateGithubIssue,
 }: {
   task: Task;
   editing: boolean;
@@ -1280,7 +1268,6 @@ function LinksSection({
   busy: boolean;
   onEdit: () => void;
   onChange: (value: string) => void;
-  onCreateGithubIssue: () => void;
 }) {
   if (editing) {
     return (
@@ -1321,30 +1308,17 @@ function LinksSection({
           </span>
         </span>
       </button>
-      <div className="flex flex-col items-start gap-0.5">
-        {task.link && (
-          <a
-            href={task.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-3 rounded-lg p-2 text-sm font-medium text-primary transition-colors hover:bg-accent/60"
-          >
-            <ExternalLink className="h-4 w-4 shrink-0" />
-            Open provided link
-          </a>
-        )}
-        {canCreateGithubIssue(task) && (
-          <button
-            type="button"
-            onClick={onCreateGithubIssue}
-            disabled={busy}
-            className="flex items-center gap-3 rounded-lg p-2 text-sm font-medium text-primary transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
-          >
-            <Github className="h-4 w-4 shrink-0" />
-            Create GitHub issue
-          </button>
-        )}
-      </div>
+      {task.link && (
+        <a
+          href={task.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-3 rounded-lg p-2 text-sm font-medium text-primary transition-colors hover:bg-accent/60"
+        >
+          <ExternalLink className="h-4 w-4 shrink-0" />
+          Open provided link
+        </a>
+      )}
     </div>
   );
 }
@@ -1680,16 +1654,4 @@ function OpenLink({
 function normalizeOptional(value: string) {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
-}
-
-function canCreateGithubIssue(task: Task) {
-  return (
-    (task.label === "CSEE" || task.label === "SocialAI") &&
-    !hasGithubUrl(task.link)
-  );
-}
-
-function hasGithubUrl(value: string | null) {
-  if (!value) return false;
-  return /^(https?:\/\/)?(www\.)?github\.com(\/|$)/i.test(value.trim());
 }
