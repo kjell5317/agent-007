@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from html import escape
 from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
@@ -950,21 +951,26 @@ def _summary_for(leg: PlannedLeg) -> str:
 
 def _description_for(leg: PlannedLeg) -> str:
     # Destination sits in the location field, the mode in the emoji title.
+    # `leg_record` reads the origin back from the plain "From:" line; Google
+    # renders the anchors.
     lines = [f"From: {leg.origin}"]
-    if leg.reason:
-        lines.append(f"Reason: {leg.reason}")
     if leg.note:
         lines.append(leg.note)
     if leg.mode == FAILED_MODE:
         lines.append("No route found — reserved 30 min. Check the address.")
-    lines.append(f"Navigate: {_navigation_url(leg)}")
+    links = [_anchor(_navigation_url(leg), "Navigate")]
     switch = flip_url(leg.origin_anchor, leg.dest_anchor, leg.depart, leg.arrive, leg.mode)
     if switch:
         target = "bike" if leg.mode == "transit" else "transit"
-        lines.append(f"Switch to {target}: {switch}")
+        links.append(_anchor(switch, f"Switch to {target}"))
+    lines.append(" · ".join(links))
     updated = to_user_tz(datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
     lines.append(f"Updated: {updated}")
     return "\n".join(lines)
+
+
+def _anchor(url: str, text: str) -> str:
+    return f'<a href="{escape(url)}">{text}</a>'
 
 
 def _navigation_url(leg: PlannedLeg) -> str:

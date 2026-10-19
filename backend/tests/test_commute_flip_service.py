@@ -92,7 +92,7 @@ async def test_past_flip_corrects_the_record(flips):
 async def test_describe_and_noop(flips):
     depart = datetime.now(timezone.utc) + timedelta(hours=3)
     flips.events = [leg_event("bicycling", depart)]
-    question = await flip.describe_flip(session(), request(depart))
-    assert question.startswith("Bike → Transit to Uni at")
+    preview = await flip.describe_flip(session(), request(depart))
+    assert (preview.current, preview.target, preview.place) == ("bicycling", "transit", "Uni")
     assert await flip.apply_flip(session(), request(depart, mode="bicycling")) == "This leg is already bike."
     assert flips.logged == []

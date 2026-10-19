@@ -22,7 +22,7 @@ import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
 import { getUserTimezone, setUserTimezone } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
-import { backFromDeepLink, clearDeepLink, parseDeepLink, pushDeepLink } from "@/lib/deepLinks";
+import { backFromDeepLink, clearDeepLink, parseDeepLink, pushDeepLink, rewindToTask } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
 import { compareTasksByDue } from "@/lib/tasks";
@@ -47,7 +47,7 @@ export function App() {
   const [searchSubmitted, setSearchSubmitted] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
   const inboxSource = view === "chat" && searchFilters.kind === "messages" ? searchFilters.source : "";
-  const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData(inboxSource);
+  const { tasks, inputs, inputsSource, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData(inboxSource);
   const inboxOpen = view === "chat" && !searchQuery.trim() && searchFilters.kind === "messages";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const taskCacheRef = useRef(new Map<string, Task>());
@@ -372,6 +372,7 @@ export function App() {
   // top of it, so closing lands back where the click happened.
   const openTask = useCallback((id: string) => {
     if (selectedTaskId === id) return;
+    if (rewindToTask(id)) return;
     const requestId = ++taskNavigationRequestRef.current;
     const listedTask = tasks.find((candidate) => candidate.id === id) ?? taskCacheRef.current.get(id);
     const finish = (loadedTask?: Task) => {
@@ -451,11 +452,11 @@ export function App() {
     />
   );
 
-  // `inputs` is already fetched for this source; the local filter only hides
-  // the previous list's rows until the new page lands.
-  const renderInbox = (source = "") => (
+  // `inputs` is fetched for the selected source server-side, where generated
+  // inputs (subtasks) count as their origin's source — so no local filter.
+  const renderInbox = () => (
     <InboxPanel
-      inputs={source ? inputs.filter((input) => input.source === source) : inputs}
+      inputs={inputs}
       onChanged={refresh}
       onLoadMore={loadMoreInputs}
       hasMore={hasMoreInputs}
@@ -533,7 +534,7 @@ export function App() {
             ) : searchFilters.kind === "tasks" ? (
               loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters.label)
             ) : searchFilters.kind === "messages" ? (
-              loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading messages"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderInbox(searchFilters.source)
+              loading || inputsSource !== searchFilters.source ? <div className="flex justify-center py-12" role="status" aria-label="Loading messages"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderInbox()
             ) : searchFilters.kind === "notes" ? (
               <NotesPanel key={searchFilters.source} source={searchFilters.source} />
             ) : searchFilters.kind === null && chat.messages.length > 0 ? (

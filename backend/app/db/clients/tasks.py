@@ -39,6 +39,12 @@ def is_manual_for(
     }
 
 
+def created_manually(session: Session, task: Task) -> bool:
+    """Typed in by the user — a subtask inherits it from its parent."""
+    root = task.parent_task_id or task.id
+    return is_manual_for(session, [root]).get(root, False)
+
+
 def create(session: Session, payload: TaskCreate) -> Task:
     due_date = payload.due_date or datetime.now(timezone.utc) + DEFAULT_DUE_HORIZON
     if session.bind is not None and session.bind.dialect.name == "postgresql":

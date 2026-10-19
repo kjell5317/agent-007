@@ -26,14 +26,13 @@ from app.events import publish_task
 from app.services.calendar.discover import discover_updated_events
 from app.services.calendar.labels import sync as sync_labels
 from app.services.input.poll import poll_sources
-from app.services.notify import notify_task_created
 from app.services.plan import (
     cleanup_stray_commute_legs,
     refresh_commutes_for_weather,
     schedule_task,
 )
 from app.services.plan.checkin import checkin_overdue_slots_once
-from app.services.plan.schedule import scheduler_engine
+from app.services.plan.schedule import announce_placement, scheduler_engine
 from app.services.task.recur import plan_recurring_tasks
 
 log = logging.getLogger(__name__)
@@ -162,7 +161,7 @@ async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[
                 continue
             _no_slot_until.pop(task.id, None)
             scheduled += 1
-            await notify_task_created(task, start=result[0], end=result[1])
+            await announce_placement(session, task, start=result[0], end=result[1])
             publish_task(session, task.id)
     return {"attempted": attempted, "scheduled": scheduled}
 
@@ -183,7 +182,7 @@ async def _retry_with_solver(session, pending, now, *, respect_backoff: bool) ->
         span = result.placed.get(task.id)
         if task.schedule_state == "placed" and span is not None:
             scheduled += 1
-            await notify_task_created(task, start=span[0], end=span[1])
+            await announce_placement(session, task, start=span[0], end=span[1])
             publish_task(session, task.id)
     if scheduled < len(pending):
         _no_slot_until["solver"] = now + NO_SLOT_RETRY

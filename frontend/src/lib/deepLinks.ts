@@ -30,12 +30,33 @@ export function deepLinkHash(link: DeepLink): string {
     : `#run/${link.id}`;
 }
 
+// Task ids opened since the modal stack began, oldest first, kept in history
+// state so a jump back to one of them rewinds instead of stacking a loop
+// (parent → subtask → parent → …).
+function taskTrail(): string[] {
+  const trail = window.history.state?.taskTrail;
+  if (Array.isArray(trail)) return trail;
+  const current = parseDeepLink();
+  return current?.kind === "task" ? [current.id] : [];
+}
+
 export function pushDeepLink(link: DeepLink) {
-  window.history.pushState({ appDeepLink: true }, "", deepLinkHash(link));
+  const trail = link.kind === "task" ? [...taskTrail(), link.id] : [];
+  window.history.pushState({ appDeepLink: true, taskTrail: trail }, "", deepLinkHash(link));
 }
 
 export function replaceDeepLink(link: DeepLink) {
   window.history.replaceState({ appDeepLink: true }, "", deepLinkHash(link));
+}
+
+// Returns whether `id` was already on the trail and history is rewinding to it.
+export function rewindToTask(id: string): boolean {
+  const trail = taskTrail();
+  const index = trail.lastIndexOf(id);
+  // go(0) would reload the page.
+  if (index < 0 || index === trail.length - 1) return false;
+  window.history.go(index - (trail.length - 1));
+  return true;
 }
 
 export function backFromDeepLink(): boolean {

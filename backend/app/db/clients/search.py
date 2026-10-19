@@ -21,6 +21,8 @@ from datetime import datetime
 from sqlalchemy import Float, String, bindparam, text
 from sqlalchemy.orm import Session
 
+from app.db.clients.raw_inputs import ORIGIN_SOURCE_SQL
+
 TASK = "task"
 INPUT = "input"
 DOCUMENT = "document"
@@ -206,7 +208,7 @@ def _filters_sql(
         # One `source:` filter spans both origin corpora — matched against the
         # input's `source` column and the document's `provider` column.
         if source is not None:
-            parts.append("r.source = :source")
+            parts.append(f"({ORIGIN_SOURCE_SQL}) = :source")
         # `is:processing` / `is:event` filter inputs by their raw status
         # (the corpus router only sends non-task statuses here).
         if status is not None:

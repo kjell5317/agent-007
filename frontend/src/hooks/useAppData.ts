@@ -12,6 +12,8 @@ const INPUTS_PAGE_SIZE = 20;
 export interface AppData {
   tasks: Task[];
   inputs: RawInput[];
+  // The source filter `inputs` was fetched for.
+  inputsSource: string;
   loading: boolean;
   refresh: () => Promise<void>;
   loadMoreInputs: () => Promise<void>;
@@ -36,6 +38,7 @@ function upsertInput(list: RawInput[], input: RawInput): RawInput[] {
 export function useAppData(inputSource = ""): AppData {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [inputs, setInputs] = useState<RawInput[]>([]);
+  const [inputsSource, setInputsSource] = useState(inputSource);
   const [loading, setLoading] = useState(true);
   const [hasMoreInputs, setHasMoreInputs] = useState(false);
   // Held in refs so refresh/loadMoreInputs keep stable identities across renders.
@@ -49,6 +52,7 @@ export function useAppData(inputSource = ""): AppData {
     const rows = await api.listInputs({ limit, source });
     if (source !== inputSourceRef.current) return false;
     setInputs(rows);
+    setInputsSource(source);
     // Count groups the way the backend's LIMIT does; groupInputs also folds
     // kotx runs into their tasks, which would undercount and end paging early.
     setHasMoreInputs(new Set(rows.map(inputGroupKey)).size >= limit);
@@ -147,6 +151,7 @@ export function useAppData(inputSource = ""): AppData {
   return {
     tasks,
     inputs,
+    inputsSource,
     loading,
     refresh,
     loadMoreInputs,

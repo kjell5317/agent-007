@@ -27,6 +27,7 @@ from app.config import get_settings
 from app.db import SessionLocal, get_session
 from app.db.models.raw_input import RawInput
 from app.db.clients import chats as chats_store
+from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import search_clicks
 from app.db.schemas.search import (
     ChatConversationRead,
@@ -68,8 +69,10 @@ async def search_facets(kind: str = Query(..., pattern="^(messages|files|notes)$
     """Only offer child filters backed by searchable data."""
     with SessionLocal() as session:
         if kind == "messages":
+            # Generated inputs filter under their origin's source.
+            hidden = ("chat", *raw_inputs_store.GENERATED_SOURCES)
             sources = session.execute(
-                select(RawInput.source).where(RawInput.source != "chat").distinct().order_by(RawInput.source)
+                select(RawInput.source).where(RawInput.source.notin_(hidden)).distinct().order_by(RawInput.source)
             ).scalars().all()
             return {"options": list(sources)}
         if kind == "notes":

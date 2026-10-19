@@ -1,15 +1,20 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   AlarmClock,
   ArrowLeft,
-  CalendarClock,
   CalendarDays,
   ChevronDown,
   ChevronRight,
   CircleCheckBig,
   ExternalLink,
-  Flag,
-  Gauge,
   GitFork,
   GripVertical,
   Link2,
@@ -23,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { ChoiceChips } from "@/components/ui/choice-chips";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
@@ -64,7 +69,7 @@ import {
   WORK_TYPE_LABEL,
 } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
-import type { Label, RecurrenceUnit, Task, TaskRawInput } from "@/lib/types";
+import type { Label, RecurrenceUnit, Task, TaskRawInput, WorkType } from "@/lib/types";
 
 interface Props {
   task: Task;
@@ -78,14 +83,8 @@ interface Props {
 }
 
 type TextField = "title" | "description" | "link" | "location";
-type PickerField =
-  | "due_date"
-  | "deadline_kind"
-  | "estimation"
-  | "work_type"
-  | "effort"
-  | "label"
-  | "recurrence";
+// "due_date" also edits the deadline kind, "work" both work type and effort.
+type PickerField = "due_date" | "estimation" | "work" | "label" | "recurrence";
 type AttributePatch = Partial<Pick<Task, "work_type" | "effort" | "deadline_kind">>;
 
 const TEXT_LABEL: Record<TextField, string> = {
@@ -106,15 +105,22 @@ const TASK_SUMMARY_URGENT_BADGE_CLASS =
   "bg-orange-500 text-white dark:bg-orange-500/25 dark:text-orange-100";
 const TASK_SUMMARY_OVERDUE_BADGE_CLASS =
   "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
-const TASK_SUMMARY_SCHEDULED_BADGE_CLASS =
-  "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200";
-const TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS =
-  "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
-const TASK_SUMMARY_REPEAT_BADGE_CLASS: Record<RecurrenceUnit, string> = {
-  day: "bg-violet-100 text-violet-800 dark:bg-violet-500/20 dark:text-violet-200",
-  week: "bg-teal-100 text-teal-800 dark:bg-teal-500/20 dark:text-teal-200",
-  month: "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-500/20 dark:text-fuchsia-200",
+const TASK_SUMMARY_BLUE_BADGE_CLASS =
+  "bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200";
+const WORK_TYPE_BADGE_CLASS: Record<WorkType, string> = {
+  physical: "border-transparent bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200",
+  cognitive: "border-transparent bg-violet-100 text-violet-800 dark:bg-violet-500/20 dark:text-violet-200",
+  social: "border-transparent bg-pink-100 text-pink-800 dark:bg-pink-500/20 dark:text-pink-200",
 };
+const SCHEDULE_PILL_CLASS = "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium";
+const SCHEDULE_PILL_TONE = {
+  scheduled: "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200",
+  unscheduled: "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100",
+  muted: "bg-muted text-muted-foreground",
+};
+// Borderless so an edit reads as the same text, just with a caret.
+const INLINE_FIELD_CLASS =
+  "h-auto rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0";
 
 export function TaskDetailModal({
   task,
@@ -360,14 +366,21 @@ export function TaskDetailModal({
     autoSavePatch({ [editingText]: normalized } as Partial<Task>);
   };
 
-  async function runTaskAction(action: () => Promise<Task>, message: string) {
+  async function runTaskAction(
+    action: () => Promise<Task>,
+    message: string,
+    { keepPicker = false }: { keepPicker?: boolean } = {},
+  ) {
     setBusy(true);
     try {
       const saved = await action();
       syncTaskState(saved);
-      setEditingText(null);
-      setActivePicker(null);
-      toast.success(message);
+      if (!keepPicker) {
+        setEditingText(null);
+        setActivePicker(null);
+      }
+      // Picker steps save one by one; each toast replaces the previous one.
+      toast.success(message, keepPicker ? { id: "picker-save" } : undefined);
       await onChanged();
       return saved;
     } catch (e) {
@@ -385,6 +398,7 @@ export function TaskDetailModal({
     runTaskAction(
       () => api.setRecurrence(current.id, unit, interval),
       `Repeats ${fmtRecurrence(unit, interval).toLowerCase()}`,
+      { keepPicker: true },
     );
 
   const removeRecurrence = () =>
@@ -533,6 +547,9 @@ export function TaskDetailModal({
     onClose();
   };
 
+  const canSplit =
+    current.status === "open" && !current.is_container && !current.parent_task_id && !kotxTask;
+
   const backFromModal = () => {
     if (editingText) { closeTextEdit(editingText); return; }
     if (activePicker) { setActivePicker(null); return; }
@@ -549,73 +566,67 @@ export function TaskDetailModal({
       className="h-[760px] max-h-[calc(100dvh-2rem)] max-w-3xl max-sm:h-dvh max-sm:max-h-dvh max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:p-0"
       header={
         <div className="relative z-50 flex h-[72px] shrink-0 items-center justify-between bg-card px-4 sm:-mx-4 sm:-mt-4 sm:rounded-t-xl">
-          <div className="flex items-center gap-3">
-            <Button type="button" size="icon" variant="ghost" onClick={backFromModal} aria-label="Back" className="h-12 w-12 shrink-0">
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-          </div>
-          <div className="flex items-center gap-3">
-            {current.status !== "open" && !kotxTask && (
-              <TaskSummaryIconButton
-                label="Re-open task"
-                disabled={busy}
-                onClick={reopenCurrentTask}
-                className="h-12 w-12 shrink-0 text-muted-foreground hover:text-primary"
-              >
-                <RotateCcw className="h-5 w-5" />
-              </TaskSummaryIconButton>
-            )}
-            {current.status === "open" && !current.is_container && (
-              <Button
-                type="button"
-                size="icon"
-                aria-label={
-                  kotxTask
-                    ? kotxTask.canDiscard
-                      ? "Dismiss run"
-                      : "Mark not a task"
-                    : "Mark done"
-                }
-                disabled={busy}
-                onClick={kotxTask ? dismissRun : markDone}
-                className="h-12 w-12 shrink-0 rounded-full"
-              >
-                <CircleCheckBig className="h-5 w-5" />
-              </Button>
-            )}
-            {current.status === "open" &&
-              !current.is_container &&
-              !current.parent_task_id &&
-              !kotxTask && (
-                <TaskSummaryIconButton
+          <TopbarButton label="Back" variant="ghost" onClick={backFromModal}>
+            <ArrowLeft className="h-5 w-5" />
+          </TopbarButton>
+          <div className="flex items-center gap-2">
+            {canSplit && (
+              <div role="group" aria-label="Split" className="flex shrink-0">
+                <TopbarButton
                   label="Split into subtasks"
+                  variant="secondary"
                   disabled={busy || splitPending}
                   onClick={() => { void splitCurrentTask(); }}
-                  className="h-12 w-12 shrink-0"
+                  className="rounded-r-none"
                 >
                   <GitFork className="h-5 w-5" />
-                </TaskSummaryIconButton>
-              )}
-            {current.status === "open" && !current.is_container && !current.parent_task_id && !kotxTask && (
-              <TaskSummaryIconButton
-                label="Split into equal subtasks"
-                disabled={busy || splitPending}
-                onClick={() => { void splitCurrentTask(true); }}
-                className="h-12 w-12 shrink-0"
-              >
-                <span className="text-sm font-semibold">1h</span>
-              </TaskSummaryIconButton>
+                </TopbarButton>
+                <TopbarButton
+                  label="Split into equal subtasks"
+                  variant="secondary"
+                  disabled={busy || splitPending}
+                  onClick={() => { void splitCurrentTask(true); }}
+                  className="rounded-l-none border-l border-card"
+                >
+                  <span className="text-sm font-semibold">1h</span>
+                </TopbarButton>
+              </div>
             )}
             {current.status === "open" && !kotxTask && (
-                <TaskSummaryIconButton
-                  label={current.is_container ? "Delete parent and dismiss subtasks" : "Mark not a task"}
-                  disabled={busy}
-                  onClick={dismissTask}
-                  className="h-12 w-12 shrink-0 hover:text-destructive"
-                >
-                  <Trash2 className="h-5 w-5" />
-                </TaskSummaryIconButton>
-              )}
+              <TopbarButton
+                label={current.is_container ? "Delete parent and dismiss subtasks" : "Mark not a task"}
+                variant="ghost"
+                disabled={busy}
+                onClick={dismissTask}
+                className="hover:text-destructive"
+              >
+                <Trash2 className="h-5 w-5" />
+              </TopbarButton>
+            )}
+            {current.status === "open" && !current.is_container && (
+              <TopbarButton
+                label="Reschedule"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => { void rescheduleCurrent(); }}
+              >
+                <RefreshCw className="h-5 w-5" />
+              </TopbarButton>
+            )}
+            {current.status !== "open" && !kotxTask && (
+              <TopbarButton label="Re-open task" variant="ghost" disabled={busy} onClick={reopenCurrentTask}>
+                <RotateCcw className="h-5 w-5" />
+              </TopbarButton>
+            )}
+            {current.status === "open" && !current.is_container && (
+              <TopbarButton
+                label={kotxTask ? (kotxTask.canDiscard ? "Dismiss run" : "Mark not a task") : "Mark done"}
+                disabled={busy}
+                onClick={kotxTask ? dismissRun : markDone}
+              >
+                <CircleCheckBig className="h-5 w-5" />
+              </TopbarButton>
+            )}
           </div>
         </div>
       }
@@ -668,7 +679,6 @@ export function TaskDetailModal({
           onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
           onAttributeChange={autoSavePatch}
           onMarkDone={markDone}
-          onReschedule={rescheduleCurrent}
           onSaveRecurrence={(unit, interval) => { void saveRecurrence(unit, interval); }}
           onRemoveRecurrence={() => { void removeRecurrence(); }}
           onKotxActionPendingChange={setKotxActionPending}
@@ -692,17 +702,26 @@ function TaskTitleHeader({
   onEdit: () => void;
   onChange: (value: string) => void;
 }) {
+  const schedule = task.is_container ? null : scheduleBadge(task);
   return (
     <div className="flex min-w-0 flex-col items-start gap-1.5">
-      <TaskIdPill id={task.public_id} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <TaskIdPill id={task.public_id} />
+        {schedule && (
+          <span title={schedule.title} className={cn(SCHEDULE_PILL_CLASS, schedule.className)}>
+            {schedule.text}
+          </span>
+        )}
+      </div>
       {editing ? (
-        <div className="w-full text-left text-sm font-normal leading-normal">
+        <div className="w-full">
           <InlineTextEditor
             label={TEXT_LABEL.title}
+            labelHidden
             value={draft}
             busy={busy}
             onChange={onChange}
-            inputClassName="text-left text-2xl font-semibold leading-tight"
+            inputClassName="py-1 text-2xl font-semibold leading-tight"
           />
         </div>
       ) : (
@@ -710,13 +729,35 @@ function TaskTitleHeader({
           type="button"
           onClick={onEdit}
           disabled={busy}
-          className="group w-full min-w-0 rounded-lg py-1 text-left text-2xl font-semibold leading-tight transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+          className="w-full min-w-0 py-1 text-left text-2xl font-semibold leading-tight disabled:pointer-events-none disabled:opacity-50"
         >
           <span className="block min-w-0 break-words">{task.title}</span>
         </button>
       )}
     </div>
   );
+}
+
+function scheduleBadge(task: Task): { text: string; title: string; className: string } {
+  if (task.schedule_status === "unscheduled") {
+    return { text: "Not scheduled", title: "Not scheduled", className: SCHEDULE_PILL_TONE.unscheduled };
+  }
+  if (task.schedule_status === "deferred") {
+    return {
+      text: "Later",
+      title: `Not planned yet — due ${fmtDue(task.due_date)}`,
+      className: SCHEDULE_PILL_TONE.muted,
+    };
+  }
+  if (!task.scheduled_date) {
+    return { text: "Scheduling…", title: "Not scheduled yet", className: SCHEDULE_PILL_TONE.muted };
+  }
+  const byUser = task.placed_by === "user" && task.schedule_status === "scheduled";
+  return {
+    text: `${fmtDue(task.scheduled_date)}${byUser ? " · by you" : ""}`,
+    title: `Scheduled ${fmtDue(task.scheduled_date)}${byUser ? " (placed by you)" : ""}`,
+    className: SCHEDULE_PILL_TONE.scheduled,
+  };
 }
 
 function TaskSummary({
@@ -758,7 +799,6 @@ function TaskSummary({
   onPickerLabelChange,
   onAttributeChange,
   onMarkDone,
-  onReschedule,
   onSaveRecurrence,
   onRemoveRecurrence,
   onKotxActionPendingChange,
@@ -801,7 +841,6 @@ function TaskSummary({
   onPickerLabelChange: (value: string) => void;
   onAttributeChange: (patch: AttributePatch) => void;
   onMarkDone: () => void;
-  onReschedule: () => void;
   onSaveRecurrence: (unit: RecurrenceUnit, interval: number) => void;
   onRemoveRecurrence: () => void;
   onKotxActionPendingChange: (pending: boolean) => void;
@@ -857,24 +896,10 @@ function TaskSummary({
     : dueUrgent
       ? TASK_SUMMARY_URGENT_BADGE_CLASS
       : TASK_SUMMARY_OPEN_BADGE_CLASS;
-  const placedByUser =
-    task.placed_by === "user" && task.schedule_status === "scheduled" && !!task.scheduled_date;
-  const scheduledBadgeText =
-    task.schedule_status === "unscheduled"
-      ? "Not scheduled"
-      : task.schedule_status === "deferred"
-        ? "Later"
-        : task.scheduled_date
-          ? fmtDue(task.scheduled_date)
-          : "Reschedule";
-  const scheduledBadgeLabel =
-    task.schedule_status === "unscheduled"
-      ? "Not scheduled"
-      : task.schedule_status === "deferred"
-        ? `Not planned yet — due ${fmtDue(task.due_date)}`
-        : task.scheduled_date
-          ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}${placedByUser ? " (placed by you)" : ""}`
-          : "Reschedule task";
+  const workSummary = [
+    task.work_type && WORK_TYPE_LABEL[task.work_type],
+    task.effort && `${EFFORT_LABEL[task.effort]} effort`,
+  ].filter(Boolean).join(" · ");
   const correctedMinutes = correctedEstimation(task);
   const runningSince = taskRunningSince(task);
 
@@ -933,14 +958,23 @@ function TaskSummary({
             onClose={onClosePicker}
             panel={
               <InlinePickerPanel
-                title="Due date"
+                title="Deadline"
                 onClose={onClosePicker}
-                onEditDate={
-                  dateStep === "time"
-                    ? () => onDateStepChange("date")
-                    : undefined
+                action={
+                  dateStep === "time" ? (
+                    <PanelIconButton label="Edit date" onClick={() => onDateStepChange("date")}>
+                      <CalendarDays className="h-4 w-4" />
+                    </PanelIconButton>
+                  ) : undefined
                 }
               >
+                <ChoiceChips
+                  value={task.deadline_kind}
+                  labels={DEADLINE_KIND_LABEL}
+                  hints={DEADLINE_KIND_HINT}
+                  centered
+                  onChange={(kind) => { if (kind) onAttributeChange({ deadline_kind: kind }); }}
+                />
                 <DatePicker
                   value={pickerDue}
                   onChange={onPickerDueChange}
@@ -955,8 +989,10 @@ function TaskSummary({
               onClick={() => onEditPicker("due_date")}
               disabled={busy || !!task.parent_task_id}
               title={
-                task.parent_task_id ? "Due date is set by the parent task" :
-                task.due_date ? `Due ${fmtDue(task.due_date)}` : "Set due date"
+                task.parent_task_id ? "The deadline is set by the parent task" :
+                task.due_date
+                  ? `${DEADLINE_KIND_LABEL[task.deadline_kind]} deadline ${fmtDue(task.due_date)}: ${DEADLINE_KIND_HINT[task.deadline_kind].toLowerCase()}`
+                  : "Set deadline"
               }
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
@@ -965,44 +1001,12 @@ function TaskSummary({
             >
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                 <AlarmClock className="h-3 w-3" />
-                {task.due_date ? fmtDue(task.due_date) : "No due date"}
+                {task.due_date
+                  ? `${fmtDue(task.due_date)} · ${DEADLINE_KIND_LABEL[task.deadline_kind]}`
+                  : "No deadline"}
               </span>
             </button>
           </PickerAnchor>
-
-          {task.due_date && (
-            <PickerAnchor
-              open={activePicker === "deadline_kind"}
-              onClose={onClosePicker}
-              panel={
-                <InlinePickerPanel title="Deadline" onClose={onClosePicker}>
-                  <ChoiceChips
-                    value={task.deadline_kind}
-                    labels={DEADLINE_KIND_LABEL}
-                    hints={DEADLINE_KIND_HINT}
-                    centered
-                    onChange={(kind) => { if (kind) onAttributeChange({ deadline_kind: kind }); }}
-                  />
-                </InlinePickerPanel>
-              }
-            >
-              <button
-                type="button"
-                onClick={() => onEditPicker("deadline_kind")}
-                disabled={busy}
-                title={`${DEADLINE_KIND_LABEL[task.deadline_kind]} deadline: ${DEADLINE_KIND_HINT[task.deadline_kind].toLowerCase()}`}
-                className={cn(
-                  TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                  TASK_SUMMARY_MUTED_BADGE_CLASS,
-                )}
-              >
-                <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
-                  <Flag className="h-3 w-3" />
-                  {DEADLINE_KIND_LABEL[task.deadline_kind]} deadline
-                </span>
-              </button>
-            </PickerAnchor>
-          )}
 
           <PickerAnchor
             open={!task.is_container && activePicker === "estimation"}
@@ -1030,7 +1034,7 @@ function TaskSummary({
               }
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                TASK_SUMMARY_MUTED_BADGE_CLASS,
+                task.estimation != null ? TASK_SUMMARY_BLUE_BADGE_CLASS : TASK_SUMMARY_MUTED_BADGE_CLASS,
               )}
             >
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
@@ -1042,67 +1046,46 @@ function TaskSummary({
 
           {!task.is_container && (
             <PickerAnchor
-              open={activePicker === "work_type"}
+              open={activePicker === "work"}
               onClose={onClosePicker}
               panel={
-                <InlinePickerPanel title="Work type" onClose={onClosePicker}>
-                  <ChoiceChips
-                    value={task.work_type}
-                    labels={WORK_TYPE_LABEL}
-                    noneLabel="None"
-                    centered
-                    onChange={(workType) => onAttributeChange({ work_type: workType })}
-                  />
+                <InlinePickerPanel title="Work type & effort" onClose={onClosePicker}>
+                  <div className="space-y-1.5">
+                    <div className="text-center text-xs font-medium text-muted-foreground">Work type</div>
+                    <ChoiceChips
+                      value={task.work_type}
+                      labels={WORK_TYPE_LABEL}
+                      selectedClasses={WORK_TYPE_BADGE_CLASS}
+                      centered
+                      onChange={(workType) => { if (workType) onAttributeChange({ work_type: workType }); }}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="text-center text-xs font-medium text-muted-foreground">Effort</div>
+                    <ChoiceChips
+                      value={task.effort}
+                      labels={EFFORT_LABEL}
+                      noneLabel="None"
+                      centered
+                      onChange={(effort) => onAttributeChange({ effort })}
+                    />
+                  </div>
                 </InlinePickerPanel>
               }
             >
               <button
                 type="button"
-                onClick={() => onEditPicker("work_type")}
+                onClick={() => onEditPicker("work")}
                 disabled={busy}
-                title="Set work type"
+                title="Set work type and effort"
                 className={cn(
                   TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                  TASK_SUMMARY_MUTED_BADGE_CLASS,
+                  task.work_type ? WORK_TYPE_BADGE_CLASS[task.work_type] : TASK_SUMMARY_MUTED_BADGE_CLASS,
                 )}
               >
                 <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                   <Shapes className="h-3 w-3" />
-                  {task.work_type ? WORK_TYPE_LABEL[task.work_type] : "Work type"}
-                </span>
-              </button>
-            </PickerAnchor>
-          )}
-
-          {!task.is_container && (
-            <PickerAnchor
-              open={activePicker === "effort"}
-              onClose={onClosePicker}
-              panel={
-                <InlinePickerPanel title="Effort" onClose={onClosePicker}>
-                  <ChoiceChips
-                    value={task.effort}
-                    labels={EFFORT_LABEL}
-                    noneLabel="None"
-                    centered
-                    onChange={(effort) => onAttributeChange({ effort })}
-                  />
-                </InlinePickerPanel>
-              }
-            >
-              <button
-                type="button"
-                onClick={() => onEditPicker("effort")}
-                disabled={busy}
-                title="Set effort"
-                className={cn(
-                  TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                  TASK_SUMMARY_MUTED_BADGE_CLASS,
-                )}
-              >
-                <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
-                  <Gauge className="h-3 w-3" />
-                  {task.effort ? `${EFFORT_LABEL[task.effort]} effort` : "Effort"}
+                  {workSummary || "Work type"}
                 </span>
               </button>
             </PickerAnchor>
@@ -1113,13 +1096,27 @@ function TaskSummary({
               open={activePicker === "recurrence"}
               onClose={onClosePicker}
               panel={
-                <InlinePickerPanel title="Repeat" onClose={onClosePicker}>
+                <InlinePickerPanel
+                  title="Repeat"
+                  onClose={onClosePicker}
+                  action={
+                    task.recurrence_unit ? (
+                      <PanelIconButton
+                        label="Stop repeating"
+                        disabled={busy}
+                        onClick={onRemoveRecurrence}
+                        className="hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </PanelIconButton>
+                    ) : undefined
+                  }
+                >
                   <RecurrencePicker
                     unit={task.recurrence_unit}
                     interval={task.recurrence_interval}
                     busy={busy}
-                    onSave={onSaveRecurrence}
-                    onRemove={onRemoveRecurrence}
+                    onChange={onSaveRecurrence}
                   />
                 </InlinePickerPanel>
               }
@@ -1137,7 +1134,7 @@ function TaskSummary({
                 }
                 className={cn(
                   TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                  repeat ? TASK_SUMMARY_REPEAT_BADGE_CLASS[repeat.unit] : TASK_SUMMARY_MUTED_BADGE_CLASS,
+                  repeat ? TASK_SUMMARY_BLUE_BADGE_CLASS : TASK_SUMMARY_MUTED_BADGE_CLASS,
                 )}
               >
                 <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
@@ -1146,31 +1143,6 @@ function TaskSummary({
                 </span>
               </button>
             </PickerAnchor>
-          )}
-
-          {!task.is_container && (
-            <button
-              type="button"
-              onClick={onReschedule}
-              disabled={busy}
-              title={scheduledBadgeLabel}
-              aria-label={scheduledBadgeLabel}
-              className={cn(
-                TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                task.schedule_status === "unscheduled"
-                  ? TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS
-                  : task.scheduled_date
-                    ? TASK_SUMMARY_SCHEDULED_BADGE_CLASS
-                    : TASK_SUMMARY_MUTED_BADGE_CLASS,
-              )}
-            >
-              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
-                <CalendarClock className="h-3 w-3" />
-                {scheduledBadgeText}
-                {placedByUser && <span className="opacity-70">· by you</span>}
-                <RefreshCw className="h-3 w-3 opacity-70" />
-              </span>
-            </button>
           )}
 
           {kotxTask && (
@@ -1329,9 +1301,22 @@ function TaskSummary({
   );
 }
 
-function TaskSummaryIconButton({
+// Sized and styled like the app Topbar's buttons, hover included.
+function TopbarButton({ label, className, ...props }: ButtonProps & { label: string }) {
+  return (
+    <Button
+      type="button"
+      size="icon"
+      aria-label={label}
+      title={label}
+      className={cn("h-12 w-12 shrink-0", className)}
+      {...props}
+    />
+  );
+}
+
+function PanelIconButton({
   label,
-  children,
   className,
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
@@ -1341,13 +1326,11 @@ function TaskSummaryIconButton({
       aria-label={label}
       title={label}
       className={cn(
-        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
         className,
       )}
       {...props}
-    >
-      {children}
-    </button>
+    />
   );
 }
 
@@ -1382,27 +1365,32 @@ function EditableTextBlock({
 }) {
   if (editing) {
     return (
-      <div className="rounded-lg bg-accent/40 p-2">
-        {field === "location" ? (
-          <LocationTextEditor
-            label={TEXT_LABEL[field]}
-            value={draft}
-            busy={busy}
-            placeholder={fallback}
-            suggestions={suggestions}
-            onChange={onChange}
-            onSelectSuggestion={onSelectSuggestion ?? onChange}
-          />
-        ) : (
-          <InlineTextEditor
-            label={TEXT_LABEL[field]}
-            value={draft}
-            busy={busy}
-            multiline={multiline}
-            placeholder={fallback}
-            onChange={onChange}
-          />
+      <div className="flex w-full min-w-0 items-start gap-3 p-2">
+        {icon && (
+          <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
         )}
+        <div className="min-w-0 flex-1">
+          {field === "location" ? (
+            <LocationTextEditor
+              label={TEXT_LABEL[field]}
+              value={draft}
+              busy={busy}
+              placeholder={fallback}
+              suggestions={suggestions}
+              onChange={onChange}
+              onSelectSuggestion={onSelectSuggestion ?? onChange}
+            />
+          ) : (
+            <InlineTextEditor
+              label={TEXT_LABEL[field]}
+              value={draft}
+              busy={busy}
+              multiline={multiline}
+              placeholder={fallback}
+              onChange={onChange}
+            />
+          )}
+        </div>
       </div>
     );
   }
@@ -1425,7 +1413,7 @@ function EditableTextBlock({
             onEdit();
           }
         }}
-        className="flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-lg p-2 transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-lg p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {icon && (
           <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
@@ -1445,7 +1433,7 @@ function EditableTextBlock({
       type="button"
       onClick={onEdit}
       disabled={busy}
-      className="group flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+      className="flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left disabled:pointer-events-none disabled:opacity-50"
     >
       {icon && (
         <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
@@ -1490,14 +1478,19 @@ function LinksSection({
 }) {
   if (editing) {
     return (
-      <div className="rounded-lg bg-accent/40 p-2">
-        <InlineTextEditor
-          label={TEXT_LABEL.link}
-          value={draft}
-          busy={busy}
-          placeholder="https://..."
-          onChange={onChange}
-        />
+      <div className="flex w-full min-w-0 items-start gap-3 p-2">
+        <span className="mt-0.5 shrink-0 text-muted-foreground">
+          <Link2 className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <InlineTextEditor
+            label={TEXT_LABEL.link}
+            value={draft}
+            busy={busy}
+            placeholder="https://..."
+            onChange={onChange}
+          />
+        </div>
       </div>
     );
   }
@@ -1508,7 +1501,7 @@ function LinksSection({
         type="button"
         onClick={onEdit}
         disabled={busy}
-        className="group flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 disabled:pointer-events-none disabled:opacity-50"
+        className="flex w-full min-w-0 items-start gap-3 rounded-lg p-2 text-left disabled:pointer-events-none disabled:opacity-50"
       >
         <span className="mt-0.5 shrink-0 text-muted-foreground">
           <Link2 className="h-4 w-4" />
@@ -1561,8 +1554,8 @@ function LocationTextEditor({
 }) {
   return (
     <div className="space-y-2">
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium uppercase text-muted-foreground">
+      <label className="block">
+        <span className="block text-xs font-medium uppercase text-muted-foreground">
           {label}
         </span>
         <Input
@@ -1570,6 +1563,7 @@ function LocationTextEditor({
           onChange={(e) => onChange(e.target.value)}
           disabled={busy}
           placeholder={placeholder}
+          className={INLINE_FIELD_CLASS}
           autoFocus
         />
       </label>
@@ -1595,6 +1589,7 @@ function LocationTextEditor({
 
 function InlineTextEditor({
   label,
+  labelHidden = false,
   value,
   busy,
   multiline,
@@ -1603,6 +1598,7 @@ function InlineTextEditor({
   onChange,
 }: {
   label: string;
+  labelHidden?: boolean;
   value: string;
   busy: boolean;
   multiline?: boolean;
@@ -1611,32 +1607,35 @@ function InlineTextEditor({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium uppercase text-muted-foreground">
-          {label}
-        </span>
-        {multiline ? (
-          <Textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={busy}
-            placeholder={placeholder}
-            className="min-h-32 resize-y"
-            autoFocus
-          />
-        ) : (
-          <Input
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={busy}
-            placeholder={placeholder}
-            className={inputClassName}
-            autoFocus
-          />
+    <label className="block">
+      <span
+        className={cn(
+          "block text-xs font-medium uppercase text-muted-foreground",
+          labelHidden && "sr-only",
         )}
-      </label>
-    </div>
+      >
+        {label}
+      </span>
+      {multiline ? (
+        <Textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={busy}
+          placeholder={placeholder}
+          className={cn(INLINE_FIELD_CLASS, "mt-1 min-h-32 resize-y leading-relaxed")}
+          autoFocus
+        />
+      ) : (
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={busy}
+          placeholder={placeholder}
+          className={cn(INLINE_FIELD_CLASS, inputClassName)}
+          autoFocus
+        />
+      )}
+    </label>
   );
 }
 
@@ -1663,7 +1662,8 @@ function PickerAnchor({
   }, [open, onClose]);
 
   return (
-    <div ref={anchorRef} className={cn("relative inline-flex", open && "z-40")}>
+    // Above the modal header (z-50), which a flipped panel may overlap.
+    <div ref={anchorRef} className={cn("relative inline-flex", open && "z-[60]")}>
       {children}
       {open && panel}
     </div>
@@ -1673,45 +1673,38 @@ function PickerAnchor({
 function InlinePickerPanel({
   title,
   children,
-  onEditDate,
+  action,
   onClose,
 }: {
   title: string;
   children: ReactNode;
-  onEditDate?: () => void;
+  // Top-left header slot, e.g. "back to date" or "stop repeating".
+  action?: ReactNode;
   onClose: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const position = useViewportClampedPosition(panelRef);
+
   return (
     <div
+      ref={panelRef}
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
-      className="fixed inset-x-0 bottom-0 top-[72px] z-40 flex items-start justify-center overflow-y-auto bg-card p-4 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:block sm:overflow-visible sm:p-0"
+      style={position}
+      className="fixed inset-x-0 bottom-0 top-[72px] z-40 flex items-start justify-center overflow-y-auto bg-card p-4 sm:inset-auto sm:block sm:overflow-visible sm:bg-transparent sm:p-0"
     >
       <div
-        className="isolate flex max-h-[calc(100dvh-2rem)] w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:w-[min(calc(100vw-4rem),22rem)]"
+        className="isolate flex max-h-full w-full max-w-[22rem] flex-col overflow-hidden rounded-lg border bg-card p-3 text-card-foreground shadow-lg sm:max-h-[calc(100dvh-2rem)] sm:w-[min(calc(100vw-2rem),22rem)]"
       >
         <div className="mb-2 grid grid-cols-[1.75rem_1fr_1.75rem] items-center">
-          <div>
-            {onEditDate && (
-              <button
-                type="button"
-                aria-label="Edit date"
-                title="Edit date"
-                onClick={onEditDate}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <CalendarDays className="h-4 w-4" />
-              </button>
-            )}
-          </div>
+          <div>{action}</div>
           <div className="truncate text-center text-sm font-semibold">
             {title}
           </div>
-          <button type="button" onClick={onClose} aria-label={`Close ${title} picker`}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+          <PanelIconButton label={`Close ${title} picker`} onClick={onClose}>
             <X className="h-4 w-4" />
-          </button>
+          </PanelIconButton>
         </div>
         <div className="min-h-0 space-y-3 overflow-y-auto">
           {children}
@@ -1719,6 +1712,68 @@ function InlinePickerPanel({
       </div>
     </div>
   );
+}
+
+const VIEWPORT_MARGIN = 16;
+const PANEL_GAP = 8;
+
+// On desktop a picker floats by its pill — below it, else above, else
+// wherever there's more room — clamped so the whole panel stays on screen
+// without scrolling. Phones get the full-screen sheet from the classes.
+function useViewportClampedPosition(panelRef: RefObject<HTMLDivElement>): CSSProperties | undefined {
+  const [position, setPosition] = useState<CSSProperties>();
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    // The PickerAnchor wrapper, which hugs the pill.
+    const anchor = panel?.parentElement;
+    if (!panel || !anchor) return;
+    const desktop = window.matchMedia("(min-width: 640px)");
+
+    const place = () => {
+      if (!desktop.matches) {
+        setPosition(undefined);
+        return;
+      }
+      const pill = anchor.getBoundingClientRect();
+      const { width, height } = panel.getBoundingClientRect();
+      const viewHeight = window.innerHeight;
+      const below = pill.bottom + PANEL_GAP;
+      const above = pill.top - PANEL_GAP - height;
+      const top =
+        below + height <= viewHeight - VIEWPORT_MARGIN ? below
+        : above >= VIEWPORT_MARGIN ? above
+        : viewHeight - pill.bottom >= pill.top ? below : above;
+      setPosition({
+        top: clamp(top, VIEWPORT_MARGIN, viewHeight - VIEWPORT_MARGIN - height),
+        left: clamp(
+          pill.left + pill.width / 2 - width / 2,
+          VIEWPORT_MARGIN,
+          window.innerWidth - VIEWPORT_MARGIN - width,
+        ),
+      });
+    };
+
+    place();
+    // Steps and expanding lists change the panel's size while it's open.
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", place, true);
+    desktop.addEventListener("change", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, true);
+      desktop.removeEventListener("change", place);
+    };
+  }, [panelRef]);
+
+  return position;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function LinkedInputsSection({

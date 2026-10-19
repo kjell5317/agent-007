@@ -87,7 +87,9 @@ async def _update_with_solver(session: Session, task, changed: set[str]) -> None
     from app.services.plan.schedule import schedule_task, scheduled_interval_for
 
     prior = scheduled_interval_for(task)
-    if task.calendar_event_id and changed & {"title", "description", "link", "location", "label"}:
+    if task.calendar_event_id and changed & {
+        "title", "description", "link", "location", "label", "due_date", "deadline_kind",
+    }:
         await update_task_event(session, task, changed_fields=changed)
     await schedule_task(session, task)
     if "location" in changed and prior is not None:

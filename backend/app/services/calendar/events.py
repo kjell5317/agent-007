@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from datetime import datetime, timedelta
+from html import escape
 from typing import Any
 
 import httpx
@@ -41,6 +42,7 @@ from app.services.calendar.client import (
     rfc3339,
     tz_name,
 )
+from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
 
@@ -304,8 +306,8 @@ async def update_task_event(
     patch_kwargs: dict[str, Any] = {}
     if _changed("title"):
         patch_kwargs["summary"] = task.title
-    if _changed("description") or _changed("link"):
-        patch_kwargs["description"] = _task_description(task) or ""
+    if any(_changed(name) for name in ("description", "link", "due_date", "deadline_kind")):
+        patch_kwargs["description"] = _task_description(task)
     if _changed("location"):
         patch_kwargs["location"] = resolve_location_alias(task.location) or ""
     if _changed("label"):
@@ -432,13 +434,27 @@ def reminders_differ(event: CalendarEvent, desired: dict) -> bool:
     return _norm(event_reminders(event)) != _norm(desired)
 
 
-def _task_description(task) -> str | None:
-    parts: list[str] = []
-    if task.description:
-        parts.append(task.description)
-    if task.link:
-        parts.append(task.link)
-    return "\n\n".join(parts) or None
+def _task_description(task) -> str:
+    parts = [part for part in (task.description, task.link) if part]
+    parts.append(task_event_footer(task))
+    return "\n\n".join(parts)
+
+
+DEADLINE_PREFIX = "Deadline: "
+
+
+def task_event_footer(task) -> str:
+    """Generated tail of a task event body. Google renders the HTML anchor;
+    the absolute date keeps the body stable between pushes."""
+    from app.services.notify import task_url
+
+    lines = []
+    if task.due_date:
+        line = DEADLINE_PREFIX + to_user_tz(task.due_date).strftime("%a %b %d, %H:%M")
+        kind = getattr(task, "deadline_kind", None)
+        lines.append(f"{line} ({kind})" if kind else line)
+    lines.append(f'<a href="{escape(task_url(task.id))}">Open task</a>')
+    return "\n".join(lines)
 
 
 def task_private_properties(task) -> dict[str, str]:

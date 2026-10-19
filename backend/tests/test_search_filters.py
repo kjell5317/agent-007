@@ -146,7 +146,7 @@ def test_calendar_suggest_limits_nearest_occurrences_instead_of_far_future_match
 
 
 @pytest.mark.asyncio
-async def test_message_facets_use_stored_sources_and_exclude_chat(monkeypatch):
+async def test_message_facets_use_stored_sources_and_exclude_chat_and_generated(monkeypatch):
     from app.api import search as search_api
 
     captured = {}
@@ -159,12 +159,12 @@ async def test_message_facets_use_stored_sources_and_exclude_chat(monkeypatch):
             pass
 
         def execute(self, statement):
-            captured["sql"] = str(statement)
+            captured["sql"] = str(statement.compile(compile_kwargs={"literal_binds": True}))
             return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["gmail", "slack"]))
 
     monkeypatch.setattr(search_api, "SessionLocal", Session)
     assert await search_api.search_facets("messages") == {"options": ["gmail", "slack"]}
-    assert "source != :source_1" in captured["sql"]
+    assert "NOT IN ('chat', 'subtask', 'recurrence')" in captured["sql"]
     assert "DISTINCT" in captured["sql"]
 
 
@@ -189,3 +189,24 @@ async def test_note_facets_use_sources_of_existing_notes(monkeypatch):
     assert await search_api.search_facets("notes") == {"options": ["chat", "gmail"]}
     assert "FROM notes n LEFT JOIN raw_inputs r" in captured["sql"]
     assert "coalesce(r.source, 'chat')" in captured["sql"]
+
+
+def test_message_source_filter_counts_generated_inputs_as_their_origin():
+    from app.db.clients.raw_inputs import ORIGIN_SOURCE_SQL
+
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            captured["params"] = params
+            return SimpleNamespace(all=lambda: [])
+
+    search_client.suggest(
+        Session(), tsquery="report:*", branches=frozenset({INPUT}),
+        limit=25, half_life_days=30, source="gmail",
+    )
+
+    assert f"({ORIGIN_SOURCE_SQL}) = :source" in captured["sql"]
+    assert "r.source = :source" not in captured["sql"]
+    assert captured["params"]["source"] == "gmail"

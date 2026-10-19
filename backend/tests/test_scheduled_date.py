@@ -388,6 +388,7 @@ async def test_add_task_event_persists_scheduled_date_after_calendar_create(monk
         link=None,
         location=None,
         label=None,
+        due_date=None,
         calendar_event_id=None,
         scheduled_date=None,
     )
@@ -1031,6 +1032,7 @@ async def test_schedule_task_serializes_across_tasks(monkeypatch):
     monkeypatch.setattr(schedule_service, "plan_task_slot", fake_plan)
     monkeypatch.setattr("app.services.calendar.add_task_event", fake_add)
     monkeypatch.setattr(schedule_service.tasks_store, "latest_status_for", lambda *_args: {})
+    monkeypatch.setattr("app.events.publish_task", lambda session, task_id: None)
 
     def make_task():
         return SimpleNamespace(
@@ -1051,3 +1053,106 @@ async def test_schedule_task_serializes_across_tasks(monkeypatch):
     (start_a, end_a), (start_b, _end_b) = sorted([res_a, res_b])
     assert end_a <= start_b  # back-to-back, no overlap
     assert len(placed) == 2
+
+
+def test_created_manually_follows_the_parent(monkeypatch):
+    asked: list[uuid.UUID] = []
+
+    def fake_is_manual_for(_session, ids):
+        asked.extend(ids)
+        return {ids[0]: True}
+
+    monkeypatch.setattr(tasks_store, "is_manual_for", fake_is_manual_for)
+    parent_id = uuid.uuid4()
+
+    assert tasks_store.created_manually(None, SimpleNamespace(id=uuid.uuid4(), parent_task_id=parent_id))
+    assert asked == [parent_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("manual", "due_in", "end_in", "expected"),
+    [
+        (False, timedelta(days=2), timedelta(days=1), "created"),
+        (True, timedelta(days=2), timedelta(days=1), "cleared"),
+        # The solver's `newly_late` already warned about a deadline still ahead.
+        (True, timedelta(days=1), timedelta(days=2), None),
+        (True, -timedelta(hours=1), timedelta(hours=1), "missed"),
+    ],
+)
+async def test_announce_placement_keeps_manual_tasks_quiet(monkeypatch, manual, due_in, end_in, expected):
+    now = datetime.now(timezone.utc)
+    task = SimpleNamespace(id=uuid.uuid4(), due_date=now + due_in)
+    calls: list[str] = []
+
+    async def record(kind, *_args, **_kwargs):
+        calls.append(kind)
+
+    monkeypatch.setattr(schedule_service.tasks_store, "created_manually", lambda _s, _t: manual)
+    monkeypatch.setattr(notify_service, "notify_task_created", lambda *a, **k: record("created"))
+    monkeypatch.setattr(notify_service, "clear_task_notification", lambda *a, **k: record("cleared"))
+    monkeypatch.setattr(notify_service, "notify_deadline_missed", lambda *a, **k: record("missed"))
+
+    await schedule_service.announce_placement(
+        None, task, start=now + end_in - timedelta(minutes=30), end=now + end_in,
+    )
+
+    assert calls == ([expected] if expected else [])
+
+
+def test_task_event_body_carries_deadline_and_modal_link(monkeypatch):
+    monkeypatch.setattr(
+        notify_service, "get_settings", lambda: SimpleNamespace(task_default_url="https://example.test/app"),
+    )
+    task = SimpleNamespace(
+        id=uuid.uuid4(), description="Body", link="https://example.com/pr/1",
+        due_date=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc), deadline_kind="hard",
+    )
+
+    description, link, footer = calendar_events._task_description(task).split("\n\n")
+
+    assert (description, link) == ("Body", "https://example.com/pr/1")
+    deadline, anchor = footer.splitlines()
+    assert deadline.startswith("Deadline: Thu Jul 02, ")
+    assert deadline.endswith(" (hard)")
+    assert anchor == f'<a href="https://example.test/app#task/{task.id}">Open task</a>'
+
+
+@pytest.mark.parametrize("encoding", ["verbatim", "html"])
+def test_discover_strips_generated_footer_from_edited_body(encoding):
+    session = _sqlite_session()
+    start = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    task = Task(
+        title="Write report",
+        description="Original body",
+        link=None,
+        location="Office A",
+        estimation=45,
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=start,
+        calendar_event_id="event-1",
+    )
+    session.add(task)
+    session.flush()
+    footer = calendar_events.task_event_footer(task)
+    body = (
+        f"Rewritten body\n\n{footer}" if encoding == "verbatim"
+        # Google's editor re-encodes the whole edited body as HTML.
+        else "Rewritten body<br><br>" + footer.replace("\n", "<br>")
+    )
+    event = CalendarEvent(
+        id="event-1",
+        calendar_id="primary",
+        summary="Write report",
+        description=body,
+        start=start,
+        end=start + timedelta(minutes=45),
+        all_day=False,
+        location="Office A",
+        html_link=None,
+        private_properties={"managed_by": "plan_service", "kind": "task", "task_id": str(task.id)},
+        raw={"summary": "Write report"},
+    )
+
+    assert discover._sync_task_schedule_from_event(session, event) == task.id
+    assert task.description == "Rewritten body"

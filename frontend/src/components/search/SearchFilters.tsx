@@ -29,10 +29,6 @@ const KINDS: { key: SearchKind; label: string }[] = [
   { key: "contacts", label: "Contacts" },
 ];
 
-function selectedFirst<T>(items: T[], selected: T | undefined): T[] {
-  return selected === undefined ? items : [selected, ...items.filter((item) => item !== selected)];
-}
-
 function sourceLabel(source: string): string {
   return source.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
@@ -75,9 +71,10 @@ export function SearchFilters({
     ? [KINDS.find((kind) => kind.key === filters.kind)!, ...visibleKinds.filter((kind) => kind.key !== filters.kind)]
     : visibleKinds;
 
+  // Only a kind change reshuffles the row; second-level pills stay in place.
   useEffect(() => {
     scrollerRef.current?.scrollTo({ left: 0, behavior: "smooth" });
-  }, [filters.kind, filters.label, filters.source, filters.format]);
+  }, [filters.kind]);
 
   const selectKind = (kind: SearchKind) => {
     onChange({ ...EMPTY_SEARCH_FILTERS, kind: filters.kind === kind ? null : kind });
@@ -102,7 +99,7 @@ export function SearchFilters({
         </button>
       ))}
       {filters.kind === "tasks" && (
-        selectedFirst(labels, labels.find((label) => label.name === filters.label)).map((label) => {
+        labels.map((label) => {
           const selected = filters.label === label.name;
           return (
             <button
@@ -119,7 +116,7 @@ export function SearchFilters({
           );
         })
       )}
-      {filters.kind === "messages" && selectedFirst(facets.messages, facets.messages.find((source) => source === filters.source)).map((source) => {
+      {filters.kind === "messages" && facets.messages.map((source) => {
         const selected = filters.source === source;
         return (
           <button
@@ -133,7 +130,7 @@ export function SearchFilters({
           </button>
         );
       })}
-      {filters.kind === "notes" && selectedFirst(facets.notes, facets.notes.find((source) => source === filters.source)).map((source) => {
+      {filters.kind === "notes" && facets.notes.map((source) => {
         const selected = filters.source === source;
         return (
           <button
@@ -147,7 +144,7 @@ export function SearchFilters({
           </button>
         );
       })}
-      {filters.kind === "files" && selectedFirst(facets.files, facets.files.find((format) => format === filters.format)).map((format) => {
+      {filters.kind === "files" && facets.files.map((format) => {
         const selected = filters.format === format;
         return (
           <button

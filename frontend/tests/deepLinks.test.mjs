@@ -86,3 +86,49 @@ test("an uppercase public task ID in the path opens its task", () => {
   );
   assert.equal(exports.parseDeepLink({ pathname: "/app", search: "", hash: "" }), null);
 });
+
+test("reopening a task already on the trail rewinds instead of looping", () => {
+  const entries = [{ url: "/app", state: null }];
+  let index = 0;
+  const location = { pathname: "/app", search: "", hash: "" };
+  const setUrl = (url) => {
+    location.hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+  };
+  const history = {
+    get state() { return entries[index].state; },
+    pushState: (state, _title, url) => {
+      entries.splice(++index, Infinity, { url, state });
+      setUrl(url);
+    },
+    replaceState: (state, _title, url) => {
+      entries[index] = { url, state };
+      setUrl(url);
+    },
+    go: (delta) => {
+      index += delta;
+      setUrl(entries[index].url);
+    },
+    back: () => history.go(-1),
+  };
+  const exports = {};
+  vm.runInNewContext(outputText, { exports, window: { location, history }, URLSearchParams });
+
+  assert.equal(exports.rewindToTask("parent"), false);
+  exports.pushDeepLink({ kind: "task", id: "parent" });
+  exports.pushDeepLink({ kind: "task", id: "child" });
+  assert.equal(exports.rewindToTask("child"), false);
+
+  // The parent card inside the subtask modal goes back to the parent entry.
+  assert.equal(exports.rewindToTask("parent"), true);
+  assert.equal(location.hash, "#task/parent");
+  assert.equal(exports.backFromDeepLink(), true);
+  assert.equal(location.hash, "");
+
+  // A task opened straight from a URL still anchors the trail.
+  entries.splice(0, Infinity, { url: "/app#task/root", state: null });
+  index = 0;
+  setUrl("/app#task/root");
+  exports.pushDeepLink({ kind: "task", id: "sub" });
+  assert.equal(exports.rewindToTask("root"), true);
+  assert.equal(location.hash, "#task/root");
+});

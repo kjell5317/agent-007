@@ -7,6 +7,8 @@ interface Props<T extends string> {
   hints?: Record<T, string>;
   // Adds a chip that clears the value.
   noneLabel?: string;
+  // Per-choice color for the selected chip, instead of the primary fill.
+  selectedClasses?: Partial<Record<T, string>>;
   centered?: boolean;
   disabled?: boolean;
   onChange: (value: T | null) => void;
@@ -17,6 +19,7 @@ export function ChoiceChips<T extends string>({
   labels,
   hints,
   noneLabel,
+  selectedClasses,
   centered = false,
   disabled = false,
   onChange,
@@ -37,9 +40,9 @@ export function ChoiceChips<T extends string>({
             onClick={() => { if (choice !== value) onChange(choice); }}
             className={cn(
               "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
-              value === choice
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-input text-muted-foreground hover:bg-accent hover:text-foreground",
+              value !== choice
+                ? "border-input text-muted-foreground hover:bg-accent hover:text-foreground"
+                : (choice && selectedClasses?.[choice]) || "border-primary bg-primary text-primary-foreground",
             )}
           >
             {text}

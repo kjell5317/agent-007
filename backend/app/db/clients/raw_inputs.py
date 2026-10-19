@@ -58,6 +58,28 @@ def list_(
     return list(session.execute(stmt).scalars())
 
 
+# Inputs the app generates itself rather than receives.
+GENERATED_SOURCES = ("subtask", "recurrence")
+
+# The source a `raw_inputs r` row counts as for filtering: a generated input
+# takes the first received source of the task it derives from — a subtask its
+# parent's, a repeat instance (or a split occurrence's subtask) its series'.
+ORIGIN_SOURCE_SQL = """
+CASE WHEN r.source NOT IN ('subtask', 'recurrence') THEN r.source ELSE (
+    SELECT o.source
+    FROM tasks base
+    JOIN tasks ot ON ot.id = base.id OR ot.recurrence_series_id = base.recurrence_series_id
+    JOIN raw_inputs o ON o.task_id = ot.id
+    WHERE base.id = CASE WHEN r.source = 'subtask'
+                         THEN CAST(r.source_metadata->>'parent_task_id' AS uuid)
+                         ELSE r.task_id END
+      AND o.source NOT IN ('subtask', 'recurrence')
+    ORDER BY o.received_at
+    LIMIT 1
+) END
+"""
+
+
 # Group key mirrors the frontend's `inputGroupKey`: a shared task wins, so every
 # follow-up / duplicate of a task (incl. cross-thread, embedding-matched ones)
 # folds in with its anchor; then a thread for pre-task inputs; then unlinked
@@ -66,7 +88,7 @@ def list_(
 # for N groups are exactly N whole groups on the client. Repeat-instance
 # anchors (`recurrence`) are generated, not received, so they never show.
 _GROUPED_INPUT_IDS_SQL = text(
-    """
+    f"""
     WITH keyed AS (
         SELECT
             id,
@@ -89,10 +111,10 @@ _GROUPED_INPUT_IDS_SQL = text(
                             '[[:space:]]+', ' ', 'g'))), '/+$', '', 'g')
                 ELSE 'input:' || id::text
             END AS group_key
-        FROM raw_inputs
+        FROM raw_inputs r
         WHERE source NOT IN ('chat', 'recurrence')
           AND (CAST(:status AS text) IS NULL OR status = :status)
-          AND (CAST(:source AS text) IS NULL OR source = :source)
+          AND (CAST(:source AS text) IS NULL OR ({ORIGIN_SOURCE_SQL}) = :source)
     ),
     top_groups AS (
         SELECT group_key, MAX(received_at) AS group_sort

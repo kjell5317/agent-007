@@ -21,6 +21,7 @@ the stored token drives cheap incremental pulls.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ from app.services.calendar.client import (
     normalize,
 )
 from app.services.calendar.events import (
+    DEADLINE_PREFIX,
     WINDOW_DAYS,
     _task_description,
     commute_leg_key,
@@ -52,6 +54,7 @@ from app.services.calendar.events import (
     is_location_blocker,
     is_managed_event,
     is_task_event,
+    task_event_footer,
 )
 from app.services.commute.legs import _norm
 from app.services.location import (
@@ -63,6 +66,7 @@ from app.services.home_assistant import (
     next_event_datetime_configured,
     set_next_event_datetime,
 )
+from app.services.notify import task_url
 from app.services.plan.checkin import booked_slot
 from app.services.plan.schedule import (
     _duration_minutes,
@@ -701,7 +705,10 @@ def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:
         updates["title"] = raw_summary
 
     if event.description != _task_description(task):
-        updates["description"] = _description_for_task(event, task)
+        description = _description_for_task(event, task)
+        # An event written before the footer existed differs without an edit.
+        if description != task.description:
+            updates["description"] = description
 
     if event.location != resolve_location_alias(task.location):
         updates["location"] = event.location
@@ -719,14 +726,25 @@ def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:
 def _description_for_task(event: CalendarEvent, task: Task) -> str | None:
     """Recover the task description from an edited event body.
 
-    The event body is `description + "\\n\\n" + link`; strip a trailing,
-    unedited link so it doesn't leak into `task.description` (and duplicate on
-    the next push). If the link was itself edited away, keep the whole body.
+    The event body is description, link and the generated footer separated
+    by blank lines; strip the unedited trailing parts so they don't leak into
+    `task.description` (and duplicate on the next push). If they were edited
+    away, keep the whole body.
     """
-    desc = event.description
+    desc = event.description or ""
+    footer = task_event_footer(task)
+    if desc.endswith(footer):
+        desc = desc[: -len(footer)].rstrip("\n")
+    elif (cut := desc.rfind(DEADLINE_PREFIX)) >= 0 and task_url(task.id) in desc[cut:]:
+        # Google's editor re-encodes an edited body as HTML, so the footer no
+        # longer matches verbatim; cut at its first line instead.
+        desc = _TRAILING_BREAKS.sub("", desc[:cut])
     if desc and task.link and desc.endswith(task.link):
-        desc = desc[: -len(task.link)].rstrip("\n") or None
-    return desc
+        desc = desc[: -len(task.link)].rstrip("\n")
+    return desc or None
+
+
+_TRAILING_BREAKS = re.compile(r"(?:\s|<br\s*/?>)+$", re.IGNORECASE)
 
 
 async def _reschedule_deleted_task_event(

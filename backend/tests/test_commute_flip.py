@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from html import escape
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -17,11 +18,12 @@ from app.auth.middleware import _is_exempt_request  # noqa: E402
 from app.db import get_session  # noqa: E402
 from app.services.commute import flip as flip_service  # noqa: E402
 from app.services.commute import flip_link  # noqa: E402
-from app.services.commute.flip import FlipRequest  # noqa: E402
+from app.services.commute.flip import FlipPreview, FlipRequest  # noqa: E402
 from app.services.commute.flip_link import flip_url, verify_flip  # noqa: E402
 from app.services.commute.legs import FAILED_MODE, PlannedLeg  # noqa: E402
 from app.services.commute.planner import (  # noqa: E402
     _description_for,
+    _navigation_url,
     _without_updated_line,
 )
 
@@ -186,24 +188,29 @@ def _leg(**changes) -> PlannedLeg:
 
 
 def test_description_carries_note_and_flip_link():
-    lines = _description_for(
-        _leg(note="Bike is at Uni since Tue — riding it back", reason="switched by you")
-    ).splitlines()
+    leg = _leg(note="Bike is at Uni since Tue — riding it back", reason="switched by you")
+    lines = _description_for(leg).splitlines()
 
-    assert lines[1] == "Reason: switched by you"
-    assert lines[2] == "Bike is at Uni since Tue — riding it back"
-    switch = next(line for line in lines if line.startswith("Switch to "))
-    assert switch == f"Switch to transit: {flip_url('home', 'ev1', DEPART, ARRIVE, 'bicycling')}"
+    assert lines[0] == "From: Home"
+    assert lines[1] == "Bike is at Uni since Tue — riding it back"
+    assert not any("switched by you" in line for line in lines)
+    switch = escape(flip_url("home", "ev1", DEPART, ARRIVE, "bicycling"))
+    assert lines[2] == (
+        f'<a href="{escape(_navigation_url(leg))}">Navigate</a> · '
+        f'<a href="{switch}">Switch to transit</a>'
+    )
     assert lines[-1].startswith("Updated: ")
 
-    transit = _description_for(_leg(mode="transit")).splitlines()
-    assert any(line.startswith("Switch to bike: https://007.example.org/") for line in transit)
+    transit = _description_for(_leg(mode="transit"))
+    assert '<a href="https://007.example.org/' in transit
+    assert ">Switch to bike</a>" in transit
 
 
 def test_failed_leg_description_has_no_flip_link():
-    lines = _description_for(_leg(mode=FAILED_MODE)).splitlines()
+    description = _description_for(_leg(mode=FAILED_MODE))
 
-    assert not any(line.startswith("Switch to ") for line in lines)
+    assert "Switch to" not in description
+    assert ">Navigate</a>" in description
 
 
 def test_description_is_stable_across_replans(monkeypatch):
@@ -252,7 +259,10 @@ def test_get_shows_confirm_page_without_flipping(monkeypatch, client_and_session
 
     async def describe(_session, request):
         seen.append(request)
-        return "Bike → Transit for Uni at 09:40?"
+        return FlipPreview(
+            current="bicycling", target="transit", place="Uni",
+            destination="Uni, Arcisstraße 21", when="Tue 09:40",
+        )
 
     async def apply(*_args):
         raise AssertionError("a GET must never flip")
@@ -264,8 +274,11 @@ def test_get_shows_confirm_page_without_flipping(monkeypatch, client_and_session
     response = client.get("/commute/flip?" + urlsplit(url).query)
 
     assert response.status_code == 200
-    assert "Bike → Transit for Uni at 09:40?" in response.text
-    assert '<form method="post" action="flip">' in response.text
+    assert "Commute · Tue 09:40" in response.text
+    assert "to Uni</h1>" in response.text
+    assert "Uni, Arcisstraße 21" in response.text
+    assert '<form method="post" action="flip"' in response.text
+    assert "Switch to transit</button>" in response.text
     for key, value in _params(url).items():
         assert f'name="{key}" value="{value}"' in response.text
     assert seen[0].mode == "transit"
@@ -342,11 +355,31 @@ def test_vanished_leg_says_so(monkeypatch, client_and_session, method):
     assert "This leg no longer exists" in response.text
 
 
+def test_already_in_target_mode_offers_no_switch(monkeypatch, client_and_session):
+    client, _ = client_and_session
+
+    async def describe(*_args):
+        return FlipPreview(
+            current="transit", target="transit", place="Uni", destination=None, when="Tue 09:40",
+        )
+
+    monkeypatch.setattr(flip_service, "describe_flip", describe)
+
+    response = client.get("/commute/flip", params=_params(_live_link()))
+
+    assert response.status_code == 200
+    assert "Already transit" in response.text
+    assert "<form" not in response.text
+
+
 def test_page_escapes_message(monkeypatch, client_and_session):
     client, _ = client_and_session
 
     async def describe(*_args):
-        return "<script>alert(1)</script>"
+        return FlipPreview(
+            current="bicycling", target="transit", place="<script>alert(1)</script>",
+            destination=None, when="Tue 09:40",
+        )
 
     monkeypatch.setattr(flip_service, "describe_flip", describe)
 

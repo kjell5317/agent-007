@@ -271,7 +271,7 @@ async def schedule_tasks(
         session.rollback()
         result = None
 
-    from app.services.notify import clear_task_notification, notify_task_created, notify_task_deferred
+    from app.services.notify import clear_task_notification, notify_task_deferred
 
     out: dict = {}
     for task, options in requests:
@@ -282,15 +282,48 @@ async def schedule_tasks(
             continue
         if interval is not None and task.calendar_event_id:
             if fresh[task.id]:
-                await notify_task_created(
-                    task, start=interval.start, end=interval.end,
+                await announce_placement(
+                    session, task, start=interval.start, end=interval.end,
                     primary_action=options.get("primary_action"),
                 )
             else:
                 await clear_task_notification(task.id)
-        elif task.schedule_state == "deferred" and fresh[task.id]:
+        elif (
+            task.schedule_state == "deferred"
+            and fresh[task.id]
+            and not tasks_store.created_manually(session, task)
+        ):
             await notify_task_deferred(task, primary_action=options.get("primary_action"))
     return out
+
+
+async def announce_placement(
+    session: Session,
+    task: Task,
+    *,
+    start: datetime,
+    end: datetime,
+    primary_action: dict[str, str] | None = None,
+) -> None:
+    """The "Scheduled" push for a task's first slot. A task the user typed in
+    is already known to them, so only a slot past its deadline is news; an
+    on-time slot just clears a lingering "could not schedule" warning."""
+    from app.services.notify import (
+        clear_task_notification,
+        notify_deadline_missed,
+        notify_task_created,
+    )
+
+    if not tasks_store.created_manually(session, task):
+        await notify_task_created(task, start=start, end=end, primary_action=primary_action)
+        return
+    due = to_user_tz(task.due_date) if task.due_date else None
+    if due is None or end <= due:
+        await clear_task_notification(task.id)
+    elif due <= datetime.now(user_tz()):
+        # The solver only warns about deadlines still ahead (`newly_late`);
+        # one already behind is announced here instead.
+        await notify_deadline_missed(task, start=start, end=end)
 
 
 async def _schedule_task_locked(
@@ -383,6 +416,11 @@ async def _schedule_task_locked(
         return None
 
     await _log_legacy_placement(session, task, planned, prior)
+    from app.events import publish_task
+
+    # The solver path publishes its placements in `replan._apply`; without
+    # this, cards placed here keep showing "unscheduled" until a refetch.
+    publish_task(session, task.id)
 
     # Each placement→replan→displaced-task hop increments _depth, so a
     # replan cycle (A's legs move B, B's legs move A, …) terminates here
@@ -406,10 +444,8 @@ async def _schedule_task_locked(
         if is_fresh:
             # First slot for this task — announce it. Shares the task tag, so
             # it also replaces any lingering "could not schedule" warning.
-            from app.services.notify import notify_task_created
-
-            await notify_task_created(
-                task, start=planned.start, end=planned.end, primary_action=primary_action
+            await announce_placement(
+                session, task, start=planned.start, end=planned.end, primary_action=primary_action
             )
         else:
             # A silent reschedule of an already-mirrored task. Still clear a

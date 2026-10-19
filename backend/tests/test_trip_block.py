@@ -95,8 +95,8 @@ def test_leg_event_format():
     desc = _description_for(leg)
     lines = desc.splitlines()
     assert lines[0] == "From: Home"
-    assert not any(line.startswith(("To:", "Mode:")) for line in lines)
-    assert any(line.startswith("Reason: ") for line in lines)
+    assert not any(line.startswith(("To:", "Mode:", "Reason:")) for line in lines)
+    assert any(line.startswith('<a href="https://www.google.com/maps/dir/?') for line in lines)
     assert any(line.startswith("Updated: ") for line in lines)
 
 
@@ -1683,6 +1683,7 @@ async def test_cascading_victim_shifts_compact_the_day(monkeypatch):
     monkeypatch.setattr(schedule_service, "_movable_victims", fake_victims)
     monkeypatch.setattr("app.services.calendar.update_task_event", fake_update)
     monkeypatch.setattr("app.services.notify.clear_task_notification", noop)
+    monkeypatch.setattr("app.events.publish_task", lambda session, task_id: None)
     monkeypatch.setattr(
         schedule_service, "get_settings",
         lambda: SimpleNamespace(

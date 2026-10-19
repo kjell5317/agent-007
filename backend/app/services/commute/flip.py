@@ -20,6 +20,7 @@ from app.timezones import to_user_tz
 log = logging.getLogger(__name__)
 
 MODE_LABELS = {"bicycling": "Bike", "transit": "Transit", "failed": "No route"}
+MODE_ICONS = {"bicycling": "🚲", "transit": "🚆", "failed": "⚠️"}
 # A link survives re-plans that shift its leg by up to this much.
 SEARCH_WINDOW = timedelta(days=1)
 
@@ -30,6 +31,15 @@ class FlipRequest:
     dest_anchor: str
     depart: datetime
     mode: str
+
+
+@dataclass(frozen=True)
+class FlipPreview:
+    current: str
+    target: str
+    place: str
+    destination: str | None
+    when: str
 
 
 async def _find_leg(session: Session, request: FlipRequest):
@@ -55,17 +65,17 @@ def _place(address: str | None) -> str:
     return (address or "home").split(",")[0].strip() or "home"
 
 
-async def describe_flip(session: Session, request: FlipRequest) -> str:
+async def describe_flip(session: Session, request: FlipRequest) -> FlipPreview:
     from app.services.commute.state import leg_record
 
     event = await _find_leg(session, request)
     record = leg_record(event)
-    when = to_user_tz(record.depart).strftime("%a %H:%M")
-    if record.mode == request.mode:
-        return f"Already {MODE_LABELS[request.mode].lower()} to {_place(record.destination)} at {when}."
-    return (
-        f"{MODE_LABELS.get(record.mode, record.mode)} → {MODE_LABELS[request.mode]} "
-        f"to {_place(record.destination)} at {when}?"
+    return FlipPreview(
+        current=record.mode,
+        target=request.mode,
+        place=_place(record.destination),
+        destination=record.destination,
+        when=to_user_tz(record.depart).strftime("%a %H:%M"),
     )
 
 
@@ -175,7 +185,6 @@ async def _rewrite_past_leg(session: Session, event, record, mode: str) -> None:
         mode=mode,
         depart=record.depart,
         arrive=record.arrive,
-        reason="switched by you",
     )
     props = commute_private_properties(
         origin_anchor=record.origin_anchor, dest_anchor=record.dest_anchor, mode=mode,

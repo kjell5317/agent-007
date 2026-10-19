@@ -74,9 +74,10 @@ export function Composer({ onCreated }: Props) {
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-[env(safe-area-inset-bottom)] z-40">
+    // Same translucent bar as the Topbar, reaching into the bottom safe area.
+    <div className="fixed inset-x-0 bottom-0 z-40 bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/75">
       <form onSubmit={submit} autoComplete="off">
-        <div className="mx-auto max-w-2xl px-4 py-2">
+        <div className="mx-auto max-w-2xl px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="flex h-12 min-w-0 flex-1 items-center rounded-full bg-secondary px-4 shadow-sm">
               <Input
@@ -96,7 +97,7 @@ export function Composer({ onCreated }: Props) {
                 className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               />
             </div>
-            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 rounded-full p-0 shadow-sm disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100">
+            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 p-0 shadow-sm disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100">
               <Plus className="h-5 w-5" />
             </Button>
           </div>
