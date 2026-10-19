@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.agent import retrieval
 from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT
 from app.agent.helpers.llm import (
     LLMMessage,
@@ -28,6 +31,7 @@ from app.agent.helpers.llm import (
 )
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import (
+    related_events_section,
     run_create_event,
     run_find_calendar_events,
     run_get_event_details,
@@ -56,6 +60,7 @@ from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context
 from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs, tasks
+from app.db.clients.documents import CalendarMatch
 from app.db.clients.raw_inputs import SimilarInput
 
 log = logging.getLogger(__name__)
@@ -81,8 +86,11 @@ async def run_new_input_agent(
                 seen_tasks.add(hit.task_id)
                 task_candidates.append((hit, t))
     not_task_signals = [h for h in candidates if h.status == "not_task"]
+    related_events = await retrieval.related_calendar_events(
+        session, raw=raw, embedding=query_embedding
+    )
 
-    user_msg = _build_new_input_message(raw, task_candidates, not_task_signals)
+    user_msg = _build_new_input_message(raw, task_candidates, not_task_signals, related_events)
     source_url = first_input_url(raw)
 
     trace: dict[str, Any] = {
@@ -91,6 +99,7 @@ async def run_new_input_agent(
         "embedded_query": query_embedding is not None,
         "candidates": [_candidate_trace_ref(h) for h in candidates],
         "evidence_refs": [_candidate_trace_ref(h) for h in candidates],
+        "related_events": [retrieval.calendar_match_ref(m) for m in related_events],
         "iterations": [],
     }
     final_status = "not_task"
@@ -425,10 +434,12 @@ def _build_new_input_message(
     raw,
     task_candidates: list[tuple[SimilarInput, Any]],
     not_task_signals: list[SimilarInput],
+    related_events: Sequence[CalendarMatch] = (),
 ) -> str:
     meta = raw.source_metadata or {}
+    user_timezone = get_settings().user_timezone
     lines = [
-        f"Current time: {now_iso(get_settings().user_timezone)}",
+        f"Current time: {now_iso(user_timezone)}",
         f"Source: {raw.source}",
     ]
     append_meta_lines(lines, meta)
@@ -447,6 +458,8 @@ def _build_new_input_message(
             lines.extend(_task_candidate_lines(hit, t))
         for p in not_task_signals:
             lines.extend(_not_task_candidate_lines(p))
+
+    lines.extend(related_events_section(related_events, ZoneInfo(user_timezone)))
 
     lines.append("")
     lines.append("Body:")

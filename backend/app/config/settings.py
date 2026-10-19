@@ -144,6 +144,15 @@ class Settings(BaseSettings):
     calendar_semantic_match_limit: int = 5
     calendar_semantic_min_similarity: float = 0.4
 
+    # Upcoming events injected into the task-creation prompt so a task that
+    # prepares for one (book accommodation before a trip) gets a deadline
+    # before it. The query is the whole input embedding, not a short query:
+    # with gemini-embedding-001 unrelated input/event pairs already score
+    # ~0.65–0.75, so this floor sits far above `calendar_semantic_min_similarity`.
+    # It only trims noise — the agent still judges which event, if any, fits.
+    task_related_events_limit: int = 3
+    task_related_events_min_similarity: float = 0.75
+
     # Google OAuth
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""

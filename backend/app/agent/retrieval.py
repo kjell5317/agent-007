@@ -7,11 +7,14 @@ storage layer directly. No change to Gemini embeddings or pgvector storage.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from app.db.clients import notes as notes_store, raw_inputs
+from app.config import get_settings
+from app.db.clients import documents as documents_store, notes as notes_store, raw_inputs
+from app.db.clients.documents import CalendarMatch
 from app.db.clients.raw_inputs import SimilarInput
-from app.services.input.embedding import embed
+from app.services.input.embedding import candidate_query_text, embed
 
 
 def search_raw_inputs(
@@ -40,6 +43,54 @@ def precedent_query_text(raw: Any) -> str:
     meta = getattr(raw, "source_metadata", None) or {}
     subject = (meta.get("subject") or "").strip()
     return (subject or (getattr(raw, "content", "") or "").strip())[:300]
+
+
+async def related_calendar_events(
+    session: Any, *, raw: Any, embedding: list[float] | None = None
+) -> list[CalendarMatch]:
+    """Upcoming cached calendar events that may relate to `raw`, for the task
+    creation prompt. Reuses the input's stored embedding when given (same
+    model and task type as the cached events), else embeds it here."""
+    settings = get_settings()
+    if embedding is None:
+        embedding = await embed(
+            candidate_query_text(raw.content or "", raw.source_metadata or {})
+        )
+    limit = settings.task_related_events_limit
+    matches = documents_store.search_calendar_semantic(
+        session,
+        embedding=embedding,
+        raw_text=precedent_query_text(raw),
+        # Over-fetch: recurring instances share text and would fill every slot.
+        k=limit * 4,
+        min_similarity=settings.task_related_events_min_similarity,
+        time_min=datetime.now(timezone.utc).isoformat(),
+    )
+    return soonest_per_event(matches)[:limit]
+
+
+def calendar_match_ref(m: CalendarMatch) -> dict[str, Any]:
+    return {
+        "event_id": m.event_id,
+        "calendar_id": m.calendar_id,
+        "summary": m.summary,
+        "starts_at": m.starts_at.isoformat() if m.starts_at else None,
+        "similarity": round(m.similarity, 4),
+    }
+
+
+def soonest_per_event(matches: list[CalendarMatch]) -> list[CalendarMatch]:
+    """Collapse same-titled events (recurring instances) to the soonest one,
+    keeping the rank of the first occurrence."""
+    best: dict[tuple[str | None, str], CalendarMatch] = {}
+    for m in matches:
+        key = (m.calendar_id, m.summary)
+        kept = best.get(key)
+        if kept is None or (
+            m.starts_at is not None and (kept.starts_at is None or m.starts_at < kept.starts_at)
+        ):
+            best[key] = m
+    return list(best.values())
 
 
 async def search_notes(session: Any, *, query: str, k: int = 5) -> str:

@@ -43,11 +43,16 @@ You also have non-terminal lookup tools:
   input mentions a person, project, account, or fact you might have
   recorded earlier. You may call it more than once. After searching
   you still need to call a terminal task tool to finish.
+- The user message may list "Upcoming calendar events that may be related".
+  Link one using both ids when the task clearly prepares for it: booking
+  travel or accommodation for a trip, buying tickets or a gift, registering,
+  preparing slides or materials. Set a due_date before its start with
+  realistic lead time (book a trip weeks ahead, not the day before). Do not
+  link follow-up work that happens after the event.
 - `find_calendar_events(query?, time_min?, time_max?)` finds events related to
-  the task. Use it when the request names an event or asks for preparation.
-- `find_calendar_events` includes event details. Link a clear match using both
-  ids. Complete preparation before its start;
-  set `due_date_is_explicit` only when the input states a deadline. Keep event
+  the task. Use it when the task serves a trip or event that isn't listed —
+  query a short destination, event, or person name.
+- Set `due_date_is_explicit` only when the input states a deadline. Keep event
   facts in its description and work instructions in the task description.
 - `get_event_details(event_id, calendar_id)` reads an extended description if
   the event search result was truncated. Do not overwrite truncated details.

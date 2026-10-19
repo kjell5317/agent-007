@@ -15,6 +15,7 @@ read as hard blockers to the planner, never as movable managed events.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.agent.helpers.text import parse_iso
 from app.config import get_settings
 from app.db.clients import documents as documents_store
+from app.db.clients.documents import CalendarMatch
 from app.services.calendar.events import (
     PROP_KIND,
     create_event,
@@ -115,7 +117,8 @@ def _parse_bound(value: str | None, tz: ZoneInfo) -> datetime | bool | None:
 
 
 def _event_line(event_id: str, when: str, summary: str, location: str | None,
-                *, calendar_id: str | None = None, description: str | None = None) -> str:
+                *, calendar_id: str | None = None, description: str | None = None,
+                detail_limit: int = 1200) -> str:
     loc = f" @ {location}" if location else ""
     calendar = f" | calendar_id={calendar_id}" if calendar_id else ""
     # Include useful event detail in the lookup while bounding total prompt size.
@@ -125,10 +128,30 @@ def _event_line(event_id: str, when: str, summary: str, location: str | None,
     for prefix in (summary, location):
         if prefix and detail.startswith(prefix):
             detail = detail[len(prefix):].lstrip("\n ")
-    details = f" | details={detail[:1200]}" if detail else ""
-    if len(detail) > 1200:
+    details = f" | details={detail[:detail_limit]}" if detail else ""
+    if len(detail) > detail_limit:
         details += " [truncated]"
     return f"- id={event_id}{calendar} | {when} | {summary}{loc}{details}"
+
+
+def related_events_section(matches: Sequence[CalendarMatch], tz: ZoneInfo) -> list[str]:
+    """Prompt lines listing upcoming events the input may prepare for."""
+    if not matches:
+        return []
+    lines = [
+        "",
+        "Upcoming calendar events that may be related (retrieved by similarity; "
+        "often none of them is). If the task prepares for one of them, link it "
+        "with `related_event_id` + `related_event_calendar_id` and set a due_date "
+        "before it starts with realistic lead time. Ignore events that don't "
+        "clearly match.",
+    ]
+    for m in matches:
+        when = m.starts_at.astimezone(tz).isoformat() if m.starts_at else "(no time)"
+        lines.append(_event_line(m.event_id, when, m.summary, m.location,
+                                 calendar_id=m.calendar_id, description=m.description,
+                                 detail_limit=300))
+    return lines
 
 
 def _format_matches(query: str, matches, tz: ZoneInfo) -> str:

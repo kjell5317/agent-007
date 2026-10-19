@@ -115,8 +115,8 @@ _CREATE_TASK_PROPS: dict = {
         ),
     },
     "description": {"type": "string"},
-    "related_event_id": {"type": "string", "description": "Id of the event this work prepares for; use a verified calendar search result."},
-    "related_event_calendar_id": {"type": "string", "description": "Calendar id from the same verified event result."},
+    "related_event_id": {"type": "string", "description": "Id of the event this work prepares for, from the listed upcoming events or a calendar search result."},
+    "related_event_calendar_id": {"type": "string", "description": "Calendar id from the same event entry."},
     "due_date_is_explicit": {"type": "boolean", "description": "True only when the user or source stated this task deadline explicitly."},
     "estimation": {
         "type": "integer",

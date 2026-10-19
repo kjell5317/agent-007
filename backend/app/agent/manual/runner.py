@@ -8,10 +8,13 @@ matching existing task.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.agent import retrieval
 from app.agent.prompts import EXTRACT_FIELDS_SYSTEM_PROMPT
 from app.agent.helpers.web import first_input_url, provisional_task_title, research_link
 from app.agent.helpers.llm import (
@@ -25,7 +28,7 @@ from app.agent.helpers.llm import (
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
 from app.agent.tools.calendar_lookup import (
-    run_find_calendar_events, run_get_event_details, run_update_event,
+    related_events_section, run_find_calendar_events, run_get_event_details, run_update_event,
 )
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.helpers.precedents import (
@@ -36,6 +39,7 @@ from app.agent.tools import INPUT_LINK_RESEARCH_TOOL, new_input_tools
 from app.config import get_settings
 from app.db.clients import labels as labels_store
 from app.db.clients import tasks
+from app.db.clients.documents import CalendarMatch
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.event_context import apply_event_context, mentions_event
 
@@ -78,7 +82,12 @@ async def extract_task_fields(
         if hit.task_id and hit.status in ("open", "closed")
     ]
     candidate_task_ids = {str(hit.task_id) for hit in precedent_candidates}
-    user_msg = _build_extract_message(session, raw, context_inputs, precedent_candidates)
+    related_events = await retrieval.related_calendar_events(
+        session, raw=raw, embedding=getattr(raw, "embedding", None)
+    )
+    user_msg = _build_extract_message(
+        session, raw, context_inputs, precedent_candidates, related_events
+    )
     source_url = first_input_url(raw) if raw.source == "manual" else None
     tools = new_input_tools(labels_store.agent_descriptions(session))
     create_tool = next(t for t in tools if t["name"] == "create_task")
@@ -109,6 +118,7 @@ async def extract_task_fields(
         "branch": "manual",
         "candidates": [candidate_trace_ref(h) for h in precedent_candidates],
         "evidence_refs": [candidate_trace_ref(h) for h in precedent_candidates],
+        "related_events": [retrieval.calendar_match_ref(m) for m in related_events],
         "iterations": [],
     }
     iteration_limit = MAX_TOOL_ITERATIONS + 2 if mentions_event(raw.content or "") else MAX_TOOL_ITERATIONS
@@ -353,16 +363,20 @@ def _build_extract_message(
     raw,
     context_inputs=(),
     precedent_candidates: list[SimilarInput] | None = None,
+    related_events: Sequence[CalendarMatch] = (),
 ) -> str:
-    now_line = f"Current time: {now_iso(get_settings().user_timezone)}"
+    user_timezone = get_settings().user_timezone
+    now_line = f"Current time: {now_iso(user_timezone)}"
     precedent_lines = _precedent_lines(session, precedent_candidates or [])
+    event_lines = related_events_section(related_events, ZoneInfo(user_timezone))
     if not context_inputs:
-        return "\n".join([now_line, *precedent_lines, *_render_input_lines(raw)])
+        return "\n".join([now_line, *precedent_lines, *event_lines, *_render_input_lines(raw)])
 
     ordered = sorted([raw, *context_inputs], key=lambda r: r.received_at)
     lines = [
         now_line,
         *precedent_lines,
+        *event_lines,
         "",
         f"This input is part of a conversation thread of {len(ordered)} "
         "messages, shown oldest first. Handle ONE task that captures the "

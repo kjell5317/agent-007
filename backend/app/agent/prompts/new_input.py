@@ -57,10 +57,16 @@ Events vs. tasks — these are different things:
   preserve existing information when adding new facts. If the event is on a
   calendar this agent cannot edit, retain the new detail in the task context
   and leave the event unchanged.
-- When a task prepares for or follows up an event, call `find_calendar_events`.
-  Read the event details in its result. Use the returned event and
-  calendar ids on the task only when the match is clear. Its due date must be
-  before the event starts, with time for the work. Set `due_date_is_explicit`
+- A task prepares for an event when it must be done before the event: booking
+  travel or accommodation for a trip, buying tickets or a gift, registering,
+  preparing slides or materials. The user message may list "Upcoming calendar
+  events that may be related"; link one only when the match is clear. If none
+  is listed but the task clearly serves a trip or event, call
+  `find_calendar_events` with a short query (destination, event, or person).
+- Link with the event's id and calendar id. The due date must be before the
+  event starts, with realistic lead time for the work (book a trip weeks
+  ahead, not the day before). Do not link follow-up work that happens after
+  the event — linking forces the due date before it. Set `due_date_is_explicit`
   only for a deadline actually stated by the user or source; an explicit date
   takes priority, even when it conflicts with the event, so flag that conflict.
 - `create_event`/`update_event` do NOT finish the run; still emit a terminal
