@@ -13,6 +13,7 @@ import {
   Link2,
   MapPin,
   RefreshCw,
+  Repeat,
   RotateCcw,
   Timer,
   Trash2,
@@ -28,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { LabelPicker } from "@/components/ui/label-picker";
 import { Markdown } from "@/components/ui/markdown";
 import { Modal } from "@/components/ui/modal";
+import { RecurrencePicker } from "@/components/ui/recurrence-picker";
 import { Textarea } from "@/components/ui/textarea";
 import {
   hasInputDetails,
@@ -46,8 +48,9 @@ import { inputTitle, senderName } from "@/lib/inbox";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
+import { fmtRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
-import type { Label, Task, TaskRawInput } from "@/lib/types";
+import type { Label, RecurrenceUnit, Task, TaskRawInput } from "@/lib/types";
 
 interface Props {
   task: Task;
@@ -61,7 +64,7 @@ interface Props {
 }
 
 type TextField = "title" | "description" | "link" | "location";
-type PickerField = "due_date" | "estimation" | "label";
+type PickerField = "due_date" | "estimation" | "label" | "recurrence";
 
 const TEXT_LABEL: Record<TextField, string> = {
   title: "Title",
@@ -349,6 +352,15 @@ export function TaskDetailModal({
   const rescheduleCurrent = () =>
     runTaskAction(() => api.rescheduleTask(current.id), "Rescheduling started");
 
+  const saveRecurrence = (unit: RecurrenceUnit, interval: number) =>
+    runTaskAction(
+      () => api.setRecurrence(current.id, unit, interval),
+      `Repeats ${fmtRecurrence(unit, interval).toLowerCase()}`,
+    );
+
+  const removeRecurrence = () =>
+    runTaskAction(() => api.removeRecurrence(current.id), "Stopped repeating");
+
   async function runClosingTaskAction(
     action: () => Promise<void>,
     message: string,
@@ -626,6 +638,8 @@ export function TaskDetailModal({
           onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
           onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
           onReschedule={rescheduleCurrent}
+          onSaveRecurrence={(unit, interval) => { void saveRecurrence(unit, interval); }}
+          onRemoveRecurrence={() => { void removeRecurrence(); }}
           onKotxActionPendingChange={setKotxActionPending}
       />
     </Modal>
@@ -712,6 +726,8 @@ function TaskSummary({
   onPickerEstimationChange,
   onPickerLabelChange,
   onReschedule,
+  onSaveRecurrence,
+  onRemoveRecurrence,
   onKotxActionPendingChange,
 }: {
   title: ReactNode;
@@ -751,6 +767,8 @@ function TaskSummary({
   onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
   onReschedule: () => void;
+  onSaveRecurrence: (unit: RecurrenceUnit, interval: number) => void;
+  onRemoveRecurrence: () => void;
   onKotxActionPendingChange: (pending: boolean) => void;
 }) {
   const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
@@ -929,6 +947,46 @@ function TaskSummary({
               </span>
             </button>
           </PickerAnchor>
+
+          {!kotxTask && (
+            <PickerAnchor
+              open={activePicker === "recurrence"}
+              onClose={onClosePicker}
+              panel={
+                <InlinePickerPanel title="Repeat" onClose={onClosePicker}>
+                  <RecurrencePicker
+                    unit={task.recurrence_unit}
+                    interval={task.recurrence_interval}
+                    busy={busy}
+                    onSave={onSaveRecurrence}
+                    onRemove={onRemoveRecurrence}
+                  />
+                </InlinePickerPanel>
+              }
+            >
+              <button
+                type="button"
+                onClick={() => onEditPicker("recurrence")}
+                disabled={busy || task.is_container || !!task.parent_task_id}
+                title={
+                  task.is_container || task.parent_task_id
+                    ? "Subtasks and split tasks can't repeat"
+                    : "Set repeat"
+                }
+                className={cn(
+                  TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                  TASK_SUMMARY_MUTED_BADGE_CLASS,
+                )}
+              >
+                <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                  <Repeat className="h-3 w-3" />
+                  {task.recurrence_unit && task.recurrence_interval
+                    ? fmtRecurrence(task.recurrence_unit, task.recurrence_interval)
+                    : "Repeat"}
+                </span>
+              </button>
+            </PickerAnchor>
+          )}
 
           {!task.is_container && (
             <button

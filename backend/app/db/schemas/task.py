@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled"]
+RecurrenceUnit = Literal["day", "week", "month"]
 
 
 class SubtaskSummary(BaseModel):
@@ -35,10 +36,21 @@ class TaskBase(BaseModel):
     is_container: bool = False
     due_date_derived: bool = False
     subtask_order: int | None = None
+    recurrence_unit: RecurrenceUnit | None = None
+    recurrence_interval: int | None = None
 
 
 class TaskCreate(TaskBase):
-    pass
+    recurrence_anchor: datetime | None = None
+    recurrence_series_id: uuid.UUID | None = None
+
+
+class TaskRecurrence(BaseModel):
+    """Body for PUT /tasks/{id}/recurrence. The per-unit upper bound is checked
+    by the service (`app.services.recurrence.MAX_INTERVAL`)."""
+
+    unit: RecurrenceUnit
+    interval: int = Field(ge=1)
 
 
 class TaskUpdate(BaseModel):
@@ -202,6 +214,8 @@ class TaskRead(TaskBase):
                 "is_container": getattr(task, "is_container", False),
                 "due_date_derived": getattr(task, "due_date_derived", False),
                 "subtask_order": getattr(task, "subtask_order", None),
+                "recurrence_unit": getattr(task, "recurrence_unit", None),
+                "recurrence_interval": getattr(task, "recurrence_interval", None),
                 "status": status_,
                 "is_manual": is_manual,
                 "kotx_task_id": getattr(task, "kotx_task_id", None),

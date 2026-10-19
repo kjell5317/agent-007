@@ -58,6 +58,7 @@ from app.services.location import (
     resolve_routable_location,
     resolve_routable_location_sync,
 )
+from app.services.recurrence import shift
 from app.timezones import to_user_tz, user_tz
 
 log = logging.getLogger(__name__)
@@ -419,6 +420,10 @@ async def plan_task_slot(
     now = datetime.now(user_tz()) + timedelta(minutes=settings.slot_min_lead_minutes)
     window_start = max(now, due - timedelta(days=LEAD_DAYS))
     window_end = due
+    if unit := getattr(task, "recurrence_unit", None):
+        # A repeat instance belongs to its own period: scanning from the
+        # LEAD_DAYS floor would stack a week of daily instances onto today.
+        window_start = max(window_start, shift(due, unit, -task.recurrence_interval))
     predecessor_id = getattr(task, "depends_on_task_id", None)
     if predecessor_id:
         predecessor = tasks_store.get(session, predecessor_id)

@@ -8,6 +8,8 @@
   * POST   /tasks/{task_id}/close       — mark done
   * POST   /tasks/{task_id}/not_task    — dismiss
   * POST   /tasks/{task_id}/reopen      — revive a closed/dismissed task
+  * PUT    /tasks/{task_id}/recurrence  — make a task repeat / change its rule
+  * DELETE /tasks/{task_id}/recurrence  — stop the task's series repeating
 
 All business logic lives in `app.services.task.*` — this file is just
 the HTTP surface.
@@ -30,6 +32,7 @@ from app.db.schemas.task import (
     TaskPromote,
     TaskRawInputRead,
     TaskRead,
+    TaskRecurrence,
     SubtaskSummary,
     TaskUpdate,
 )
@@ -47,6 +50,9 @@ from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import cleanup_dismissed_container, dismiss_container, dismiss_task
 from app.services.task.open import open_task_from_input
+from app.services.task.recur import (
+    drop_instances, plan_recurring_tasks, remove_recurrence, set_recurrence,
+)
 from app.services.task.reopen import enqueue_reopen_task
 from app.services.task.split import (
     create_subtask as create_subtask_svc, reflow_children,
@@ -110,6 +116,20 @@ async def _split_in_background(task_id: uuid.UUID) -> None:
             log.exception("task split failed · task=%s", task_id)
             from app.services.notify import notify_error
             await notify_error("Task split failed", exc, context=row.title)
+
+
+async def _refresh_series_in_background(
+    series_id: uuid.UUID | None, stale_ids: list[uuid.UUID]
+) -> None:
+    with SessionLocal() as session:
+        try:
+            await drop_instances(session, stale_ids)
+            if series_id is not None:
+                await plan_recurring_tasks(session, [series_id])
+        except Exception as exc:  # noqa: BLE001
+            log.exception("repeat planning failed · series=%s", series_id)
+            from app.services.notify import notify_error
+            await notify_error("Repeat planning failed", exc)
 
 
 def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
@@ -328,6 +348,37 @@ async def update_task(
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     background_tasks.add_task(_sync_task_changes, affected_tasks(session, row, set(fields)))
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual, session)
+
+
+@router.put("/{task_id}/recurrence", response_model=TaskRead)
+async def set_task_recurrence(
+    task_id: uuid.UUID, payload: TaskRecurrence, background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    try:
+        row, stale = set_recurrence(session, task_id, payload.unit, payload.interval)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    background_tasks.add_task(_refresh_series_in_background, row.recurrence_series_id, stale)
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return _to_read(row, status_, is_manual, session)
+
+
+@router.delete("/{task_id}/recurrence", response_model=TaskRead)
+async def remove_task_recurrence(
+    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session),
+) -> TaskRead:
+    try:
+        row, stale = remove_recurrence(session, task_id)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    background_tasks.add_task(_refresh_series_in_background, None, stale)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return _to_read(row, status_, is_manual, session)

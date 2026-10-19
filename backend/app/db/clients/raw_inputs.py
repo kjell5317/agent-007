@@ -63,7 +63,8 @@ def list_(
 # folds in with its anchor; then a thread for pre-task inputs; then unlinked
 # manual requests with normalized URL text; else the row stands alone.
 # Keeping the two in sync is what guarantees the rows we return
-# for N groups are exactly N whole groups on the client.
+# for N groups are exactly N whole groups on the client. Repeat-instance
+# anchors (`recurrence`) are generated, not received, so they never show.
 _GROUPED_INPUT_IDS_SQL = text(
     """
     WITH keyed AS (
@@ -89,7 +90,7 @@ _GROUPED_INPUT_IDS_SQL = text(
                 ELSE 'input:' || id::text
             END AS group_key
         FROM raw_inputs
-        WHERE source <> 'chat'
+        WHERE source NOT IN ('chat', 'recurrence')
           AND (CAST(:status AS text) IS NULL OR status = :status)
           AND (CAST(:source AS text) IS NULL OR source = :source)
     ),
@@ -152,12 +153,13 @@ def count_since(session: Session, ts: datetime) -> int:
 
     Manual entries and their automatic web research follow-ups are excluded —
     they don't need a notification badge about the user's own creation. The inbox
-    feed (list_) does still surface them so they can be reopened later.
+    feed (list_) does still surface them so they can be reopened later. Repeat
+    instances' anchors aren't inbox items at all (see `_GROUPED_INPUT_IDS_SQL`).
     """
     stmt = (
         select(func.count(RawInput.id))
         .where(RawInput.processed_at > ts,
-               RawInput.source.notin_(("manual", "web_research")))
+               RawInput.source.notin_(("manual", "web_research", "recurrence")))
     )
     return int(session.execute(stmt).scalar_one() or 0)
 

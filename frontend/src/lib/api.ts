@@ -9,6 +9,7 @@ import type {
   Note,
   NoteAudit,
   RawInput,
+  RecurrenceUnit,
   SearchHit,
   SearchHitType,
   Task,
@@ -87,6 +88,13 @@ export const api = {
     request<LocationSuggestions>(
       `/tasks/location_suggestions?q=${encodeURIComponent(query)}`,
     ),
+  setRecurrence: (id: string, unit: RecurrenceUnit, interval: number) =>
+    request<Task>(`/tasks/${id}/recurrence`, {
+      method: "PUT",
+      body: JSON.stringify({ unit, interval }),
+    }),
+  removeRecurrence: (id: string) =>
+    request<Task>(`/tasks/${id}/recurrence`, { method: "DELETE" }),
   rescheduleTask: (id: string) =>
     request<Task>(`/tasks/${id}/reschedule`, { method: "POST" }),
   closeTask: (id: string) =>

@@ -40,3 +40,13 @@ test("an expired deadline is overdue even without an estimation or slot", () => 
     ...task, scheduled_date: null, estimation: null, due_date: "2026-09-23T11:00:00Z",
   }, now), true);
 });
+
+test("repeat labels read naturally for one and many units", () => {
+  assert.equal(exports.fmtRecurrence("day", 1), "Daily");
+  assert.equal(exports.fmtRecurrence("week", 1), "Weekly");
+  assert.equal(exports.fmtRecurrence("month", 3), "Every 3 months");
+});
+
+test("repeat intervals stop where the next unit takes over", () => {
+  assert.deepEqual({ ...exports.RECURRENCE_MAX }, { day: 7, week: 4, month: 12 });
+});

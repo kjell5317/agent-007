@@ -88,7 +88,7 @@ export function EstimationPicker({ value, onChange, allowNone = true }: Props) {
   );
 }
 
-function StepButton({
+export function StepButton({
   label,
   onClick,
   disabled,

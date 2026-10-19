@@ -6,6 +6,7 @@ import string
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, case, func, select, text
+from sqlalchemy import delete as sa_delete, update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db.models.raw_input import RawInput
@@ -79,6 +80,10 @@ def create(session: Session, payload: TaskCreate) -> Task:
         is_container=payload.is_container,
         due_date_derived=payload.due_date_derived,
         subtask_order=payload.subtask_order,
+        recurrence_unit=payload.recurrence_unit,
+        recurrence_interval=payload.recurrence_interval,
+        recurrence_anchor=payload.recurrence_anchor,
+        recurrence_series_id=payload.recurrence_series_id,
     )
     session.add(row)
     session.flush()
@@ -104,6 +109,54 @@ def dependents(session: Session, predecessor_id: uuid.UUID) -> list[Task]:
     return list(session.execute(
         select(Task).where(Task.depends_on_task_id == predecessor_id)
     ).scalars())
+
+
+def recurring_series_ids(session: Session) -> list[uuid.UUID]:
+    return list(session.execute(
+        select(Task.recurrence_series_id).where(Task.recurrence_unit.is_not(None)).distinct()
+    ).scalars())
+
+
+def series(session: Session, series_id: uuid.UUID) -> list[Task]:
+    """Every instance of a repeating series, earliest due first."""
+    return list(session.execute(
+        select(Task).where(Task.recurrence_series_id == series_id)
+        .order_by(Task.due_date, Task.created_at)
+    ).scalars())
+
+
+def set_series_recurrence(
+    session: Session,
+    series_id: uuid.UUID,
+    *,
+    unit: str,
+    interval: int,
+    anchor: datetime,
+) -> None:
+    session.execute(
+        sa_update(Task).where(Task.recurrence_series_id == series_id).values(
+            recurrence_unit=unit, recurrence_interval=interval, recurrence_anchor=anchor,
+        )
+    )
+    session.flush()
+
+
+def clear_series_recurrence(session: Session, series_id: uuid.UUID) -> None:
+    session.execute(
+        sa_update(Task).where(Task.recurrence_series_id == series_id).values(
+            recurrence_unit=None, recurrence_interval=None,
+            recurrence_anchor=None, recurrence_series_id=None,
+        )
+    )
+    session.flush()
+
+
+def delete_with_inputs(session: Session, task: Task) -> None:
+    """Remove a task and the inputs anchoring it — for generated rows with no
+    history worth keeping (a dropped repeat instance)."""
+    session.execute(sa_delete(RawInput).where(RawInput.task_id == task.id))
+    session.delete(task)
+    session.flush()
 
 
 def get_by_kotx_id(session: Session, kotx_task_id: int) -> Task | None:

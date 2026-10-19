@@ -1,5 +1,6 @@
 export type TaskStatus = "open" | "duplicate" | "closed" | "not_task";
 export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled";
+export type RecurrenceUnit = "day" | "week" | "month";
 
 export interface SubtaskSummary {
   id: string;
@@ -34,6 +35,8 @@ export interface Task {
   is_container: boolean;
   due_date_derived: boolean;
   subtask_order: number | null;
+  recurrence_unit: RecurrenceUnit | null;
+  recurrence_interval: number | null;
   subtasks: SubtaskSummary[];
   status: TaskStatus;
   is_manual: boolean;

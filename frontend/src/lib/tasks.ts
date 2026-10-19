@@ -1,6 +1,20 @@
-import type { Task } from "@/lib/types";
+import type { RecurrenceUnit, Task } from "@/lib/types";
 
 export type TaskSortMode = "scheduled" | "due";
+
+// Each unit stops where the next one takes over — mirrors the backend's
+// `MAX_INTERVAL` (a week has 7 days, a month ~4 weeks, a year 12 months).
+export const RECURRENCE_MAX: Record<RecurrenceUnit, number> = { day: 6, week: 4, month: 12 };
+
+const RECURRENCE_ADVERB: Record<RecurrenceUnit, string> = {
+  day: "Daily",
+  week: "Weekly",
+  month: "Monthly",
+};
+
+export function fmtRecurrence(unit: RecurrenceUnit, interval: number): string {
+  return interval === 1 ? RECURRENCE_ADVERB[unit] : `Every ${interval} ${unit}s`;
+}
 
 export function isTaskOverdue(task: Task, now = Date.now()): boolean {
   if (task.status !== "open") return false;

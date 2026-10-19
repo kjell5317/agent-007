@@ -37,6 +37,7 @@ from app.services.points import (
     PENALTY_POINTS,
     subtract_scheduled_overdue_penalty,
 )
+from app.services.task.recur import plan_recurring_tasks
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,9 @@ OVERDUE_TASK_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 OVERDUE_TASK_GRACE = timedelta(minutes=15)
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
+# Repeat instances are materialized a week ahead, so hourly keeps the window
+# rolling without daily ones ever lagging.
+RECURRING_TASKS_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # Labels only change when the user edits them in Calendar, and the settings
 # page syncs on open — this loop just keeps the mirror from going stale (and
 # populates it on a fresh deploy, before anyone opens that page).
@@ -276,6 +280,24 @@ async def _commute_cleanup() -> None:
             log.exception("commute-cleanup iteration failed")
 
 
+async def _recurring_tasks() -> None:
+    log.info("recurring-tasks loop started · interval=%ds", RECURRING_TASKS_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(RECURRING_TASKS_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                log.debug("recurring-tasks skipped (disabled)")
+                continue
+            with SessionLocal() as session:
+                created = await plan_recurring_tasks(session)
+            log.info("recurring-tasks done · created=%d", len(created))
+        except asyncio.CancelledError:
+            log.info("recurring-tasks loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("recurring-tasks iteration failed")
+
+
 async def _label_sync() -> None:
     """Mirror the calendar's event labels, starting shortly after boot."""
     log.info("label-sync loop started · interval=%ds", LABEL_SYNC_INTERVAL_S)
@@ -304,6 +326,7 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("overdue-scheduled-tasks", _overdue_scheduled_tasks),
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-cleanup", _commute_cleanup),
+    ("recurring-tasks", _recurring_tasks),
 ]
 
 # Names of jobs that only make sense with commute enabled.

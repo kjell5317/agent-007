@@ -17,6 +17,7 @@ from app.services.calendar import delete_task_event
 from app.services.kotx import client as kotx_client
 from app.services.notify import clear_task_notification
 from app.services.points import award_for_task
+from app.services.task.recur import plan_recurring_tasks
 from app.services.task.vacate import vacated_commute_window, replan_vacated_window
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ async def close_task(
         if any(statuses.get(child.id, "open") != "closed" for child in children):
             raise ValueError("Complete all subtasks before closing the parent task")
     kotx_task_id = task.kotx_task_id
+    series_id = getattr(task, "recurrence_series_id", None)
     vacated = vacated_commute_window(task)
     latest = raw_inputs_store.latest_for_task(session, task_id)
     # Award completion points before any status flip / orphan delete, so we
@@ -76,6 +78,13 @@ async def close_task(
             await kotx_client.discard_task(kotx_task_id)
         except Exception:  # noqa: BLE001 — closing must never fail on kotx
             log.exception("kotx discard failed · kotx_task=%s", kotx_task_id)
+    if series_id is not None:
+        # Completing the only upcoming instance (e.g. a monthly one) must not
+        # wait for the hourly sweep to plan the next — which still retries a failure.
+        try:
+            await plan_recurring_tasks(session, [series_id])
+        except Exception:  # noqa: BLE001 — closing must never fail on the next instance
+            log.exception("repeat planning failed · series=%s", series_id)
     parent_id = getattr(task, "parent_task_id", None)
     if parent_id:
         siblings = tasks_store.children(session, parent_id)

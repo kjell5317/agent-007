@@ -57,6 +57,19 @@ class Task(Base):
     due_date_derived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     subtask_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Repeat rule, copied onto every instance of a series (see
+    # app.services.task.recur). The anchor is the due date occurrences count
+    # from; the series id groups the instances. Not a foreign key: no single
+    # instance owns the series.
+    recurrence_unit: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    recurrence_interval: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recurrence_anchor: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    recurrence_series_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+
     # Link to the kotx coding-agent task driving this work, when there is one.
     # One 007 task per kotx task; transitions arrive via webhook/poll and are
     # matched back through this id (see app.agent.kotx).
