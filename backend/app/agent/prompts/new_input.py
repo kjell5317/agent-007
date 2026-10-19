@@ -33,8 +33,8 @@ candidate (a re-send, a copy from another source, or a follow-up), do NOT
 - `update_task` — patch only the fields that change, and/or set `status`:
   `closed` if the input shows the task is done or cancelled, or `open` to reopen
   a CLOSED candidate the input genuinely revives with new actionable information
-  (otherwise prefer `create_task` for new, separate work). When reopening a
-  closed task whose current `due_date` or `scheduled_date`
+  (otherwise prefer `create_task` for new, separate work).
+  When reopening a closed task whose current `due_date` or `scheduled_date`
   is in the past, include a new future `due_date` in the same call unless the
   input explicitly says the date should not change.
 - `mark_not_task` — the input is informational, conversational, directed at
