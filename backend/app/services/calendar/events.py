@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.clients import labels as labels_store
 from app.db.clients import tasks as tasks_store
-from app.services.location import resolve_location_alias
+from app.services.location import is_online_location, resolve_location_alias
 from app.services.calendar.client import (
     CalendarEvent,
     authorized_client,
@@ -510,6 +510,13 @@ def is_free_event(event: CalendarEvent) -> bool:
     """Google's show-as-Free flag. All-day events default to free; timed
     events default to busy."""
     return event.raw.get("transparency") == "transparent"
+
+
+def is_location_blocker(event: CalendarEvent) -> bool:
+    """A timed show-as-Free event at a physical place: the user is there for
+    its span, so it routes like any anchor, but the time stays free for
+    location-less work."""
+    return is_free_event(event) and not event.all_day and not is_online_location(event.location)
 
 
 def _clean_private_properties(props: dict[str, str]) -> dict[str, str]:

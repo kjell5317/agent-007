@@ -189,6 +189,9 @@ def _slots(seconds: int | None) -> int | None:
 async def _route_nodes(grid: Grid, now: datetime, horizon_end: datetime, events: list[Item], index):
     """Located fixed events ahead, overlapping ones merged into one node (the
     user is double-booked: entered once, left once)."""
+    # TODO: let a task at a location blocker's own place sit inside it, as
+    # the legacy scheduler does (`_inside_blocker`); the circuit orders every
+    # task node before or after the blocker's node.
     located = sorted(
         (e for e in events if e.location and now <= e.start < horizon_end),
         key=lambda e: e.start,

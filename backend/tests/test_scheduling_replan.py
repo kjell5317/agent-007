@@ -34,8 +34,8 @@ def world(monkeypatch):
     state = SimpleNamespace(tasks=[], events=[], writes=[], deletes=[], logs=[], resolved={},
                             pushed=[])
 
-    async def calendar_items(_session, _start, _end, account_key=None):
-        return state.events
+    async def calendar_items(_session, _start, _end, account_key=None, blockers=False):
+        return [e for e in state.events if blockers or e.kind != "blocker"]
 
     async def update_task_event(_session, task, *, start, end, changed_fields=None):
         state.writes.append((task.title, start, end))
@@ -228,6 +228,27 @@ async def test_replan_starts_where_the_bike_was_left(routed):
     back = next(leg for leg in routed.legs if leg.origin_anchor == "lec")
     assert out.mode == "transit" and back.mode == "bicycling"
     assert back.note and "riding it back" in back.note
+
+
+@pytest.mark.asyncio
+async def test_location_blocker_routes_without_claiming_the_time(routed):
+    # Show-as-free "working at the library" block over the whole working day.
+    bib = Item(NOW.replace(hour=10), NOW.replace(hour=19), "blocker", event_id="bib",
+               location="Library")
+    routed.events = [bib]
+    homework = make_task("homework", due=NOW.replace(hour=22))
+    lecture_prep = make_task("prep", due=NOW.replace(hour=22), location="Uni")
+    routed.tasks = [homework, lecture_prep]
+
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+
+    assert result.ok
+    keys = {(leg.origin_anchor, leg.dest_anchor) for leg in routed.legs}
+    assert any(key[1] == "bib" for key in keys) and any(key[0] == "bib" for key in keys)
+    start, end = result.placed[homework.id]
+    assert bib.start <= start and end <= bib.end
+    start, end = result.placed[lecture_prep.id]
+    assert end <= bib.start or start >= bib.end
 
 
 @pytest.mark.asyncio

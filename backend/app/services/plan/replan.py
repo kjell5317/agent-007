@@ -232,9 +232,14 @@ async def replan(
     run_id = uuid.uuid4()
 
     label_defaults = labels_store.defaults_by_name(session)
-    events = await calendar_items(
-        session, horizon_start - CONTEXT_MARGIN, horizon_end + CONTEXT_MARGIN, account_key=account_key,
+    calendar = await calendar_items(
+        session, horizon_start - CONTEXT_MARGIN, horizon_end + CONTEXT_MARGIN,
+        account_key=account_key, blockers=True,
     )
+    # Location blockers are route nodes only, never fixed items: located
+    # tasks route around them, location-less ones may sit inside.
+    events = [item for item in calendar if item.kind == "event"]
+    blockers = [item for item in calendar if item.kind == "blocker"]
     weights = jobs.weights_for(session, grid.origin)
     duration_params = jobs.duration_params(session)
     user_estimates = overrides_store.task_ids_with_user_override(session, "estimation")
@@ -322,7 +327,7 @@ async def replan(
     if routing.routing_enabled():
         try:
             routing_ctx = await routing.build(
-                session, grid=grid, now=now, events=events, fixed_tasks=fixed_tasks,
+                session, grid=grid, now=now, events=[*events, *blockers], fixed_tasks=fixed_tasks,
                 movable=[(m.solver_task.key, m.task, m.attrs) for m in movable.values()],
                 weights=weights,
             )

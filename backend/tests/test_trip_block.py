@@ -1972,3 +1972,184 @@ def test_extended_late_evening_block_straddles_into_normal_window():
     )
 
     assert slot == (_day_at(20, 0), _day_at(22, 0))
+
+
+def test_location_blocker_is_a_timed_free_event_somewhere_physical():
+    from app.services.calendar.events import is_location_blocker
+
+    def event(**kw):
+        return _calendar_event("ev", _day_at(12), _day_at(16), **kw)
+
+    assert is_location_blocker(event(location=LIBRARY, transparency="transparent"))
+    assert not is_location_blocker(event(location=LIBRARY))
+    assert not is_location_blocker(event(transparency="transparent"))
+    assert not is_location_blocker(
+        event(location="https://zoom.us/j/123", transparency="transparent"),
+    )
+    assert not is_location_blocker(
+        event(location=LIBRARY, transparency="transparent", all_day=True),
+    )
+
+
+@pytest.mark.asyncio
+async def test_busy_view_keeps_located_free_event_as_blocker(monkeypatch):
+    bib = _calendar_event(
+        "bib", _day_at(12, 30), _day_at(16, 45), location=LIBRARY, transparency="transparent",
+    )
+    maybe_call = _calendar_event("maybe-call", _day_at(17), _day_at(18), transparency="transparent")
+
+    async def fake_list_events(session, *, calendar_ids, time_min, time_max, account_key=None):
+        return [bib, maybe_call]
+
+    async def fake_resolve(location):
+        return location
+
+    monkeypatch.setattr("app.services.calendar.list_events_between", fake_list_events)
+    monkeypatch.setattr(schedule_service, "resolve_routable_location", fake_resolve)
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(google_calendar_id="primary", google_busy_calendar_ids=[]),
+    )
+
+    busy = await schedule_service._fetch_busy_events(
+        None, _day_at(8), _day_at(20), exclude_event_id=None, account_key=None,
+    )
+
+    assert [(ev.id, ev.kind, ev.location) for ev in busy] == [("bib", "blocker", LIBRARY)]
+
+
+def test_piggyback_places_task_inside_blocker_at_its_location():
+    busy = [
+        BusyEvent("bib", _day_at(12, 30), _day_at(16, 45), "blocker", location=LIBRARY),
+        BusyEvent("homework", _day_at(14, 30), _day_at(16, 30), "task"),
+        # The blocker's arriving leg ends within the event gap of its start —
+        # a task there faces it like the blocker does.
+        BusyEvent(
+            "leg-in", _day_at(12), _day_at(12, 25), "commute", leg_key=("home", "bib"),
+        ),
+    ]
+    planned = _piggyback_slot(
+        busy,
+        location=LIBRARY,
+        duration=timedelta(minutes=90),
+        gaps=GAPS,
+        out_s=600,
+        in_s=600,
+        window_start=_day_at(8),
+        window_end=_day_at(20),
+    )
+
+    assert planned is not None
+    assert (planned.start, planned.end) == (_day_at(12, 45), _day_at(14, 15))
+    assert (planned.block_start, planned.block_end) == (planned.start, planned.end)
+    assert planned.out_s == planned.in_s == 0
+
+
+@pytest.mark.parametrize(
+    "location, inside",
+    [
+        (None, True),
+        ("https://meet.google.com/abc-defg-hij", True),
+        ("home", False),
+        (GYM, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_blocker_binds_only_located_tasks(monkeypatch, location, inside):
+    tomorrow_early = _day_at(8, 0, day_offset=1)
+    bib = BusyEvent("bib", _day_at(12, 0, day_offset=1), _day_at(19, 0, day_offset=1), "blocker",
+                    location=LIBRARY)
+    # Nothing fits before tomorrow; tomorrow is the library day.
+    wall = BusyEvent("wall", datetime.now(user_tz()) - timedelta(hours=1), tomorrow_early, "busy")
+    task = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Work",
+        due_date=_day_at(19, 0, day_offset=1),
+        scheduled_date=None,
+        calendar_event_id=None,
+        estimation=60,
+        location=location,
+    )
+
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=5,
+            event_buffer_minutes=15,
+            google_calendar_default_event_minutes=30,
+            slot_min_lead_minutes=0,
+            commute_home_layover_minutes=60,
+        ),
+    )
+
+    async def fake_busy(session, lo, hi, *, account_key=None):
+        return [bib, wall]
+
+    async def no_legs(_session, _task, *, reference):
+        # Trip legs don't matter here — only whether the blocker binds.
+        return 0, 0, False
+
+    monkeypatch.setattr(schedule_service, "_fetch_busy_events", fake_busy)
+    monkeypatch.setattr(schedule_service, "_estimate_trip_legs", no_legs)
+    monkeypatch.setattr(schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy)
+
+    planned = await schedule_service.plan_task_slot(SimpleNamespace(), task)
+
+    assert (bib.start <= planned.start and planned.end <= bib.end) is inside
+    if not inside:
+        assert planned.end + EVENT_BUFFER <= bib.start
+
+
+def test_active_events_keep_location_blockers_only():
+    from app.services.calendar.discover import _active_events
+
+    def raw(event_id, **kw):
+        return {
+            "id": event_id, "status": "confirmed", "summary": event_id,
+            "start": {"dateTime": _day_at(12).isoformat()},
+            "end": {"dateTime": _day_at(16).isoformat()},
+            **kw,
+        }
+
+    items = [
+        raw("bib", location=LIBRARY, transparency="transparent"),
+        raw("maybe", transparency="transparent"),
+        raw("lecture", location=OFFICE),
+        raw("gone", location=OFFICE, status="cancelled"),
+    ]
+
+    assert [ev.id for ev in _active_events(items, "primary")] == ["bib", "lecture"]
+
+
+@pytest.mark.asyncio
+async def test_blocker_displaces_only_what_needs_the_user_elsewhere(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+
+    async def fake_resolve(location):
+        if not location or location.startswith("https://"):
+            return None
+        return "Homestreet 1" if location == "home" else location
+
+    monkeypatch.setattr(discover_mod, "resolve_routable_location", fake_resolve)
+    task_props = {"managed_by": "plan_service", "kind": "task"}
+    span = (_day_at(13), _day_at(14))
+    bib = _calendar_event(
+        "bib", _day_at(12, 30), _day_at(16, 45), location=LIBRARY, transparency="transparent",
+    )
+    conflicts = [
+        _calendar_event("homework", *span, props=task_props),
+        _calendar_event("call", *span, location="https://zoom.us/j/1", props=task_props),
+        _calendar_event("books", *span, location=LIBRARY.upper(), props=task_props),
+        _calendar_event("gym", *span, location=GYM, props=task_props),
+        _calendar_event("laundry", *span, location="home", props=task_props),
+        _calendar_event(
+            "leg", _day_at(12, 40), _day_at(12, 55),
+            props={"managed_by": "plan_service", "kind": "commute"},
+        ),
+    ]
+
+    displaced = await discover_mod._displaced_by_blocker(bib, conflicts)
+
+    assert [ev.id for ev in displaced] == ["gym", "laundry", "leg"]

@@ -48,10 +48,17 @@ from app.services.calendar.events import (
     commute_leg_key,
     is_commute_event,
     is_declined_event,
+    is_free_event,
+    is_location_blocker,
     is_managed_event,
     is_task_event,
 )
-from app.services.location import resolve_location_alias
+from app.services.commute.legs import _norm
+from app.services.location import (
+    is_online_location,
+    resolve_location_alias,
+    resolve_routable_location,
+)
 from app.services.home_assistant import (
     next_event_datetime_configured,
     set_next_event_datetime,
@@ -226,6 +233,8 @@ async def discover_updated_events(
             # A single changed event can collide with several tasks and legs
             # at once — every one within the event gap needs its own reschedule.
             conflicts = _managed_conflicts(ev, write_events, event_gap)
+            if is_location_blocker(ev):
+                conflicts = await _displaced_by_blocker(ev, conflicts)
             for overlapping in conflicts:
                 summary["overlapping"] += 1
                 kind = (
@@ -766,6 +775,26 @@ def _managed_conflicts(
     ]
 
 
+async def _displaced_by_blocker(
+    blocker: CalendarEvent,
+    conflicts: list[CalendarEvent],
+) -> list[CalendarEvent]:
+    """The managed events a location blocker pushes out. Its time stays free,
+    so only what needs the user somewhere else has to move: legs, and tasks
+    located elsewhere (home included)."""
+    here = _norm(await resolve_routable_location(blocker.location) or blocker.location)
+    out: list[CalendarEvent] = []
+    for other in conflicts:
+        if not is_commute_event(other):
+            if is_online_location(other.location):
+                continue
+            there = await resolve_routable_location(other.location) or other.location
+            if _norm(there) == here:
+                continue
+        out.append(other)
+    return out
+
+
 def _reschedule_targets(
     changed: CalendarEvent,
     conflict: CalendarEvent,
@@ -813,9 +842,10 @@ def _active_events(items: Iterable[dict], calendar_id: str) -> list[CalendarEven
     for item in items:
         if item.get("status") == "cancelled":
             continue
-        if item.get("transparency") == "transparent":
+        event = normalize(item, calendar_id)
+        if is_free_event(event) and not is_location_blocker(event):
             continue
-        out.append(normalize(item, calendar_id))
+        out.append(event)
     return out
 
 

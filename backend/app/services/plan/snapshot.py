@@ -35,16 +35,23 @@ def busy_calendar_ids() -> list[str]:
 
 
 async def calendar_items(
-    session: Session, start: datetime, end: datetime, *, account_key: str | None = None
+    session: Session,
+    start: datetime,
+    end: datetime,
+    *,
+    account_key: str | None = None,
+    blockers: bool = False,
 ) -> list[Item]:
     """Fixed calendar events in `[start, end)`: busy calendars minus our own
     task mirrors (tasks come from the DB), commute legs (derived output in
     phase 1), show-as-free and declined events. A busy all-day event blocks
-    its whole local days."""
+    its whole local days. `blockers` keeps show-as-free events at a physical
+    place as `kind="blocker"` items — they shape routes, not occupancy."""
     from app.services.calendar import (
         is_commute_event,
         is_declined_event,
         is_free_event,
+        is_location_blocker,
         is_task_event,
         list_events_between,
     )
@@ -65,7 +72,9 @@ async def calendar_items(
         if ev.id in seen:
             continue
         seen.add(ev.id)
-        if is_free_event(ev) or is_task_event(ev) or is_commute_event(ev) or is_declined_event(ev):
+        if is_free_event(ev) and not (blockers and is_location_blocker(ev)):
+            continue
+        if is_task_event(ev) or is_commute_event(ev) or is_declined_event(ev):
             continue
         kept.append(ev)
     attributes = event_attributes(session, [(ev.calendar_id, ev.id) for ev in kept])
@@ -81,7 +90,8 @@ async def calendar_items(
             continue
         location = None if is_online_location(ev.location) else resolve_location_alias(ev.location)
         out.append(Item(
-            to_user_tz(ev.start), to_user_tz(ev.end), "event", label=label,
+            to_user_tz(ev.start), to_user_tz(ev.end),
+            "blocker" if is_free_event(ev) else "event", label=label,
             work_type=work_type, effort=effort, event_id=ev.id, location=location,
             created=_created(ev),
         ))

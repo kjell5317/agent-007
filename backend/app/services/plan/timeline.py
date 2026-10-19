@@ -22,7 +22,7 @@ from app.services.plan.solver import SLOT_MINUTES, SLOTS_PER_DAY
 class Item:
     start: datetime
     end: datetime
-    kind: str  # "event" | "task"
+    kind: str  # "event" | "task" | "blocker" (location blocker, routing only)
     label: str | None = None
     work_type: str | None = None
     effort: str | None = None

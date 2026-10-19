@@ -10,8 +10,9 @@ are reconciled later by the hourly refresh).
 
 Placement preference for located tasks:
 
-1. *Piggyback* — directly before/after an existing anchor at the same
-   location (zero marginal commute).
+1. *Piggyback* — inside a location blocker (a show-as-free event) at the
+   same location (no legs at all), or directly before/after an existing
+   anchor there (zero marginal commute).
 2. *Chain-insert* — into a gap between two anchors when the detour fits.
 3. *Standalone trip* — sweep for the full home↔location block:
    a. a clean free slot without moving anything,
@@ -566,6 +567,10 @@ async def plan_task_slot(
     # own mirror; the parent's mirror stays visible to it (unwritten move).
     busy = [ev for ev in raw_busy if ev.id != task.calendar_event_id]
     busy = _db_scheduled_busy(session, task, fetch_lo, fetch_hi, busy)
+    if is_online_location(getattr(task, "location", None)):
+        # The user is at a blocker's place anyway; location-less work fits
+        # inside it. Located tasks (home included) keep it as busy.
+        busy = [ev for ev in busy if ev.kind != "blocker"]
     for itv in extra_busy or []:
         busy.append(BusyEvent(itv.event_id or "extra", itv.start, itv.end, "extra"))
     if block is not None:
@@ -810,6 +815,14 @@ def _piggyback_slot(
     anchors = [ev for ev in located if _norm_loc(ev.location) == target]
     elsewhere = [ev for ev in located if _norm_loc(ev.location) != target]
     for anchor in sorted(anchors, key=lambda ev: ev.start, reverse=True):
+        if anchor.kind == "blocker":
+            planned = _inside_blocker(
+                anchor, busy,
+                duration=duration, gaps=gaps,
+                window_start=window_start, window_end=window_end, extended=extended,
+            )
+            if planned is not None:
+                return planned
         planned = _piggyback_after(
             anchor, busy, elsewhere,
             duration=duration, gaps=gaps, in_s=in_s,
@@ -827,6 +840,31 @@ def _piggyback_slot(
         if planned is not None:
             return planned
     return None
+
+
+def _inside_blocker(
+    blocker: BusyEvent,
+    busy: list[BusyEvent],
+    *,
+    duration: timedelta,
+    gaps: Gaps,
+    window_start: datetime,
+    window_end: datetime,
+    extended: bool,
+) -> PlannedSlot | None:
+    """Slot inside a location blocker at the task's own location — the user
+    is there for its whole span, so the task needs no legs. The blocker's
+    legs sit outside that span with their inner commute gap already kept."""
+    others = [ev for ev in busy if ev.id != blocker.id and blocker.id not in (ev.leg_key or ())]
+    lower_time, upper_time = (EARLY_MORNING, END_OF_DAY) if extended else (DAY_START, DAY_TARGET)
+    lower, upper = _day_bounds(
+        blocker.start.date(), lower_time, upper_time, user_tz(),
+        max(blocker.start, window_start), min(blocker.end, window_end),
+    )
+    slot = _sweep_backward(others, duration, gaps, lower, upper)
+    if slot is None:
+        return None
+    return PlannedSlot(slot[0], slot[1], slot[0], slot[1], 0, 0)
 
 
 def _piggyback_after(
@@ -1645,6 +1683,7 @@ async def _fetch_busy_events(
         commute_leg_key,
         is_commute_event,
         is_free_event,
+        is_location_blocker,
         is_task_event,
         list_events_between,
     )
@@ -1662,14 +1701,19 @@ async def _fetch_busy_events(
     )
     out: list[BusyEvent] = []
     for ev in events:
-        if ev.id == exclude_event_id or is_free_event(ev):
+        if ev.id == exclude_event_id or (is_free_event(ev) and not is_location_blocker(ev)):
             continue
         if ev.all_day:
             # Marked busy despite being all-day (those default to free): the
             # whole day is blocked, midnight to midnight in the user's tz.
             out.append(BusyEvent(ev.id, *_all_day_span(ev), "busy"))
             continue
-        kind = "commute" if is_commute_event(ev) else "task" if is_task_event(ev) else "busy"
+        if is_commute_event(ev):
+            kind = "commute"
+        elif is_task_event(ev):
+            kind = "task"
+        else:
+            kind = "blocker" if is_free_event(ev) else "busy"
         location = await resolve_routable_location(ev.location)
         out.append(
             BusyEvent(
