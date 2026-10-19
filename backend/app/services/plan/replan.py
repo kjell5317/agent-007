@@ -62,6 +62,11 @@ log = logging.getLogger(__name__)
 # Log-odds cost of moving an already placed task (fixed, not learned).
 STABILITY_MOVE = 1.0
 STABILITY_SOON = 3.0
+# A hand-placed task whose lock was released (something new arrived, a
+# deadline or duration changed) still only gives way when it's in the way:
+# to avoid a missed deadline, a task with no slot, or a night-time slot —
+# never for small preference gains.
+STABILITY_YIELD = 5.0
 SOON = timedelta(hours=24)
 # Utility a deferral loses when the task alone would fill the free time
 # expected before its deadline.
@@ -87,6 +92,7 @@ class ReplanResult:
     unplaced: set[uuid.UUID] = field(default_factory=set)
     moved: set[uuid.UUID] = field(default_factory=set)
     newly_unplaced: set[uuid.UUID] = field(default_factory=set)
+    newly_late: set[uuid.UUID] = field(default_factory=set)
     routes: list | None = None
 
 
@@ -109,7 +115,6 @@ _requested = 0
 _completed = 0
 _last_result: ReplanResult | None = None
 _pending_blocks: dict[uuid.UUID, list[tuple[datetime, datetime]]] = {}
-_pending_quiet: set[uuid.UUID] = set()
 
 
 async def request_replan(
@@ -117,15 +122,13 @@ async def request_replan(
     *,
     reason: str,
     blocks: dict[uuid.UUID, list[tuple[datetime, datetime]]] | None = None,
-    quiet: set[uuid.UUID] | None = None,
     account_key: str | None = None,
     time_limit: float | None = None,
 ) -> ReplanResult:
     """Run (or join) a solve that reflects the state at the time of the call.
 
     `blocks` keep a task out of the given spans for this solve (a deleted
-    event's slot, a "Reschedule" tap). `quiet` tasks get no "could not
-    schedule" notification."""
+    event's slot, a "Reschedule" tap)."""
     from app.services.plan.schedule import _schedule_lock
 
     global _requested, _completed, _last_result
@@ -133,17 +136,14 @@ async def request_replan(
     ticket = _requested
     for task_id, spans in (blocks or {}).items():
         _pending_blocks.setdefault(task_id, []).extend(spans)
-    _pending_quiet.update(quiet or ())
     async with _schedule_lock:
         if _completed >= ticket and _last_result is not None:
             return _last_result
         target = _requested
         run_blocks = dict(_pending_blocks)
         _pending_blocks.clear()
-        run_quiet = set(_pending_quiet)
-        _pending_quiet.clear()
         result = await replan(
-            session, reason=reason, blocks=run_blocks, quiet=run_quiet,
+            session, reason=reason, blocks=run_blocks,
             account_key=account_key, time_limit=time_limit,
         )
         _completed = target
@@ -218,7 +218,6 @@ async def replan(
     reason: str,
     now: datetime | None = None,
     blocks: dict[uuid.UUID, list[tuple[datetime, datetime]]] | None = None,
-    quiet: set[uuid.UUID] | None = None,
     account_key: str | None = None,
     time_limit: float | None = None,
     dry_run: bool = False,
@@ -266,7 +265,7 @@ async def replan(
             candidates.append((task, attrs, None))
         else:
             candidates.append((task, attrs, slot[0] if slot else None))
-    locked = _hand_placed_locks(
+    locked, yielding = _hand_placed_locks(
         session, candidates, tasks, events, list(fixed_tasks.values()), now=now, dry_run=dry_run,
     )
     for task, attrs, current in candidates:
@@ -280,6 +279,7 @@ async def replan(
         movable[task.id] = _movable(
             session, task, attrs, current,
             grid=grid, now=now, earliest_now=earliest_now,
+            stability_floor=STABILITY_YIELD if task.id in yielding else 0.0,
             duration_params=None if task.id in user_estimates else duration_params,
             blocks=(blocks or {}).get(task.id, []),
         )
@@ -370,7 +370,7 @@ async def replan(
         return result
     await _apply(
         session, result, movable, grid=grid, now=now, fixed_items=fixed_items,
-        quiet=quiet or set(), routing_ctx=routing_ctx,
+        routing_ctx=routing_ctx,
     )
     if routing_ctx is not None:
         global _last_rain
@@ -387,26 +387,21 @@ def _hand_placed_locks(
     *,
     now: datetime,
     dry_run: bool,
-) -> set[uuid.UUID]:
-    """Hand-placed tasks the solver must leave exactly where they are: the
-    user's choice stands until something new is issued or a deadline or
-    duration changes (see `lock_holds`), or a fixed item now overlaps it."""
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """`(locked, yielding)` hand-placed tasks. Locked ones stay exactly where
+    they are: nothing new was issued and no deadline or duration changed
+    since the placement (see `lock_holds`). The rest of the hand-placed
+    tasks — released by such a change, or overlapped by a fixed item —
+    yield only when they're in the way (`STABILITY_YIELD`)."""
     from app.services.plan.schedule import estimate_minutes
 
     settings = get_settings()
-    current_tasks = [
-        (str(t.id), to_user_tz(t.due_date), estimate_minutes(t, settings),
-         str(t.recurrence_series_id) if t.recurrence_series_id else None)
-        for t in tasks
-    ]
-    tasks_created = [
-        (str(t.id), to_user_tz(t.created_at) if t.created_at else now,
-         str(t.recurrence_series_id) if t.recurrence_series_id else None)
-        for t in tasks
-    ]
+    current_tasks = [(str(t.id), to_user_tz(t.due_date), estimate_minutes(t, settings)) for t in tasks]
+    tasks_created = [(str(t.id), to_user_tz(t.created_at) if t.created_at else now) for t in tasks]
     events_created = [(e.event_id, e.created) for e in events if e.kind == "event" and e.event_id]
     taken = [(item.start, item.end) for item in [*events, *fixed]]
     out: set[uuid.UUID] = set()
+    yielding: set[uuid.UUID] = set()
     for task, _, current in candidates:
         if task.placed_by != "user" or current is None or current <= now:
             continue
@@ -415,17 +410,25 @@ def _hand_placed_locks(
         snapshot = lock_snapshot(slot, placed_at, current_tasks, events)
         stored = task.placed_context if (task.placed_context or {}).get("tasks") is not None else None
         if stored is None:
-            stored = snapshot
+            # Taken at the first solve after the move: leave out what was
+            # issued in between, so it still counts as new.
+            created = dict(tasks_created)
+            stored = lock_snapshot(
+                slot,
+                placed_at,
+                [t for t in current_tasks if created[t[0]] <= placed_at],
+                [e for e in events if e.created is None or e.created <= placed_at],
+            )
             if not dry_run:
-                task.placed_context = snapshot
+                task.placed_context = stored
                 session.flush()
-        if not lock_holds(stored, snapshot, tasks_created=tasks_created, events_created=events_created):
-            continue
-        if any(start < slot[1] and slot[0] < end for start, end in taken):
+        holds = lock_holds(stored, snapshot, tasks_created=tasks_created, events_created=events_created)
+        if not holds or any(start < slot[1] and slot[0] < end for start, end in taken):
+            yielding.add(task.id)
             continue
         out.add(task.id)
         taken.append(slot)
-    return out
+    return out, yielding
 
 
 def _movable(
@@ -437,6 +440,7 @@ def _movable(
     grid: Grid,
     now: datetime,
     earliest_now: int,
+    stability_floor: float,
     duration_params: dict | None,
     blocks: list[tuple[datetime, datetime]],
 ) -> _Movable:
@@ -463,7 +467,7 @@ def _movable(
     current_slot = grid.floor(current) if current is not None else None
     stability = 0.0
     if current is not None:
-        stability = STABILITY_SOON if current - now < SOON else STABILITY_MOVE
+        stability = max(stability_floor, STABILITY_SOON if current - now < SOON else STABILITY_MOVE)
 
     solver_task = S.SolverTask(
         key=str(task.id),
@@ -476,6 +480,7 @@ def _movable(
         effort=attrs.effort,
         current=current_slot,
         stability=stability,
+        neutral=stability_floor > 0,
         deferrable=due >= grid.horizon,
         forbidden=tuple((grid.floor(s), grid.ceil(e)) for s, e in blocks),
     )
@@ -695,7 +700,6 @@ async def _apply(
     grid: Grid,
     now: datetime,
     fixed_items: list[Item],
-    quiet: set[uuid.UUID],
     routing_ctx: routing.RoutingContext | None = None,
 ) -> None:
     from app.events import publish_task
@@ -752,6 +756,9 @@ async def _apply(
             if prior:
                 touched.append(prior)
             changed.append(task_id)
+            due = m.attrs.due
+            if span[1] > due > now and (prior is None or prior[1] <= due):
+                result.newly_late.add(task_id)
             continue
 
         state = "deferred" if m.solver_task.deferrable else "unplaced"
@@ -779,10 +786,15 @@ async def _apply(
     session.commit()
     for task_id in changed:
         publish_task(session, task_id)
-    for task_id in result.newly_unplaced - quiet:
-        from app.services.notify import notify_no_slot
+    # Deadline warnings go out whoever triggered the solve — a repeat
+    # instance or a missed slot re-plan included.
+    from app.services.notify import notify_deadline_missed, notify_no_slot
 
+    for task_id in result.newly_unplaced:
         await notify_no_slot(movable[task_id].task)
+    for task_id in result.newly_late:
+        start, end = result.placed[task_id]
+        await notify_deadline_missed(movable[task_id].task, start=start, end=end)
     if routing_ctx is not None and result.routes is not None:
         await _write_routes(session, routing_ctx, result, movable, grid=grid, now=now,
                             final_items=final_items)

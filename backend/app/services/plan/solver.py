@@ -106,6 +106,9 @@ class SolverTask:
     forbidden: tuple[tuple[int, int], ...] = ()
     # Warm start; None = not placed in the warm start.
     hint: int | None = None
+    # No slot preferences of its own (a released hand-placed task): it moves
+    # only for its deadline or for what other tasks need.
+    neutral: bool = False
 
 
 @dataclass(frozen=True)
@@ -410,13 +413,19 @@ class _Builder:
         self.m.add(var == 0).only_enforce_if(~present)
         return var
 
+    def _weights(self, task: SolverTask) -> dict[str, float]:
+        if not task.neutral:
+            return self.w
+        return {k: v for k, v in self.w.items() if k.startswith(("late:", "late_h:"))}
+
     def _static_costs(self, tv: _TaskVars) -> None:
         task, m, key = tv.task, self.m, tv.task.key
         wt, eff = task.work_type, task.effort
         start, present = tv.start, tv.present
+        w = self._weights(task)
 
-        start_table = [_cost(F.utility(F.start_hour_features(h, wt, eff), self.w)) for h in range(24)]
-        end_table = [_cost(F.utility(F.end_hour_features(h), self.w)) for h in range(24)]
+        start_table = [_cost(F.utility(F.start_hour_features(h, wt, eff), w)) for h in range(24)]
+        end_table = [_cost(F.utility(F.end_hour_features(h), w)) for h in range(24)]
         tod = m.new_int_var(0, SLOTS_PER_DAY - 1, f"tod_{key}")
         m.add_modulo_equality(tod, start, SLOTS_PER_DAY)
         hour = m.new_int_var(0, 23, f"hour_{key}")
@@ -449,7 +458,7 @@ class _Builder:
             tv.day_lits[d] = lit
             meetings = self.inp.meeting_load[d] if d < len(self.inp.meeting_load) else 0.0
             day_table[d] = _cost(F.utility(
-                F.day_features(self.inp.days[d], today, wt, meetings), self.w
+                F.day_features(self.inp.days[d], today, wt, meetings), w
             ))
             self._add(day_table[d], lit)
         m.add(sum(tv.day_lits.values()) == present)
@@ -480,7 +489,7 @@ class _Builder:
             self._add(per_slot, late_slots)
 
         # Hours-to-deadline buckets as cumulative thresholds on the end.
-        htd = [_cost(self.w.get(F.htd_key(b), 0.0)) for b in F.HTD_BUCKETS]
+        htd = [_cost(w.get(F.htd_key(b), 0.0)) for b in F.HTD_BUCKETS]
         self._add(htd[-1], present)
         for n in reversed(range(len(F.HTD_HOURS))):
             delta = htd[n] - htd[n + 1]
@@ -498,7 +507,7 @@ class _Builder:
         for side in F.SIDES:
             none = F.neighbour_features(side, None, label=task.label, work_type=wt, effort=eff)
             gap = F.gap_features(side, None)
-            self._add(_cost(F.utility({**none, **gap}, self.w)), present)
+            self._add(_cost(F.utility({**none, **gap}, w)), present)
 
     def _candidate_days(self, tv: _TaskVars, count: int = CANDIDATE_DAYS) -> set[int]:
         start_table, end_table = tv.hour_tables
@@ -523,13 +532,15 @@ class _Builder:
             work_type=item.work_type, effort=item.effort,
         )
         kw = {"label": task.label, "work_type": task.work_type, "effort": task.effort}
-        chosen = F.utility(F.neighbour_features(side, neighbour, **kw), self.w)
-        none = F.utility(F.neighbour_features(side, None, **kw), self.w)
+        w = self._weights(task)
+        chosen = F.utility(F.neighbour_features(side, neighbour, **kw), w)
+        none = F.utility(F.neighbour_features(side, None, **kw), w)
         return _cost(chosen - none)
 
-    def _gap_delta(self, side: str, slots: int) -> int:
-        chosen = F.utility(F.gap_features(side, slots * SLOT_MINUTES), self.w)
-        default = F.utility(F.gap_features(side, None), self.w)
+    def _gap_delta(self, side: str, slots: int, task: SolverTask) -> int:
+        w = self._weights(task)
+        chosen = F.utility(F.gap_features(side, slots * SLOT_MINUTES), w)
+        default = F.utility(F.gap_features(side, None), w)
         return _cost(chosen - default)
 
     def _allowed(self, tv: _TaskVars, slot: int) -> bool:
@@ -584,7 +595,7 @@ class _Builder:
         tv.side_lits[side].append((chosen, within))
         self._add(self._neighbour_cost(tv.task, side, item), chosen)
         for k in range(3):
-            delta = self._gap_delta(side, k)
+            delta = self._gap_delta(side, k, tv.task)
             if not delta:
                 continue
             gap = self._bool(f"g{k}_{name}")
@@ -616,7 +627,7 @@ class _Builder:
         self._add(self._neighbour_cost(a.task, "next", b_item), nb_a)
         self._add(self._neighbour_cost(b.task, "prev", a_item), nb_b)
         for k in range(3):
-            delta = self._gap_delta("next", k) + self._gap_delta("prev", k)
+            delta = self._gap_delta("next", k, a.task) + self._gap_delta("prev", k, b.task)
             if not delta:
                 continue
             gap = self._bool(f"tg{k}_{name}")
@@ -630,7 +641,8 @@ class _Builder:
     def _day_load(self) -> None:
         loads = [_cost(self.w.get(F.load_key(b), 0.0)) for b in F.LOAD_BUCKETS]
         for tv in self.vars.values():
-            self._add(loads[0], tv.present)
+            if not tv.task.neutral:
+                self._add(loads[0], tv.present)
         deltas = [loads[n + 1] - loads[n] for n in range(len(F.LOAD_MINUTES))]
         for d in range(len(self.inp.days)):
             members = [(tv, tv.day_lits[d]) for tv in self.vars.values() if d in tv.day_lits]
@@ -644,14 +656,17 @@ class _Builder:
                 delta = deltas[n]
                 if not delta or top < threshold:
                     continue
+                # A neutral task still adds to the day's load (others feel it)
+                # but carries no load cost of its own.
+                charged = [(tv, lit) for tv, lit in members if not tv.task.neutral]
                 if base >= threshold:
-                    for _, lit in members:
+                    for _, lit in charged:
                         self._add(delta, lit)
                     continue
                 over = self._bool(f"ge_{d}_{n}")
                 self.m.add(load >= threshold).only_enforce_if(over)
                 self.m.add(load <= threshold - 1).only_enforce_if(~over)
-                for tv, lit in members:
+                for tv, lit in charged:
                     both = self._bool(f"ld_{tv.task.key}_{d}_{n}")
                     self.m.add_implication(both, lit)
                     self.m.add_implication(both, over)

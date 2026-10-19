@@ -110,7 +110,7 @@ def test_hand_placed_lock_holds_until_something_changes():
     placed = dt(19, 9)
     slot = (dt(20, 15), dt(20, 16))
     lecture = T.Item(dt(20, 10), dt(20, 12), "event", event_id="e1")
-    tasks = [("a", dt(22, 18), 60, None), ("b", dt(23, 18), 30, "series-1")]
+    tasks = [("a", dt(22, 18), 60), ("b", dt(23, 18), 30)]
     stored = T.lock_snapshot(slot, placed, tasks, [lecture])
 
     def holds(current_tasks=tasks, events=(lecture,), created=(), events_created=()):
@@ -119,16 +119,14 @@ def test_hand_placed_lock_holds_until_something_changes():
                             events_created=list(events_created))
 
     assert holds()
-    # A new task issued after the placement releases it …
-    assert not holds(created=[("c", dt(19, 12), None)])
-    # … but not the next instance of a series that already existed,
-    assert holds(created=[("b2", dt(19, 12), "series-1")])
-    # nor an old task the snapshot simply didn't cover.
-    assert holds(created=[("old", dt(18, 9), None)])
+    # Anything issued after the placement releases it — a repeat instance too …
+    assert not holds(created=[("c", dt(19, 12))])
+    # … but not an old task the snapshot simply didn't cover.
+    assert holds(created=[("old", dt(18, 9))])
     assert not holds(events_created=[("e2", dt(19, 10))])
     # Deadline or duration changes release it; an event moving doesn't.
-    assert not holds(current_tasks=[("a", dt(22, 20), 60, None), tasks[1]])
-    assert not holds(current_tasks=[("a", dt(22, 18), 90, None), tasks[1]])
+    assert not holds(current_tasks=[("a", dt(22, 20), 60), tasks[1]])
+    assert not holds(current_tasks=[("a", dt(22, 18), 90), tasks[1]])
     longer = T.Item(dt(20, 10), dt(20, 13), "event", event_id="e1")
     assert not holds(events=(longer,))
     moved = T.Item(dt(20, 11), dt(20, 13), "event", event_id="e1")

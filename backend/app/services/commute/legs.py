@@ -49,6 +49,11 @@ HOME = "home"
 FAILED_MODE = "failed"
 FAILED_LEG_SECONDS = 30 * 60
 
+# Legs live on a 5-minute grid: travel rounds up to whole 5 minutes, and the
+# end tied to an anchor snaps away from it (arrivals earlier, departures
+# later), so both ends land on the grid without cutting into the buffer.
+LEG_STEP = timedelta(minutes=5)
+
 # How far a leg may shift (arrivals earlier, departures later) to clear an
 # avoid span. Beyond this the waiting costs more than the visible overlap
 # it prevents, so the leg stays put. Legs between anchors are additionally
@@ -397,9 +402,10 @@ def _harmonized_chain(
 def _with_mode(leg: PlannedLeg, mode: str, seconds: int, reason: str) -> PlannedLeg:
     """Swap a leg's mode keeping its anchored end fixed: arrivals stay
     anchored on `arrive`, rides home on `depart`."""
+    duration = timedelta(seconds=_step_seconds(seconds))
     if leg.dest_anchor == HOME:
-        return replace(leg, mode=mode, reason=reason, arrive=leg.depart + timedelta(seconds=seconds))
-    return replace(leg, mode=mode, reason=reason, depart=leg.arrive - timedelta(seconds=seconds))
+        return replace(leg, mode=mode, reason=reason, arrive=leg.depart + duration)
+    return replace(leg, mode=mode, reason=reason, depart=leg.arrive - duration)
 
 
 def _arrive_leg(
@@ -421,18 +427,21 @@ def _arrive_leg(
         bike_available=bike_available, missing_transit=missing_transit,
     )
     seconds, mode, reason = option if option is not None else _failed_option()
-    arrive = anchor.start - buffer
-    depart = arrive - timedelta(seconds=seconds)
+    duration = timedelta(seconds=seconds)
+    arrive = _floor_step(anchor.start - buffer)
+    depart = arrive - duration
     if avoid:
         # The avoided events aren't this leg's anchors, so the full event
         # gap applies — not the inner leg↔anchor buffer.
         clearance = timedelta(minutes=settings.event_buffer_minutes)
         depart, arrive = _dodged_earlier(depart, arrive, avoid, clearance, floor=not_before)
+        arrive = _floor_step(arrive)
+        depart = arrive - duration
     if not_before is not None and depart < not_before:
         # Physically late — anchor the leg to the earliest possible departure
         # and let the overlap machinery deal with what it collides with.
-        depart = not_before
-        arrive = depart + timedelta(seconds=seconds)
+        depart = _ceil_step(not_before)
+        arrive = depart + duration
     return PlannedLeg(
         origin_anchor=origin_anchor,
         dest_anchor=anchor.id,
@@ -463,8 +472,9 @@ def _depart_leg(
         bike_available=bike_available, missing_transit=missing_transit,
     )
     seconds, mode, reason = option if option is not None else _failed_option()
-    depart = anchor.end + buffer
-    arrive = depart + timedelta(seconds=seconds)
+    duration = timedelta(seconds=seconds)
+    depart = _ceil_step(anchor.end + buffer)
+    arrive = depart + duration
     if avoid:
         # E.g. an online meeting right after the anchor: attend it there and
         # ride afterwards. Leaving is immediate — the meeting effectively
@@ -472,6 +482,8 @@ def _depart_leg(
         # applies, not the full event gap. Departing earlier would mean
         # leaving mid-event, so the only direction is later.
         depart, arrive = _dodged_later(depart, arrive, avoid, buffer)
+        depart = _ceil_step(depart)
+        arrive = depart + duration
     return PlannedLeg(
         origin_anchor=anchor.id,
         dest_anchor=dest_anchor,
@@ -507,13 +519,13 @@ def _leg_option(
         key = (origin, destination, "transit")
         transit = durations.get(key)
         if transit is not None:
-            return transit, "transit", reason
+            return _step_seconds(transit), "transit", reason
         if key not in durations and missing_transit is not None:
             missing_transit.add((origin, destination))
         if bike is None or not bike_available:
             return None
-        return bike, "bicycling", "transit unavailable, fell back to bike"
-    return bike, "bicycling", None
+        return _step_seconds(bike), "bicycling", "transit unavailable, fell back to bike"
+    return _step_seconds(bike), "bicycling", None
 
 
 def _dodged_earlier(
@@ -572,6 +584,21 @@ def _dodged_later(
         if depart > ceiling:
             return original
     return original
+
+
+def _step_seconds(seconds: int) -> int:
+    step = int(LEG_STEP.total_seconds())
+    return -(-int(seconds) // step) * step
+
+
+def _floor_step(when: datetime) -> datetime:
+    step = int(LEG_STEP.total_seconds())
+    return when - timedelta(seconds=int(when.timestamp()) % step, microseconds=when.microsecond)
+
+
+def _ceil_step(when: datetime) -> datetime:
+    floored = _floor_step(when)
+    return floored if floored == when else floored + LEG_STEP
 
 
 def _failed_option() -> tuple[int, str, str]:

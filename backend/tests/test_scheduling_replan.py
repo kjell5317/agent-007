@@ -31,7 +31,8 @@ def make_task(title, *, due, scheduled=None, minutes=60, **kw) -> Task:
 
 @pytest.fixture
 def world(monkeypatch):
-    state = SimpleNamespace(tasks=[], events=[], writes=[], deletes=[], logs=[], resolved={})
+    state = SimpleNamespace(tasks=[], events=[], writes=[], deletes=[], logs=[], resolved={},
+                            pushed=[])
 
     async def calendar_items(_session, _start, _end, account_key=None):
         return state.events
@@ -61,6 +62,12 @@ def world(monkeypatch):
     monkeypatch.setattr("app.services.learn.jobs.duration_params", lambda _s: None)
     monkeypatch.setattr("app.services.learn.jobs.rho", lambda _s: 0.5)
     monkeypatch.setattr("app.events.publish_task", lambda _s, _id: None)
+
+    async def no_push(*_args, **_kw):
+        state.pushed.append(_kw.get("title") or (_args[0] if _args else None))
+
+    # Never reach a real phone from a test.
+    monkeypatch.setattr("app.services.notify.notify", no_push)
     return state
 
 
@@ -156,8 +163,9 @@ def routed(world, monkeypatch):
             for b, y in enumerate(locations):
                 if a != b:
                     bike, transit = minutes[frozenset({x, y})]
-                    out[(a, b, "bicycling")] = bike * 60
-                    out[(a, b, "transit")] = transit * 60
+                    # Odd seconds, as Maps returns them.
+                    out[(a, b, "bicycling")] = bike * 60 + 20
+                    out[(a, b, "transit")] = transit * 60 + 40
         return out
 
     async def no_weather(*_args):
@@ -203,6 +211,9 @@ async def test_replan_writes_the_solved_route(routed):
     start, end = result.placed[library.id]
     assert all(leg.arrive <= start or leg.depart >= end for leg in routed.legs)
     assert all(leg.mode in ("bicycling", "transit") for leg in routed.legs)
+    for leg in routed.legs:
+        assert leg.depart.minute % 5 == 0 and leg.depart.second == 0
+        assert (leg.arrive - leg.depart) % timedelta(minutes=5) == timedelta(0)
 
 
 @pytest.mark.asyncio
@@ -220,8 +231,8 @@ async def test_replan_starts_where_the_bike_was_left(routed):
 
 
 @pytest.mark.asyncio
-async def test_hand_placed_task_stays_locked_until_something_new_arrives(world):
-    # 06:00 is a poor hour under the prior; only the lock keeps it there.
+async def test_released_hand_placed_task_only_yields_when_in_the_way(world):
+    # 06:00 is a poor hour under the prior; the user chose it anyway.
     early = (NOW + timedelta(days=1)).replace(hour=6)
     mine = make_task("mine", due=NOW + timedelta(days=3), scheduled=early, placed_by="user",
                      placed_at=NOW - timedelta(hours=1), created_at=NOW - timedelta(days=2))
@@ -229,9 +240,46 @@ async def test_hand_placed_task_stays_locked_until_something_new_arrives(world):
     await replan.replan(session(), reason="test", now=NOW, time_limit=5)
     assert world.writes == [] and mine.placed_context["tasks"]
 
-    world.tasks.append(make_task("new", due=NOW + timedelta(days=2), created_at=NOW))
+    # Something new arrives (a repeat instance counts) and fits elsewhere:
+    # the hand-placed task doesn't move for the model's own preferences.
+    world.tasks.append(make_task("new", due=NOW + timedelta(days=2), created_at=NOW,
+                                 recurrence_series_id=uuid.uuid4()))
     await replan.replan(session(), reason="test", now=NOW, time_limit=5)
-    assert "mine" in {title for title, _, _ in world.writes}
+    assert "mine" not in {title for title, _, _ in world.writes}
+
+
+@pytest.mark.asyncio
+async def test_released_hand_placed_task_gives_way_to_a_deadline(world, monkeypatch):
+    # Today is booked except 14:00–15:00, which the user filled by hand.
+    world.events = [
+        Item(NOW.replace(minute=15), NOW.replace(hour=14), "event", event_id="e1"),
+        Item(NOW.replace(hour=15), NOW.replace(hour=23, minute=59), "event", event_id="e2"),
+    ]
+    mine = make_task("mine", due=NOW + timedelta(days=3), scheduled=NOW.replace(hour=14),
+                     placed_by="user", placed_at=NOW - timedelta(hours=1),
+                     created_at=NOW - timedelta(days=2))
+    urgent = make_task("urgent", due=NOW.replace(hour=23), created_at=NOW, deadline_kind="firm")
+    world.tasks = [mine, urgent]
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    written = {title: start for title, start, _ in world.writes}
+    assert written["urgent"] == NOW.replace(hour=14)
+    assert "mine" in written
+
+
+@pytest.mark.asyncio
+async def test_late_placement_warns(world, monkeypatch):
+    warned = []
+
+    async def deadline_missed(task, *, start, end):
+        warned.append(task.title)
+
+    monkeypatch.setattr("app.services.notify.notify_deadline_missed", deadline_missed)
+    # Booked solid until tomorrow evening; the task is due tomorrow noon.
+    world.events = [Item(NOW.replace(minute=15), (NOW + timedelta(days=1)).replace(hour=20),
+                         "event", event_id="e1")]
+    world.tasks = [make_task("squeezed", due=(NOW + timedelta(days=1)).replace(hour=12))]
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert warned == ["squeezed"]
 
 
 @pytest.mark.asyncio

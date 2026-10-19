@@ -328,10 +328,8 @@ def planned_legs(
         dest_anchor = anchors.get(leg.dest_key, leg.dest_key)
         if not origin_anchor or not dest_anchor:
             continue
-        seconds = ctx.travel_seconds.get((leg.origin_loc, leg.dest_loc, leg.mode))
-        travel = timedelta(seconds=seconds) if seconds else timedelta(
-            minutes=leg.travel * S.SLOT_MINUTES
-        )
+        # The modelled travel: Maps seconds rounded up to whole 5-minute slots.
+        travel = timedelta(minutes=leg.travel * S.SLOT_MINUTES)
         if leg.shortfall:
             arrive = grid.at(leg.end) - buffer
             depart = arrive - travel

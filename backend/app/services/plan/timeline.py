@@ -179,18 +179,17 @@ def slot_features(attrs: TaskAttrs, start: datetime, end: datetime, **kw) -> dic
 def lock_snapshot(
     slot: tuple[datetime, datetime],
     placed_at: datetime,
-    tasks: list[tuple[str, datetime, int, str | None]],
+    tasks: list[tuple[str, datetime, int]],
     events: list[Item],
 ) -> dict:
     """What the user saw when placing a task by hand: every open task's
-    deadline and duration (`(id, due, minutes, series id)`), every event's
-    duration. The task stays locked while none of that changes and nothing
-    new is issued."""
+    deadline and duration (`(id, due, minutes)`), every event's duration.
+    The task stays locked while none of that changes and nothing new is
+    issued."""
     return {
         "slot": [slot[0].isoformat(), slot[1].isoformat()],
         "placed_at": placed_at.isoformat(),
-        "tasks": {task_id: [due.isoformat(), minutes] for task_id, due, minutes, _ in tasks},
-        "series": sorted({series for *_, series in tasks if series}),
+        "tasks": {task_id: [due.isoformat(), minutes] for task_id, due, minutes in tasks},
         "events": {e.event_id: _minutes(e) for e in events if e.kind == "event" and e.event_id},
     }
 
@@ -199,19 +198,18 @@ def lock_holds(
     stored: dict | None,
     current: dict,
     *,
-    tasks_created: list[tuple[str, datetime, str | None]],
+    tasks_created: list[tuple[str, datetime]],
     events_created: list[tuple[str, datetime | None]],
 ) -> bool:
     """`current` is a `lock_snapshot` of now; `*_created` carry creation
-    times. Released by a new task or event issued after the placement —
-    a repeat instance of a series that already existed doesn't count — or
-    by a changed deadline or duration of anything that existed then."""
+    times. Released by a new task (repeat instances included) or event
+    issued after the placement, or by a changed deadline or duration of
+    anything that existed then."""
     if not stored or stored.get("slot") != current.get("slot"):
         return False
     placed_at = datetime.fromisoformat(stored["placed_at"])
-    series = set(stored.get("series") or [])
-    for task_id, created, series_id in tasks_created:
-        if task_id not in stored["tasks"] and created > placed_at and series_id not in series:
+    for task_id, created in tasks_created:
+        if task_id not in stored["tasks"] and created > placed_at:
             return False
     for event_id, created in events_created:
         if event_id not in stored["events"] and created is not None and created > placed_at:

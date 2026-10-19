@@ -176,7 +176,7 @@ async def _retry_with_solver(session, pending, now, *, respect_backoff: bool) ->
     backoff = _no_slot_until.get("solver")
     if respect_backoff and backoff is not None and now < backoff:
         return {"attempted": 0, "scheduled": 0}
-    result = await request_replan(session, reason="retry_unplaced", quiet={t.id for t in pending})
+    result = await request_replan(session, reason="retry_unplaced")
     scheduled = 0
     for task in pending:
         session.refresh(task)

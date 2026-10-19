@@ -430,7 +430,26 @@ def test_transit_pin_moves_the_whole_trip_to_transit():
     assert outbound.arrive == anchor.start - BUFFER
     assert outbound.depart == outbound.arrive - timedelta(seconds=1200)
     assert inbound.depart == anchor.end + BUFFER
-    assert inbound.arrive == inbound.depart + timedelta(seconds=1300)
+    # 21:40 of transit is booked as 25 minutes: legs live on the 5-minute grid.
+    assert inbound.arrive == inbound.depart + timedelta(minutes=25)
+
+
+def test_legs_land_on_the_five_minute_grid():
+    # An event at 14:07 with a 13:20 ride: the arrival snaps earlier, the
+    # departure later, and both rides last whole 5-minute steps.
+    start = _at(14) + timedelta(minutes=7)
+    anchor = Anchor("ev1", start, start + timedelta(minutes=58), GYM)
+    durations = _durations({
+        (HOME_ADDR, GYM, "bicycling"): 800, (GYM, HOME_ADDR, "bicycling"): 800,
+    })
+    legs, _ = derive_legs([anchor], HOME_ADDR, durations, None, SETTINGS)
+    outbound, inbound = legs
+    for leg in legs:
+        assert leg.depart.minute % 5 == 0 and leg.arrive.minute % 5 == 0
+        assert leg.depart.second == leg.arrive.second == 0
+        assert leg.arrive - leg.depart == timedelta(minutes=15)
+    assert outbound.arrive <= anchor.start - BUFFER
+    assert inbound.depart >= anchor.end + BUFFER
 
 
 def test_transit_pin_requests_unfetched_transit_then_applies():

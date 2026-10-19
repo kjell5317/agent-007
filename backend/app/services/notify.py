@@ -335,6 +335,22 @@ async def notify_no_slot(task) -> None:
     )
 
 
+async def notify_deadline_missed(task, *, start: datetime, end: datetime) -> None:
+    """The solver could only place the task after its deadline — a full day,
+    a repeat instance squeezed out. Same tag as the task, so a later on-time
+    placement's notification replaces it."""
+    await notify(
+        title=f"⚠️ Past its deadline: {_short_title(task)}",
+        message=f"Due {_fmt_when(to_user_tz(task.due_date))} · planned {_fmt_range(start, end)}",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=_warning_actions(),
+        importance="high",
+        channel="Scheduling warnings",
+        color="#f59e0b",
+    )
+
+
 async def notify_unroutable_location(task, location: str) -> None:
     """The task has a physical-looking location Google Maps can't route to —
     30-minute placeholder commutes were reserved instead of real ones. Uses

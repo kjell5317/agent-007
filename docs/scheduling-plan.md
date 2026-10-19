@@ -31,7 +31,7 @@ decisions in the extraction agent.
 | Hard: events | Calendar events not owned by the app never move. |
 | Hard | Nothing starts in the past. `depends_on_task_id` order holds. A repeat occurrence doesn't start before its period. A task whose slot has started stays fixed, including a running *Still working* extension. |
 | Deadline | Per task: `hard`, `firm` or `soft` (step 3, step 5). Lateness is penalised by kind; an overdue task gets placed instead of failing. |
-| User-placed tasks | Locked (fixed in the solve) until a new task or event is issued, or a deadline or duration changes; then normal stability (step 6). |
+| User-placed tasks | Locked (fixed in the solve) until a new task or event is issued — repeat instances included — or a deadline or duration changes. Then they give way only when they're in the way (step 6). |
 | Removed | Day windows (10–19, 8–24), the 15-min event buffer, the same-day rule, `LEAD_DAYS`, victim ordering, displacement repair. All become prior weights. |
 | Commute (phase 1) | Not in the solver. The commute planner still derives legs after placement. Legs are derived output, not busy input. |
 | Points | The "−N points, slot missed" notification goes away. The deduction itself stays on *Not done* and on no answer (confirm). |
@@ -268,12 +268,19 @@ Model (time unit = 5 min, `t = 0` at horizon start):
 - Stability: moving a planner-placed task costs 1; 3 if its current
   slot is within 24 h.
 - Hand-placed tasks are locked: they enter the solve as fixed items until
-  a new task or event is created after the placement (a new instance of a
-  repeat series that already existed doesn't count), or a deadline or
-  duration of anything that existed then changes. An event moving isn't
-  a release by itself — unless it now overlaps the locked slot, which
-  releases the lock since both can't stay. A locked task's predecessor
-  must end before it. After release the normal stability cost applies.
+  a new task (repeat instances included) or event is created after the
+  placement, or a deadline or duration of anything that existed then
+  changes. An event moving isn't a release by itself — unless it now
+  overlaps the locked slot. A locked task's predecessor must end before
+  it.
+- A released hand-placed task gives way only when it's in the way: it
+  ignores its own slot preferences (the user chose the slot) and costs 5
+  to move, so it moves to avoid a missed deadline, a task with no slot or
+  a night-time slot for another task — never for small gains, and never
+  to suit the model's view of its own hour.
+- Deadline warnings: a task placed after a deadline that's still ahead,
+  or left without a slot, gets the "could not schedule" style warning
+  whoever triggered the solve — repeat instances included.
 - `AddHint` from the current calendar, so the result is never worse than
   the current schedule. `num_workers=2`, fixed `random_seed`; tests use
   one worker.

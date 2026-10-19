@@ -51,7 +51,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
-from app.services.commute.legs import FAILED_LEG_SECONDS
+from app.services.commute.legs import FAILED_LEG_SECONDS, _step_seconds
 from app.services.location import (
     is_online_location,
     resolve_location_alias,
@@ -254,19 +254,16 @@ async def schedule_tasks(
 
     fresh = {task.id: task.calendar_event_id is None for task, _ in requests}
     blocks: dict = {}
-    quiet: set = set()
     account_key = None
     for task, options in requests:
         block = options.get("block")
         if block is not None:
             blocks.setdefault(task.id, []).append((block.start, block.end))
-        if not options.get("notify", True):
-            quiet.add(task.id)
         account_key = account_key or options.get("account_key")
     session.commit()
     try:
         result = await request_replan(
-            session, reason="schedule_task", blocks=blocks, quiet=quiet, account_key=account_key,
+            session, reason="schedule_task", blocks=blocks, account_key=account_key,
         )
     except Exception as exc:  # noqa: BLE001
         log.error("plan.schedule · solve failed err=%s", exc, exc_info=True)
@@ -1037,9 +1034,10 @@ async def _estimate_trip_legs(
     out = await _one_way_seconds(session, home, location, reference)
     inbound = await _one_way_seconds(session, location, home, reference)
     unroutable = out is None or inbound is None
+    # Reserve what the written legs will take: travel on the 5-minute grid.
     return (
-        out if out is not None else FAILED_LEG_SECONDS,
-        inbound if inbound is not None else FAILED_LEG_SECONDS,
+        _step_seconds(out) if out is not None else FAILED_LEG_SECONDS,
+        _step_seconds(inbound) if inbound is not None else FAILED_LEG_SECONDS,
         unroutable,
     )
 
@@ -1132,7 +1130,7 @@ def _cached_trip_legs(
         )
         return row.duration_seconds if row is not None else 0
 
-    return cached(home, location), cached(location, home)
+    return _step_seconds(cached(home, location)), _step_seconds(cached(location, home))
 
 
 def _norm_loc(location: str | None) -> str:
