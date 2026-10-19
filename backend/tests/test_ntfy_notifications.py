@@ -124,7 +124,7 @@ def test_ntfy_http_action_preflight_and_callback(monkeypatch):
     monkeypatch.setattr(notifications, "get_settings", lambda: settings)
     monkeypatch.setattr(notifications.tasks_store, "get", lambda *_args: SimpleNamespace(id=task_id))
 
-    async def fake_dismiss(_session, received_id):
+    async def fake_dismiss(_session, received_id, *, source=None):
         called.append(received_id)
 
     monkeypatch.setattr(notifications, "dismiss_task", fake_dismiss)

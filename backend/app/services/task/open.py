@@ -53,6 +53,14 @@ async def open_task_from_input(
     raw = raw_inputs_store.get(session, raw_input_id)
     if raw is None:
         raise LookupError("Raw input not found")
+    if raw.status == "not_task":
+        from app.db.clients import overrides as overrides_store
+
+        overrides_store.add(
+            session, field="is_task", agent_value=False, user_value=True, source="ui",
+            task_id=raw.task_id, raw_input_id=raw.id,
+        )
+        session.commit()
 
     context_input_ids = context_input_ids or []
     target = _find_followup_target(session, raw, context_input_ids, target_task_id)

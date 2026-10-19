@@ -152,9 +152,11 @@ duplicate; for a calendar edit, first `calendar_search` to get the event_id.
 For a task that prepares for an event, search the calendar, read a likely
 event's details, and pass its event and calendar ids to `create_task`. Finish
 the work before the event begins. Respect any due date the user explicitly
-gave; set `due_date_is_explicit=true` for such a date. Put event facts in its
-description, work in the task description, and
-save only durable standalone facts as notes.
+gave; set `due_date_is_explicit=true` for such a date. On `create_task` also
+set `work_type` and `effort` (inherit the label's defaults unless the task
+clearly differs) and `deadline_kind` (hard / firm / soft as the field
+describes). Put event facts in its description, work in the task description,
+and save only durable standalone facts as notes.
 If asked to remember a detail about a specific event, search for that event
 and update its description rather than calling `create_note`. Read its full
 details first and preserve existing description text when adding a fact.

@@ -13,6 +13,12 @@ required fields must be present (omitting any is a bug — double-check):
     EOD → 23:45.
   * label — the single best-fitting enum value; if none fits, `mark_not_task`.
   Optional: description, location (home allowed), link (most relevant source URL).
+  Also set work_type and effort — inherit the label's defaults (listed with the
+  labels) unless this task clearly differs — and deadline_kind:
+    * hard — missing the deadline makes the task pointless or has external
+      consequences: submissions, exams, appointments, preparing for a linked event.
+    * firm — any other explicit deadline.
+    * soft — a guessed or derived due date, or "sometime" phrasing.
 
 The user message may list the most similar past items by status: OPEN/CLOSED
 tasks are candidates you can act on; NOT_TASK items are precedents (a strong

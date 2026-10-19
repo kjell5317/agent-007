@@ -200,6 +200,22 @@ class Settings(BaseSettings):
             return [c.strip() for c in v.split(",") if c.strip()]
         return v
 
+    # Task placement engine (see docs/scheduling-plan.md). `legacy` is the
+    # rule-driven greedy planner; `shadow` keeps it authoritative and runs the
+    # CP-SAT solver alongside without writing, logging both to Langfuse;
+    # `solver` makes the solver authoritative.
+    scheduler_engine: Literal["legacy", "shadow", "solver"] = "shadow"
+    # Same look-ahead as the commute planner (`commute_lookahead_days`).
+    scheduler_horizon_days: int = 7
+    scheduler_time_limit_seconds: float = 10.0
+    scheduler_nightly_time_limit_seconds: float = 60.0
+    scheduler_workers: int = 2
+    # Above this many movable tasks, gap/neighbour terms are only modelled on
+    # each task's candidate days (keeps a solve inside the time limit on 2 vCPUs).
+    scheduler_neighbour_task_limit: int = 50
+    # Local hour of the nightly refit + long solve.
+    scheduler_nightly_hour: int = 3
+
     # Commute planning. Disabled by default — the feature is parked while
     # we sort out a TZ/routing reliability issue. Flip to true to re-enable
     # weather refresh, commute events, and the location-driven replan path.

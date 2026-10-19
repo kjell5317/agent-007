@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { ChoiceChips } from "@/components/ui/choice-chips";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { labelChipStyle } from "@/lib/labels";
+import { EFFORT_LABEL, WORK_TYPE_LABEL } from "@/lib/tasks";
 import type { Label } from "@/lib/types";
 
 interface Props {
@@ -17,6 +19,8 @@ interface Props {
 export function LabelEditModal({ label, onClose, onSaved }: Props) {
   const [description, setDescription] = useState(label.description);
   const [repo, setRepo] = useState(label.github_repo ?? "");
+  const [workType, setWorkType] = useState(label.default_work_type);
+  const [effort, setEffort] = useState(label.default_effort);
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
@@ -25,6 +29,8 @@ export function LabelEditModal({ label, onClose, onSaved }: Props) {
       const updated = await api.updateLabel(label.google_id, {
         description: description.trim(),
         github_repo: repo.trim() || null,
+        default_work_type: workType,
+        default_effort: effort,
       });
       onSaved(updated);
       onClose();
@@ -88,6 +94,34 @@ export function LabelEditModal({ label, onClose, onSaved }: Props) {
           />
           <p className="text-xs text-muted-foreground">
             Optional. Coding tasks from this repo get this label.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Default work type
+          </span>
+          <ChoiceChips
+            value={workType}
+            labels={WORK_TYPE_LABEL}
+            noneLabel="None"
+            onChange={setWorkType}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Default effort
+          </span>
+          <ChoiceChips
+            value={effort}
+            labels={EFFORT_LABEL}
+            noneLabel="None"
+            onChange={setEffort}
+          />
+          <p className="text-xs text-muted-foreground">
+            New tasks with this label inherit these unless they clearly differ.
+            The planner uses them to pick fitting slots.
           </p>
         </div>
 

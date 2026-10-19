@@ -19,6 +19,7 @@ from app.db.schemas.task import TaskCreate
 from app.events import publish_task
 from app.services.calendar import delete_task_event
 from app.services.plan import schedule_task
+from app.services.plan.replan import batch as replan_batch
 
 log = logging.getLogger(__name__)
 
@@ -185,6 +186,16 @@ def roman(number: int) -> str:
     return result
 
 
+def inherited_attributes(parent: Task) -> dict:
+    """Subtasks share the parent's work type and effort, and its deadline
+    kind: their derived deadlines exist to meet the parent's."""
+    return {
+        "work_type": getattr(parent, "work_type", None),
+        "effort": getattr(parent, "effort", None),
+        "deadline_kind": getattr(parent, "deadline_kind", None) or "firm",
+    }
+
+
 def create_subtask(session: Session, parent: Task, title: str) -> Task:
     title = title.strip()
     if not title:
@@ -198,6 +209,7 @@ def create_subtask(session: Session, parent: Task, title: str) -> Task:
         related_event_calendar_id=parent.related_event_calendar_id,
         related_event_due_derived=False,
         subtask_order=len(children),
+        **inherited_attributes(parent),
     ))
     session.add(RawInput(
         source="subtask", content=title, status="open", task_id=child.id,
@@ -232,6 +244,7 @@ def split_deterministically(session: Session, task: Task) -> list[Task]:
             related_event_calendar_id=task.related_event_calendar_id,
             related_event_due_derived=False,
             subtask_order=index,
+            **inherited_attributes(task),
         ))
         session.add(RawInput(
             source="subtask", content=child.title, status="open", task_id=child.id,
@@ -272,6 +285,7 @@ async def split_task(
             depends_on_task_id=children[plan.depends_on].id if plan.depends_on is not None else None,
             due_date_derived=plan.due_date is None,
             subtask_order=index,
+            **inherited_attributes(task),
         ))
         children.append(child)
         session.add(RawInput(
@@ -289,12 +303,13 @@ async def split_task(
     task.scheduled_date = None
     session.commit()
     publish_task(session, task.id)
-    for child in children:
-        publish_task(session, child.id)
-        try:
-            await schedule_task(session, child)
-        except Exception:  # noqa: BLE001 — keep the saved split on calendar failure
-            log.exception("subtask scheduling failed · task=%s", child.id)
+    async with replan_batch(session):
+        for child in children:
+            publish_task(session, child.id)
+            try:
+                await schedule_task(session, child)
+            except Exception:  # noqa: BLE001 — keep the saved split on calendar failure
+                log.exception("subtask scheduling failed · task=%s", child.id)
     return children
 
 

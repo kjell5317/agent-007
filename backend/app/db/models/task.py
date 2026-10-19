@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -74,6 +74,29 @@ class Task(Base):
     # One 007 task per kotx task; transitions arrive via webhook/poll and are
     # matched back through this id (see app.agent.kotx).
     kotx_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
+
+    # Scheduling attributes (see docs/scheduling-plan.md). `work_type` /
+    # `effort` / `deadline_kind` feed the slot-preference model; the `placed_*`
+    # fields record who chose the current slot and what surrounded it then, so
+    # the solver can keep a hand-placed slot until its surroundings change.
+    work_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    effort: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    deadline_kind: Mapped[str] = mapped_column(String(8), default="firm", server_default="firm")
+    placed_by: Mapped[str] = mapped_column(String(16), default="planner", server_default="planner")
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    placed_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Set while a "Still working" extension runs; the slot then stays fixed and
+    # its calendar event grows in 15-minute steps until the task is closed.
+    running_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Length the current slot was booked with — the estimate after the learned
+    # duration correction. Null means the estimate itself. Calendar sync
+    # compares event lengths against this, so a corrected booking doesn't
+    # read as a user resize.
+    booked_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # placed | deferred | unplaced — `scheduled_date` is null for the last two.
+    schedule_state: Mapped[str] = mapped_column(
+        String(16), default="placed", server_default="placed"
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

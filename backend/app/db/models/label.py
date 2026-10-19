@@ -25,6 +25,10 @@ class Label(Base):
 
     description: Mapped[str] = mapped_column(Text, default="", server_default="")
     github_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Inherited by new tasks with this label unless the agent sees a reason
+    # to differ.
+    default_work_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    default_effort: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

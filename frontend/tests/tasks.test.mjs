@@ -60,3 +60,35 @@ test("subtasks of a split occurrence show the occurrence's repeat", () => {
   );
   assert.equal(exports.taskRecurrence({ recurrence_unit: null, recurrence_interval: null, parent_card: null }), null);
 });
+
+test("a running task stays green past its slot until marked done", () => {
+  assert.equal(exports.isTaskOverdue({ ...task, running_since: "2026-09-23T10:30:00Z" }, now), false);
+});
+
+test("a running task is still overdue once its deadline passes", () => {
+  assert.equal(exports.isTaskOverdue({
+    ...task, running_since: "2026-09-23T10:30:00Z", due_date: "2026-09-23T11:00:00Z",
+  }, now), true);
+});
+
+test("the corrected duration is the booked slot length", () => {
+  const slot = { ...task, scheduled_date: "2026-09-23T11:00:00Z", estimation: 30 };
+  assert.equal(exports.isTaskOverdue(slot, now), true);
+  assert.equal(exports.isTaskOverdue({ ...slot, estimation_corrected: 90 }, now), false);
+});
+
+test("the estimate shows the planned duration only when the correction changes it", () => {
+  assert.equal(exports.fmtEstimation({ estimation: 60, estimation_corrected: 75 }), "60 min · planned 75 min");
+  assert.equal(exports.fmtEstimation({ estimation: 60, estimation_corrected: 60 }), "60 min");
+  assert.equal(exports.fmtEstimation({ estimation: 60, estimation_corrected: null }), "60 min");
+  assert.equal(exports.fmtEstimation({ estimation: null, estimation_corrected: 75 }), null);
+  assert.equal(exports.correctedEstimation({ estimation: 60, estimation_corrected: 75 }), 75);
+  assert.equal(exports.correctedEstimation({ estimation: 60, estimation_corrected: 60 }), null);
+});
+
+test("only open tasks count as running", () => {
+  const since = "2026-09-23T10:30:00Z";
+  assert.equal(exports.taskRunningSince({ status: "open", running_since: since }), since);
+  assert.equal(exports.taskRunningSince({ status: "closed", running_since: since }), null);
+  assert.equal(exports.taskRunningSince({ status: "open", running_since: null }), null);
+});

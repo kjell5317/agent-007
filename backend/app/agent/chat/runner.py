@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.agent.helpers.attributes import new_task_attributes
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.helpers.llm import (
     LLMMessage,
@@ -784,11 +785,12 @@ async def _dispatch(
 async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     due = normalize_agent_due_date(tin.get("due_date"))
     from app.services.event_context import apply_event_context
+    explicit_due = bool(tin.get("due_date_is_explicit"))
     event_fields, event_warning = apply_event_context(
-        session, {**tin, "due_date": due},
-        explicit_due=bool(tin.get("due_date_is_explicit")),
+        session, {**tin, "due_date": due}, explicit_due=explicit_due,
     )
     due = event_fields.get("due_date")
+    label = str(tin.get("label")) if tin.get("label") else None
     task = tasks_store.create(
         session,
         TaskCreate(
@@ -798,10 +800,17 @@ async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict
             due_date=due,
             location=str(tin.get("location")) if tin.get("location") else None,
             link=str(tin.get("link")) if tin.get("link") else None,
-            label=str(tin.get("label")) if tin.get("label") else None,
+            label=label,
             related_event_id=event_fields.get("related_event_id"),
             related_event_calendar_id=event_fields.get("related_event_calendar_id"),
             related_event_due_derived=bool(event_fields.get("related_event_due_derived")),
+            **new_task_attributes(
+                tin,
+                labels_store.defaults_by_name(session),
+                label=label,
+                explicit_due=explicit_due,
+                related_event=bool(event_fields.get("related_event_id")),
+            ),
         ),
     )
     anchor_text = "\n".join(

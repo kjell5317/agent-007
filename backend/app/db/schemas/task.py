@@ -6,8 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled"]
+TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled", "deferred"]
 RecurrenceUnit = Literal["day", "week", "month"]
+WorkType = Literal["physical", "cognitive", "social"]
+Effort = Literal["low", "medium", "high"]
+DeadlineKind = Literal["hard", "firm", "soft"]
+ScheduleState = Literal["placed", "deferred", "unplaced"]
 
 
 class SubtaskSummary(BaseModel):
@@ -38,6 +42,9 @@ class TaskBase(BaseModel):
     subtask_order: int | None = None
     recurrence_unit: RecurrenceUnit | None = None
     recurrence_interval: int | None = None
+    work_type: WorkType | None = None
+    effort: Effort | None = None
+    deadline_kind: DeadlineKind = "firm"
 
 
 class TaskCreate(TaskBase):
@@ -64,6 +71,9 @@ class TaskUpdate(BaseModel):
     related_event_id: str | None = None
     related_event_calendar_id: str | None = None
     related_event_due_derived: bool | None = None
+    work_type: WorkType | None = None
+    effort: Effort | None = None
+    deadline_kind: DeadlineKind | None = None
 
 
 class TaskPromote(BaseModel):
@@ -154,6 +164,12 @@ class TaskRead(TaskBase):
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
     kotx_task_id: int | None = None
+    placed_by: str = "planner"
+    schedule_state: ScheduleState = "placed"
+    running_since: datetime | None = None
+    # The duration the planner books: the estimate after the learned
+    # correction. Null while no correction is fitted.
+    estimation_corrected: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -187,6 +203,8 @@ class TaskRead(TaskBase):
             latest = next((item for item in (raw_inputs or []) if item.status != "duplicate"), None)
             scheduling = scheduling if scheduling is not None else (latest.agent_trace or {}).get("scheduling") if latest else None
             schedule_status = "pending" if scheduling in {"pending", "not_needed"} else "unscheduled"
+        if status_ == "open" and not scheduled and getattr(task, "schedule_state", None) == "deferred":
+            schedule_status = "deferred"
         if getattr(task, "is_container", False):
             schedule_status = "pending"
         return cls.model_validate(
@@ -219,6 +237,19 @@ class TaskRead(TaskBase):
                 "status": status_,
                 "is_manual": is_manual,
                 "kotx_task_id": getattr(task, "kotx_task_id", None),
+                "work_type": getattr(task, "work_type", None),
+                "effort": getattr(task, "effort", None),
+                "deadline_kind": getattr(task, "deadline_kind", None) or "firm",
+                "placed_by": getattr(task, "placed_by", None) or "planner",
+                "schedule_state": getattr(task, "schedule_state", None) or "placed",
+                "running_since": getattr(task, "running_since", None),
+                "estimation_corrected": (
+                    booked
+                    if status_ == "open"
+                    and (booked := getattr(task, "booked_minutes", None))
+                    and booked != task.estimation
+                    else None
+                ),
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
             }

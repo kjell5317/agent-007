@@ -6,6 +6,7 @@ import { SkeletonBlock } from "@/components/ui/skeleton";
 import { primeLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { labelChipStyle, labelDotStyle } from "@/lib/labels";
+import { EFFORT_LABEL, WORK_TYPE_LABEL } from "@/lib/tasks";
 import type { Label } from "@/lib/types";
 
 export function LabelsPanel() {
@@ -113,6 +114,14 @@ export function LabelsPanel() {
                       <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                         <Github className="h-3 w-3" />
                         {label.github_repo}
+                      </span>
+                    )}
+                    {(label.default_work_type || label.default_effort) && (
+                      <span className="text-xs text-muted-foreground">
+                        {[
+                          label.default_work_type && WORK_TYPE_LABEL[label.default_work_type],
+                          label.default_effort && `${EFFORT_LABEL[label.default_effort]} effort`,
+                        ].filter(Boolean).join(" · ")}
                       </span>
                     )}
                   </span>

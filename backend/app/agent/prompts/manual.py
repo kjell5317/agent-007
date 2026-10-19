@@ -33,6 +33,14 @@ Optional: description, location (home is possible), link (most relevant
 source URL), notes (durable, cross-project long-term memory; the `notes` field
 describes what makes a good note; skip ephemeral content).
 
+Also set work_type and effort — inherit the label's defaults (listed with the
+labels) unless this task clearly differs — and deadline_kind:
+    * hard — missing the deadline makes the task pointless or has external
+        consequences: submissions, exams, appointments, preparing for a
+        linked event.
+    * firm — any other explicit deadline.
+    * soft — a guessed or derived due date, or "sometime" phrasing.
+
 You also have non-terminal lookup tools:
 
 - `research_input_link()` (when available) — inspect the input's first URL

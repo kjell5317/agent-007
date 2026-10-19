@@ -178,9 +178,10 @@ export const api = {
 
   listLabels: () => request<Label[]>("/labels"),
   syncLabels: () => request<Label[]>("/labels/sync", { method: "POST" }),
+  // Replaces all four fields, so callers send the untouched ones unchanged.
   updateLabel: (
     googleId: string,
-    body: { description: string; github_repo: string | null },
+    body: Pick<Label, "description" | "github_repo" | "default_work_type" | "default_effort">,
   ) =>
     request<Label>(`/labels/${encodeURIComponent(googleId)}`, {
       method: "PATCH",

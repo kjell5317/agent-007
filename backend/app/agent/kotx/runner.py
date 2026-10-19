@@ -301,6 +301,11 @@ async def _create_task_from_brief(
     # The subject is "{repo}#{number} {title}" — the repo is already carried
     # by the label, so the task title drops it.
     title = str(meta.get("subject") or "kotx task").removeprefix(repo)
+    # The repo label's defaults win over the agent's pick, like the label
+    # itself; a kotx brief is always coding work.
+    default_work_type, default_effort = labels_store.defaults_by_name(session).get(
+        label or "", (None, None)
+    )
     task = tasks.create(
         session,
         TaskCreate(
@@ -308,6 +313,9 @@ async def _create_task_from_brief(
             estimation=payload.get("estimation"),
             due_date=payload.get("due_date"),
             label=label,
+            work_type=default_work_type or "cognitive",
+            effort=default_effort or payload.get("effort"),
+            deadline_kind=payload.get("deadline_kind") or "firm",
         ),
     )
     task.kotx_task_id = kotx_id

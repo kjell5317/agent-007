@@ -8,7 +8,11 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
 from app.agent.input import runner  # noqa: E402
-from app.agent.prompts import NEW_INPUT_SYSTEM_PROMPT, THREAD_FOLLOWUP_SYSTEM_PROMPT  # noqa: E402
+from app.agent.prompts import (  # noqa: E402
+    EXTRACT_FIELDS_SYSTEM_PROMPT,
+    NEW_INPUT_SYSTEM_PROMPT,
+    THREAD_FOLLOWUP_SYSTEM_PROMPT,
+)
 from app.agent.tools.schemas import new_input_tools  # noqa: E402
 from app.db.clients.raw_inputs import SimilarInput  # noqa: E402
 
@@ -205,3 +209,11 @@ def test_new_input_prompt_guides_calendar_corrections_to_update_event():
     assert "`find_calendar_events` to get the existing event id" in NEW_INPUT_SYSTEM_PROMPT
     assert "`update_event` with only the changed event fields" in NEW_INPUT_SYSTEM_PROMPT
     assert "use\n  `update_task` instead of `update_event`" in NEW_INPUT_SYSTEM_PROMPT
+
+
+def test_prompts_carry_the_deadline_kind_rules():
+    for prompt in (NEW_INPUT_SYSTEM_PROMPT, EXTRACT_FIELDS_SYSTEM_PROMPT):
+        assert "inherit the label's defaults" in prompt
+        assert "hard — missing the deadline makes the task pointless" in prompt
+        assert "firm — any other explicit deadline" in prompt
+        assert '"sometime" phrasing' in prompt

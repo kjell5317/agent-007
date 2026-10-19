@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -12,6 +12,8 @@ _REPO_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678
 class LabelUpdate(BaseModel):
     description: str = ""
     github_repo: str | None = None
+    default_work_type: Literal["physical", "cognitive", "social"] | None = None
+    default_effort: Literal["low", "medium", "high"] | None = None
 
     @field_validator("description")
     @classmethod
@@ -36,6 +38,8 @@ class LabelRead(BaseModel):
     color: str
     description: str
     github_repo: str | None
+    default_work_type: str | None = None
+    default_effort: str | None = None
 
     @classmethod
     def from_row(cls, row: "Label") -> "LabelRead":
@@ -45,4 +49,6 @@ class LabelRead(BaseModel):
             color=row.background_color,
             description=row.description,
             github_repo=row.github_repo,
+            default_work_type=row.default_work_type,
+            default_effort=row.default_effort,
         )

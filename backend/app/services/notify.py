@@ -146,10 +146,6 @@ def task_tag(task_id: UUID | str) -> str:
     return f"task-{task_id}"
 
 
-def points_tag() -> str:
-    return "points"
-
-
 def task_url(task_id: UUID | str) -> str:
     """Frontend deep link for opening a task detail modal."""
     base = get_settings().task_default_url
@@ -210,6 +206,47 @@ async def notify_task_created(
 
 
 _DISMISS_BUTTON = {"action": ACTION_DISMISS_TASK, "title": "Dismiss"}
+
+
+async def notify_task_deferred(task, *, primary_action: dict[str, str] | None = None) -> None:
+    """A new task due after the planning horizon that the planner left for
+    later — it is reconsidered on every solve."""
+    actions = _task_actions()
+    if primary_action is DROP_LEADING_ACTION:
+        actions = actions[1:]
+    elif primary_action is not None:
+        actions = [primary_action, *actions[1:]]
+    await notify(
+        title=_short_title(task),
+        message=f"Planned later · Due {_fmt_when(to_user_tz(task.due_date))}",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=actions,
+        sticky=True,
+    )
+
+
+async def notify_checkin(task, *, start: datetime, end: datetime) -> None:
+    """End-of-slot check-in. Replaces the task's earlier notification (same
+    tag) and, with it, the old "points subtracted" message."""
+    from app.services.plan.checkin import (
+        ACTION_CHECKIN_DONE,
+        ACTION_CHECKIN_NOT_DONE,
+        ACTION_CHECKIN_STILL_WORKING,
+    )
+
+    await notify(
+        title=f"Still on {_short_title(task)}?",
+        message=f"Slot {_fmt_range(start, end)} ended",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=[
+            {"action": ACTION_CHECKIN_DONE, "title": "Done"},
+            {"action": ACTION_CHECKIN_STILL_WORKING, "title": "Still working"},
+            {"action": ACTION_CHECKIN_NOT_DONE, "title": "Not done"},
+        ],
+        sticky=True,
+    )
 
 
 async def notify_kotx_start(task) -> None:
@@ -376,17 +413,6 @@ async def notify_calendar_event_updated(event) -> None:
 async def clear_notification_tag(tag: str) -> None:
     """Remove a lingering tagged notification in the selected provider."""
     await notify(title="", message="clear_notification", tag=tag)
-
-
-async def notify_points_penalty(task, *, points: int, reason: str) -> None:
-    await notify(
-        title="Points subtracted",
-        message=f"-{points} points: {reason}\n{_short_title(task)}",
-        url=task_url(task.id),
-        tag=points_tag(),
-        channel="Points",
-        color="#dc2626",
-    )
 
 
 async def clear_task_notification(task_id: UUID | str) -> None:

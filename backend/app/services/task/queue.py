@@ -35,6 +35,8 @@ from app.db.schemas.task import TaskCreate
 from app.services.plan import schedule_task
 from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context, mentions_event
+from app.agent.helpers.attributes import new_task_attributes
+from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.input.embedding import candidate_query_text, embed
@@ -235,6 +237,14 @@ async def _process(
                 related_event_id=merged.get("related_event_id"),
                 related_event_calendar_id=merged.get("related_event_calendar_id"),
                 related_event_due_derived=bool(merged.get("related_event_due_derived")),
+                **new_task_attributes(
+                    merged,
+                    labels_store.defaults_by_name(session),
+                    label=merged.get("label"),
+                    explicit_due=user_fields.get("due_date") is not None
+                    or bool(agent_fields.get("due_date_is_explicit")),
+                    related_event=bool(merged.get("related_event_id")),
+                ),
             ),
         )
 

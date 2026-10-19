@@ -26,6 +26,8 @@ from app.events import publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.notify import clear_task_notification
 from app.services.plan import schedule_task
+from app.services.plan.replan import batch as replan_batch
+from app.services.task.split import inherited_attributes
 from app.services.recurrence import occurrences_to_create, validate
 from app.services.task.vacate import replan_vacated_window, vacated_commute_window
 from app.timezones import to_user_tz, user_tz
@@ -104,11 +106,13 @@ async def plan_recurring_tasks(
     """Create the instances each series (default: all) is missing, then
     place them on the calendar."""
     created = create_due_instances(session, datetime.now(user_tz()), series_ids)
+    async with replan_batch(session):
+        for task in created:
+            try:
+                await schedule_task(session, task, notify=False)
+            except Exception:  # noqa: BLE001 — the instance stays; the retry sweep places it
+                log.exception("repeat instance scheduling failed · task=%s", task.id)
     for task in created:
-        try:
-            await schedule_task(session, task, notify=False)
-        except Exception:  # noqa: BLE001 — the instance stays; the retry sweep places it
-            log.exception("repeat instance scheduling failed · task=%s", task.id)
         publish_task(session, task.id)
     return created
 
@@ -154,6 +158,7 @@ def _create_instance(session: Session, template: Task, due: datetime) -> Task:
         recurrence_interval=template.recurrence_interval,
         recurrence_anchor=template.recurrence_anchor,
         recurrence_series_id=template.recurrence_series_id,
+        **inherited_attributes(template),
     ))
     session.add(RawInput(
         source="recurrence",

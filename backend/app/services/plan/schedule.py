@@ -186,6 +186,24 @@ async def schedule_task(
         log.debug("plan.schedule · task=%s has no due_date", task.id)
         return None
 
+    engine = scheduler_engine()
+    if engine == "solver":
+        if _depth > 0:
+            # Commute-triggered moves: phase 1 keeps commute out of the
+            # solver, so a leg that doesn't fit stays flagged, the task stays.
+            log.info("plan.schedule · solver mode ignores nested reschedule task=%s", task.id)
+            interval = scheduled_interval_for(task)
+            return (interval.start, interval.end) if interval is not None else None
+        options = {"block": block, "account_key": account_key, "notify": notify,
+                   "primary_action": primary_action}
+        from app.services.plan.replan import batched
+
+        pending = batched()
+        if pending is not None:
+            pending.append((task, options))
+            return None
+        return (await schedule_tasks(session, [(task, options)])).get(task.id)
+
     # Everything at _depth>0 (victim reschedules, commute-triggered moves)
     # already runs inside the lock; re-acquiring would deadlock.
     if _depth > 0:
@@ -219,7 +237,62 @@ async def schedule_task(
                 and to_user_tz(dependent.scheduled_date) < planned.end
             ):
                 await schedule_task(session, dependent, notify=False)
+    if engine == "shadow" and _depth == 0:
+        from app.services.plan.replan import shadow_soon
+
+        shadow_soon("schedule_task")
     return (planned.start, planned.end) if planned is not None else None
+
+
+async def schedule_tasks(
+    session: Session, requests: list[tuple[Task, dict]]
+) -> dict:
+    """Solver mode: one global solve covering every requested task, then the
+    per-task notifications `schedule_task` promises. Returns
+    `{task_id: (start, end) | None}`."""
+    from app.services.plan.replan import request_replan
+
+    fresh = {task.id: task.calendar_event_id is None for task, _ in requests}
+    blocks: dict = {}
+    quiet: set = set()
+    account_key = None
+    for task, options in requests:
+        block = options.get("block")
+        if block is not None:
+            blocks.setdefault(task.id, []).append((block.start, block.end))
+        if not options.get("notify", True):
+            quiet.add(task.id)
+        account_key = account_key or options.get("account_key")
+    session.commit()
+    try:
+        result = await request_replan(
+            session, reason="schedule_task", blocks=blocks, quiet=quiet, account_key=account_key,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("plan.schedule · solve failed err=%s", exc, exc_info=True)
+        session.rollback()
+        result = None
+
+    from app.services.notify import clear_task_notification, notify_task_created, notify_task_deferred
+
+    out: dict = {}
+    for task, options in requests:
+        session.refresh(task)
+        interval = scheduled_interval_for(task) if task.schedule_state == "placed" else None
+        out[task.id] = (interval.start, interval.end) if interval is not None else None
+        if result is None or not options.get("notify", True):
+            continue
+        if interval is not None and task.calendar_event_id:
+            if fresh[task.id]:
+                await notify_task_created(
+                    task, start=interval.start, end=interval.end,
+                    primary_action=options.get("primary_action"),
+                )
+            else:
+                await clear_task_notification(task.id)
+        elif task.schedule_state == "deferred" and fresh[task.id]:
+            await notify_task_deferred(task, primary_action=options.get("primary_action"))
+    return out
 
 
 async def _schedule_task_locked(
@@ -271,6 +344,7 @@ async def _schedule_task_locked(
                 )
             task.calendar_event_id = None
             task.scheduled_date = None
+            task.schedule_state = "unplaced"
             session.flush()
             session.commit()
             from app.events import publish_task
@@ -309,6 +383,8 @@ async def _schedule_task_locked(
                 context=f"task_id={task.id}",
             )
         return None
+
+    await _log_legacy_placement(session, task, planned, prior)
 
     # Each placement→replan→displaced-task hop increments _depth, so a
     # replan cycle (A's legs move B, B's legs move A, …) terminates here
@@ -354,6 +430,30 @@ async def _schedule_task_locked(
 
                 await notify_unroutable_location(task, location)
     return planned
+
+
+async def _log_legacy_placement(
+    session: Session, task: Task, planned: PlannedSlot, prior: Interval | None
+) -> None:
+    """Legacy placements feed the same training log as solver placements."""
+    from app.db.clients import schedule_log as log_store
+    from app.services.plan.snapshot import features_snapshot
+
+    task.schedule_state = "placed"
+    task.placed_by = "planner"
+    task.placed_at = datetime.now(user_tz())
+    task.placed_context = None
+    try:
+        snapshot = await features_snapshot(session, task, planned.start, planned.end)
+        log_store.add(
+            session, task_id=task.id, kind="placed", actor="planner",
+            slot_start=planned.start, slot_end=planned.end,
+            prev_start=prior.start if prior else None, prev_end=prior.end if prior else None,
+            features=snapshot,
+        )
+        session.commit()
+    except Exception as exc:  # noqa: BLE001 — training data must never block a placement
+        log.warning("plan.schedule · placement log failed task=%s err=%s", task.id, exc)
 
 
 async def reschedule_event(
@@ -1681,6 +1781,20 @@ def scheduled_interval_for(task: Task) -> Interval | None:
 
 
 def _duration_minutes(task: Task, settings) -> int:
+    """Booked length of the task's slot: what the solver wrote (the corrected
+    estimate) when set, else the estimate."""
+    booked = getattr(task, "booked_minutes", None)
+    if booked:
+        return booked
+    raw = task.estimation or settings.google_calendar_default_event_minutes
+    return max(5, int(raw or 30))
+
+
+def scheduler_engine() -> str:
+    return getattr(get_settings(), "scheduler_engine", "legacy")
+
+
+def estimate_minutes(task: Task, settings) -> int:
     raw = task.estimation or settings.google_calendar_default_event_minutes
     return max(5, int(raw or 30))
 

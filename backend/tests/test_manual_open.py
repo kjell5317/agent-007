@@ -10,8 +10,16 @@ import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
+from app.db.clients import overrides as overrides_store  # noqa: E402
 from app.services.task import open as open_svc  # noqa: E402
 from app.services.task import queue as queue_svc  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def overrides_added(monkeypatch):
+    added = []
+    monkeypatch.setattr(overrides_store, "add", lambda _session, **kw: added.append(kw))
+    return added
 from app.agent.helpers.llm import ToolCall  # noqa: E402
 
 
@@ -82,13 +90,13 @@ async def test_open_context_linked_input_enqueues_followup(monkeypatch):
     )
     monkeypatch.setattr(open_svc, "enqueue", fake_enqueue)
 
-    await open_svc.open_task_from_input(SimpleNamespace(), raw_id, {}, [context_id])
+    await open_svc.open_task_from_input(SimpleNamespace(commit=lambda: None), raw_id, {}, [context_id])
 
     assert enqueued == [(raw_id, {}, [context_id], task_id)]
 
 
 @pytest.mark.asyncio
-async def test_open_unlinked_input_still_enqueues_fresh_task(monkeypatch):
+async def test_open_unlinked_input_still_enqueues_fresh_task(monkeypatch, overrides_added):
     raw_id = uuid.UUID("20000000-0000-0000-0000-000000000004")
     raw = SimpleNamespace(
         id=raw_id,
@@ -110,12 +118,17 @@ async def test_open_unlinked_input_still_enqueues_fresh_task(monkeypatch):
     monkeypatch.setattr(open_svc, "enqueue", fake_enqueue)
 
     await open_svc.open_task_from_input(
-        SimpleNamespace(),
+        SimpleNamespace(commit=lambda: None),
         raw_id,
         {"title": "Explicit title"},
     )
 
     assert enqueued == [(raw_id, {"title": "Explicit title"}, [], None)]
+    # Opening a dismissed input corrects the agent's "not a task" decision.
+    assert overrides_added == [{
+        "field": "is_task", "agent_value": False, "user_value": True, "source": "ui",
+        "task_id": None, "raw_input_id": raw_id,
+    }]
 
 
 @pytest.mark.asyncio

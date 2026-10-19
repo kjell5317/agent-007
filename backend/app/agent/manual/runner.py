@@ -30,6 +30,9 @@ from app.agent.tools.notes_lookup import run_search_notes, save_notes
 from app.agent.tools.calendar_lookup import (
     related_events_section, run_find_calendar_events, run_get_event_details, run_update_event,
 )
+from app.agent.helpers.attributes import (
+    ATTRIBUTE_FIELDS, new_task_attributes, valid_attributes,
+)
 from app.agent.helpers.text import normalize_agent_due_date, now_iso
 from app.agent.helpers.precedents import (
     candidate_trace_ref,
@@ -250,7 +253,10 @@ async def extract_task_fields(
                     raise ValueError(f"Agent selected a task outside the candidate set: {target_id}")
                 if not any(
                     payload.get(key) is not None
-                    for key in ("title", "description", "estimation", "due_date", "location", "link", "label", "status")
+                    for key in (
+                        "title", "description", "estimation", "due_date", "location", "link",
+                        "label", "status", *ATTRIBUTE_FIELDS,
+                    )
                 ):
                     raise ValueError("Manual update_task must change a task field or status")
                 trace["action"] = terminal_use.name
@@ -295,8 +301,19 @@ async def extract_task_fields(
     # trace and strip so they don't count as agent-extracted task fields.
     trace["reason"] = payload.pop("reason", None)
     trace["confidence"] = payload.pop("confidence", None)
+    attributes: dict[str, str | None] = valid_attributes(payload)
+    for field in ATTRIBUTE_FIELDS:
+        payload.pop(field, None)
     if trace.get("action") is None:
         _backstop_required(payload, raw_id=raw.id)
+        attributes = new_task_attributes(
+            attributes,
+            labels_store.defaults_by_name(session),
+            label=payload.get("label"),
+            explicit_due=explicit_due,
+            related_event=bool(payload.get("related_event_id")),
+        )
+    payload.update({field: value for field, value in attributes.items() if value is not None})
     if include_trace:
         return payload, trace
     return payload

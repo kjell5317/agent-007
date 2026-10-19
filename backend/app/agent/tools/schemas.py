@@ -25,6 +25,8 @@ storage concerns.
 
 from collections.abc import Mapping
 
+from app.agent.helpers.attributes import DEADLINE_KINDS, EFFORTS, WORK_TYPES
+
 # Provider-neutral JSON schema format; provider adapters translate at the boundary.
 
 INPUT_LINK_RESEARCH_TOOL = {
@@ -82,6 +84,38 @@ _NOTES_SCHEMA = {
 }
 
 
+WORK_TYPE_DOC = (
+    "Kind of work. physical: body, errands, sport, chores; cognitive: focused "
+    "thinking, writing, coding, studying; social: calls, meetings, messaging people."
+)
+EFFORT_DOC = "How demanding the task is."
+DEADLINE_KIND_DOC = (
+    "hard: missing the due date makes the task pointless or has external "
+    "consequences (submissions, exams, appointments, preparing for a linked "
+    "event). firm: any other explicit deadline. soft: a guessed or derived due "
+    "date, or 'sometime' phrasing."
+)
+_INHERIT_LABEL_DEFAULT = (
+    " Inherit the label's default (listed with the labels) unless this task "
+    "clearly differs."
+)
+
+
+def _attribute_props(*, on_create: bool) -> dict:
+    inherit = _INHERIT_LABEL_DEFAULT if on_create else ""
+    return {
+        "deadline_kind": {
+            "type": "string", "enum": list(DEADLINE_KINDS), "description": DEADLINE_KIND_DOC,
+        },
+        "work_type": {
+            "type": "string", "enum": list(WORK_TYPES), "description": WORK_TYPE_DOC + inherit,
+        },
+        "effort": {
+            "type": "string", "enum": list(EFFORTS), "description": EFFORT_DOC + inherit,
+        },
+    }
+
+
 def _label_schema(labels: Mapping[str, str], *, required: bool) -> dict:
     """Build the `label` property from a `{name: description}` catalog.
 
@@ -130,6 +164,7 @@ _CREATE_TASK_PROPS: dict = {
             "choices (:00, :15, :30, :45); EOD/end of day means 23:45."
         ),
     },
+    **_attribute_props(on_create=True),
     "location": {"type": "string"},
     "link": {
         "type": "string",
@@ -170,6 +205,7 @@ _UPDATE_TASK_PROPS: dict = {
             "not change."
         ),
     },
+    **_attribute_props(on_create=False),
     "location": {"type": "string"},
     "link": {
         "type": "string",

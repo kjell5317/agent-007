@@ -23,7 +23,12 @@ async def update_task_to_calendar(
     changed_fields: Iterable[str] | None = None,
 ) -> None:
     """Patch or reschedule a task after a plan-relevant edit."""
+    from app.services.plan.schedule import scheduler_engine
+
     changed = set(changed_fields or ())
+    if scheduler_engine() == "solver":
+        await _update_with_solver(session, task, changed)
+        return
     if not changed & PLAN_TRIGGER_FIELDS:
         return
 
@@ -73,6 +78,20 @@ async def update_task_to_calendar(
     # old span — re-derive them around the new one.
     if "estimation" in changed and resolve_location_alias(task.location):
         await _replan_window(session, current.start, end)
+
+
+async def _update_with_solver(session: Session, task, changed: set[str]) -> None:
+    """Any plan-relevant edit is a new solve; the solver decides whether the
+    slot moves. Non-time event fields are patched first."""
+    from app.services.calendar import update_task_event
+    from app.services.plan.schedule import schedule_task, scheduled_interval_for
+
+    prior = scheduled_interval_for(task)
+    if task.calendar_event_id and changed & {"title", "description", "link", "location", "label"}:
+        await update_task_event(session, task, changed_fields=changed)
+    await schedule_task(session, task)
+    if "location" in changed and prior is not None:
+        await _replan_window(session, prior.start, prior.end)
 
 
 async def _replan_window(session: Session, start, end) -> None:

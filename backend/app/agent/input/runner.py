@@ -29,6 +29,7 @@ from app.agent.helpers.llm import (
     tool_result_message,
     user_message,
 )
+from app.agent.helpers.attributes import new_task_attributes
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import (
     related_events_section,
@@ -277,10 +278,11 @@ async def run_new_input_agent(
         if tu.name == "create_task":
             payload = dict(tu_input)
             due_date = normalize_agent_due_date(payload.get("due_date"))
+            explicit_due = bool(payload.get("due_date_is_explicit"))
             event_fields, event_warning = apply_event_context(
                 session,
                 {**payload, "due_date": due_date},
-                explicit_due=bool(payload.get("due_date_is_explicit")),
+                explicit_due=explicit_due,
             )
             due_date = event_fields.get("due_date")
             if event_warning:
@@ -292,6 +294,7 @@ async def run_new_input_agent(
                     "agent skipped label · raw=%s — leaving NULL, user must assign",
                     raw.id,
                 )
+            label = str(payload.get("label")) if payload.get("label") else None
             task = tasks.create(
                 session,
                 TaskCreate(
@@ -301,10 +304,17 @@ async def run_new_input_agent(
                     due_date=due_date,
                     location=str(payload.get("location")) if payload.get("location") else None,
                     link=str(payload.get("link")) if payload.get("link") else None,
-                    label=str(payload.get("label")) if payload.get("label") else None,
+                    label=label,
                     related_event_id=event_fields.get("related_event_id"),
                     related_event_calendar_id=event_fields.get("related_event_calendar_id"),
                     related_event_due_derived=bool(event_fields.get("related_event_due_derived")),
+                    **new_task_attributes(
+                        payload,
+                        labels_store.defaults_by_name(session),
+                        label=label,
+                        explicit_due=explicit_due,
+                        related_event=bool(event_fields.get("related_event_id")),
+                    ),
                 ),
             )
             trace["outcome"] = "task_created"

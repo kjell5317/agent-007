@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta, timezone, tzinfo
 
 from sqlalchemy import select
@@ -54,8 +55,10 @@ from app.services.home_assistant import (
     next_event_datetime_configured,
     set_next_event_datetime,
 )
+from app.services.plan.checkin import booked_slot
 from app.services.plan.schedule import (
     _duration_minutes,
+    scheduler_engine,
     reschedule_event,
     schedule_task,
     scheduled_interval_for,
@@ -120,6 +123,7 @@ async def discover_updated_events(
     }
 
     changed_physical: list[CalendarEvent] = []
+    user_moves: list[UserMove] = []
     deleted_spans: list[tuple[datetime, datetime]] = []
     cancelled_docs: list[tuple[str, str]] = []
     for cid in ids:
@@ -157,7 +161,7 @@ async def discover_updated_events(
             for ev in active:
                 if not is_task_event(ev):
                     continue
-                synced_task_id = _sync_task_schedule_from_event(session, ev)
+                synced_task_id = _sync_task_schedule_from_event(session, ev, user_moves)
                 if synced_task_id is not None:
                     synced_task_ids.append(synced_task_id)
                     summary["scheduled_updates"] += 1
@@ -263,6 +267,7 @@ async def discover_updated_events(
         session.rollback()
 
     await _refresh_related_task_deadlines(session, changed_physical, cancelled_docs)
+    await _record_user_moves(session, user_moves, account_key=account_key)
 
     await _plan_legs_for_changed_events(
         session, changed_physical, deleted_spans=deleted_spans, account_key=account_key,
@@ -539,34 +544,108 @@ def _baseline_stale(baseline_iso: str | None, now: datetime) -> bool:
     return (now - base) > REBASELINE_INTERVAL
 
 
-def _sync_task_schedule_from_event(session: Session, event: CalendarEvent) -> uuid.UUID | None:
+@dataclass(frozen=True)
+class UserMove:
+    task_id: uuid.UUID
+    kind: str  # "moved_by_user" | "resized_by_user"
+    prev: tuple[datetime, datetime] | None
+    slot: tuple[datetime, datetime]
+
+
+def _sync_task_schedule_from_event(
+    session: Session, event: CalendarEvent, moves: list[UserMove] | None = None
+) -> uuid.UUID | None:
     """Sync an externally-edited task event back into its task row.
 
     Pulls start (→ scheduled_date), duration (→ estimation), title, location
     and description. Only writes the DB — never patches the calendar back, so
     it can't ping-pong with the planner. Each field is compared against the
     value we'd have pushed, so unedited fields (aliased locations, the
-    description+link merge) don't get clobbered on a round trip.
+    description+link merge) don't get clobbered on a round trip — which also
+    makes every start or length difference a user edit: a move or resize is
+    recorded as a hand placement and as training data.
     """
     row = _task_for_event(session, event)
     if row is None:
         return None
 
+    prev = booked_slot(row)
     changed = False
+    moved = False
     if row.calendar_event_id != event.id:
         row.calendar_event_id = event.id
         changed = True
     if not event.all_day and row.scheduled_date != event.start:
         row.scheduled_date = event.start
-        changed = True
-    for field, value in _synced_field_updates(event, row).items():
+        changed = moved = True
+    updates = _synced_field_updates(event, row)
+    resized = "estimation" in updates
+    if resized:
+        from app.db.clients import overrides as overrides_store
+
+        overrides_store.add(
+            session, field="estimation", agent_value=row.estimation,
+            user_value=updates["estimation"], source="calendar", task_id=row.id,
+        )
+        row.booked_minutes = None
+    for field, value in updates.items():
         setattr(row, field, value)
         changed = True
 
     if not changed:
         return None
+    if moved or resized:
+        row.placed_by = "user"
+        row.placed_at = datetime.now(timezone.utc)
+        row.placed_context = None
+        row.schedule_state = "placed"
+        if moves is not None:
+            moves.append(UserMove(
+                task_id=row.id,
+                kind="moved_by_user" if moved else "resized_by_user",
+                prev=prev,
+                slot=(event.start, event.end),
+            ))
     session.flush()
     return row.id
+
+
+async def _record_user_moves(
+    session: Session, moves: list[UserMove], *, account_key: str | None
+) -> None:
+    """Log hand placements with before/after feature snapshots, then let the
+    solver resolve whatever the move now overlaps."""
+    if not moves:
+        return
+    from app.db.clients import schedule_log as log_store
+    from app.db.clients import tasks as tasks_store
+    from app.services.learn.jobs import refit_soon
+    from app.services.plan.snapshot import features_snapshot
+
+    for move in moves:
+        task = tasks_store.get(session, move.task_id)
+        if task is None:
+            continue
+        snapshot = await features_snapshot(
+            session, task, move.slot[0], move.slot[1],
+            prev=move.prev if move.kind == "moved_by_user" else None,
+        )
+        log_store.add(
+            session, task_id=task.id, kind=move.kind, actor="user",
+            slot_start=move.slot[0], slot_end=move.slot[1],
+            prev_start=move.prev[0] if move.prev else None,
+            prev_end=move.prev[1] if move.prev else None,
+            features=snapshot,
+        )
+    session.commit()
+    refit_soon()
+    if scheduler_engine() == "solver":
+        from app.services.plan.replan import request_replan
+
+        try:
+            await request_replan(session, reason="user_move", account_key=account_key)
+        except Exception:  # noqa: BLE001
+            log.exception("discover · replan after user move failed")
 
 
 def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:
@@ -583,7 +662,8 @@ def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:
     if event.location != resolve_location_alias(task.location):
         updates["location"] = event.location
 
-    if not event.all_day:
+    # A running "Still working" extension grows the event on purpose.
+    if not event.all_day and getattr(task, "running_since", None) is None:
         expected = _duration_minutes(task, get_settings())
         actual = round((event.end - event.start).total_seconds() / 60)
         if actual >= 1 and actual != expected:

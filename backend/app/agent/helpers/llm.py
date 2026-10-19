@@ -120,6 +120,7 @@ async def chat(
     model: str | None = None,
     thinking_level: str | None = None,
     web_search: bool = False,
+    max_tokens: int = MAX_TOKENS,
 ) -> LLMResponse:
     """Call the configured Haystack chat backend and normalize its response.
     `provider`/`model` override the global default for per-agent routing;
@@ -133,7 +134,7 @@ async def chat(
         system_prompt=system_prompt,
         messages=messages,
         tools=tools,
-        generation_kwargs=_generation_kwargs(provider, MAX_TOKENS, force_tool, thinking_level),
+        generation_kwargs=_generation_kwargs(provider, max_tokens, force_tool, thinking_level),
         provider=provider,
         model=model,
         name=name,

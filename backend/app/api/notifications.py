@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.db.clients import tasks as tasks_store
 from app.events import publish_task
 from app.services.home_assistant import minutes_until_next_event_prep, schedule_day_action
@@ -40,6 +40,7 @@ from app.services.notify import (
     clear_task_notification,
 )
 from app.services.ntfy import action_secret, verify_action
+from app.services.plan.checkin import CHECKIN_ACTIONS, handle_checkin_action
 from app.services.plan.schedule import schedule_task, scheduled_interval_for
 from app.services.points import adjust_points
 from app.services.task.close import close_task as close_task_svc
@@ -184,6 +185,16 @@ async def handle_action(
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
 
+    if payload.action in CHECKIN_ACTIONS:
+        log.info("notify action · check-in %s task=%s", payload.action, task.id)
+        # "Not done" re-plans, which can take the solver's whole time limit —
+        # answer the tap right away.
+        if background_tasks is not None:
+            background_tasks.add_task(_checkin_in_background, task.id, payload.action)
+        else:
+            await handle_checkin_action(session, task, payload.action)
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
     if payload.action == ACTION_CLOSE_TASK:
         log.info("notify action · close task=%s", task.id)
         await close_task_svc(session, task.id)
@@ -191,7 +202,7 @@ async def handle_action(
 
     if payload.action == ACTION_DISMISS_TASK:
         log.info("notify action · dismiss task=%s", task.id)
-        await dismiss_task(session, task.id)
+        await dismiss_task(session, task.id, source="notification")
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     if payload.action == ACTION_RESCHEDULE_TASK:
@@ -224,3 +235,14 @@ async def handle_action(
         status.HTTP_400_BAD_REQUEST,
         f"unknown action: {payload.action}",
     )
+
+
+async def _checkin_in_background(task_id: uuid.UUID, action: str) -> None:
+    with SessionLocal() as session:
+        task = tasks_store.get(session, task_id)
+        if task is None:
+            return
+        try:
+            await handle_checkin_action(session, task, action)
+        except Exception:  # noqa: BLE001
+            log.exception("check-in action failed · task=%s action=%s", task_id, action)

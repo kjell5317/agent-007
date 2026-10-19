@@ -341,7 +341,7 @@ async def update_task(
     fields = payload.model_dump(exclude_unset=True)
     try:
         row = await update_task_svc(
-            session, task_id, fields, sync_calendar=False, auto_split=False
+            session, task_id, fields, sync_calendar=False, auto_split=False, actor="user"
         )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
@@ -441,7 +441,7 @@ async def mark_not_task(task_id: uuid.UUID, background_tasks: BackgroundTasks, s
             ids = dismiss_container(session, task_id)
             background_tasks.add_task(cleanup_dismissed_container, ids)
         else:
-            await dismiss_task(session, task_id)
+            await dismiss_task(session, task_id, source="ui")
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 

@@ -17,6 +17,16 @@ from app.services.task.split import reflow_children
 
 log = logging.getLogger(__name__)
 PLAN_TRIGGER_FIELDS = frozenset({"estimation", "due_date", "location"})
+# Fields only the solver's preference model looks at.
+SOLVER_TRIGGER_FIELDS = frozenset({"deadline_kind", "work_type", "effort", "label"})
+
+
+def plan_trigger_fields() -> frozenset[str]:
+    from app.services.plan.schedule import scheduler_engine
+
+    if scheduler_engine() == "solver":
+        return PLAN_TRIGGER_FIELDS | SOLVER_TRIGGER_FIELDS
+    return PLAN_TRIGGER_FIELDS
 
 
 def affected_tasks(session: Session, row: Task, changed: set[str]) -> list[tuple[uuid.UUID, set[str]]]:
@@ -37,7 +47,7 @@ async def sync_external(session: Session, updates: list[tuple[uuid.UUID, set[str
         if row is None or row.is_container or statuses.get(task_id) == "closed":
             continue
         try:
-            if changed & PLAN_TRIGGER_FIELDS:
+            if changed & plan_trigger_fields():
                 await update_task_to_calendar(session, row, changed_fields=changed)
             else:
                 await update_task_event(session, row, changed_fields=changed)
@@ -55,10 +65,15 @@ async def update_task(
     cascade_deadline: bool = True,
     sync_calendar: bool = True,
     auto_split: bool = True,
+    actor: str = "agent",
 ) -> Task:
+    """`actor="user"` marks an edit from the UI: every changed agent-chosen
+    field is recorded as a correction (the training signal for the agent ML
+    hints). Agent follow-ups — a new email moving a deadline — are not."""
     row = tasks_store.get(session, task_id)
     if row is None:
         raise LookupError("Task not found")
+    before = {key: getattr(row, key, None) for key in fields} if actor == "user" else {}
     if "due_date" in fields and fields["due_date"] is None:
         raise ValueError("Due date is required")
     if row.parent_task_id and cascade_deadline and "due_date" in fields:
@@ -68,6 +83,13 @@ async def update_task(
     if row.parent_task_id and "estimation" in fields and not (fields["estimation"] or 0) > 0:
         raise ValueError("A subtask needs a positive duration")
     row = tasks_store.update(session, task_id, **fields)
+    if before:
+        from app.db.clients import overrides as overrides_store
+
+        overrides_store.record_changes(
+            session, task_id=task_id, before=before,
+            after={key: getattr(row, key, None) for key in fields}, source="ui",
+        )
     changed = set(fields)
     if cascade_deadline and row.is_container and "due_date" in changed:
         reflow_children(session, row)

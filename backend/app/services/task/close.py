@@ -7,7 +7,9 @@ mirrored calendar event.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -45,6 +47,8 @@ async def close_task(
     kotx_task_id = task.kotx_task_id
     series_id = getattr(task, "recurrence_series_id", None)
     vacated = vacated_commute_window(task)
+    running = getattr(task, "running_since", None) is not None
+    await _log_close(session, task)
     latest = raw_inputs_store.latest_for_task(session, task_id)
     # Award completion points before any status flip / orphan delete, so we
     # still have the task's estimation in hand. Idempotent per completion cycle and
@@ -70,7 +74,10 @@ async def close_task(
         session.delete(task)
         session.commit()
         publish_task_removed(task_id)
-    await delete_task_event(session, task)
+    if running and latest is not None:
+        await _trim_running_event(session, task)
+    else:
+        await delete_task_event(session, task)
     await clear_task_notification(task_id)
     await replan_vacated_window(session, vacated)
     if discard_kotx and kotx_task_id is not None:
@@ -93,3 +100,55 @@ async def close_task(
             parent_status = tasks_store.latest_status_for(session, [parent_id]).get(parent_id, "open")
             if parent_status != "closed":
                 await close_task(session, parent_id, award_points=False)
+
+
+async def _log_close(session: Session, task) -> None:
+    """Record the close time against the booked slot — the duration
+    observation for check-ins and closes inside the slot."""
+    from app.db.clients import schedule_log as log_store
+    from app.services.learn.jobs import refit_soon
+    from app.services.plan.checkin import booked_slot
+    from app.services.plan.snapshot import features_snapshot
+
+    try:
+        slot = booked_slot(task)
+        if slot is None or getattr(task, "is_container", False):
+            return
+        now = datetime.now(slot[0].tzinfo)
+        snapshot = None
+        for row in log_store.for_slot(session, task.id, task.scheduled_date):
+            if row.features and row.features.get("slot"):
+                snapshot = row.features
+        if snapshot is None and slot[0] <= now <= slot[1] + timedelta(minutes=15):
+            snapshot = await features_snapshot(session, task, slot[0], slot[1], now=now)
+        log_store.add(
+            session, task_id=task.id, kind="closed", actor="user",
+            slot_start=task.scheduled_date, slot_end=slot[1], features=snapshot,
+        )
+        session.commit()
+        refit_soon()
+    except Exception as exc:  # noqa: BLE001 — training data must never block a close
+        log.warning("close · schedule log failed task=%s err=%s", task.id, exc)
+
+
+async def _trim_running_event(session: Session, task) -> None:
+    """A "Still working" task marked done: cut its event to the done time and
+    keep it as the record of when the work actually happened."""
+    from app.services.calendar import update_task_event
+    from app.services.plan.checkin import booked_slot
+
+    slot = booked_slot(task)
+    task.running_since = None
+    session.commit()
+    if slot is None or not task.calendar_event_id:
+        return
+    now = datetime.now(slot[0].tzinfo)
+    minutes = max(5, math.ceil((now - slot[0]).total_seconds() / 300) * 5)
+    # Recorded as the booked length so calendar sync sees what we pushed,
+    # not a user resize.
+    task.booked_minutes = minutes
+    session.commit()
+    try:
+        await update_task_event(session, task, start=slot[0], end=slot[0] + timedelta(minutes=minutes))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("close · running event trim failed task=%s err=%s", task.id, exc)

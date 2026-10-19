@@ -16,11 +16,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { actionHint } from "@/components/runs/runLabels";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
-import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
+import { dueDateBadgeVariant, fmtClock, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { isTaskOverdue, taskRecurrence } from "@/lib/tasks";
+import { isTaskOverdue, taskRecurrence, taskRunningSince } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -82,6 +82,8 @@ export function TaskCard({
   const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
+  const runningSince = taskRunningSince(task);
+  const deferred = task.schedule_status === "deferred";
   const recurrence = taskRecurrence(task);
   const recurrenceTitle = recurrence
     ? `${recurrence.inherited ? "Part of a task that repeats" : "Repeats"} ${recurrence.label.toLowerCase()}`
@@ -97,6 +99,8 @@ export function TaskCard({
           ? "border-emerald-500/70"
           : null;
   const locationProbeKey = [
+    runningSince ?? "",
+    deferred,
     displayDate ?? "",
     task.estimation ?? "",
     task.label ?? "",
@@ -360,9 +364,25 @@ export function TaskCard({
               ref={metadataRef}
               className={cn("mt-1 flex items-center gap-x-2 gap-y-1 text-xs text-muted-foreground", compact ? "overflow-hidden whitespace-nowrap" : "flex-wrap")}
             >
+              {runningSince && (
+                <span
+                  title={`Running since ${fmtClock(runningSince)}`}
+                  className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-300"
+                >
+                  <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                  Running
+                </span>
+              )}
+
               {displayDate && (
                 <Badge variant={displayDateVariant}>
                   {fmtDue(displayDate)}
+                </Badge>
+              )}
+
+              {deferred && (
+                <Badge variant="muted" title={`Not planned yet — due ${fmtDue(task.due_date)}`}>
+                  Later
                 </Badge>
               )}
 

@@ -25,12 +25,12 @@ decisions in the extraction agent.
 |---|---|
 | Time grid | 5 minutes. Durations and commute legs round **up** to 5 min. |
 | Solver | OR-Tools CP-SAT (new dependency). 10 s limit per trigger, 60 s nightly, warm-started from the current calendar. Result = best schedule found within the limit, never worse than the current one; optimality is not proven at realistic sizes (see *Solver limits and horizon*). |
-| Horizon | 14 days. Tasks due later may be *deferred*: not placed now, reconsidered on every solve (step 7). |
+| Horizon | 7 days, the same look-ahead as the commute planner. Tasks due later may be *deferred*: not placed now, reconsidered on every solve (step 6). |
 | Hard: overlap | No two tasks overlap; no task overlaps a calendar event. |
 | Hard: events | Calendar events not owned by the app never move. |
 | Hard | Nothing starts in the past. `depends_on_task_id` order holds. A repeat occurrence doesn't start before its period. A task whose slot has started stays fixed, including a running *Still working* extension. |
-| Deadline | Per task: `hard`, `firm` or `soft` (step 3, step 6). Lateness is penalised by kind; an overdue task gets placed instead of failing. |
-| User-placed tasks | Movable. A strong anchor while their surroundings are unchanged; normal stability once the surroundings change (step 7). |
+| Deadline | Per task: `hard`, `firm` or `soft` (step 3, step 5). Lateness is penalised by kind; an overdue task gets placed instead of failing. |
+| User-placed tasks | Movable. A strong anchor while their surroundings are unchanged; normal stability once the surroundings change (step 6). |
 | Removed | Day windows (10–19, 8–24), the 15-min event buffer, the same-day rule, `LEAD_DAYS`, victim ordering, displacement repair. All become prior weights. |
 | Commute (phase 1) | Not in the solver. The commute planner still derives legs after placement. Legs are derived output, not busy input. |
 | Points | The "−N points, slot missed" notification goes away. The deduction itself stays on *Not done* and on no answer (confirm). |
@@ -51,6 +51,7 @@ decisions in the extraction agent.
 | `placed_at` | timestamptz; when the current slot was set |
 | `placed_context` | jsonb, user placements only: ids and spans of items within ±2 h and the day load at placement time |
 | `running_since` | timestamptz, set while a *Still working* extension runs |
+| `booked_minutes` | length the current slot was booked with (the corrected estimate); null = the estimate. Calendar sync compares event lengths against it, so a corrected booking doesn't read as a user resize |
 | `schedule_state` | `placed` \| `deferred` \| `unplaced`; `scheduled_date` is null for the last two |
 
 `labels` gains `default_work_type`, `default_effort` (nullable).
@@ -105,7 +106,7 @@ as user overrides.
 | `open_task_from_input` (not_task input opened) | `task_overrides is_task: false → true` |
 | Every solver placement | `schedule_log placed` with features and `solver_run_id` |
 
-Backfill: a one-off script compares each task's agent tool-call input in
+Backfill: a one-off script compares, for tasks due at most 7 days ago, each task's agent tool-call input in
 `raw_inputs.agent_trace.iterations[].blocks[].input` with the current task
 fields and writes `source=backfill` rows. Noisy (calendar resizes and
 agent updates also changed fields), so learning down-weights them.
@@ -126,18 +127,10 @@ agent updates also changed fields), so learning down-weights them.
   and later an ML hint (see the last section).
 - Labels API (`api/labels.py`) and UI: edit the defaults.
 - Task detail UI: show and edit all three fields (edits feed `task_overrides`).
-- Backfill script for open tasks and tasks from the last 180 days, one
-  batched call per 20 tasks on the cheap model.
+- Backfill script for tasks due at most 7 days ago, one batched call
+  per 20 tasks on the cheap model.
 
-### Step 4 — Holiday calendar
-
-- Setting `google_holiday_calendar_id` (e.g. the German public-holiday
-  calendar) plus `.env.example`.
-- `services/calendar/holidays.py`: fetch all-day events for the horizon,
-  return a `set[date]`, cache per process for 24 h. Not added to busy
-  calendars — holidays are a feature, not a blocker.
-
-### Step 5 — End-of-slot check-in (replaces the penalty notification)
+### Step 4 — End-of-slot check-in (replaces the penalty notification)
 
 Hook: `reschedule_overdue_scheduled_tasks_once` in `app/cron.py` already
 fires at slot end + 15 min (`OVERDUE_TASK_GRACE`). It becomes
@@ -183,11 +176,11 @@ time; good enough for a correction factor):
 | `not_done` | missed slot, no duration |
 | `no_response`, `abandoned` | excluded |
 
-### Step 6 — Feature extraction (pure)
+### Step 5 — Feature extraction (pure)
 
 `app/services/plan/features.py`. Input: a `SlotContext` dataclass (task
 attributes, slot start/end, previous and next neighbour with kind / label
-/ work type / effort / gap, day load, holiday set). Output: sparse
+/ work type / effort / gap, day load). Output: sparse
 `dict[str, float]`. The same function produces log snapshots and solver
 cost tables, so training and serving can't drift apart.
 
@@ -199,7 +192,6 @@ that approximate today's rules.
 | Hour of day | one-hot, 24 | 10–19: 0 · 8–10 and 19–24: −2 · 0–8: −8 |
 | Hour × work type, hour × effort | one-hot | 0 |
 | Weekday | one-hot, 7; × work type | 0 |
-| Holiday | flag; × work type | 0 |
 | Season | sin / cos of day of year | 0, very tight regularisation |
 | Gap before / after | buckets 0, 5, 10, ≥15 min | −3, −2, −1, 0 (replaces the 15-min buffer) |
 | Neighbour before / after | kind (`none` if gap > 60 min, `event`, `task`) × same-label flag; for tasks also × work type × effort pair. Events carry label only in phase 1. | 0 |
@@ -211,9 +203,9 @@ that approximate today's rules.
 No caps on learned weights. The prior is a starting point, not a limit:
 an hour with no observations stays at its prior, and every observation
 can move it. How fast it moves is set by the prior's spread per feature
-group (step 8).
+group (step 7).
 
-### Step 7 — Solver
+### Step 6 — Solver
 
 `app/services/plan/solver.py`, pure: `SolveInput` (tasks with duration,
 earliest start, fixed flag, predecessor, current slot, static cost table;
@@ -240,22 +232,22 @@ Model (time unit = 5 min, `t = 0` at horizon start):
     `free_k` is the free time in good hours between the horizon end and
     `k`, from coarse busy data (Calendar `freeBusy`); `ρ` is the share of
     free time that historically goes to tasks (prior 0.5, learned in
-    step 8). One linear constraint per week, almost free to solve.
-  - Effect: a task due in two months with only poor slots this fortnight
+    step 7). One linear constraint per week, almost free to solve.
+  - Effect: a task due in two months with only poor slots this week
     waits; one whose remaining weeks are already full is pulled in now.
 - `AddNoOverlap` over task intervals and fixed intervals (fixed tasks,
   calendar events). Gaps are soft (features), not padding.
 - Costs are built from small tables, never one entry per start:
   `day_i = start_i // 288`, `tod_i = start_i % 288`, `hour_i = tod_i // 12`.
   Hour terms (hour, hour × work type, hour × effort) fold into a 24-entry
-  table per task, day terms (weekday, holiday, season, days from now and
+  table per task, day terms (weekday, season, days from now and
   their work-type interactions) into one entry per horizon day, lateness
   is linear via `AddMaxEquality`. A prototype with one 4032-entry table
   per task spent 25 s in presolve for 40 tasks; the compact form accepts
   the warm start in under 0.5 s.
 - Gap and neighbour terms need one yes/no variable per (task, item it
   could sit next to) pair: "ends 0 / 5 / 10 min before", "starts 0 / 5 /
-  10 min after", "adjacent within 60 min". Generated for all 14 days by
+  10 min after", "adjacent within 60 min". Generated for every horizon day by
   default. Fallback when there are more than about 50 movable tasks, or
   shadow-mode solves don't settle within the limit: candidate days only
   (the task's current day plus its 3 best days by the other cost terms).
@@ -281,7 +273,7 @@ Model (time unit = 5 min, `t = 0` at horizon start):
 - `AddHint` from the current calendar, so the result is never worse than
   the current schedule. `num_workers=2`, fixed `random_seed`; tests use
   one worker.
-- Durations use the duration correction from step 8 once it exists.
+- Durations use the duration correction from step 7 once it exists.
 
 Integration:
 
@@ -289,7 +281,7 @@ Integration:
   sites). Internally it marks the user's schedule dirty and runs
   `replan()` under the existing `_schedule_lock`; a burst of triggers
   coalesces into at most one follow-up solve.
-- `replan()`: fetch busy events and holidays, build `SolveInput`, solve,
+- `replan()`: fetch busy events, build `SolveInput`, solve,
   diff, patch only moved task events, delete events of newly deferred
   tasks, log `placed` / `deferred`, then run the commute planner for the
   affected days. `retry_unscheduled_tasks_once` skips deferred tasks.
@@ -331,7 +323,7 @@ Neighbour terms, 14 days, 2 workers, 10 s limit:
 | 80 | all days | ≈ 28 k | 8.3 s |
 
 At 40 tasks the full model fits the 10 s budget; at 80 it doesn't on
-2 vCPUs. Hence the fallback threshold in step 7. "Global optimum" in practice means: the best schedule found in the
+2 vCPUs. Hence the fallback threshold in step 6. "Global optimum" in practice means: the best schedule found in the
 time limit, never worse than the current one, with the remaining gap
 logged.
 
@@ -351,11 +343,12 @@ Limitations:
 - **External inputs are precomputed.** Travel times (phase 2) come in as
   numbers, not live lookups.
 
-Horizon: 14 days. The solver handled 180 days in tests, but far
+Horizon: 7 days, matching the commute planner. The tables above were
+measured on 14 days, so a week is well inside the budget. The solver handled 180 days in tests, but far
 placements get re-solved many times before they happen and each move is
 a calendar write. Deferral covers later deadlines.
 
-### Step 8 — Learning
+### Step 7 — Learning
 
 `app/services/learn/` with pure fitting code plus a nightly cron job.
 
@@ -377,7 +370,7 @@ Slot preference model:
   from the posterior and use it for every solve that day, so the
   schedule doesn't flicker between triggers. Well-observed features
   barely vary between draws; rarely observed ones (night hours,
-  holidays) vary more, so the solver tries them now and then.
+  rare weekdays) vary more, so the solver tries them now and then.
   Exploration fades on its own as evidence accumulates. The prior spread
   per feature group sets how adventurous early draws are.
 - The held-out log-likelihood on the most recent 20 % of data is
@@ -390,8 +383,10 @@ Duration correction:
 - `log(actual) = a[label, work_type] + b · log(estimate)`, fitted on
   exact observations, with upper-bound observations handled as censored
   (only penalise predictions above the bound). Shrinks toward
-  `a = 0, b = 1` with little data.
-- The solver uses the corrected duration; the UI shows both.
+  `a = 0, b = 1` with little data. The log-estimate is centred on one hour,
+  so the shared slope doesn't absorb one group's offset.
+- The solver uses the corrected duration; the UI shows both. An estimate
+  the user set (UI edit or calendar resize) is booked as is.
 
 Metrics, weekly, via Langfuse and `GET /stats/scheduling`: share of
 slots completed in slot, user moves per week, *Not done* rate,
@@ -423,7 +418,7 @@ no-response rate.
 1. Migration, override capture, schedule log. No behaviour change.
 2. Work type / effort extraction, label defaults, backfill.
 3. Check-in notifications replace penalty notifications.
-4. Holiday calendar, feature extraction, feature snapshots in the log.
+4. Feature extraction, feature snapshots in the log.
 5. Solver in shadow mode for one week.
 6. Switch to solver; delete legacy planner code.
 7. Learning with posterior sampling: slot preferences and duration
@@ -481,7 +476,7 @@ Friday") or where data per class stays tiny.
 |---|---|---|---|---|---|
 | Task vs not task | Yes, gate + hint | Logistic regression on the input embedding + source features (source, sender domain, list headers) | Strong: not_task input opened; task dismissed. Weak: decisions untouched for 7 days | p < 0.03 → auto not_task without an LLM call; otherwise p goes into the prompt | 300 inputs, 30 overrides |
 | Label | Yes, hint | Recency-weighted kNN over task embeddings (pgvector) | Final label after overrides | "Similar tasks: Uni 8/10" in the prompt; the LLM decides (labels change, new topics appear) | 20 per label |
-| Duration | Yes — strongest case | LLM estimate × learned correction (same model as step 8) + kNN residual | Check-in observations, calendar resizes, estimate edits | The solver uses the corrected value; the agent sees it as a hint | 10 observations per label |
+| Duration | Yes — strongest case | LLM estimate × learned correction (same model as step 7) + kNN residual | Check-in observations, calendar resizes, estimate edits | The solver uses the corrected value; the agent sees it as a hint | 10 observations per label |
 | Deadline, explicit | No | — | — | Stays LLM extraction | — |
 | Deadline, implicit | Yes, default | Median of (final due − received) over kNN neighbours, per label and source | Due-date overrides on tasks with `due_date_is_explicit = false` | Replaces the LLM's guess when ≥ 10 neighbours agree; otherwise a hint | 30 overrides |
 | Work type / effort | Later | Same as label | Overrides | Hint | 20 per class |

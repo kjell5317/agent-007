@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent.helpers.attributes import ATTRIBUTE_FIELDS, valid_attributes
 from app.agent.helpers.text import normalize_agent_due_date
 from app.db.models.task import Task
 from app.services.task.close import close_task as close_task_svc
@@ -41,8 +42,9 @@ async def apply_task_action(
         status = tu_input.get("status")
         patch = {
             k: v for k, v in tu_input.items()
-            if v is not None and k not in _NON_PATCH_FIELDS
+            if v is not None and k not in _NON_PATCH_FIELDS and k not in ATTRIBUTE_FIELDS
         }
+        patch.update(valid_attributes(tu_input))
         if "due_date" in patch:
             patch["due_date"] = normalize_agent_due_date(patch["due_date"])
         if patch.get("related_event_id") and patch.get("related_event_calendar_id"):

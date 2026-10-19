@@ -661,6 +661,10 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     # "owner/repo").
     assert payload.estimation == 20
     assert payload.label == "SocialAI"
+    # A brief is coding work; with no label default the type falls back to cognitive.
+    assert (payload.work_type, payload.effort, payload.deadline_kind) == (
+        "cognitive", None, "firm",
+    )
     assert created["scheduled"] is True
     # The first notification for a draft implement task swaps "Done" for "Start".
     assert created["primary_action"] == {"action": "KOTX_START", "title": "Start"}

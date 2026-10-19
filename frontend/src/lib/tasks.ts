@@ -1,4 +1,4 @@
-import type { RecurrenceUnit, Task } from "@/lib/types";
+import type { DeadlineKind, Effort, RecurrenceUnit, Task, WorkType } from "@/lib/types";
 
 export type TaskSortMode = "scheduled" | "due";
 
@@ -31,13 +31,64 @@ export function taskRecurrence(
   return null;
 }
 
+export const WORK_TYPE_LABEL: Record<WorkType, string> = {
+  physical: "Physical",
+  cognitive: "Cognitive",
+  social: "Social",
+};
+
+export const EFFORT_LABEL: Record<Effort, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
+export const DEADLINE_KIND_LABEL: Record<DeadlineKind, string> = {
+  hard: "Hard",
+  firm: "Firm",
+  soft: "Soft",
+};
+
+export const DEADLINE_KIND_HINT: Record<DeadlineKind, string> = {
+  hard: "Missing it makes the task pointless",
+  firm: "An explicit deadline",
+  soft: "A target, lateness is cheap",
+};
+
+export function taskRunningSince(task: Pick<Task, "status" | "running_since">): string | null {
+  return task.status === "open" ? task.running_since : null;
+}
+
+// The learned correction is only worth showing when it changes what the
+// calendar books.
+export function correctedEstimation(
+  task: Pick<Task, "estimation" | "estimation_corrected">,
+): number | null {
+  const corrected = task.estimation_corrected;
+  return task.estimation != null && corrected != null && corrected !== task.estimation
+    ? corrected
+    : null;
+}
+
+export function fmtEstimation(
+  task: Pick<Task, "estimation" | "estimation_corrected">,
+): string | null {
+  if (task.estimation == null) return null;
+  const corrected = correctedEstimation(task);
+  return corrected != null
+    ? `${task.estimation} min · planned ${corrected} min`
+    : `${task.estimation} min`;
+}
+
 export function isTaskOverdue(task: Task, now = Date.now()): boolean {
   if (task.status !== "open") return false;
   const due = timeOrNull(task.due_date);
+  if (due != null && due < now) return true;
+  // A running task's event keeps extending past its slot until marked done.
+  if (task.running_since) return false;
   const scheduled = timeOrNull(task.scheduled_date);
-  const duration = Math.max(5, task.estimation || 30) * 60_000;
-  return (due != null && due < now) ||
-    (scheduled != null && scheduled + duration < now);
+  const duration = Math.max(5, task.estimation_corrected || task.estimation || 30) * 60_000;
+  return scheduled != null && scheduled + duration < now;
 }
 
 function timeOrNull(iso: string | null): number | null {

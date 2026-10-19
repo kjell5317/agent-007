@@ -1,6 +1,11 @@
 export type TaskStatus = "open" | "duplicate" | "closed" | "not_task";
-export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled";
+// "deferred": due after the planning horizon, deliberately not placed yet and
+// reconsidered on every solve — not a warning like "unscheduled".
+export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled" | "deferred";
 export type RecurrenceUnit = "day" | "week" | "month";
+export type WorkType = "physical" | "cognitive" | "social";
+export type Effort = "low" | "medium" | "high";
+export type DeadlineKind = "hard" | "firm" | "soft";
 
 export interface SubtaskSummary {
   id: string;
@@ -41,6 +46,17 @@ export interface Task {
   status: TaskStatus;
   is_manual: boolean;
   kotx_task_id: number | null;
+  work_type: WorkType | null;
+  effort: Effort | null;
+  deadline_kind: DeadlineKind;
+  placed_by: "planner" | "user";
+  schedule_state: "placed" | "deferred" | "unplaced";
+  // Set while the user is still working past the slot end; the calendar
+  // event keeps extending until the task is marked done.
+  running_since: string | null;
+  // What the planner books after the learned estimate correction; null while
+  // no correction is fitted.
+  estimation_corrected: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -51,12 +67,14 @@ export interface TaskRawInput extends RawInput {
 
 export interface Label {
   // Opaque Google Calendar event-label id; name and color are Google's and
-  // read-only here, description and github_repo are ours.
+  // read-only here, the rest is ours.
   google_id: string;
   name: string;
   color: string;
   description: string;
   github_repo: string | null;
+  default_work_type: WorkType | null;
+  default_effort: Effort | null;
 }
 
 export interface AgentTrace {

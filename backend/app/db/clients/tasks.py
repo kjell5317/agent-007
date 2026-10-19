@@ -84,6 +84,9 @@ def create(session: Session, payload: TaskCreate) -> Task:
         recurrence_interval=payload.recurrence_interval,
         recurrence_anchor=payload.recurrence_anchor,
         recurrence_series_id=payload.recurrence_series_id,
+        work_type=payload.work_type,
+        effort=payload.effort,
+        deadline_kind=payload.deadline_kind,
     )
     session.add(row)
     session.flush()
@@ -207,6 +210,7 @@ _UPDATABLE = {
     "location", "label", "related_event_id", "related_event_calendar_id",
     "related_event_due_derived",
     "due_date_derived",
+    "work_type", "effort", "deadline_kind",
 }
 
 
@@ -227,6 +231,8 @@ def update(session: Session, task_id: uuid.UUID, **fields) -> Task | None:
         if key == "title" and value is None:
             continue
         setattr(row, key, value)
+    if "estimation" in fields:
+        row.booked_minutes = None
     if "due_date" in fields and "related_event_due_derived" not in fields:
         row.related_event_due_derived = False
     if "due_date" in fields and "due_date_derived" not in fields:
@@ -449,3 +455,44 @@ def open_scheduled_between(
     if exclude_task_id is not None:
         stmt = stmt.where(Task.id != exclude_task_id)
     return list(session.execute(stmt).scalars())
+
+
+def open_schedulable(session: Session) -> list[Task]:
+    """Every open, non-container task — the solver's universe."""
+    latest = _latest_status_subquery()
+    stmt = (
+        select(Task)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.is_container.is_(False))
+        .where(func.coalesce(latest.c.status, "open") == "open")
+        .order_by(Task.due_date.asc())
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def running_open(session: Session) -> list[Task]:
+    latest = _latest_status_subquery()
+    stmt = (
+        select(Task)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.running_since.is_not(None))
+        .where(func.coalesce(latest.c.status, "open") == "open")
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def _latest_status_subquery():
+    return (
+        select(
+            RawInput.task_id.label("task_id"),
+            RawInput.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=RawInput.task_id,
+                order_by=RawInput.received_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(RawInput.status != "duplicate")
+        .subquery()
+    )

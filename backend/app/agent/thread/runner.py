@@ -20,6 +20,7 @@ from app.agent.helpers.llm import (
     chat,
     user_message,
 )
+from app.agent.helpers.attributes import ATTRIBUTE_FIELDS
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.helpers.text import append_meta_lines, now_iso, task_field_lines
 from app.agent.tools.notes_lookup import save_notes
@@ -171,7 +172,10 @@ async def run_thread_followup(
             }
         if require_change and not any(
             action_input.get(key) is not None
-            for key in ("title", "description", "estimation", "due_date", "location", "link", "label", "status")
+            for key in (
+                "title", "description", "estimation", "due_date", "location", "link", "label",
+                "status", *ATTRIBUTE_FIELDS,
+            )
         ):
             raise ValueError("Explicit task action must change a field or status")
         target = task

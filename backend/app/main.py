@@ -29,6 +29,7 @@ from app.api import (
     points,
     search,
     settings as settings_router,
+    stats,
     tasks,
     webhooks,
 )
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(points.router)
     app.include_router(search.router)
     app.include_router(settings_router.router)
+    app.include_router(stats.router)
     app.include_router(webhooks.router)
 
     @app.get("/health", tags=["meta"])

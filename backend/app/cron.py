@@ -22,21 +22,18 @@ from app import state
 from app.config import get_settings
 from app.db import SessionLocal
 from app.db.clients import tasks as tasks_store
-from app.events import publish_points, publish_task
+from app.events import publish_task
 from app.services.calendar.discover import discover_updated_events
 from app.services.calendar.labels import sync as sync_labels
 from app.services.input.poll import poll_sources
-from app.services.notify import notify_points_penalty, notify_task_created
+from app.services.notify import notify_task_created
 from app.services.plan import (
     cleanup_stray_commute_legs,
     refresh_commutes_for_weather,
     schedule_task,
-    scheduled_interval_for,
 )
-from app.services.points import (
-    PENALTY_POINTS,
-    subtract_scheduled_overdue_penalty,
-)
+from app.services.plan.checkin import checkin_overdue_slots_once
+from app.services.plan.schedule import scheduler_engine
 from app.services.task.recur import plan_recurring_tasks
 
 log = logging.getLogger(__name__)
@@ -48,7 +45,7 @@ AUTO_POLL_INTERVAL_S = 300
 DISCOVER_INTERVAL_S = 60
 OVERDUE_TASK_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
-OVERDUE_TASK_GRACE = timedelta(minutes=15)
+NIGHTLY_CHECK_INTERVAL_S = 600
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # Repeat instances are materialized a week ahead, so hourly keeps the window
 # rolling without daily ones ever lagging.
@@ -134,52 +131,6 @@ async def _calendar_discover() -> None:
             log.exception("calendar-discover iteration failed")
 
 
-async def reschedule_overdue_scheduled_tasks_once() -> dict[str, int]:
-    now = datetime.now(timezone.utc)
-    cutoff = now - OVERDUE_TASK_GRACE
-    attempted = 0
-    rescheduled = 0
-    points_subtracted = 0
-    with SessionLocal() as session:
-        overdue = tasks_store.overdue_scheduled_open(session, cutoff=cutoff)
-        for task in overdue:
-            scheduled_date = task.scheduled_date
-            block = scheduled_interval_for(task)
-            if block is None or block.end + OVERDUE_TASK_GRACE > now:
-                continue
-            backoff = _no_slot_until.get(task.id)
-            if backoff is not None and now < backoff:
-                continue
-            attempted += 1
-            result = await schedule_task(session, task, block=block)
-            # The slot was missed whether or not a new one was found — the
-            # penalty applies either way (idempotent per slot). On failure
-            # the old calendar slot stays visible until a retry succeeds.
-            if subtract_scheduled_overdue_penalty(
-                session,
-                task,
-                scheduled_date=scheduled_date,
-            ):
-                points_subtracted += PENALTY_POINTS
-                publish_points(session)
-                await notify_points_penalty(
-                    task,
-                    points=PENALTY_POINTS,
-                    reason="scheduled date was overdue",
-                )
-            if result is None:
-                _no_slot_until[task.id] = now + NO_SLOT_RETRY
-                continue
-            _no_slot_until.pop(task.id, None)
-            rescheduled += 1
-            publish_task(session, task.id)
-    return {
-        "attempted": attempted,
-        "rescheduled": rescheduled,
-        "points_subtracted": points_subtracted,
-    }
-
-
 async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[str, int]:
     """Try to place open due-dated tasks that currently have no slot (their
     stale slot was cleared after a failed schedule). Failures stay silent —
@@ -191,7 +142,14 @@ async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[
     attempted = 0
     scheduled = 0
     with SessionLocal() as session:
-        for task in tasks_store.open_unscheduled_due(session):
+        # Deferred tasks wait on purpose; every solve reconsiders them.
+        pending = [
+            task for task in tasks_store.open_unscheduled_due(session)
+            if task.schedule_state != "deferred"
+        ]
+        if scheduler_engine() == "solver":
+            return await _retry_with_solver(session, pending, now, respect_backoff=respect_backoff)
+        for task in pending:
             backoff = _no_slot_until.get(task.id)
             if respect_backoff and backoff is not None and now < backoff:
                 continue
@@ -207,6 +165,31 @@ async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[
     return {"attempted": attempted, "scheduled": scheduled}
 
 
+async def _retry_with_solver(session, pending, now, *, respect_backoff: bool) -> dict[str, int]:
+    """One solve covers every unplaced task; the backoff is per sweep."""
+    from app.services.plan.replan import request_replan
+
+    if not pending:
+        return {"attempted": 0, "scheduled": 0}
+    backoff = _no_slot_until.get("solver")
+    if respect_backoff and backoff is not None and now < backoff:
+        return {"attempted": 0, "scheduled": 0}
+    result = await request_replan(session, reason="retry_unplaced", quiet={t.id for t in pending})
+    scheduled = 0
+    for task in pending:
+        session.refresh(task)
+        span = result.placed.get(task.id)
+        if task.schedule_state == "placed" and span is not None:
+            scheduled += 1
+            await notify_task_created(task, start=span[0], end=span[1])
+            publish_task(session, task.id)
+    if scheduled < len(pending):
+        _no_slot_until["solver"] = now + NO_SLOT_RETRY
+    else:
+        _no_slot_until.pop("solver", None)
+    return {"attempted": len(pending), "scheduled": scheduled}
+
+
 async def _overdue_scheduled_tasks() -> None:
     log.info("overdue-scheduled-tasks loop started · interval=%ds", OVERDUE_TASK_INTERVAL_S)
     while True:
@@ -215,14 +198,15 @@ async def _overdue_scheduled_tasks() -> None:
             if not state.auto_poll_enabled:
                 log.debug("overdue-scheduled-tasks skipped (disabled)")
                 continue
-            summary = await reschedule_overdue_scheduled_tasks_once()
+            summary = await checkin_overdue_slots_once()
             retry = await retry_unscheduled_tasks_once()
             log.info(
-                "overdue-scheduled-tasks done · attempted=%d rescheduled=%d points=%d"
+                "check-in sweep done · sent=%d no_response=%d extended=%d abandoned=%d"
                 " retry_attempted=%d retry_scheduled=%d",
-                summary["attempted"],
-                summary["rescheduled"],
-                summary["points_subtracted"],
+                summary["sent"],
+                summary["no_response"],
+                summary["extended"],
+                summary["abandoned"],
                 retry["attempted"],
                 retry["scheduled"],
             )
@@ -298,6 +282,46 @@ async def _recurring_tasks() -> None:
             log.exception("recurring-tasks iteration failed")
 
 
+async def nightly_scheduler_once() -> None:
+    """Refit the learned models, then give the solver its long run: 60 s
+    instead of the per-trigger 10 s, so the gap left during the day closes."""
+    from app.services.learn.jobs import nightly
+    from app.services.plan.replan import _shadow_run, request_replan
+
+    settings = get_settings()
+    with SessionLocal() as session:
+        await nightly(session)
+        if settings.scheduler_engine == "solver":
+            await request_replan(
+                session, reason="nightly", time_limit=settings.scheduler_nightly_time_limit_seconds,
+            )
+    if settings.scheduler_engine == "shadow":
+        await _shadow_run("nightly", time_limit=settings.scheduler_nightly_time_limit_seconds)
+
+
+async def _nightly_scheduler() -> None:
+    log.info("nightly-scheduler loop started · hour=%d", get_settings().scheduler_nightly_hour)
+    last_run: str | None = None
+    while True:
+        try:
+            await asyncio.sleep(NIGHTLY_CHECK_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                continue
+            from app.timezones import user_tz
+
+            local = datetime.now(user_tz())
+            if local.hour != get_settings().scheduler_nightly_hour or last_run == local.date().isoformat():
+                continue
+            last_run = local.date().isoformat()
+            await nightly_scheduler_once()
+            log.info("nightly-scheduler done")
+        except asyncio.CancelledError:
+            log.info("nightly-scheduler loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("nightly-scheduler iteration failed")
+
+
 async def _label_sync() -> None:
     """Mirror the calendar's event labels, starting shortly after boot."""
     log.info("label-sync loop started · interval=%ds", LABEL_SYNC_INTERVAL_S)
@@ -327,6 +351,7 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-cleanup", _commute_cleanup),
     ("recurring-tasks", _recurring_tasks),
+    ("nightly-scheduler", _nightly_scheduler),
 ]
 
 # Names of jobs that only make sense with commute enabled.

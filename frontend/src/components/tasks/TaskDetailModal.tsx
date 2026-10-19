@@ -8,6 +8,8 @@ import {
   ChevronRight,
   CircleCheckBig,
   ExternalLink,
+  Flag,
+  Gauge,
   GitFork,
   GripVertical,
   Link2,
@@ -15,12 +17,14 @@ import {
   RefreshCw,
   Repeat,
   RotateCcw,
+  Shapes,
   Timer,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { ChoiceChips } from "@/components/ui/choice-chips";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -43,12 +47,22 @@ import {
 } from "@/components/runs/RunStatusBadge";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
-import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
+import { fmtClock, fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { fmtRecurrence, taskRecurrence } from "@/lib/tasks";
+import {
+  correctedEstimation,
+  DEADLINE_KIND_HINT,
+  DEADLINE_KIND_LABEL,
+  EFFORT_LABEL,
+  fmtEstimation,
+  fmtRecurrence,
+  taskRecurrence,
+  taskRunningSince,
+  WORK_TYPE_LABEL,
+} from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import type { Label, RecurrenceUnit, Task, TaskRawInput } from "@/lib/types";
 
@@ -64,7 +78,15 @@ interface Props {
 }
 
 type TextField = "title" | "description" | "link" | "location";
-type PickerField = "due_date" | "estimation" | "label" | "recurrence";
+type PickerField =
+  | "due_date"
+  | "deadline_kind"
+  | "estimation"
+  | "work_type"
+  | "effort"
+  | "label"
+  | "recurrence";
+type AttributePatch = Partial<Pick<Task, "work_type" | "effort" | "deadline_kind">>;
 
 const TEXT_LABEL: Record<TextField, string> = {
   title: "Title",
@@ -644,6 +666,8 @@ export function TaskDetailModal({
           onPickerDueChange={(value) => { setPickerDue(value); autoSavePatch({ due_date: value }); }}
           onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
           onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
+          onAttributeChange={autoSavePatch}
+          onMarkDone={markDone}
           onReschedule={rescheduleCurrent}
           onSaveRecurrence={(unit, interval) => { void saveRecurrence(unit, interval); }}
           onRemoveRecurrence={() => { void removeRecurrence(); }}
@@ -732,6 +756,8 @@ function TaskSummary({
   onPickerDueChange,
   onPickerEstimationChange,
   onPickerLabelChange,
+  onAttributeChange,
+  onMarkDone,
   onReschedule,
   onSaveRecurrence,
   onRemoveRecurrence,
@@ -773,6 +799,8 @@ function TaskSummary({
   onPickerDueChange: (value: string | null) => void;
   onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
+  onAttributeChange: (patch: AttributePatch) => void;
+  onMarkDone: () => void;
   onReschedule: () => void;
   onSaveRecurrence: (unit: RecurrenceUnit, interval: number) => void;
   onRemoveRecurrence: () => void;
@@ -829,23 +857,45 @@ function TaskSummary({
     : dueUrgent
       ? TASK_SUMMARY_URGENT_BADGE_CLASS
       : TASK_SUMMARY_OPEN_BADGE_CLASS;
+  const placedByUser =
+    task.placed_by === "user" && task.schedule_status === "scheduled" && !!task.scheduled_date;
   const scheduledBadgeText =
     task.schedule_status === "unscheduled"
       ? "Not scheduled"
-      : task.scheduled_date
-        ? fmtDue(task.scheduled_date)
-        : "Reschedule";
+      : task.schedule_status === "deferred"
+        ? "Later"
+        : task.scheduled_date
+          ? fmtDue(task.scheduled_date)
+          : "Reschedule";
   const scheduledBadgeLabel =
     task.schedule_status === "unscheduled"
       ? "Not scheduled"
-      : task.scheduled_date
-        ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}`
-        : "Reschedule task";
+      : task.schedule_status === "deferred"
+        ? `Not planned yet — due ${fmtDue(task.due_date)}`
+        : task.scheduled_date
+          ? `Reschedule task scheduled ${fmtDue(task.scheduled_date)}${placedByUser ? " (placed by you)" : ""}`
+          : "Reschedule task";
+  const correctedMinutes = correctedEstimation(task);
+  const runningSince = taskRunningSince(task);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-4 sm:px-4">
       <div className="space-y-5">
         {title}
+        {runningSince && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-500/40 bg-emerald-50 px-3 py-2 dark:bg-emerald-500/10">
+            <span className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 dark:text-emerald-200">
+              <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+              Running since {fmtClock(runningSince)}
+            </span>
+            {!kotxTask && (
+              <Button type="button" size="sm" disabled={busy} onClick={onMarkDone}>
+                <CircleCheckBig className="h-4 w-4" />
+                Done
+              </Button>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
           <PickerAnchor
             open={activePicker === "label"}
@@ -920,6 +970,40 @@ function TaskSummary({
             </button>
           </PickerAnchor>
 
+          {task.due_date && (
+            <PickerAnchor
+              open={activePicker === "deadline_kind"}
+              onClose={onClosePicker}
+              panel={
+                <InlinePickerPanel title="Deadline" onClose={onClosePicker}>
+                  <ChoiceChips
+                    value={task.deadline_kind}
+                    labels={DEADLINE_KIND_LABEL}
+                    hints={DEADLINE_KIND_HINT}
+                    centered
+                    onChange={(kind) => { if (kind) onAttributeChange({ deadline_kind: kind }); }}
+                  />
+                </InlinePickerPanel>
+              }
+            >
+              <button
+                type="button"
+                onClick={() => onEditPicker("deadline_kind")}
+                disabled={busy}
+                title={`${DEADLINE_KIND_LABEL[task.deadline_kind]} deadline: ${DEADLINE_KIND_HINT[task.deadline_kind].toLowerCase()}`}
+                className={cn(
+                  TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                  TASK_SUMMARY_MUTED_BADGE_CLASS,
+                )}
+              >
+                <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                  <Flag className="h-3 w-3" />
+                  {DEADLINE_KIND_LABEL[task.deadline_kind]} deadline
+                </span>
+              </button>
+            </PickerAnchor>
+          )}
+
           <PickerAnchor
             open={!task.is_container && activePicker === "estimation"}
             onClose={onClosePicker}
@@ -940,7 +1024,9 @@ function TaskSummary({
               title={
                 task.is_container
                   ? "Duration is set by subtasks"
-                  : "Set duration"
+                  : correctedMinutes != null
+                    ? `Set duration — the calendar books ${correctedMinutes} min, corrected from past tasks`
+                    : "Set duration"
               }
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
@@ -949,12 +1035,78 @@ function TaskSummary({
             >
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                 <Timer className="h-3 w-3" />
-                {task.estimation != null
-                  ? `${task.estimation} min`
-                  : "No estimate"}
+                {fmtEstimation(task) ?? "No estimate"}
               </span>
             </button>
           </PickerAnchor>
+
+          {!task.is_container && (
+            <PickerAnchor
+              open={activePicker === "work_type"}
+              onClose={onClosePicker}
+              panel={
+                <InlinePickerPanel title="Work type" onClose={onClosePicker}>
+                  <ChoiceChips
+                    value={task.work_type}
+                    labels={WORK_TYPE_LABEL}
+                    noneLabel="None"
+                    centered
+                    onChange={(workType) => onAttributeChange({ work_type: workType })}
+                  />
+                </InlinePickerPanel>
+              }
+            >
+              <button
+                type="button"
+                onClick={() => onEditPicker("work_type")}
+                disabled={busy}
+                title="Set work type"
+                className={cn(
+                  TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                  TASK_SUMMARY_MUTED_BADGE_CLASS,
+                )}
+              >
+                <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                  <Shapes className="h-3 w-3" />
+                  {task.work_type ? WORK_TYPE_LABEL[task.work_type] : "Work type"}
+                </span>
+              </button>
+            </PickerAnchor>
+          )}
+
+          {!task.is_container && (
+            <PickerAnchor
+              open={activePicker === "effort"}
+              onClose={onClosePicker}
+              panel={
+                <InlinePickerPanel title="Effort" onClose={onClosePicker}>
+                  <ChoiceChips
+                    value={task.effort}
+                    labels={EFFORT_LABEL}
+                    noneLabel="None"
+                    centered
+                    onChange={(effort) => onAttributeChange({ effort })}
+                  />
+                </InlinePickerPanel>
+              }
+            >
+              <button
+                type="button"
+                onClick={() => onEditPicker("effort")}
+                disabled={busy}
+                title="Set effort"
+                className={cn(
+                  TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                  TASK_SUMMARY_MUTED_BADGE_CLASS,
+                )}
+              >
+                <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                  <Gauge className="h-3 w-3" />
+                  {task.effort ? `${EFFORT_LABEL[task.effort]} effort` : "Effort"}
+                </span>
+              </button>
+            </PickerAnchor>
+          )}
 
           {!kotxTask && (
             <PickerAnchor
@@ -1015,6 +1167,7 @@ function TaskSummary({
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                 <CalendarClock className="h-3 w-3" />
                 {scheduledBadgeText}
+                {placedByUser && <span className="opacity-70">· by you</span>}
                 <RefreshCw className="h-3 w-3 opacity-70" />
               </span>
             </button>

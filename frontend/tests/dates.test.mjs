@@ -46,3 +46,10 @@ test("a different configured zone controls both display and picker conversion", 
   assert.match(dates.fmtDue(iso), /09:00/);
   dates.setUserTimezone("Europe/Berlin");
 });
+
+test("clock times drop the date only for today", () => {
+  const today = new Date().toISOString();
+  assert.equal(dates.fmtClock(today), dates.fmtDue(today).replace(/^Today /, ""));
+  assert.equal(dates.fmtClock("2020-01-15T08:00:00Z"), dates.fmtDue("2020-01-15T08:00:00Z"));
+  assert.match(dates.fmtClock("2020-01-15T08:00:00Z"), /09:00/);
+});

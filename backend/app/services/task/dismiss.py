@@ -16,7 +16,12 @@ from app.services.notify import clear_task_notification
 from app.services.task.vacate import vacated_commute_window, replan_vacated_window
 
 
-async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
+async def dismiss_task(
+    session: Session, task_id: uuid.UUID, *, source: str | None = None
+) -> None:
+    """`source` marks a user dismissal ("ui" / "notification"), recorded as a
+    correction of the agent's "this is a task" decision; agent-driven
+    dismissals pass none."""
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
@@ -31,6 +36,13 @@ async def dismiss_task(session: Session, task_id: uuid.UUID) -> None:
     # would still appear open by default, so remove only those.
     latest = raw_inputs_store.latest_for_task(session, task_id)
     latest_id = latest.id if latest is not None else None
+    if source is not None:
+        from app.db.clients import overrides as overrides_store
+
+        overrides_store.add(
+            session, field="is_task", agent_value=True, user_value=False, source=source,
+            task_id=task_id if latest is not None else None, raw_input_id=latest_id,
+        )
     if latest is not None:
         latest.status = "not_task"
         # processed_at belongs to ingestion, not to this manual state change.

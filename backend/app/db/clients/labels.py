@@ -48,16 +48,35 @@ def prune_missing(session: Session, google_ids: list[str]) -> int:
 
 
 def set_metadata(
-    session: Session, row: Label, *, description: str, github_repo: str | None
+    session: Session,
+    row: Label,
+    *,
+    description: str,
+    github_repo: str | None,
+    default_work_type: str | None = None,
+    default_effort: str | None = None,
 ) -> Label:
     row.description = description
     row.github_repo = github_repo
+    row.default_work_type = default_work_type
+    row.default_effort = default_effort
     session.flush()
     return row
 
 
+def defaults_by_name(session: Session) -> dict[str, tuple[str | None, str | None]]:
+    """`{name: (default_work_type, default_effort)}` for every label."""
+    rows = session.execute(select(Label.name, Label.default_work_type, Label.default_effort))
+    return {name: (work_type, effort) for name, work_type, effort in rows}
+
+
+def names_by_google_id(session: Session) -> dict[str, str]:
+    return dict(session.execute(select(Label.google_id, Label.name)).all())
+
+
 def agent_descriptions(session: Session) -> dict[str, str]:
-    """`{name: description}` for the labels the agent may choose from.
+    """`{name: description}` for the labels the agent may choose from, with the
+    label's work type / effort defaults appended for the agent to inherit.
 
     A label with no description carries nothing for the model to match on, so
     it stays out of the tool enum until the user writes one.
@@ -65,7 +84,15 @@ def agent_descriptions(session: Session) -> dict[str, str]:
     rows = session.scalars(
         select(Label).where(Label.description != "").order_by(Label.name)
     )
-    return {row.name: row.description for row in rows}
+    return {
+        row.name: _with_defaults(row.description, row.default_work_type, row.default_effort)
+        for row in rows
+    }
+
+
+def _with_defaults(description: str, work_type: str | None, effort: str | None) -> str:
+    defaults = ", ".join(value for value in (work_type, effort) if value)
+    return f"{description} (defaults: {defaults})" if defaults else description
 
 
 def google_id_for(session: Session, name: str | None) -> str | None:

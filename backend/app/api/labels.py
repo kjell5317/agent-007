@@ -2,7 +2,8 @@
 
   * GET   /labels                  — the local mirror, no Calendar round-trip
   * POST  /labels/sync             — refresh the mirror from Google, then list
-  * PATCH /labels/{google_id}      — edit our own fields (description, repo)
+  * PATCH /labels/{google_id}      — edit our own fields (description, repo,
+                                     work type / effort defaults)
 
 Name and color belong to Google and are read-only here; they change in the
 Calendar UI and arrive on the next sync.
@@ -46,7 +47,12 @@ async def update_label(
             )
 
     labels_store.set_metadata(
-        session, row, description=payload.description, github_repo=payload.github_repo
+        session,
+        row,
+        description=payload.description,
+        github_repo=payload.github_repo,
+        default_work_type=payload.default_work_type,
+        default_effort=payload.default_effort,
     )
     session.commit()
     return LabelRead.from_row(row)

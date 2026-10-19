@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -17,8 +16,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 from app import cron  # noqa: E402
 from app.api import notifications  # noqa: E402
 from app.db.clients import tasks as tasks_store  # noqa: E402
-from app.db.clients import points as points_store  # noqa: E402
 from app.db.models.points_entry import PointsEntry  # noqa: E402
+from app.db.models.scheduling import TaskOverride  # noqa: E402
 from app.db.models.task import Task  # noqa: E402
 from app.db.schemas.task import TaskRawInputRead, TaskRead  # noqa: E402
 from app.services.calendar.client import CalendarEvent  # noqa: E402
@@ -33,6 +32,7 @@ from app.services.plan.schedule import Interval  # noqa: E402
 def _sqlite_session():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Task.__table__.create(engine)
+    TaskOverride.__table__.create(engine)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
 
 
@@ -360,15 +360,23 @@ def test_discover_syncs_moved_managed_task_event():
     session.commit()
 
     moved_start = datetime(2026, 7, 1, 13, 0, tzinfo=timezone.utc)
+    moves: list = []
     synced_task_id = discover._sync_task_schedule_from_event(
         session,
         _event("event-1", moved_start, moved_start + timedelta(minutes=30), task.id),
+        moves,
     )
 
     session.commit()
     session.refresh(task)
     assert synced_task_id == task.id
     assert task.scheduled_date == moved_start.replace(tzinfo=None)
+    # A drag in the calendar is a hand placement and a training example.
+    assert task.placed_by == "user"
+    assert [(m.kind, m.task_id, m.slot[0]) for m in moves] == [
+        ("moved_by_user", task.id, moved_start)
+    ]
+    assert moves[0].prev[0].astimezone(timezone.utc) == datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -811,33 +819,6 @@ async def test_task_notifications_deep_link_and_actions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_points_penalty_notification_uses_points_tag(monkeypatch):
-    task_id = uuid.uuid4()
-    task = SimpleNamespace(id=task_id, title="Write report")
-    calls: list[dict] = []
-
-    async def fake_notify(**kwargs):
-        calls.append(kwargs)
-
-    monkeypatch.setattr(
-        notify_service,
-        "get_settings",
-        lambda: SimpleNamespace(task_default_url="https://example.test/app"),
-    )
-    monkeypatch.setattr(notify_service, "notify", fake_notify)
-
-    await notify_service.notify_points_penalty(
-        task,
-        points=10,
-        reason="task is past due",
-    )
-
-    assert calls[0]["tag"] == "points"
-    assert calls[0]["url"] == f"https://example.test/app#task/{task_id}"
-    assert calls[0]["message"].startswith("-10 points: task is past due")
-
-
-@pytest.mark.asyncio
 async def test_notification_done_and_dismiss_callbacks_use_task_services(monkeypatch):
     task_id = uuid.uuid4()
     task = SimpleNamespace(id=task_id, title="Write report")
@@ -847,7 +828,7 @@ async def test_notification_done_and_dismiss_callbacks_use_task_services(monkeyp
     async def fake_close_task(_session, task_id_arg):
         closed.append(task_id_arg)
 
-    async def fake_dismiss_task(_session, task_id_arg):
+    async def fake_dismiss_task(_session, task_id_arg, *, source=None):
         dismissed.append(task_id_arg)
 
     monkeypatch.setattr(notifications.tasks_store, "get", lambda _session, _task_id: task)
@@ -882,144 +863,6 @@ async def test_notification_done_and_dismiss_callbacks_use_task_services(monkeyp
     assert dismiss_result["ok"] is True
     assert closed == [task_id]
     assert dismissed == [task_id]
-
-
-@pytest.mark.asyncio
-async def test_overdue_scheduled_cron_reschedules_with_previous_slot_blocked(monkeypatch):
-    task_id = uuid.uuid4()
-    scheduled = datetime.now(timezone.utc) - timedelta(minutes=50)
-    task = SimpleNamespace(
-        id=task_id,
-        title="Write report",
-        due_date=datetime.now(timezone.utc) + timedelta(days=1),
-        scheduled_date=scheduled,
-        calendar_event_id="event-1",
-        estimation=30,
-    )
-    session = _sqlite_points_session()
-    calls: list[Interval | None] = []
-    published_points: list[float] = []
-    notified: list[tuple[uuid.UUID, int, str]] = []
-    published_tasks: list[uuid.UUID] = []
-
-    @contextmanager
-    def fake_session_local():
-        yield session
-
-    async def fake_schedule_task(_session, _task, **kwargs):
-        calls.append(kwargs.get("block"))
-        _task.scheduled_date = scheduled + timedelta(hours=1)
-        return (scheduled + timedelta(hours=1), scheduled + timedelta(hours=1, minutes=30))
-
-    async def fake_notify(task_arg, *, points, reason):
-        notified.append((task_arg.id, points, reason))
-
-    monkeypatch.setattr(cron, "SessionLocal", fake_session_local)
-    monkeypatch.setattr(cron.tasks_store, "overdue_scheduled_open", lambda _session, *, cutoff: [task])
-    monkeypatch.setattr(cron, "schedule_task", fake_schedule_task)
-    monkeypatch.setattr(cron, "publish_task", lambda _session, task_id_arg: published_tasks.append(task_id_arg))
-    monkeypatch.setattr(cron, "publish_points", lambda session_arg: published_points.append(points_store.total(session_arg)))
-    monkeypatch.setattr(cron, "notify_points_penalty", fake_notify)
-
-    summary = await cron.reschedule_overdue_scheduled_tasks_once()
-
-    assert summary == {"attempted": 1, "rescheduled": 1, "points_subtracted": 10}
-    assert calls == [Interval(scheduled, scheduled + timedelta(minutes=30), "event-1")]
-    assert points_store.total(session) == -10
-    assert published_points == [-10]
-    assert notified == [(task_id, 10, "scheduled date was overdue")]
-    assert published_tasks == [task_id]
-
-
-@pytest.mark.asyncio
-async def test_overdue_scheduled_cron_waits_until_frame_and_grace_elapsed(monkeypatch):
-    task_id = uuid.uuid4()
-    scheduled = datetime.now(timezone.utc) - timedelta(minutes=20)
-    task = SimpleNamespace(
-        id=task_id,
-        title="Write report",
-        due_date=datetime.now(timezone.utc) + timedelta(days=1),
-        scheduled_date=scheduled,
-        calendar_event_id="event-1",
-        estimation=30,
-    )
-    session = _sqlite_points_session()
-    calls: list[uuid.UUID] = []
-    published_points: list[float] = []
-    notified: list[int] = []
-    published_tasks: list[uuid.UUID] = []
-
-    @contextmanager
-    def fake_session_local():
-        yield session
-
-    async def fake_schedule_task(_session, _task, **_kwargs):
-        calls.append(_task.id)
-        return (scheduled + timedelta(hours=1), scheduled + timedelta(hours=1, minutes=30))
-
-    async def fake_notify(*_args, **_kwargs):
-        notified.append(1)
-
-    monkeypatch.setattr(cron, "SessionLocal", fake_session_local)
-    monkeypatch.setattr(cron.tasks_store, "overdue_scheduled_open", lambda _session, *, cutoff: [task])
-    monkeypatch.setattr(cron, "schedule_task", fake_schedule_task)
-    monkeypatch.setattr(cron, "publish_task", lambda _session, task_id_arg: published_tasks.append(task_id_arg))
-    monkeypatch.setattr(cron, "publish_points", lambda session_arg: published_points.append(points_store.total(session_arg)))
-    monkeypatch.setattr(cron, "notify_points_penalty", fake_notify)
-
-    summary = await cron.reschedule_overdue_scheduled_tasks_once()
-
-    assert summary == {"attempted": 0, "rescheduled": 0, "points_subtracted": 0}
-    assert calls == []
-    assert points_store.total(session) == 0
-    assert published_points == []
-    assert notified == []
-    assert published_tasks == []
-
-
-@pytest.mark.asyncio
-async def test_overdue_scheduled_cron_penalizes_even_failed_reschedule(monkeypatch):
-    # The slot was missed whether or not a new one was found — the penalty
-    # applies once per slot; the preserved slot remains eligible for retries.
-    task = SimpleNamespace(
-        id=uuid.uuid4(),
-        title="Write report",
-        due_date=datetime.now(timezone.utc) + timedelta(days=1),
-        scheduled_date=datetime.now(timezone.utc) - timedelta(minutes=50),
-        calendar_event_id="event-1",
-        estimation=30,
-    )
-    session = _sqlite_points_session()
-    published_points: list[float] = []
-    notified: list[int] = []
-
-    @contextmanager
-    def fake_session_local():
-        yield session
-
-    async def fake_schedule_task(_session, _task, **_kwargs):
-        return None
-
-    async def fake_notify(*_args, **_kwargs):
-        notified.append(1)
-
-    monkeypatch.setattr(cron, "SessionLocal", fake_session_local)
-    monkeypatch.setattr(cron.tasks_store, "overdue_scheduled_open", lambda _session, *, cutoff: [task])
-    monkeypatch.setattr(cron, "schedule_task", fake_schedule_task)
-    monkeypatch.setattr(cron, "publish_task", lambda _session, _task_id: None)
-    monkeypatch.setattr(cron, "publish_points", lambda session_arg: published_points.append(points_store.total(session_arg)))
-    monkeypatch.setattr(cron, "notify_points_penalty", fake_notify)
-
-    summary = await cron.reschedule_overdue_scheduled_tasks_once()
-
-    assert summary == {
-        "attempted": 1,
-        "rescheduled": 0,
-        "points_subtracted": 10,
-    }
-    assert points_store.total(session) == -10
-    assert published_points == [-10]
-    assert notified == [1]
 
 
 def test_hourly_overdue_penalty_job_is_not_registered():

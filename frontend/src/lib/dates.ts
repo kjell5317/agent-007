@@ -111,18 +111,26 @@ export function dueDateBadgeVariant(
   return "closed";
 }
 
+function fmtTime(d: Date): string {
+  return d.toLocaleTimeString(undefined, {
+    timeZone: userTimeZone, hour: "2-digit", minute: "2-digit",
+  });
+}
+
 export function fmtDue(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  const time = d.toLocaleTimeString(undefined, {
-    timeZone: userTimeZone, hour: "2-digit", minute: "2-digit",
-  });
+  const time = fmtTime(d);
   if (isToday(iso)) return `Today ${time}`;
   if (isTomorrow(iso)) return `Tomorrow ${time}`;
   return d.toLocaleString(undefined, {
     timeZone: userTimeZone,
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
+}
+
+export function fmtClock(iso: string): string {
+  return isToday(iso) ? fmtTime(new Date(iso)) : fmtDue(iso);
 }
 
 export function fmtWhen(iso: string | null): string {
