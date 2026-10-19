@@ -8,8 +8,9 @@ happen to the results on the write calendar:
      re-described) sync their new state back into the task row.
   2. Task events that were deleted get their task re-planned onto a fresh
      slot, blocking the one they were removed from.
-  3. Any updated event that now overlaps a managed event hands off to
-     `services.plan.reschedule.reschedule_event` to resolve the conflict.
+  3. Any updated event that now overlaps a managed event (or sits within the
+     event gap of one) hands off to `services.plan.reschedule_event` to resolve
+     the conflict — for a commute leg, the tasks that leg serves move.
 
 The `syncToken` is stored per calendar on the oauth_tokens row (extra JSON).
 A full baseline sync is re-run at most once a day so the look-ahead window
@@ -42,6 +43,7 @@ from app.services.calendar.client import (
 from app.services.calendar.events import (
     WINDOW_DAYS,
     _task_description,
+    commute_leg_key,
     is_commute_event,
     is_declined_event,
     is_managed_event,
@@ -207,12 +209,14 @@ async def discover_updated_events(
         summary["checked"] += len(write_events)
 
         event_gap = timedelta(minutes=settings.event_buffer_minutes)
+        task_event_ids = {w.id for w in write_events if is_task_event(w)}
         for ev in active:
             if cid == write_id and is_managed_event(ev):
                 continue
             # A single changed event can collide with several tasks and legs
             # at once — every one within the event gap needs its own reschedule.
-            for overlapping in _managed_conflicts(ev, write_events, event_gap):
+            conflicts = _managed_conflicts(ev, write_events, event_gap)
+            for overlapping in conflicts:
                 summary["overlapping"] += 1
                 kind = (
                     "commute" if is_commute_event(overlapping)
@@ -224,11 +228,14 @@ async def discover_updated_events(
                     ev.summary, ev.start.isoformat(), ev.id,
                     kind, overlapping.summary, overlapping.start.isoformat(),
                 )
-                await reschedule_event(
-                    session,
-                    overlapping.id,
-                    account_key=account_key,
-                )
+            # A task hit directly and through its own leg is re-planned once.
+            targets = dict.fromkeys(
+                target
+                for overlapping in conflicts
+                for target in _reschedule_targets(ev, overlapping, task_event_ids)
+            )
+            for event_id in targets:
+                await reschedule_event(session, event_id, account_key=account_key)
 
     # Persist cursors only after a successful pass. If anything above raised
     # we'll re-check with the same tokens next run, which keeps overlap and
@@ -642,6 +649,24 @@ def _managed_conflicts(
         and start - gap < other.end
         and other.start < end + gap
     ]
+
+
+def _reschedule_targets(
+    changed: CalendarEvent,
+    conflict: CalendarEvent,
+    task_event_ids: set[str],
+) -> list[str]:
+    """Managed events to re-plan because `changed` sits on or near `conflict`.
+
+    A leg the changed event doesn't anchor is blocked by it, so the tasks that
+    leg serves are re-planned and their legs follow — re-deriving the legs
+    alone only routes around (or flags) the newcomer while the task stays put.
+    A leg of the changed event itself, or one between fixed events, is
+    re-derived in place."""
+    key = commute_leg_key(conflict)
+    if key is None or changed.id in key:
+        return [conflict.id]
+    return [anchor for anchor in key if anchor in task_event_ids] or [conflict.id]
 
 
 def _effective_span(event: CalendarEvent) -> tuple[datetime, datetime]:

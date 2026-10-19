@@ -1003,6 +1003,113 @@ def test_managed_conflicts_catches_event_within_gap_not_overlapping():
     assert _managed_conflicts(close, [foreign], EVENT_BUFFER) == []
 
 
+def test_blocked_leg_replans_the_tasks_it_serves():
+    from app.services.calendar.discover import _reschedule_targets
+
+    def leg(origin, dest):
+        return _calendar_event(f"{origin}->{dest}", _day_at(12, 5), _day_at(12, 25), props={
+            "managed_by": "plan_service", "kind": "commute",
+            "origin_anchor": origin, "dest_anchor": dest,
+        })
+
+    task_ids = {"task-ev"}
+    meeting = _calendar_event("meeting", _day_at(12, 10), _day_at(12, 20))
+    task = _calendar_event(
+        "task-ev", _day_at(11), _day_at(12), props={"managed_by": "plan_service", "kind": "task"},
+    )
+
+    # A newcomer on a task's trip moves the task; its legs follow.
+    assert _reschedule_targets(meeting, leg("task-ev", "lecture"), task_ids) == ["task-ev"]
+    assert _reschedule_targets(meeting, task, task_ids) == ["task-ev"]
+    # A leg between fixed events has no task to move — re-derive it.
+    assert _reschedule_targets(meeting, leg("home", "lecture"), task_ids) == ["home->lecture"]
+    # The changed event's own leg just follows its anchor.
+    lecture = _calendar_event("lecture", _day_at(12, 30), _day_at(13, 50))
+    assert _reschedule_targets(lecture, leg("task-ev", "lecture"), task_ids) == ["task-ev->lecture"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        # Flipped from show-as-free to busy right on top of the task.
+        ((10, 30), (12, 0)),
+        # Created inside the event gap after the task.
+        ((11, 55), (11, 58)),
+        # Created on the task's outbound leg.
+        ((12, 10), (12, 20)),
+    ],
+)
+async def test_discover_replans_task_when_read_event_blocks_it(monkeypatch, start, end):
+    from app.services.calendar import discover as discover_mod
+
+    def raw(event_id, start, end, props=None):
+        item = {
+            "id": event_id, "status": "confirmed", "summary": event_id,
+            "start": {"dateTime": start.isoformat()}, "end": {"dateTime": end.isoformat()},
+        }
+        if props:
+            item["extendedProperties"] = {"private": props}
+        return item
+
+    settings = SimpleNamespace(
+        google_calendar_id="write", event_buffer_minutes=15, commute_enabled=False,
+    )
+    monkeypatch.setattr(discover_mod, "get_settings", lambda: settings)
+    recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    token_row = SimpleNamespace(account_key="acct", extra={
+        "calendar_sync_tokens": {"write": "w", "read": "r"},
+        "calendar_sync_baselines": {"write": recent, "read": recent},
+    })
+    monkeypatch.setattr(
+        discover_mod.oauth_tokens, "get_decrypted",
+        lambda session, *, provider, account_key: token_row,
+    )
+    monkeypatch.setattr(discover_mod.oauth_tokens, "set_extra", lambda *a, **k: None)
+
+    async def no_cache(session, *, active, cancelled):
+        return {"upserted": 0, "embedded": 0}
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(discover_mod, "cache_calendar_events", no_cache)
+    monkeypatch.setattr(discover_mod, "_refresh_related_task_deadlines", noop)
+
+    task = raw("task-ev", _day_at(11, 5), _day_at(11, 50), {
+        "managed_by": "plan_service", "kind": "task", "task_id": "t1",
+    })
+    leg = raw("leg", _day_at(12, 5), _day_at(12, 25), {
+        "managed_by": "plan_service", "kind": "commute",
+        "origin_anchor": "task-ev", "dest_anchor": "lecture",
+    })
+    blocker = raw("seminar", _day_at(*start), _day_at(*end))
+
+    class FakeClient:
+        async def sync_events(self, cid, *, sync_token=None, time_min=None, time_max=None):
+            return ([blocker] if cid == "read" else []), "next"
+
+        async def list_events(self, cid, *, time_min=None, time_max=None):
+            return [task, leg] if cid == "write" else [blocker]
+
+    async def fake_authorized_client(session, account_key):
+        return FakeClient()
+
+    rescheduled = []
+
+    async def fake_reschedule(session, event_id, *, account_key=None):
+        rescheduled.append(event_id)
+
+    monkeypatch.setattr(discover_mod, "authorized_client", fake_authorized_client)
+    monkeypatch.setattr(discover_mod, "reschedule_event", fake_reschedule)
+
+    await discover_mod.discover_updated_events(
+        SimpleNamespace(commit=lambda: None), calendar_ids=["write", "read"],
+    )
+
+    assert rescheduled == ["task-ev"]
+
+
 @pytest.mark.asyncio
 async def test_busy_view_blocks_all_day_busy_and_skips_free(monkeypatch):
     vacation = _calendar_event(
