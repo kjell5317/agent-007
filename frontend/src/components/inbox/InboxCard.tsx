@@ -169,13 +169,13 @@ export function InboxCard({
               </div>
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              <Badge variant="muted" className="shrink-0">{when}</Badge>
               <span className="shrink-0">
                 <InputStatusBadge input={data} />
               </span>
               <span className="min-w-0 flex-1 truncate font-medium">
                 {senderName(data)}
               </span>
-              <span className="shrink-0 font-medium">{when}</span>
             </div>
             {dueDateWarning && (
               <div className="mt-1 text-xs text-amber-600">{dueDateWarning}</div>

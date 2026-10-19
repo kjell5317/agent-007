@@ -341,7 +341,7 @@ function EmptyState({
                 <button
                   type="button"
                   onClick={() => onLoadChat(c.id)}
-                  className="flex w-full items-center gap-2.5 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
+                  className="flex w-full items-center gap-2.5 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
                 >
                   <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">

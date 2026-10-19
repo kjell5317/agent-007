@@ -204,6 +204,9 @@ export function InboxGroup({
               </div>
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              <Badge variant="muted" className="shrink-0">
+                {fmtWhen(newest.received_at)}
+              </Badge>
               <span className="shrink-0">
                 {activeRun ? (
                   <InputStatusBadge input={activeRun} />
@@ -215,9 +218,6 @@ export function InboxGroup({
               </span>
               <span className="min-w-0 flex-1 truncate font-medium">
                 {sendersLabel}
-              </span>
-              <span className="shrink-0 font-medium">
-                {fmtWhen(newest.received_at)}
               </span>
             </div>
           </div>

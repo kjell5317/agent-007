@@ -61,8 +61,8 @@ function metaPills(hit: SearchHit): string[] {
       .filter((value): value is string => Boolean(value));
   }
   return [
-    hit.sender ? displaySender(hit.sender) : null,
     hit.meta?.start || hit.ts ? fmtWhen(hit.meta?.start ?? hit.ts) : null,
+    hit.sender ? displaySender(hit.sender) : null,
     hit.meta?.location ?? hit.meta?.mime ?? (hit.source ? capitalize(hit.source) : null),
   ]
     .filter((value): value is string => Boolean(value));
@@ -202,7 +202,7 @@ function CompactResultRow({
       className={cn(
         "flex h-[76px] w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm transition-colors",
         clickable
-          ? "cursor-pointer hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
+          ? "cursor-pointer hover:bg-accent hover:text-accent-foreground"
           : "cursor-default",
       )}
     >

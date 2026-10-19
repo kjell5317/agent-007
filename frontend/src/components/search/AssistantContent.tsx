@@ -371,6 +371,7 @@ function WidgetShell({
   href,
   onActivate,
   onOpened,
+  when,
   pills = [],
   label,
 }: {
@@ -379,6 +380,8 @@ function WidgetShell({
   href?: string | null;
   onActivate?: () => void;
   onOpened?: () => void;
+  // Leads the pill row so dates line up with task and inbox cards.
+  when?: string | null;
   pills?: string[];
   label?: { text: string; color?: string | null };
 }) {
@@ -406,7 +409,7 @@ function WidgetShell({
       }
       className={cn(
         "flex h-[76px] max-w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm transition-colors",
-        clickable && "cursor-pointer hover:border-primary/40 hover:bg-accent",
+        clickable && "cursor-pointer hover:bg-accent",
       )}
     >
       <span
@@ -423,6 +426,11 @@ function WidgetShell({
           {title}
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+          {when && (
+            <span className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground" title={when}>
+              {when}
+            </span>
+          )}
           {label && (
             <span
               className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
@@ -497,10 +505,9 @@ export function EventCard({
       href={cite.url}
       onActivate={onActivate}
       onOpened={onOpened}
+      when={when}
       label={{ text: eventLabel?.name ?? "Event", color: eventLabel?.color }}
-      pills={[when, location].filter((value): value is string =>
-        Boolean(value),
-      )}
+      pills={location ? [location] : []}
     />
   );
 }
@@ -523,9 +530,8 @@ export function DocCard({
       href={cite.url}
       onActivate={onActivate}
       onOpened={onOpened}
-      pills={[cite.ts ? `${fmtWhen(cite.ts)}` : null, meta.mime].filter(
-        (value): value is string => Boolean(value),
-      )}
+      when={cite.ts ? fmtWhen(cite.ts) : null}
+      pills={meta.mime ? [meta.mime] : []}
     />
   );
 }

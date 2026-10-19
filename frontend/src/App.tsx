@@ -29,7 +29,6 @@ import { compareTasksByDue } from "@/lib/tasks";
 import type { RawInput, SearchHit, Task } from "@/lib/types";
 
 export function App() {
-  const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData();
   const [timeZone, setTimeZone] = useState(getUserTimezone);
   useEffect(() => {
     api.getSettings().then(({ user_timezone }) => {
@@ -47,6 +46,8 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSubmitted, setSearchSubmitted] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
+  const inboxSource = view === "chat" && searchFilters.kind === "messages" ? searchFilters.source : "";
+  const { tasks, inputs, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData(inboxSource);
   const inboxOpen = view === "chat" && !searchQuery.trim() && searchFilters.kind === "messages";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const taskCacheRef = useRef(new Map<string, Task>());
@@ -272,6 +273,13 @@ export function App() {
     knownTaskIdsRef.current = currentIds;
   }, [loading, tasks]);
 
+  // A source switch replaces the input list wholesale — rebaseline so the other
+  // source's rows aren't flagged as new arrivals.
+  useEffect(() => {
+    knownInputIdsRef.current = null;
+    newestInputReceivedAtRef.current = null;
+  }, [inboxSource]);
+
   useEffect(() => {
     if (loading) return;
 
@@ -443,6 +451,8 @@ export function App() {
     />
   );
 
+  // `inputs` is already fetched for this source; the local filter only hides
+  // the previous list's rows until the new page lands.
   const renderInbox = (source = "") => (
     <InboxPanel
       inputs={source ? inputs.filter((input) => input.source === source) : inputs}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
-import { groupInputs } from "@/lib/inbox";
+import { inputGroupKey } from "@/lib/inbox";
 import { compareTasksBySchedule } from "@/lib/tasks";
 import type { RawInput, Task } from "@/lib/types";
 
@@ -33,37 +33,52 @@ function upsertInput(list: RawInput[], input: RawInput): RawInput[] {
   return [...rest, input].sort((a, b) => b.received_at.localeCompare(a.received_at));
 }
 
-export function useAppData(): AppData {
+export function useAppData(inputSource = ""): AppData {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [inputs, setInputs] = useState<RawInput[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMoreInputs, setHasMoreInputs] = useState(false);
-  // Held in a ref so refresh/loadMoreInputs keep stable identities across renders.
+  // Held in refs so refresh/loadMoreInputs keep stable identities across renders.
   const inputsLimitRef = useRef(INPUTS_PAGE_SIZE);
+  const inputSourceRef = useRef(inputSource);
+
+  // Filtering by source happens server-side so every page holds `limit` groups
+  // of that source. Returns false when the filter changed mid-flight.
+  const fetchInputs = useCallback(async (limit: number) => {
+    const source = inputSourceRef.current;
+    const rows = await api.listInputs({ limit, source });
+    if (source !== inputSourceRef.current) return false;
+    setInputs(rows);
+    // Count groups the way the backend's LIMIT does; groupInputs also folds
+    // kotx runs into their tasks, which would undercount and end paging early.
+    setHasMoreInputs(new Set(rows.map(inputGroupKey)).size >= limit);
+    return true;
+  }, []);
 
   const refresh = useCallback(async () => {
-    const limit = inputsLimitRef.current;
-    const [open, allInputs] = await Promise.all([
+    const [open] = await Promise.all([
       api.listTasks("open"),
-      api.listInputs({ limit }),
+      fetchInputs(inputsLimitRef.current),
     ]);
     setTasks([...open]);
-    setInputs(allInputs);
-    setHasMoreInputs(groupInputs(allInputs).length >= limit);
     setLoading(false);
-  }, []);
+  }, [fetchInputs]);
 
   const loadMoreInputs = useCallback(async () => {
     const next = inputsLimitRef.current + INPUTS_PAGE_SIZE;
-    const more = await api.listInputs({ limit: next });
-    inputsLimitRef.current = next;
-    setInputs(more);
-    setHasMoreInputs(groupInputs(more).length >= next);
-  }, []);
+    if (await fetchInputs(next)) inputsLimitRef.current = next;
+  }, [fetchInputs]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (inputSourceRef.current === inputSource) return;
+    inputSourceRef.current = inputSource;
+    inputsLimitRef.current = INPUTS_PAGE_SIZE;
+    fetchInputs(INPUTS_PAGE_SIZE).catch(() => {});
+  }, [fetchInputs, inputSource]);
 
   // Live updates over the shared SSE stream replace periodic polling: the
   // backend pushes the full Task / RawInput on every mutation and we patch
@@ -80,6 +95,7 @@ export function useAppData(): AppData {
           setTasks((prev) => prev.filter((t) => t.id !== event.id));
           break;
         case "input":
+          if (inputSourceRef.current && event.data.source !== inputSourceRef.current) break;
           setInputs((prev) => upsertInput(prev, event.data));
           break;
         case "kotx":
