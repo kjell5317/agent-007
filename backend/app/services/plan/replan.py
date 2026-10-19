@@ -41,7 +41,7 @@ from app.services.learn import duration as duration_model
 from app.services.plan import features as F
 from app.services.plan import routing
 from app.services.plan import solver as S
-from app.services.plan.checkin import awaiting_checkin, booked_slot, running_end
+from app.services.plan.checkin import awaiting_checkin, booked_slot, preempted, running_end
 from app.services.plan.snapshot import CONTEXT_MARGIN, calendar_items, task_attrs, task_item
 from app.services.plan.timeline import (
     Grid,
@@ -251,17 +251,29 @@ async def replan(
     lead = timedelta(minutes=settings.slot_min_lead_minutes)
     earliest_now = grid.ceil(now + lead)
 
+    # New rows carry a provisional `scheduled_date` (creation time) until
+    # a calendar event exists; only a mirrored slot is a real one.
+    slots = {
+        t.id: booked_slot(t) if t.schedule_state == "placed" and t.calendar_event_id else None
+        for t in tasks
+    }
+    overtime = [
+        (slot[1], running_end(slot[0], slot[1], now))
+        for t in tasks
+        if t.running_since is not None and (slot := slots[t.id]) is not None
+    ]
+
     fixed_items: list[Item] = []
     fixed_tasks: dict[uuid.UUID, Item] = {}
     candidates: list[tuple[Task, TaskAttrs, datetime | None]] = []
     for task in tasks:
         attrs = task_attrs(task, label_defaults)
-        # New rows carry a provisional `scheduled_date` (creation time) until
-        # a calendar event exists; only a mirrored slot is a real one.
-        slot = booked_slot(task) if task.schedule_state == "placed" and task.calendar_event_id else None
+        slot = slots[task.id]
         if task.running_since is not None and slot is not None:
             item = task_item(task, attrs, slot[0], max(slot[1], running_end(slot[0], slot[1], now)))
             fixed_tasks[task.id] = item
+        elif slot is not None and slot[0] <= now and preempted(slot, overtime):
+            candidates.append((task, attrs, None))
         elif slot is not None and slot[0] <= now < slot[1]:
             fixed_tasks[task.id] = task_item(task, attrs, *slot)
         elif slot is not None and slot[1] <= now:

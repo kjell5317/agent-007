@@ -119,6 +119,32 @@ async def test_not_done_deducts_and_replans(monkeypatch, logged):
 
 
 @pytest.mark.asyncio
+async def test_extension_moves_the_next_task_even_once_it_began(monkeypatch):
+    # "Still working" lands ≥15 min after the booked end, so the task booked
+    # right after has already begun by the time the extension reaches it.
+    now = datetime.now(TZ)
+    booked_end = now - timedelta(minutes=20)
+    extension_end = booked_end + timedelta(minutes=30)
+
+    def slot_task(start, minutes):
+        return SimpleNamespace(id=uuid.uuid4(), scheduled_date=start, running_since=None,
+                               estimation=minutes, booked_minutes=None)
+
+    running = slot_task(booked_end - timedelta(hours=1), 60)
+    begun = slot_task(booked_end, 30)
+    later = slot_task(extension_end, 30)
+    monkeypatch.setattr(checkin.tasks_store, "open_scheduled_between", lambda _s, **_kw: [begun, later])
+    moved = []
+
+    async def fake_schedule(_session, task, *, block, notify):
+        moved.append((task.id, block.start, block.end))
+
+    monkeypatch.setattr("app.services.plan.schedule.schedule_task", fake_schedule)
+    await checkin._clear_way(_session(), running, booked_end, extension_end)
+    assert moved == [(begun.id, booked_end, extension_end)]
+
+
+@pytest.mark.asyncio
 async def test_late_answer_to_a_settled_checkin_only_closes(monkeypatch, logged):
     monkeypatch.setattr(
         checkin.log_store, "for_slot",

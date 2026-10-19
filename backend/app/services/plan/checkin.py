@@ -82,6 +82,14 @@ def abandoned(start: datetime, booked_end: datetime, now: datetime) -> bool:
     return now >= start + ABANDON_FACTOR * (booked_end - start)
 
 
+def preempted(slot: tuple[datetime, datetime], overtime: list[tuple[datetime, datetime]]) -> bool:
+    """A slot that a running task's overtime grew into didn't happen — the
+    user was still on the running task — so it must move even once its
+    time has begun or passed. The check-in arrives 15 minutes after the
+    booked end, so the slot right after it has always begun by then."""
+    return any(lo < slot[1] and slot[0] < hi for lo, hi in overtime)
+
+
 # --- Sweep -----------------------------------------------------------------------
 
 
@@ -248,7 +256,7 @@ async def _clear_way(session: Session, running, start: datetime, end: datetime) 
             if other.running_since is not None:
                 continue
             slot = booked_slot(other)
-            if slot is None or not (slot[0] < end and slot[1] > start) or slot[0] <= datetime.now(user_tz()):
+            if slot is None or not preempted(slot, [(start, end)]):
                 continue
             await schedule_task(session, other, block=Interval(start, end), notify=False)
 

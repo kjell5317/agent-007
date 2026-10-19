@@ -115,6 +115,21 @@ async def test_running_task_blocks_its_extension(world):
 
 
 @pytest.mark.asyncio
+async def test_running_extension_moves_slots_that_already_began(world):
+    running = make_task("running", due=NOW + timedelta(days=1),
+                        scheduled=NOW - timedelta(minutes=90), running_since=NOW - timedelta(minutes=10))
+    # The extension runs 08:30–09:15: one slot inside it is over, one is "in progress".
+    elapsed = make_task("elapsed", due=NOW + timedelta(hours=8), minutes=15,
+                        scheduled=NOW.replace(hour=8, minute=30))
+    begun = make_task("begun", due=NOW + timedelta(hours=8), scheduled=NOW.replace(hour=8, minute=45))
+    world.tasks = [running, elapsed, begun]
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    for task in (elapsed, begun):
+        start, _ = result.placed[task.id]
+        assert start >= NOW.replace(hour=9, minute=15)
+
+
+@pytest.mark.asyncio
 async def test_far_deadline_is_deferred_when_the_week_is_full(world):
     world.events = [Item(NOW.replace(hour=0), NOW.replace(hour=0) + timedelta(days=8), "event")]
     far = make_task("far", due=NOW + timedelta(days=60), scheduled=None)
