@@ -20,13 +20,13 @@ export function fmtRecurrence(unit: RecurrenceUnit, interval: number): string {
 // don't repeat themselves, they show the rule of the occurrence they belong to.
 export function taskRecurrence(
   task: Pick<Task, "recurrence_unit" | "recurrence_interval" | "parent_card">,
-): { label: string; inherited: boolean } | null {
+): { label: string; unit: RecurrenceUnit; inherited: boolean } | null {
   if (task.recurrence_unit && task.recurrence_interval) {
-    return { label: fmtRecurrence(task.recurrence_unit, task.recurrence_interval), inherited: false };
+    return { label: fmtRecurrence(task.recurrence_unit, task.recurrence_interval), unit: task.recurrence_unit, inherited: false };
   }
   const parent = task.parent_card;
   if (parent?.recurrence_unit && parent.recurrence_interval) {
-    return { label: fmtRecurrence(parent.recurrence_unit, parent.recurrence_interval), inherited: true };
+    return { label: fmtRecurrence(parent.recurrence_unit, parent.recurrence_interval), unit: parent.recurrence_unit, inherited: true };
   }
   return null;
 }

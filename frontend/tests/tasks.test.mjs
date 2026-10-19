@@ -53,10 +53,10 @@ test("repeat intervals stop where the next unit takes over", () => {
 
 test("subtasks of a split occurrence show the occurrence's repeat", () => {
   const occurrence = { recurrence_unit: "week", recurrence_interval: 1, parent_card: null };
-  assert.deepEqual({ ...exports.taskRecurrence(occurrence) }, { label: "Weekly", inherited: false });
+  assert.deepEqual({ ...exports.taskRecurrence(occurrence) }, { label: "Weekly", unit: "week", inherited: false });
   assert.deepEqual(
     { ...exports.taskRecurrence({ recurrence_unit: null, recurrence_interval: null, parent_card: occurrence }) },
-    { label: "Weekly", inherited: true },
+    { label: "Weekly", unit: "week", inherited: true },
   );
   assert.equal(exports.taskRecurrence({ recurrence_unit: null, recurrence_interval: null, parent_card: null }), null);
 });

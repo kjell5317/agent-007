@@ -100,7 +100,6 @@ export function TaskCard({
     displayDate ?? "",
     task.estimation ?? "",
     task.label ?? "",
-    recurrenceTitle ?? "",
     displayLocation ?? "",
     measurementVersion,
   ].join("|");
@@ -345,12 +344,17 @@ export function TaskCard({
               <TaskIdPill id={task.public_id} />
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-base font-medium leading-snug transition-all duration-300",
+                  "min-w-0 truncate text-base font-medium leading-snug transition-all duration-300",
                   crossing && "line-through opacity-60",
                 )}
               >
                 {task.title}
               </span>
+              {recurrenceTitle && (
+                <span title={recurrenceTitle} aria-label={recurrenceTitle} className="shrink-0 text-muted-foreground">
+                  <Repeat className="h-3.5 w-3.5" />
+                </span>
+              )}
             </div>
             <div
               ref={metadataRef}
@@ -360,12 +364,6 @@ export function TaskCard({
                 <Badge variant={displayDateVariant}>
                   {fmtDue(displayDate)}
                 </Badge>
-              )}
-
-              {recurrenceTitle && (
-                <span title={recurrenceTitle} aria-label={recurrenceTitle}>
-                  <Repeat className="h-3 w-3" />
-                </span>
               )}
 
               {task.label && (

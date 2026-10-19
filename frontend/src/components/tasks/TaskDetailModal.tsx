@@ -88,6 +88,11 @@ const TASK_SUMMARY_SCHEDULED_BADGE_CLASS =
   "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200";
 const TASK_SUMMARY_UNSCHEDULED_BADGE_CLASS =
   "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
+const TASK_SUMMARY_REPEAT_BADGE_CLASS: Record<RecurrenceUnit, string> = {
+  day: "bg-violet-100 text-violet-800 dark:bg-violet-500/20 dark:text-violet-200",
+  week: "bg-teal-100 text-teal-800 dark:bg-teal-500/20 dark:text-teal-200",
+  month: "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-500/20 dark:text-fuchsia-200",
+};
 
 export function TaskDetailModal({
   task,
@@ -980,7 +985,7 @@ function TaskSummary({
                 }
                 className={cn(
                   TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                  TASK_SUMMARY_MUTED_BADGE_CLASS,
+                  repeat ? TASK_SUMMARY_REPEAT_BADGE_CLASS[repeat.unit] : TASK_SUMMARY_MUTED_BADGE_CLASS,
                 )}
               >
                 <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
