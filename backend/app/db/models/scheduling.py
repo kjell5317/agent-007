@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -79,3 +79,27 @@ class LearnedModel(Base):
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     fitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CommuteFlip(Base):
+    """A commute leg whose mode the user flipped through the event's link.
+    Future legs keep the flipped mode as a pin until they're past; every row
+    is a pairwise training example (mode taken vs mode planned)."""
+
+    __tablename__ = "commute_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    origin_anchor: Mapped[str] = mapped_column(String(256))
+    dest_anchor: Mapped[str] = mapped_column(String(256))
+    origin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    destination: Mapped[str | None] = mapped_column(Text, nullable=True)
+    depart: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    arrive: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    planned_mode: Mapped[str] = mapped_column(String(16))
+    flipped_mode: Mapped[str] = mapped_column(String(16))
+    # The leg had already started when it was flipped: a correction of what
+    # happened (moves the derived bike location), not a pin.
+    past: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # {"planned": φ(planned mode), "flipped": φ(flipped mode)}
+    features: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

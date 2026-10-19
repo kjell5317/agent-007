@@ -288,9 +288,23 @@ async def nightly_scheduler_once() -> None:
     from app.services.learn.jobs import nightly
     from app.services.plan.replan import _shadow_run, request_replan
 
+    from app.services.calendar.attributes import classify_pending_events
+    from app.timezones import user_tz
+
     settings = get_settings()
     with SessionLocal() as session:
         await nightly(session)
+        try:
+            # Events the discovery pass didn't get to (its classifier only runs
+            # on passes that cached something).
+            await classify_pending_events(
+                session,
+                until=datetime.now(user_tz()) + timedelta(days=settings.scheduler_horizon_days),
+            )
+            session.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("nightly-scheduler · event classification failed")
+            session.rollback()
         if settings.scheduler_engine == "solver":
             await request_replan(
                 session, reason="nightly", time_limit=settings.scheduler_nightly_time_limit_seconds,

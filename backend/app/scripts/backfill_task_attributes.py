@@ -23,62 +23,34 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.agent.helpers.attributes import DEADLINE_KINDS, EFFORTS, WORK_TYPES, valid_attributes
-from app.agent.helpers.llm import chat, user_message
-from app.agent.tools.schemas import DEADLINE_KIND_DOC, EFFORT_DOC, WORK_TYPE_DOC
+from app.agent.helpers.attributes import ATTRIBUTE_FIELDS
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.db.clients import labels as labels_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.scheduling import TaskOverride
 from app.db.models.task import Task
+from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier
 
 log = logging.getLogger(__name__)
 
-BATCH_SIZE = 20
 LOOKBACK = timedelta(days=7)
-# 20 entries plus Gemini's thinking overflow the default 1024-token cap.
-MAX_TOKENS = 4096
 
-CLASSIFY_TOOL = {
-    "name": "classify_tasks",
-    "description": "Record the work type, effort and deadline kind of every listed task.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "tasks": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "n": {"type": "integer", "description": "The task's number in the list."},
-                        "work_type": {
-                            "type": "string", "enum": list(WORK_TYPES),
-                            "description": WORK_TYPE_DOC,
-                        },
-                        "effort": {
-                            "type": "string", "enum": list(EFFORTS), "description": EFFORT_DOC,
-                        },
-                        "deadline_kind": {
-                            "type": "string", "enum": list(DEADLINE_KINDS),
-                            "description": DEADLINE_KIND_DOC,
-                        },
-                    },
-                    "required": ["n", "work_type", "effort", "deadline_kind"],
-                },
-            },
-        },
-        "required": ["tasks"],
-    },
-}
-
-SYSTEM_PROMPT = (
-    "Classify every numbered task from the user's task list. Call classify_tasks "
-    "once with one entry per task, keyed by its number. Judge from the title, "
-    "description, label, estimate and due date. A due date marked 'derived' was "
-    "set by the app, not stated by the source; 'linked event' means the task "
-    "prepares for that calendar event."
+CLASSIFIER = BatchClassifier(
+    tool_name="classify_tasks",
+    description="Record the work type, effort and deadline kind of every listed task.",
+    items="tasks",
+    fields=ATTRIBUTE_FIELDS,
+    system_prompt=(
+        "Classify every numbered task from the user's task list. Call classify_tasks "
+        "once with one entry per task, keyed by its number. Judge from the title, "
+        "description, label, estimate and due date. A due date marked 'derived' was "
+        "set by the app, not stated by the source; 'linked event' means the task "
+        "prepares for that calendar event."
+    ),
+    trace_name="backfill-task-attributes",
 )
+CLASSIFY_TOOL = CLASSIFIER.tool
 
 
 def batch_message(tasks: Sequence[Mapping[str, Any]]) -> str:
@@ -106,20 +78,7 @@ def batch_message(tasks: Sequence[Mapping[str, Any]]) -> str:
 
 
 def parse_classification(tool_input: Any, count: int) -> dict[int, dict[str, str]]:
-    """`{task number: valid fields}`; unknown numbers and enum values are dropped."""
-    items = tool_input.get("tasks") if isinstance(tool_input, Mapping) else None
-    parsed: dict[int, dict[str, str]] = {}
-    for item in items if isinstance(items, list) else []:
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            number = int(item.get("n"))
-        except (TypeError, ValueError):
-            continue
-        fields = valid_attributes(item)
-        if 1 <= number <= count and fields:
-            parsed[number] = fields
-    return parsed
+    return CLASSIFIER.parse(tool_input, count)
 
 
 def planned_update(
@@ -182,22 +141,7 @@ def _deadline_kind_overridden(session: Session) -> set[uuid.UUID]:
 async def classify(
     snapshots: Sequence[Mapping[str, Any]], settings: Settings
 ) -> dict[int, dict[str, str]]:
-    # Same cheap route as the subtask planner: Gemini Flash when configured.
-    gemini = bool(settings.gemini_api_key)
-    response = await chat(
-        [user_message(batch_message(snapshots))],
-        settings,
-        system_prompt=SYSTEM_PROMPT,
-        tools=[CLASSIFY_TOOL],
-        force_tool="classify_tasks",
-        provider="google" if gemini else None,
-        model=settings.chat_llm_model if gemini else None,
-        thinking_level=settings.chat_thinking_level if gemini else None,
-        max_tokens=MAX_TOKENS,
-        name="backfill-task-attributes",
-    )
-    call = next((c for c in response.tool_calls if c.name == "classify_tasks"), None)
-    return parse_classification(call.input if call else None, len(snapshots))
+    return await CLASSIFIER.classify(batch_message(snapshots), len(snapshots), settings)
 
 
 async def backfill(

@@ -29,8 +29,8 @@ REQUIRED fields:
     * label — pick the single best-fitting value from the enum when labels
         are available. Leave it unset if none fits.
 
-Optional: description, location (home is possible), link (most relevant
-source URL), notes (durable, cross-project long-term memory; the `notes` field
+Optional: description, location ("home" when it can only be done at home,
+such as chores), link (most relevant source URL), notes (durable, cross-project long-term memory; the `notes` field
 describes what makes a good note; skip ephemeral content).
 
 Also set work_type and effort — inherit the label's defaults (listed with the

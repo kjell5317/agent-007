@@ -10,6 +10,7 @@ from app.services.commute.legs import (  # noqa: E402
     FAILED_LEG_SECONDS,
     FAILED_MODE,
     HOME,
+    PINNED_REASON,
     Anchor,
     derive_legs,
     required_routes,
@@ -413,3 +414,151 @@ def test_required_routes_cover_home_and_chain_pairs():
     }
     assert routes[(HOME_ADDR, GYM)] == first.start
     assert routes[(GYM, OFFICE)] == first.end
+
+
+def test_transit_pin_moves_the_whole_trip_to_transit():
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({(HOME_ADDR, GYM, "transit"): 1200, (GYM, HOME_ADDR, "transit"): 1300})
+    legs, skipped = derive_legs(
+        [anchor], HOME_ADDR, durations, None, SETTINGS, pins={(HOME, "ev1"): "transit"},
+    )
+
+    assert skipped == 0
+    assert [leg.mode for leg in legs] == ["transit", "transit"]
+    assert {leg.reason for leg in legs} == {PINNED_REASON}
+    outbound, inbound = legs
+    assert outbound.arrive == anchor.start - BUFFER
+    assert outbound.depart == outbound.arrive - timedelta(seconds=1200)
+    assert inbound.depart == anchor.end + BUFFER
+    assert inbound.arrive == inbound.depart + timedelta(seconds=1300)
+
+
+def test_transit_pin_requests_unfetched_transit_then_applies():
+    # Dry short trip: the resolver never fetched transit. The pin reports
+    # the pairs for the lazy fetch and keeps the bike until they arrive.
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations()
+    pins = {("ev1", HOME): "transit"}
+
+    missing: set[tuple[str, str]] = set()
+    legs, _ = derive_legs(
+        [anchor], HOME_ADDR, durations, None, SETTINGS, missing_transit=missing, pins=pins,
+    )
+    assert missing == {(HOME_ADDR, GYM), (GYM, HOME_ADDR)}
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling"]
+
+    durations[(HOME_ADDR, GYM, "transit")] = 1200
+    durations[(GYM, HOME_ADDR, "transit")] = 1200
+    missing.clear()
+    legs, _ = derive_legs(
+        [anchor], HOME_ADDR, durations, None, SETTINGS, missing_transit=missing, pins=pins,
+    )
+    assert missing == set()
+    assert [leg.mode for leg in legs] == ["transit", "transit"]
+
+
+def test_bike_pin_ignores_threshold_and_rain():
+    far = "Farawaystrasse 9"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 1800,  # over the 25-minute cap
+        (HOME_ADDR, far, "transit"): 2400,
+        (far, HOME_ADDR, "bicycling"): 1800,
+        (far, HOME_ADDR, "transit"): 2400,
+    }
+    anchor = Anchor("ev1", _at(14), _at(15), far)
+    rain = {to_user_tz(anchor.end).strftime("%Y-%m-%dT%H:00"): 80}
+    legs, _ = derive_legs(
+        [anchor], HOME_ADDR, durations, rain, SETTINGS, pins={("ev1", HOME): "bicycling"},
+    )
+
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling"]
+    assert {leg.reason for leg in legs} == {PINNED_REASON}
+    outbound, inbound = legs
+    assert outbound.arrive == anchor.start - BUFFER
+    assert outbound.depart == outbound.arrive - timedelta(seconds=1800)
+    assert inbound.depart == anchor.end + BUFFER
+    assert inbound.arrive == inbound.depart + timedelta(seconds=1800)
+
+
+def test_bike_pin_rescues_leg_failed_for_lack_of_bike():
+    # Transit out (over cap), no transit home: today the return fails because
+    # the bike stayed home. Riding the whole trip routes every leg.
+    far = "Farawaystrasse 9"
+    durations = {
+        (HOME_ADDR, far, "bicycling"): 3600,
+        (HOME_ADDR, far, "transit"): 1800,
+        (far, HOME_ADDR, "bicycling"): 3600,
+    }
+    anchor = Anchor("ev1", _at(14), _at(15), far)
+    legs, skipped = derive_legs(
+        [anchor], HOME_ADDR, durations, None, SETTINGS, pins={(HOME, "ev1"): "bicycling"},
+    )
+
+    assert skipped == 0
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling"]
+
+
+def test_pin_the_mode_cannot_route_keeps_todays_choice():
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({(HOME_ADDR, GYM, "transit"): 1200, (GYM, HOME_ADDR, "transit"): None})
+    legs, _ = derive_legs(
+        [anchor], HOME_ADDR, durations, None, SETTINGS, pins={(HOME, "ev1"): "transit"},
+    )
+
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling"]
+    assert all(leg.reason != PINNED_REASON for leg in legs)
+
+
+def test_pin_only_covers_its_own_trip():
+    first = Anchor("ev1", _at(10), _at(11), GYM)
+    second = Anchor("ev2", _at(16), _at(17), OFFICE)
+    durations = _durations({
+        (HOME_ADDR, OFFICE, "transit"): 1500,
+        (OFFICE, HOME_ADDR, "transit"): 1500,
+    })
+    legs, _ = derive_legs(
+        [first, second], HOME_ADDR, durations, None, SETTINGS, pins={("ev2", HOME): "transit"},
+    )
+
+    assert [leg.key for leg in legs] == [(HOME, "ev1"), ("ev1", HOME), (HOME, "ev2"), ("ev2", HOME)]
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling", "transit", "transit"]
+
+
+def test_pin_covers_direct_legs_of_the_trip():
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(15, 45), _at(17), OFFICE)
+    durations = _durations({
+        (HOME_ADDR, GYM, "transit"): 1200,
+        (GYM, OFFICE, "transit"): 900,
+        (OFFICE, HOME_ADDR, "transit"): 1500,
+    })
+    legs, _ = derive_legs(
+        [first, second], HOME_ADDR, durations, None, SETTINGS, pins={("ev1", "ev2"): "transit"},
+    )
+
+    assert [leg.key for leg in legs] == [(HOME, "ev1"), ("ev1", "ev2"), ("ev2", HOME)]
+    assert [leg.mode for leg in legs] == ["transit"] * 3
+    direct = legs[1]
+    assert direct.arrive == second.start - BUFFER
+    assert direct.depart == direct.arrive - timedelta(seconds=900)
+
+
+def test_later_pin_wins_when_a_trips_pins_disagree():
+    anchor = Anchor("ev1", _at(14), _at(15), GYM)
+    durations = _durations({(HOME_ADDR, GYM, "transit"): 1200, (GYM, HOME_ADDR, "transit"): 1200})
+    pins = {(HOME, "ev1"): "transit", ("ev1", HOME): "bicycling"}
+    legs, _ = derive_legs([anchor], HOME_ADDR, durations, None, SETTINGS, pins=pins)
+
+    assert [leg.mode for leg in legs] == ["bicycling", "bicycling"]
+
+
+def test_unrelated_pins_change_nothing():
+    first = Anchor("ev1", _at(14), _at(15), GYM)
+    second = Anchor("ev2", _at(15, 45), _at(17), OFFICE)
+    plain, _ = derive_legs([first, second], HOME_ADDR, _durations(), None, SETTINGS)
+    pinned, _ = derive_legs(
+        [first, second], HOME_ADDR, _durations(), None, SETTINGS,
+        pins={("other", HOME): "transit"},
+    )
+
+    assert pinned == plain

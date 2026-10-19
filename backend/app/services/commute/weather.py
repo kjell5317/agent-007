@@ -148,3 +148,74 @@ async def geocode(session, address: str) -> tuple[float, float] | None:
     geocode_cache.upsert(session, address=address, lat=lat, lon=lon)
     session.commit()
     return lat, lon
+
+
+# --- Hourly forecast for the solver ------------------------------------------
+
+FORECAST_CACHE_SECONDS = 3600
+# Long-run share of rainy hours, what a forecast decays to with lead time.
+BASE_RAIN_PCT = 20.0
+_forecast_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+async def hourly_forecast(
+    lat: float, lon: float, start: datetime, end: datetime
+) -> dict[str, dict[str, float]]:
+    """`{"YYYY-MM-DDTHH:00": {rain_pct, rain_mm, temp_c, wind_kmh, is_day}}`
+    in local time. Cached for an hour; an empty dict when unreachable."""
+    import time
+
+    start_hour = to_user_tz(start).strftime("%Y-%m-%dT%H:00")
+    end_hour = to_user_tz(end).strftime("%Y-%m-%dT%H:00")
+    key = (round(lat, 3), round(lon, 3), start_hour[:10], end_hour[:10])
+    cached = _forecast_cache.get(key)
+    if cached is not None and time.monotonic() - cached[0] < FORECAST_CACHE_SECONDS:
+        return cached[1]
+    params = {
+        "latitude": f"{lat:.5f}",
+        "longitude": f"{lon:.5f}",
+        "hourly": "precipitation_probability,precipitation,temperature_2m,wind_speed_10m,is_day",
+        "timezone": "auto",
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(_BASE, params=params)
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        log.info("open-meteo forecast failed (%s) — no weather signal", exc)
+        return {}
+    out = parse_hourly(payload.get("hourly") or {})
+    _forecast_cache[key] = (time.monotonic(), out)
+    return out
+
+
+def parse_hourly(hourly: dict) -> dict[str, dict[str, float]]:
+    fields = {
+        "rain_pct": "precipitation_probability",
+        "rain_mm": "precipitation",
+        "temp_c": "temperature_2m",
+        "wind_kmh": "wind_speed_10m",
+        "is_day": "is_day",
+    }
+    times = hourly.get("time") or []
+    out: dict[str, dict[str, float]] = {}
+    for n, when in enumerate(times):
+        row = {}
+        for name, source in fields.items():
+            series = hourly.get(source) or []
+            if n < len(series) and series[n] is not None:
+                row[name] = float(series[n])
+        out[str(when)] = row
+    return out
+
+
+def blended_rain_pct(pct: float, lead_hours: float) -> float:
+    """Forecast skill fades with lead time: trust it fully for a day, then
+    blend toward the base rate (weight 0.3 at a week)."""
+    if lead_hours <= 24:
+        return pct
+    weight = max(0.3, 1 - 0.7 * (lead_hours - 24) / (7 * 24 - 24))
+    return weight * pct + (1 - weight) * BASE_RAIN_PCT

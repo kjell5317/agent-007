@@ -124,3 +124,96 @@ async def test_dry_run_writes_nothing(world):
     result = await replan.replan(session(), reason="test", now=NOW, time_limit=5, dry_run=True)
     assert result.ok and result.placed
     assert world.writes == [] and world.logs == []
+
+
+@pytest.fixture
+def routed(world, monkeypatch):
+    """`world` plus commute inside the solver, with Maps, weather and the
+    leg writer faked."""
+    from app.config import get_settings
+    from app.services.commute import planner
+    from app.services.commute.state import CommuteState
+    from app.services.plan import routing
+
+    settings = get_settings().model_copy(update={
+        "home_address": "Home", "google_calendar_id": "primary", "google_maps_api_key": "k",
+    })
+    monkeypatch.setattr(routing, "get_settings", lambda: settings)
+    monkeypatch.setattr(routing, "routing_enabled", lambda: True)
+
+    async def load_state(_session, _now, _end):
+        return world.commute_state, []
+
+    async def routable(location):
+        return location
+
+    minutes = {frozenset({"Home", "Uni"}): (15, 25), frozenset({"Home", "Library"}): (20, 30),
+               frozenset({"Uni", "Library"}): (10, 20)}
+
+    async def travel(locations, _grid):
+        out = {}
+        for a, x in enumerate(locations):
+            for b, y in enumerate(locations):
+                if a != b:
+                    bike, transit = minutes[frozenset({x, y})]
+                    out[(a, b, "bicycling")] = bike * 60
+                    out[(a, b, "transit")] = transit * 60
+        return out
+
+    async def no_weather(*_args):
+        return {}
+
+    async def write_legs(_session, legs, **kw):
+        world.legs = legs
+        return len(legs), [], []
+
+    async def nothing(*_args, **_kw):
+        return None
+
+    world.commute_state = CommuteState()
+    world.legs = []
+    monkeypatch.setattr("app.services.commute.state.load_state", load_state)
+    monkeypatch.setattr("app.services.location.resolve_routable_location", routable)
+    monkeypatch.setattr(routing, "_travel_matrix", travel)
+    monkeypatch.setattr(routing, "_weather", no_weather)
+    monkeypatch.setattr("app.db.clients.commute_log.active_pins", lambda _s, _now: {})
+    monkeypatch.setattr(planner, "_write_legs", write_legs)
+    monkeypatch.setattr(planner, "_notify_new_failures", nothing)
+    monkeypatch.setattr(planner, "_notify_new_conflicts", nothing)
+    monkeypatch.setattr(planner, "_sync_anchor_reminders", nothing)
+    return world
+
+
+@pytest.mark.asyncio
+async def test_replan_writes_the_solved_route(routed):
+    lecture = Item(NOW.replace(hour=10), NOW.replace(hour=12), "event", event_id="lec", location="Uni")
+    routed.events = [lecture]
+    library = make_task("library", due=NOW.replace(hour=22), location="Library")
+    routed.tasks = [library]
+
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+
+    assert result.ok and result.routes
+    keys = [(leg.origin_anchor, leg.dest_anchor) for leg in routed.legs]
+    # The new task's provisional key was replaced by its new calendar event.
+    assert library.calendar_event_id == "ev-library"
+    assert any("ev-library" in key for key in keys)
+    assert not any(key[0].startswith("task:") or key[1].startswith("task:") for key in keys)
+    assert keys[0][0] == "home" and keys[-1][1] == "home"
+    start, end = result.placed[library.id]
+    assert all(leg.arrive <= start or leg.depart >= end for leg in routed.legs)
+    assert all(leg.mode in ("bicycling", "transit") for leg in routed.legs)
+
+
+@pytest.mark.asyncio
+async def test_replan_starts_where_the_bike_was_left(routed):
+    from app.services.commute.state import CommuteState
+
+    routed.commute_state = CommuteState(bike_location="Uni")
+    lecture = Item(NOW.replace(hour=10), NOW.replace(hour=12), "event", event_id="lec", location="Uni")
+    routed.events = [lecture]
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    out = next(leg for leg in routed.legs if leg.dest_anchor == "lec")
+    back = next(leg for leg in routed.legs if leg.origin_anchor == "lec")
+    assert out.mode == "transit" and back.mode == "bicycling"
+    assert back.note and "riding it back" in back.note

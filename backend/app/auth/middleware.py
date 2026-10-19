@@ -7,8 +7,9 @@ Disabled when AUTH_ALLOWED_EMAILS is empty (local dev / tests). When enabled:
 
 Exempts /auth/* (the login flow itself), /health (so external healthchecks
 work without a session), the Home Assistant webhooks under /notifications/*
-and /points/*, and the kotx webhook under /webhooks/* — all of which
-authenticate via their own shared secret instead.
+and /points/*, the kotx webhook under /webhooks/*, and the commute flip
+link at /commute/flip — all of which authenticate via their own shared
+secret or signature instead.
 
 Requires SessionMiddleware to be added AFTER this one — middleware order is
 last-added-first-executed, so a later add wraps an earlier one. Result:
@@ -28,7 +29,7 @@ from app.config import get_settings
 log = logging.getLogger(__name__)
 
 _EXEMPT_PREFIXES = ("/auth/", "/notifications/", "/points/", "/webhooks/")
-_EXEMPT_PATHS = {"/health"}
+_EXEMPT_PATHS = {"/health", "/commute/flip"}
 
 
 def _is_exempt_request(method: str, path: str) -> bool:

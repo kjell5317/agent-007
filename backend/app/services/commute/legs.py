@@ -25,7 +25,8 @@ The bike lives at home and must come back home: a trip (home → … → home)
 rides one mode. A leg may only be ridden when every previous leg since the
 last home departure was ridden too, and a chain that would mix bike with
 transit (e.g. rain flips only the return) is harmonized — transit for the
-whole trip when it routes, otherwise the bike is kept throughout.
+whole trip when it routes, otherwise the bike is kept throughout. A leg the
+user switched through its flip link pins its whole trip to that mode.
 
 The module is pure: callers resolve route durations (`required_routes`
 lists what's needed) and pass them in as a dict, so the derivation is
@@ -34,6 +35,7 @@ unit-testable from fixtures.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -52,6 +54,8 @@ FAILED_LEG_SECONDS = 30 * 60
 # it prevents, so the leg stays put. Legs between anchors are additionally
 # bounded by the previous anchor's end.
 MAX_DODGE = timedelta(hours=2)
+
+PINNED_REASON = "switched by you"
 
 Durations = dict[tuple[str, str, str], int | None]
 
@@ -74,6 +78,7 @@ class PlannedLeg:
     depart: datetime
     arrive: datetime
     reason: str | None = None
+    note: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -153,13 +158,16 @@ def derive_legs(
     settings,
     avoid: list[tuple[datetime, datetime]] | None = None,
     missing_transit: set[tuple[str, str]] | None = None,
+    pins: Mapping[tuple[str, str], str] | None = None,
 ) -> tuple[list[PlannedLeg], int]:
     """Return `(legs, unroutable)` for the anchor timeline — `unroutable`
     counts the legs that got a `FAILED_MODE` 30-minute placeholder because
     no mode could route them. `avoid` spans (online meetings) push arriving
     legs earlier and departing legs later when the default placement would
     overlap them. `missing_transit` collects pairs whose transit duration
-    the derivation wanted but was never resolved (see `_leg_option`)."""
+    the derivation wanted but was never resolved (see `_leg_option`).
+    `pins` maps a leg key to the mode the user switched it to (see
+    `_pinned_chain`)."""
     clusters = _overlap_clusters(_ordered_away(anchors, home))
     buffer = timedelta(minutes=settings.commute_event_buffer_minutes)
     layover = timedelta(minutes=settings.commute_home_layover_minutes)
@@ -259,7 +267,7 @@ def derive_legs(
                 missing_transit=missing_transit,
             )
         )
-    legs = _harmonize_chain_modes(legs, durations, settings, missing_transit)
+    legs = _harmonize_chain_modes(legs, durations, settings, missing_transit, pins or {})
     return legs, sum(1 for leg in legs if leg.mode == FAILED_MODE)
 
 
@@ -268,6 +276,7 @@ def _harmonize_chain_modes(
     durations: Durations,
     settings,
     missing_transit: set[tuple[str, str]] | None,
+    pins: Mapping[tuple[str, str], str],
 ) -> list[PlannedLeg]:
     """A trip rides one mode — the bike must come back home.
 
@@ -277,8 +286,45 @@ def _harmonize_chain_modes(
     wet ride home beats a stranded bike."""
     out: list[PlannedLeg] = []
     for chain in _chains(legs):
-        out.extend(_harmonized_chain(chain, durations, settings, missing_transit))
+        pinned = _pinned_chain(chain, pins, durations, missing_transit)
+        if pinned is None:
+            pinned = _harmonized_chain(chain, durations, settings, missing_transit)
+        out.extend(pinned)
     return out
+
+
+def _pinned_chain(
+    chain: list[PlannedLeg],
+    pins: Mapping[tuple[str, str], str],
+    durations: Durations,
+    missing_transit: set[tuple[str, str]] | None,
+) -> list[PlannedLeg] | None:
+    """The whole trip on the mode the user switched one of its legs to, or
+    None when no leg is pinned or that mode can't route every leg.
+
+    The bike can't be left behind here, so a pin covers the trip; the user
+    chose the mode, so the bike threshold and rain don't apply. When a
+    trip's pins disagree, the one later in `pins` wins — callers pass them
+    oldest flip first."""
+    keys = {leg.key for leg in chain}
+    mode = next((m for key, m in reversed(list(pins.items())) if key in keys), None)
+    if mode is None:
+        return None
+    out: list[PlannedLeg] = []
+    routable = True
+    for leg in chain:
+        if leg.mode == mode:
+            out.append(replace(leg, reason=PINNED_REASON))
+            continue
+        key = (leg.origin, leg.destination, mode)
+        seconds = durations.get(key)
+        if seconds is None:
+            if mode == "transit" and key not in durations and missing_transit is not None:
+                missing_transit.add((leg.origin, leg.destination))
+            routable = False
+            continue
+        out.append(_with_mode(leg, mode, seconds, PINNED_REASON))
+    return out if routable else None
 
 
 def _chains(legs: list[PlannedLeg]) -> list[list[PlannedLeg]]:

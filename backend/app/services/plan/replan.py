@@ -39,6 +39,7 @@ from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
 from app.services.learn import duration as duration_model
 from app.services.plan import features as F
+from app.services.plan import routing
 from app.services.plan import solver as S
 from app.services.plan.checkin import awaiting_checkin, booked_slot, running_end
 from app.services.plan.snapshot import CONTEXT_MARGIN, calendar_items, task_attrs, task_item
@@ -48,6 +49,7 @@ from app.services.plan.timeline import (
     TaskAttrs,
     free_good_minutes,
     good_hours,
+    meeting_minutes,
     placement_context,
     slot_features,
     surroundings_unchanged,
@@ -86,6 +88,7 @@ class ReplanResult:
     unplaced: set[uuid.UUID] = field(default_factory=set)
     moved: set[uuid.UUID] = field(default_factory=set)
     newly_unplaced: set[uuid.UUID] = field(default_factory=set)
+    routes: list | None = None
 
 
 @dataclass
@@ -96,6 +99,10 @@ class _Movable:
     current_start: datetime | None
     solver_task: S.SolverTask
 
+
+# Rain probabilities the last applied solve planned with, by local hour —
+# the hourly weather refresh re-solves when they shift materially.
+_last_rain: dict[str, float] = {}
 
 # --- Request coalescing ------------------------------------------------------------
 
@@ -306,6 +313,17 @@ async def replan(
 
     _warm_start(grid, list(movable.values()), fixed_items, weights)
 
+    routing_ctx = None
+    if routing.routing_enabled():
+        try:
+            routing_ctx = await routing.build(
+                session, grid=grid, now=now, events=events, fixed_tasks=fixed_tasks,
+                movable=[(m.solver_task.key, m.task, m.attrs) for m in movable.values()],
+                weights=weights,
+            )
+        except Exception as exc:  # noqa: BLE001 — solve without commute rather than not at all
+            log.warning("replan · routing input failed, solving without commute err=%s", exc)
+
     inp = S.SolveInput(
         days=grid.dates,
         tasks=[m.solver_task for m in movable.values()],
@@ -315,6 +333,8 @@ async def replan(
         ],
         weights=weights,
         capacity=capacity,
+        meeting_load=[meeting_minutes(fixed_items, day, tz) for day in grid.dates],
+        commute=routing_ctx.commute if routing_ctx is not None else None,
         time_limit=time_limit or settings.scheduler_time_limit_seconds,
         workers=settings.scheduler_workers,
         neighbour_mode=(
@@ -336,6 +356,7 @@ async def replan(
         result.placed[m.task.id] = (begin, begin + timedelta(minutes=m.minutes))
         if m.solver_task.current != start:
             result.moved.add(m.task.id)
+    result.routes = solved.routes
 
     _trace(reason, result, movable, grid, dry_run=dry_run)
     if dry_run or not solved.ok:
@@ -344,8 +365,11 @@ async def replan(
         return result
     await _apply(
         session, result, movable, grid=grid, now=now, fixed_items=fixed_items,
-        quiet=quiet or set(),
+        quiet=quiet or set(), routing_ctx=routing_ctx,
     )
+    if routing_ctx is not None:
+        global _last_rain
+        _last_rain = routing.rain_snapshot(routing_ctx, grid, now)
     return result
 
 
@@ -627,6 +651,7 @@ async def _apply(
     now: datetime,
     fixed_items: list[Item],
     quiet: set[uuid.UUID],
+    routing_ctx: routing.RoutingContext | None = None,
 ) -> None:
     from app.events import publish_task
     from app.services.calendar import delete_task_event, update_task_event
@@ -713,7 +738,33 @@ async def _apply(
         from app.services.notify import notify_no_slot
 
         await notify_no_slot(movable[task_id].task)
-    await _replan_commutes(session, touched)
+    if routing_ctx is not None and result.routes is not None:
+        await _write_routes(session, routing_ctx, result, movable, grid=grid, now=now,
+                            final_items=final_items)
+    else:
+        await _replan_commutes(session, touched)
+
+
+async def _write_routes(session, ctx, result, movable, *, grid, now, final_items) -> None:
+    """Write the solved commute legs. New tasks only got their calendar event
+    in this apply, so their provisional `task:<id>` keys are mapped first."""
+    anchors = {f"task:{m.task.id}": m.task.calendar_event_id for m in movable.values()}
+    legs = routing.planned_legs(ctx, result.routes, grid=grid, anchors=anchors)
+    obstacles = []
+    for item in final_items:
+        if item.kind == "event":
+            obstacles.append((item.event_id or item.ref, item.label or "event", item.start, item.end))
+        else:
+            task = movable.get(item.task_id).task if item.task_id in movable else None
+            anchor = task.calendar_event_id if task is not None else item.ref
+            obstacles.append((anchor or item.ref, "task", item.start, item.end))
+    try:
+        summary = await routing.write_legs(
+            session, ctx, legs, now=now, horizon_end=grid.at(grid.horizon), obstacles=obstacles,
+        )
+        log.info("replan · commute legs %s", summary)
+    except Exception as exc:  # noqa: BLE001 — the placements stand; the next solve rewrites legs
+        log.error("replan · writing commute legs failed err=%s", exc, exc_info=True)
 
 
 async def _replan_commutes(session: Session, spans: list[tuple[datetime, datetime]]) -> None:
@@ -761,6 +812,10 @@ def _trace(reason: str, result: ReplanResult, movable: dict, grid: Grid, *, dry_
         "deferred": len(result.deferred),
         "unplaced": len(result.unplaced),
     }
+    if result.routes is not None:
+        summary["legs"] = len(result.routes)
+        summary["legs_by_bike"] = sum(leg.mode == "bicycling" for leg in result.routes)
+        summary["legs_shortened"] = sum(leg.shortfall > 0 for leg in result.routes)
     log.info("replan · %s dry_run=%s %s", reason, dry_run, summary)
     with observability.root_span("scheduler.solve", tags=["scheduler", engine]) as span:
         span.update(

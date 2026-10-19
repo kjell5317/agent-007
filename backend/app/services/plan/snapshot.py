@@ -49,6 +49,9 @@ async def calendar_items(
         list_events_between,
     )
 
+    from app.services.calendar.attributes import event_attributes
+    from app.services.location import is_online_location, resolve_location_alias
+
     ids = busy_calendar_ids()
     if not ids:
         return []
@@ -56,8 +59,7 @@ async def calendar_items(
         session, calendar_ids=ids, time_min=start, time_max=end, account_key=account_key,
     )
     names = labels_store.names_by_google_id(session)
-    tz = user_tz()
-    out: list[Item] = []
+    kept = []
     seen: set[str] = set()
     for ev in events:
         if ev.id in seen:
@@ -65,13 +67,23 @@ async def calendar_items(
         seen.add(ev.id)
         if is_free_event(ev) or is_task_event(ev) or is_commute_event(ev) or is_declined_event(ev):
             continue
+        kept.append(ev)
+    attributes = event_attributes(session, [(ev.calendar_id, ev.id) for ev in kept])
+    tz = user_tz()
+    out: list[Item] = []
+    for ev in kept:
         label = names.get(ev.raw.get("eventLabelId") or "")
+        work_type, effort = attributes.get((ev.calendar_id, ev.id), (None, None))
         if ev.all_day:
             lo = datetime.combine(ev.start.date(), time.min, tzinfo=tz)
             hi = datetime.combine(ev.end.date(), time.min, tzinfo=tz)
             out.append(Item(lo, hi, "event", label=label, event_id=ev.id))
             continue
-        out.append(Item(to_user_tz(ev.start), to_user_tz(ev.end), "event", label=label, event_id=ev.id))
+        location = None if is_online_location(ev.location) else resolve_location_alias(ev.location)
+        out.append(Item(
+            to_user_tz(ev.start), to_user_tz(ev.end), "event", label=label,
+            work_type=work_type, effort=effort, event_id=ev.id, location=location,
+        ))
     return out
 
 
@@ -89,9 +101,12 @@ def task_attrs(task: Task, label_defaults: dict[str, tuple[str | None, str | Non
 
 
 def task_item(task: Task, attrs: TaskAttrs, start: datetime, end: datetime) -> Item:
+    from app.services.location import is_online_location, resolve_location_alias
+
+    location = None if is_online_location(task.location) else resolve_location_alias(task.location)
     return Item(
         to_user_tz(start), to_user_tz(end), "task", label=attrs.label,
-        work_type=attrs.work_type, effort=attrs.effort, task_id=task.id,
+        work_type=attrs.work_type, effort=attrs.effort, task_id=task.id, location=location,
     )
 
 

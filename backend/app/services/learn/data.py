@@ -111,3 +111,18 @@ def duration_observations(log_rows, now: datetime) -> list[Observation]:
             bound = max(5.0, (closed.created_at - slot_start).total_seconds() / 60)
             out.append(Observation(meta["estimate"], bound, group, True, weight))
     return out
+
+
+def commute_rows(flips, now: datetime) -> list[Row]:
+    """A flip says the mode taken beat the mode planned: one pairwise row."""
+    rows: list[Row] = []
+    for flip in flips:
+        feats = flip.features or {}
+        taken, planned = feats.get("flipped"), feats.get("planned")
+        if not taken or not planned:
+            continue
+        x = {name: taken.get(name, 0.0) - planned.get(name, 0.0) for name in set(taken) | set(planned)}
+        x = {name: value for name, value in x.items() if value}
+        if x:
+            rows.append(Row(x=x, y=1.0, weight=decay(flip.created_at, now)))
+    return rows

@@ -33,6 +33,7 @@ from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.db.models.task import Task
 from app.events import publish_task
+from app.services.calendar.attributes import classify_pending_events
 from app.services.calendar.cache import cache_calendar_events
 from app.services.calendar.client import (
     CalendarEvent,
@@ -266,6 +267,18 @@ async def discover_updated_events(
         log.exception("discover · calendar document cache failed")
         session.rollback()
 
+    # Only after a pass that cached something: rows the model keeps leaving
+    # out would otherwise cost an LLM call every poll.
+    if summary.get("cached"):
+        try:
+            summary["classified"] = await classify_pending_events(
+                session, until=now + timedelta(days=settings.scheduler_horizon_days),
+            )
+            session.commit()
+        except Exception:  # noqa: BLE001 — classification is best-effort
+            log.exception("discover · calendar event classification failed")
+            session.rollback()
+
     await _refresh_related_task_deadlines(session, changed_physical, cancelled_docs)
     await _record_user_moves(session, user_moves, account_key=account_key)
 
@@ -458,6 +471,13 @@ async def _plan_legs_for_changed_events(
         return
     from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
 
+    from app.services.plan.commute import solver_routes
+
+    if solver_routes():
+        # The solver writes task events and legs itself; only foreign changes
+        # call for a new solve (a user's own task edits re-solve via the
+        # move capture).
+        events = [ev for ev in events if not is_managed_event(ev)]
     spans: list[tuple[datetime, datetime]] = []
     active_events = [ev for ev in events if not is_declined_event(ev)]
     span = _replan_span(active_events)

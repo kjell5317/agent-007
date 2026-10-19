@@ -31,6 +31,8 @@ class Item:
     effort: str | None = None
     task_id: uuid.UUID | None = None
     event_id: str | None = None
+    # Routable place, None for online or location-less items.
+    location: str | None = None
 
     @property
     def ref(self) -> str:
@@ -123,6 +125,13 @@ def day_load(items: list[Item], day: date, tz: tzinfo, *, exclude: str | None = 
     return sum(item_load_on(i, day, tz) for i in items if exclude is None or i.ref != exclude)
 
 
+def meeting_minutes(items: list[Item], day: date, tz: tzinfo) -> float:
+    """Minutes of social events (meetings) on `day`."""
+    return sum(
+        item_load_on(i, day, tz) for i in items if i.kind == "event" and i.work_type == "social"
+    )
+
+
 @dataclass(frozen=True)
 class TaskAttrs:
     task_id: uuid.UUID
@@ -158,6 +167,7 @@ def slot_context(
         prev=prev,
         next=nxt,
         day_load_min=load,
+        meeting_min=meeting_minutes(items, local_start.date(), tz),
     )
 
 

@@ -667,14 +667,16 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
     def leg(event_id, start, end):
         return _calendar_event(event_id, start, end, props=commute_props)
 
-    past_leg = leg("past", now - timedelta(days=2), now - timedelta(days=2) + timedelta(minutes=30))
+    past_leg = leg("past", now - timedelta(days=20), now - timedelta(days=20) + timedelta(minutes=30))
+    # Recent rides are the record that locates the bike — kept.
+    recent_leg = leg("recent", now - timedelta(days=2), now - timedelta(days=2) + timedelta(minutes=30))
     live_leg = leg("live", now + timedelta(days=1), now + timedelta(days=1, minutes=30))
     stray_leg = leg("stray", now + timedelta(days=21), now + timedelta(days=21, minutes=30))
     far_task = _calendar_event("far-task", now + timedelta(days=21), now + timedelta(days=22))
 
     async def fake_list(session, *, calendar_ids, time_min, time_max, account_key=None):
         return [
-            ev for ev in (past_leg, live_leg, stray_leg, far_task)
+            ev for ev in (past_leg, recent_leg, live_leg, stray_leg, far_task)
             if ev.start < time_max and ev.end > time_min
         ]
 
@@ -1280,6 +1282,7 @@ async def test_declined_event_replan_deletes_adjacent_stale_commutes(monkeypatch
         ),
     )
     monkeypatch.setattr(commute_planner, "list_events_between", fake_list_events)
+    monkeypatch.setattr(commute_planner.commute_log, "active_pins", lambda session, now: {})
     monkeypatch.setattr(commute_planner, "delete_event", fake_delete)
     monkeypatch.setattr(commute_planner, "create_event", unexpected_write)
     monkeypatch.setattr(commute_planner, "patch_event", unexpected_write)

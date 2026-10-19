@@ -23,6 +23,7 @@ from urllib.parse import urlencode
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.clients import commute_log
 from app.services.calendar import (
     SILENT_REMINDERS,
     CalendarEvent,
@@ -48,6 +49,7 @@ from app.services.commute.legs import (
     derive_legs,
     required_routes,
 )
+from app.services.commute.flip_link import flip_url
 from app.services.commute.resolver import resolve_duration
 from app.services.commute.weather import geocode, precipitation_probabilities_between
 from app.services.location import (
@@ -58,6 +60,11 @@ from app.services.location import (
 from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
+
+# A pin covers its whole trip, so it has to outlive its own leg's departure:
+# once the transit ride out has left, the ride home must stay on transit.
+# Pins only apply to leg keys still derived, i.e. trips still on the timeline.
+_PIN_LOOKBACK = timedelta(days=1)
 
 
 async def refresh_weather_sensitive_commutes(
@@ -232,7 +239,9 @@ async def plan_window_commutes(
     # The chain rules (bike stays home / one mode per trip) can force transit
     # onto pairs the optimistic first pass didn't fetch — and each re-derive
     # may surface further pairs. Fetch just those and loop; two extra rounds
-    # cover any chain in practice.
+    # cover any chain in practice. A transit pin on a dry, short trip lands
+    # here too: its transit pairs were never fetched.
+    pins = commute_log.active_pins(session, now - _PIN_LOOKBACK)
     legs: list[PlannedLeg] = []
     skipped_unroutable = 0
     for _ in range(3):
@@ -245,6 +254,7 @@ async def plan_window_commutes(
             settings,
             avoid=online_spans,
             missing_transit=missing_transit,
+            pins=pins,
         )
         if not missing_transit:
             break
@@ -603,6 +613,9 @@ _PAST_LEG_LOOKBACK = timedelta(days=1825)
 # legs come from task placements at `due - lead`, so a year covers any
 # realistic due date.
 _STRAY_LEG_LOOKAHEAD = timedelta(days=365)
+# Past legs are the record of how the user travelled: they locate the bike
+# (see `app.services.commute.state`) and keep their flip link usable.
+PAST_LEG_RETENTION = timedelta(days=14)
 
 
 async def delete_stray_commute_legs(
@@ -610,10 +623,10 @@ async def delete_stray_commute_legs(
     *,
     account_key: str | None = None,
 ) -> int:
-    """Delete managed commute events outside `[now, now + lookahead]` — a
-    ride in the past is dead weight, and legs written beyond the horizon
-    (strays from before the horizon cap) get re-derived once their anchor
-    slides into the window."""
+    """Delete managed commute events outside `[now − retention, now +
+    lookahead]` — older rides are dead weight, and legs written beyond the
+    horizon (strays from before the horizon cap) get re-derived once their
+    anchor slides into the window."""
     settings = get_settings()
     write_calendar_id = (settings.google_calendar_id or "").strip()
     if not write_calendar_id:
@@ -621,8 +634,9 @@ async def delete_stray_commute_legs(
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(days=settings.commute_lookahead_days)
     deleted = 0
+    kept_from = now - PAST_LEG_RETENTION
     for time_min, time_max in (
-        (now - _PAST_LEG_LOOKBACK, now),
+        (now - _PAST_LEG_LOOKBACK, kept_from),
         (horizon, horizon + _STRAY_LEG_LOOKAHEAD),
     ):
         events = await list_events_between(
@@ -635,8 +649,8 @@ async def delete_stray_commute_legs(
         for ev in events:
             if ev.all_day or not is_commute_event(ev):
                 continue
-            if ev.end > now and ev.start < horizon:
-                # Running or boundary-straddling leg — still live.
+            if ev.end > kept_from and ev.start < horizon:
+                # Recent, running or boundary-straddling leg — still kept.
                 continue
             try:
                 await delete_event(
@@ -936,9 +950,15 @@ def _description_for(leg: PlannedLeg) -> str:
     lines = [f"From: {leg.origin}"]
     if leg.reason:
         lines.append(f"Reason: {leg.reason}")
+    if leg.note:
+        lines.append(leg.note)
     if leg.mode == FAILED_MODE:
         lines.append("No route found — reserved 30 min. Check the address.")
     lines.append(f"Navigate: {_navigation_url(leg)}")
+    switch = flip_url(leg.origin_anchor, leg.dest_anchor, leg.depart, leg.arrive, leg.mode)
+    if switch:
+        target = "bike" if leg.mode == "transit" else "transit"
+        lines.append(f"Switch to {target}: {switch}")
     updated = to_user_tz(datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
     lines.append(f"Updated: {updated}")
     return "\n".join(lines)

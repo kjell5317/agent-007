@@ -16,7 +16,8 @@ artifacts; caching either would duplicate a task as a calendar event. Real
 events (agent invitations, externally-created events) are cached. Past events
 are kept (no time-based eviction). Embeddings are only recomputed when an
 event's text actually changed, so re-syncs and time-only edits don't burn
-embedding calls.
+embedding calls. Each upsert also re-derives the event's work type and effort
+(see `services.calendar.attributes`).
 """
 
 from __future__ import annotations
@@ -29,8 +30,9 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.db.clients import documents as documents_store
+from app.services.calendar.attributes import LabelCatalog, cached_attributes, label_catalog
 from app.services.calendar.client import CalendarEvent
-from app.services.calendar.events import is_managed_event
+from app.services.calendar.events import is_free_event, is_managed_event
 from app.services.input.embedding import embed
 
 log = logging.getLogger(__name__)
@@ -56,6 +58,7 @@ def _metadata(event: CalendarEvent) -> dict:
         "calendar_id": event.calendar_id,
         "location": event.location,
         "all_day": event.all_day,
+        "free": is_free_event(event),
         "label_id": event.raw.get("eventLabelId"),
     }
     return {k: v for k, v in meta.items() if v is not None}
@@ -75,17 +78,29 @@ def _external_id(event: CalendarEvent) -> str:
     return f"{event.calendar_id}:{event.id}"
 
 
-async def cache_one_event(session: Session, event: CalendarEvent) -> bool:
+async def cache_one_event(
+    session: Session, event: CalendarEvent, *, labels: LabelCatalog | None = None
+) -> bool:
     """Upsert one event; return True if a fresh embedding was computed.
 
     Callers filter out commute legs (both entry points do) — this focuses on
-    the upsert + embedding-dedup so it stays reusable."""
+    the upsert + embedding-dedup so it stays reusable. `labels` saves a batch
+    caller the per-event label lookups."""
     external_id = _external_id(event)
     content = _content(event)
     existing = documents_store.get_by_external_id(
         session, provider="calendar", external_id=external_id
     )
-    if existing is not None and existing.content == content and existing.embedding is not None:
+    content_changed = existing is None or existing.content != content
+    label_defaults, label_names = labels or label_catalog(session)
+    attributes = cached_attributes(
+        event,
+        existing.meta if existing is not None else None,
+        content_changed=content_changed,
+        label_defaults=label_defaults,
+        label_names=label_names,
+    )
+    if existing is not None and not content_changed and existing.embedding is not None:
         embedding = existing.embedding
         embedded = False
     else:
@@ -100,7 +115,7 @@ async def cache_one_event(session: Session, event: CalendarEvent) -> bool:
         snippet=_snippet(event),
         content=content,
         url=event.html_link,
-        metadata=_metadata(event),
+        metadata={**_metadata(event), **attributes},
         starts_at=event.start,
         ends_at=event.end,
         updated_at=_updated_at(event),
@@ -120,6 +135,7 @@ async def cache_calendar_events(
     Resilient per event: one embedding failure never aborts the batch (or the
     discovery pass that called it)."""
     upserted = embedded = forgotten = 0
+    labels: LabelCatalog | None = None
     for event in active:
         if is_managed_event(event):
             # Never cache our own task/commute mirrors, and evict any cached
@@ -130,7 +146,8 @@ async def cache_calendar_events(
                 forgotten += 1
             continue
         try:
-            if await cache_one_event(session, event):
+            labels = labels or label_catalog(session)
+            if await cache_one_event(session, event, labels=labels):
                 embedded += 1
             upserted += 1
         except Exception:  # noqa: BLE001 — best-effort cache; never break discovery

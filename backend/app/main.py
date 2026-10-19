@@ -19,6 +19,7 @@ import app.services.input.slack  # noqa: F401
 from app import cron
 from app.api import auth as auth_router
 from app.api import (
+    commute,
     events,
     inputs,
     kotx,
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(auth_router.router)
+    app.include_router(commute.router)
     app.include_router(events.router)
     app.include_router(inputs.router)
     app.include_router(kotx.router)

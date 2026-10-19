@@ -7,6 +7,7 @@ the caller (the provider's cache service) and stored as-is.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -63,6 +64,37 @@ def delete(session: Session, *, provider: str, external_id: str) -> bool:
         )
     )
     return bool(result.rowcount or 0)
+
+
+def calendar_metadata(session: Session, external_ids: Collection[str]) -> dict[str, dict]:
+    """`{external_id: metadata}` for the cached calendar events among `external_ids`."""
+    if not external_ids:
+        return {}
+    rows = session.execute(
+        select(Document.external_id, Document.meta).where(
+            Document.provider == "calendar", Document.external_id.in_(external_ids)
+        )
+    )
+    return {external_id: meta or {} for external_id, meta in rows}
+
+
+def calendar_unclassified(session: Session, *, since: datetime, until: datetime) -> list[Document]:
+    """Timed, busy calendar events starting in `[since, until)` that carry no
+    work type and no rule decision, soonest first."""
+    meta = Document.meta
+    return list(session.scalars(
+        select(Document)
+        .where(
+            Document.provider == "calendar",
+            Document.starts_at >= since,
+            Document.starts_at < until,
+            meta["work_type"].astext.is_(None),
+            meta["attr_source"].astext.is_(None),
+            meta["all_day"].astext.is_distinct_from("true"),
+            meta["free"].astext.is_distinct_from("true"),
+        )
+        .order_by(Document.starts_at)
+    ))
 
 
 @dataclass

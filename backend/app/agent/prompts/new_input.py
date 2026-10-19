@@ -13,6 +13,7 @@ required fields must be present (omitting any is a bug — double-check):
     EOD → 23:45.
   * label — the single best-fitting enum value; if none fits, `mark_not_task`.
   Optional: description, location (home allowed), link (most relevant source URL).
+  Set location "home" when the task can only be done at home (chores, laundry).
   Also set work_type and effort — inherit the label's defaults (listed with the
   labels) unless this task clearly differs — and deadline_kind:
     * hard — missing the deadline makes the task pointless or has external

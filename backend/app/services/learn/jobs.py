@@ -75,8 +75,13 @@ def weights_for(session: Session, day: date) -> dict[str, float]:
 
 
 def refit_preferences(session: Session, now: datetime) -> preference.Posterior:
+    from app.db.clients import commute_log as commute_log_store
+
     log_rows = log_store.since(session, now - LOG_WINDOW)
     rows = data.preference_rows(log_rows, now)
+    rows += data.commute_rows(commute_log_store.since(session, now - LOG_WINDOW), now)
+    # Oldest first (lowest decay weight), so the held-out split takes the newest.
+    rows.sort(key=lambda row: row.weight)
     metrics: dict = {"rows": len(rows)}
     if len(rows) >= 5:
         # Chronological split: the newest 20 % measure how well older data

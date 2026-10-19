@@ -28,6 +28,15 @@ HTD_BUCKETS = ("0-6", "6-24", "24-72", "72+")
 HTD_HOURS = (6, 24, 72)
 LOAD_BUCKETS = ("<240", "240-360", "360-480", ">480")
 LOAD_MINUTES = (240, 360, 480)
+MEETING_BUCKETS = ("<60", "60-180", "180-300", ">300")
+MEETING_MINUTES = (60, 180, 300)
+
+COMMUTE_MODES = ("bicycling", "transit")
+# Ride-length bucket bounds as multiples of `commute_bike_max_minutes`
+# (15 / 25 / 35 / 45 min at the default 25).
+RIDE_FACTORS = (0.6, 1.0, 1.4, 1.8)
+RIDE_BUCKETS = 5
+RAIN_BUCKETS = 5
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,7 @@ class SlotContext:
     prev: Neighbour | None = None
     next: Neighbour | None = None
     day_load_min: float = 0.0
+    meeting_min: float = 0.0
 
 
 def hour_prior(hour: int) -> float:
@@ -104,13 +114,23 @@ def end_hour_features(hour: int) -> dict[str, float]:
     return {f"h_end:{hour}": 1.0}
 
 
-def day_features(day: date, today: date, work_type: str | None) -> dict[str, float]:
+def meeting_bucket(minutes: float) -> str:
+    for bucket, limit in zip(MEETING_BUCKETS, MEETING_MINUTES):
+        if minutes < limit:
+            return bucket
+    return MEETING_BUCKETS[-1]
+
+
+def day_features(
+    day: date, today: date, work_type: str | None, meeting_min: float = 0.0
+) -> dict[str, float]:
     weekday = day.weekday()
     angle = 2 * math.pi * (day.timetuple().tm_yday - 1) / 365.25
     out = {
         f"wd:{weekday}": 1.0,
         "season_sin": math.sin(angle),
         "season_cos": math.cos(angle),
+        f"meet:{meeting_bucket(meeting_min)}": 1.0,
     }
     days = (day - today).days
     if days:
@@ -137,11 +157,10 @@ def neighbour_features(
     out = {f"nb_{side}:{neighbour.kind}": 1.0}
     if label and neighbour.label == label:
         out[f"nb_{side}:same_label"] = 1.0
-    if neighbour.kind == "task":
-        if work_type and neighbour.work_type:
-            out[f"nb_{side}:wt:{work_type}:{neighbour.work_type}"] = 1.0
-        if effort and neighbour.effort:
-            out[f"nb_{side}:eff:{effort}:{neighbour.effort}"] = 1.0
+    if work_type and neighbour.work_type:
+        out[f"nb_{side}:wt:{work_type}:{neighbour.work_type}"] = 1.0
+    if effort and neighbour.effort:
+        out[f"nb_{side}:eff:{effort}:{neighbour.effort}"] = 1.0
     return out
 
 
@@ -181,7 +200,7 @@ def features(ctx: SlotContext) -> dict[str, float]:
     out: dict[str, float] = {}
     out.update(start_hour_features(ctx.start.hour, ctx.work_type, ctx.effort))
     out.update(end_hour_features(end_hour(ctx.end)))
-    out.update(day_features(ctx.start.date(), ctx.now.date(), ctx.work_type))
+    out.update(day_features(ctx.start.date(), ctx.now.date(), ctx.work_type, ctx.meeting_min))
     for side, neighbour in (("prev", ctx.prev), ("next", ctx.next)):
         out.update(gap_features(side, neighbour.gap_min if neighbour else None))
         out.update(neighbour_features(
@@ -189,6 +208,73 @@ def features(ctx: SlotContext) -> dict[str, float]:
         ))
     out.update(deadline_features(ctx.end, ctx.due, ctx.deadline_kind))
     out.update(load_features(ctx.day_load_min))
+    return out
+
+
+# --- Commute legs -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LegWeather:
+    rain_pct: float = 0.0
+    rain_mm: float = 0.0
+    temp_c: float | None = None
+    wind_kmh: float | None = None
+    dark: bool = False
+
+
+def ride_bucket(minutes: float, bike_max_minutes: float) -> int:
+    for n, factor in enumerate(RIDE_FACTORS):
+        if minutes <= factor * bike_max_minutes:
+            return n
+    return len(RIDE_FACTORS)
+
+
+def rain_bucket(pct: float, threshold_pct: float) -> int:
+    """Bounds at a third, two thirds, the threshold itself and 20 points
+    above it (10 / 20 / 30 / 50 % at the default 30)."""
+    bounds = (threshold_pct / 3, 2 * threshold_pct / 3, threshold_pct, threshold_pct + 20)
+    for n, bound in enumerate(bounds):
+        if pct < bound:
+            return n
+    return len(bounds)
+
+
+def ride_weather_features(weather: LegWeather | None, rain_threshold_pct: float) -> dict[str, float]:
+    """The weather part of riding at a given hour — the same for every leg,
+    so the solver keeps it in one table per hour."""
+    if weather is None:
+        return {}
+    out = {f"cm_rain:{rain_bucket(weather.rain_pct, rain_threshold_pct)}": 1.0}
+    if weather.rain_mm > 0:
+        out["cm_rain_mm"] = weather.rain_mm
+    if weather.temp_c is not None and weather.temp_c < 5:
+        out["cm_cold"] = 5 - weather.temp_c
+    if weather.wind_kmh is not None and weather.wind_kmh > 25:
+        out["cm_wind"] = weather.wind_kmh - 25
+    if weather.dark:
+        out["cm_dark"] = 1.0
+    return out
+
+
+def leg_features(
+    mode: str,
+    minutes: float,
+    *,
+    weather: LegWeather | None = None,
+    after_physical: bool = False,
+    bike_max_minutes: float = 25,
+    rain_threshold_pct: float = 30,
+) -> dict[str, float]:
+    if mode != "bicycling":
+        return {"cm_min:transit": minutes, "cm_transit": 1.0}
+    out = {
+        "cm_min:bicycling": minutes,
+        f"cm_ride:{ride_bucket(minutes, bike_max_minutes)}": 1.0,
+    }
+    out.update(ride_weather_features(weather, rain_threshold_pct))
+    if after_physical:
+        out["cm_after_physical"] = 1.0
     return out
 
 
@@ -220,6 +306,12 @@ def feature_names() -> list[str]:
         names.extend([late_flag_key(kind), late_hours_key(kind)])
     names.extend(htd_key(bucket) for bucket in HTD_BUCKETS)
     names.extend(load_key(bucket) for bucket in LOAD_BUCKETS)
+    names.extend(f"meet:{bucket}" for bucket in MEETING_BUCKETS)
+    names.extend(f"cm_min:{mode}" for mode in COMMUTE_MODES)
+    names.append("cm_transit")
+    names.extend(f"cm_ride:{n}" for n in range(RIDE_BUCKETS))
+    names.extend(f"cm_rain:{n}" for n in range(RAIN_BUCKETS))
+    names.extend(["cm_rain_mm", "cm_cold", "cm_wind", "cm_dark", "cm_after_physical"])
     return names
 
 
@@ -233,6 +325,16 @@ _LATE_PRIOR = {
     late_hours_key("soft"): -0.05,
 }
 _LOAD_PRIOR = {"<240": 0.0, "240-360": 0.0, "360-480": -1.0, ">480": -3.0}
+# Today's hard rules as a prior: a step at the bike threshold and at the rain
+# threshold, travel time and a fixed transit penalty around them.
+_COMMUTE_PRIOR = {
+    "cm_min:bicycling": -0.02,
+    "cm_min:transit": -0.02,
+    "cm_transit": -0.3,
+    **dict(zip((f"cm_ride:{n}" for n in range(RIDE_BUCKETS)), (0.0, 0.0, -1.0, -2.5, -5.0))),
+    **dict(zip((f"cm_rain:{n}" for n in range(RAIN_BUCKETS)), (0.0, -0.1, -0.4, -1.0, -2.5))),
+    "cm_rain_mm": -0.5,
+}
 
 
 def prior_mean() -> dict[str, float]:
@@ -250,6 +352,7 @@ def prior_mean() -> dict[str, float]:
     mean["days_from_now"] = -0.1
     for bucket, value in _LOAD_PRIOR.items():
         mean[load_key(bucket)] = value
+    mean.update(_COMMUTE_PRIOR)
     return mean
 
 
@@ -275,6 +378,16 @@ _GROUP_SIGMA = {
     "late_h": 0.1,
     "htd": 0.5,
     "load": 0.5,
+    "meet": 0.3,
+    "cm_min": 0.01,
+    "cm_transit": 0.3,
+    "cm_ride": 0.7,
+    "cm_rain": 0.7,
+    "cm_rain_mm": 0.3,
+    "cm_cold": 0.1,
+    "cm_wind": 0.05,
+    "cm_dark": 0.5,
+    "cm_after_physical": 0.5,
     "bias": 3.0,
 }
 
