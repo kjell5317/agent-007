@@ -196,3 +196,25 @@ def test_commute_features_carry_the_old_thresholds_as_prior():
     wet = F.utility(F.ride_weather_features(F.LegWeather(rain_pct=30), 30), W)
     dry = F.utility(F.ride_weather_features(F.LegWeather(rain_pct=5), 30), W)
     assert dry - wet == 1.0
+
+
+def test_finished_legs_fold_into_the_stored_position_once():
+    from app.services.commute.state import Position, advance
+
+    now = datetime(2026, 10, 20, 15, tzinfo=timezone.utc)
+    ride = LegRecord("home", "lec", None, "Uni, Somewhere", "bicycling",
+                     now - timedelta(days=1, hours=6), now - timedelta(days=1, hours=5, minutes=40))
+    home = LegRecord("lec", "home", "Uni, Somewhere", None, "transit",
+                     now - timedelta(days=1, hours=2), now - timedelta(days=1, hours=1, minutes=35))
+    stored = advance(Position(), [ride, home])
+    assert stored.bike_location == "Uni, Somewhere" and stored.user_location is None
+    # Folding again (a delete that failed last hour) changes nothing.
+    assert advance(stored, [ride, home]) == stored
+    # Today's started leg replays on top of the stored position.
+    today = LegRecord("home", "sem", None, "Office, X", "transit", now - timedelta(hours=1),
+                      now - timedelta(minutes=30))
+    state = derive_state([today], now, stored)
+    assert state.bike_location == "Uni, Somewhere"
+    assert state.user_location == "Office, X"
+    # Yesterday's arrival doesn't place the user anywhere today.
+    assert derive_state([], now, stored).user_location is None

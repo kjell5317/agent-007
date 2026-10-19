@@ -662,21 +662,19 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
     from app.services.commute.planner import delete_stray_commute_legs
 
     now = datetime.now(timezone.utc)
-    commute_props = {"managed_by": "plan_service", "kind": "commute"}
-
     def leg(event_id, start, end):
-        return _calendar_event(event_id, start, end, props=commute_props)
+        props = {"managed_by": "plan_service", "kind": "commute", "origin_anchor": "home",
+                 "dest_anchor": f"anchor-{event_id}", "mode": "bicycling"}
+        return _calendar_event(event_id, start, end, props=props)
 
-    past_leg = leg("past", now - timedelta(days=20), now - timedelta(days=20) + timedelta(minutes=30))
-    # Recent rides are the record that locates the bike — kept.
-    recent_leg = leg("recent", now - timedelta(days=2), now - timedelta(days=2) + timedelta(minutes=30))
+    past_leg = leg("past", now - timedelta(days=2), now - timedelta(days=2) + timedelta(minutes=30))
     live_leg = leg("live", now + timedelta(days=1), now + timedelta(days=1, minutes=30))
     stray_leg = leg("stray", now + timedelta(days=21), now + timedelta(days=21, minutes=30))
     far_task = _calendar_event("far-task", now + timedelta(days=21), now + timedelta(days=22))
 
     async def fake_list(session, *, calendar_ids, time_min, time_max, account_key=None):
         return [
-            ev for ev in (past_leg, recent_leg, live_leg, stray_leg, far_task)
+            ev for ev in (past_leg, live_leg, stray_leg, far_task)
             if ev.start < time_max and ev.end > time_min
         ]
 
@@ -685,18 +683,24 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
     async def fake_delete(session, *, calendar_id, event_id, account_key=None):
         deleted_ids.append(event_id)
 
+    folded = []
     monkeypatch.setattr(commute_planner, "list_events_between", fake_list)
     monkeypatch.setattr(commute_planner, "delete_event", fake_delete)
+    monkeypatch.setattr(
+        "app.services.commute.state.fold_finished", lambda _session, legs: folded.extend(legs)
+    )
     monkeypatch.setattr(
         commute_planner,
         "get_settings",
         lambda: SimpleNamespace(google_calendar_id="primary", commute_lookahead_days=7),
     )
 
-    deleted = await delete_stray_commute_legs(None)
+    deleted = await delete_stray_commute_legs(SimpleNamespace(commit=lambda: None))
 
     assert deleted == 2
     assert sorted(deleted_ids) == ["past", "stray"]
+    # The finished ride is folded into the stored position before it goes.
+    assert [leg.depart for leg in folded] == [past_leg.start]
 
 
 @pytest.mark.asyncio

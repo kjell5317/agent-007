@@ -237,17 +237,20 @@ async def _extend_running(session: Session, now: datetime) -> tuple[int, int]:
 
 async def _clear_way(session: Session, running, start: datetime, end: datetime) -> None:
     """Re-plan a movable task only once the extension actually reaches it."""
+    from app.services.plan.replan import batch
     from app.services.plan.schedule import Interval, schedule_task
 
-    for other in tasks_store.open_scheduled_between(
-        session, time_min=start - timedelta(hours=12), time_max=end, exclude_task_id=running.id
-    ):
-        if other.running_since is not None:
-            continue
-        slot = booked_slot(other)
-        if slot is None or not (slot[0] < end and slot[1] > start) or slot[0] <= datetime.now(user_tz()):
-            continue
-        await schedule_task(session, other, block=Interval(start, end), notify=False)
+    # One solve for everything the extension reaches, not one per task.
+    async with batch(session):
+        for other in tasks_store.open_scheduled_between(
+            session, time_min=start - timedelta(hours=12), time_max=end, exclude_task_id=running.id
+        ):
+            if other.running_since is not None:
+                continue
+            slot = booked_slot(other)
+            if slot is None or not (slot[0] < end and slot[1] > start) or slot[0] <= datetime.now(user_tz()):
+                continue
+            await schedule_task(session, other, block=Interval(start, end), notify=False)
 
 
 # --- Actions -----------------------------------------------------------------------

@@ -103,3 +103,23 @@ class CommuteFlip(Base):
     # {"planned": φ(planned mode), "flipped": φ(flipped mode)}
     features: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CommuteStateRow(Base):
+    """Single row: the bike's and the user's position after the last
+    finished commute leg (None location = home). `applied_through` is that
+    leg's departure, so a leg is never folded in twice."""
+
+    __tablename__ = "commute_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    bike_location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bike_anchor: Mapped[str] = mapped_column(String(256), default="home", server_default="home")
+    bike_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_anchor: Mapped[str] = mapped_column(String(256), default="home", server_default="home")
+    user_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_through: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -613,9 +613,6 @@ _PAST_LEG_LOOKBACK = timedelta(days=1825)
 # legs come from task placements at `due - lead`, so a year covers any
 # realistic due date.
 _STRAY_LEG_LOOKAHEAD = timedelta(days=365)
-# Past legs are the record of how the user travelled: they locate the bike
-# (see `app.services.commute.state`) and keep their flip link usable.
-PAST_LEG_RETENTION = timedelta(days=14)
 
 
 async def delete_stray_commute_legs(
@@ -623,10 +620,11 @@ async def delete_stray_commute_legs(
     *,
     account_key: str | None = None,
 ) -> int:
-    """Delete managed commute events outside `[now − retention, now +
-    lookahead]` — older rides are dead weight, and legs written beyond the
-    horizon (strays from before the horizon cap) get re-derived once their
-    anchor slides into the window."""
+    """Delete managed commute events outside `[now, now + lookahead]` — a
+    ride in the past is dead weight once it's folded into the stored bike /
+    user position (`app.services.commute.state`), and legs written beyond
+    the horizon (strays from before the horizon cap) get re-derived once
+    their anchor slides into the window."""
     settings = get_settings()
     write_calendar_id = (settings.google_calendar_id or "").strip()
     if not write_calendar_id:
@@ -634,9 +632,8 @@ async def delete_stray_commute_legs(
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(days=settings.commute_lookahead_days)
     deleted = 0
-    kept_from = now - PAST_LEG_RETENTION
     for time_min, time_max in (
-        (now - _PAST_LEG_LOOKBACK, kept_from),
+        (now - _PAST_LEG_LOOKBACK, now),
         (horizon, horizon + _STRAY_LEG_LOOKAHEAD),
     ):
         events = await list_events_between(
@@ -646,11 +643,17 @@ async def delete_stray_commute_legs(
             time_max=time_max,
             account_key=account_key,
         )
+        finished = [ev for ev in events if is_commute_event(ev) and not ev.all_day and ev.end <= now]
+        if finished:
+            from app.services.commute.state import fold_finished, leg_record
+
+            fold_finished(session, [r for ev in finished if (r := leg_record(ev)) is not None])
+            session.commit()
         for ev in events:
             if ev.all_day or not is_commute_event(ev):
                 continue
-            if ev.end > kept_from and ev.start < horizon:
-                # Recent, running or boundary-straddling leg — still kept.
+            if ev.end > now and ev.start < horizon:
+                # Running or boundary-straddling leg — still live.
                 continue
             try:
                 await delete_event(

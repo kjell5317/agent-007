@@ -217,3 +217,36 @@ async def test_replan_starts_where_the_bike_was_left(routed):
     back = next(leg for leg in routed.legs if leg.origin_anchor == "lec")
     assert out.mode == "transit" and back.mode == "bicycling"
     assert back.note and "riding it back" in back.note
+
+
+@pytest.mark.asyncio
+async def test_hand_placed_task_stays_locked_until_something_new_arrives(world):
+    # 06:00 is a poor hour under the prior; only the lock keeps it there.
+    early = (NOW + timedelta(days=1)).replace(hour=6)
+    mine = make_task("mine", due=NOW + timedelta(days=3), scheduled=early, placed_by="user",
+                     placed_at=NOW - timedelta(hours=1), created_at=NOW - timedelta(days=2))
+    world.tasks = [mine]
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert world.writes == [] and mine.placed_context["tasks"]
+
+    world.tasks.append(make_task("new", due=NOW + timedelta(days=2), created_at=NOW))
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert "mine" in {title for title, _, _ in world.writes}
+
+
+@pytest.mark.asyncio
+async def test_replan_is_idempotent(world):
+    """A solve right after a solve changes nothing: the solver's own writes
+    don't feed back into it."""
+    world.events = [Item(NOW.replace(hour=10), NOW.replace(hour=16), "event", event_id="e1")]
+    world.tasks = [
+        make_task("a", due=NOW + timedelta(days=1)),
+        make_task("b", due=NOW + timedelta(days=2), minutes=90),
+        make_task("c", due=NOW + timedelta(days=4), scheduled=(NOW + timedelta(days=1)).replace(hour=11)),
+    ]
+    await replan.replan(session(), reason="first", now=NOW, time_limit=5)
+    for task in world.tasks:
+        task.schedule_state = "placed"
+    world.writes.clear()
+    await replan.replan(session(), reason="second", now=NOW, time_limit=5)
+    assert world.writes == []

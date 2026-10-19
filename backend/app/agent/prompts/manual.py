@@ -18,13 +18,13 @@ REQUIRED fields:
         becomes title "Complete task A", location "A", the October 10
         due_date, and a description mentioning CSE-170. Start with a GitHub
         issue number when one is available.
-    * estimation — minutes; always your best guess.
+    * estimation — minutes in quarter hours (15, 30, 45, …); always your best guess.
     * due_date — ISO 8601 with timezone. Use the explicit deadline if stated,
         otherwise a reasonable best-guess based on urgency. The user message
         begins with a "Current time:" line; due_date must be at or after that
         time and MUST use the user's local zone
         unless the input explicitly names a different zone.
-        Prefer 15-minute choices (:00, :15, :30, :45). If the input says
+        Use quarter hours (:00, :15, :30, :45). If the input says
         EOD or end of day, use 23:45.
     * label — pick the single best-fitting value from the enum when labels
         are available. Leave it unset if none fits.

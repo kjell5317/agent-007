@@ -143,7 +143,7 @@ async def _trim_running_event(session: Session, task) -> None:
     if slot is None or not task.calendar_event_id:
         return
     now = datetime.now(slot[0].tzinfo)
-    minutes = max(5, math.ceil((now - slot[0]).total_seconds() / 300) * 5)
+    minutes = max(15, math.ceil((now - slot[0]).total_seconds() / 900) * 15)
     # Recorded as the booked length so calendar sync sees what we pushed,
     # not a user resize.
     task.booked_minutes = minutes

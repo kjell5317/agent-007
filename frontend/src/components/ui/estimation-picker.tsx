@@ -8,8 +8,9 @@ interface Props {
   allowNone?: boolean;
 }
 
-const STEP_MIN = 5;
-const PRESETS = [5, 15, 30, 60, 90, 120];
+// Durations live on the scheduler's 15-minute grid.
+const STEP_MIN = 15;
+const PRESETS = [15, 30, 45, 60, 90, 120];
 
 function fmt(value: number | null): string {
   if (value == null) return "—";
@@ -22,7 +23,11 @@ function fmt(value: number | null): string {
 export function EstimationPicker({ value, onChange, allowNone = true }: Props) {
   const shift = (delta: number) => {
     const base = value ?? 0;
-    const next = Math.max(allowNone ? 0 : STEP_MIN, base + delta);
+    // An older off-grid value snaps to the neighbouring quarter hour first.
+    const snapped = delta > 0
+      ? Math.floor(base / STEP_MIN) * STEP_MIN + STEP_MIN
+      : Math.ceil(base / STEP_MIN) * STEP_MIN - STEP_MIN;
+    const next = Math.max(allowNone ? 0 : STEP_MIN, snapped);
     onChange(next === 0 ? null : next);
   };
 

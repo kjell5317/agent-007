@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-AGENT_DATETIME_STEP_MINUTES = 5
+AGENT_DATETIME_STEP_MINUTES = 15
 
 
 def now_iso(tz_name: str | None = None) -> str:
@@ -58,7 +58,7 @@ def ceil_datetime_to_minute_step(
 
 
 def normalize_agent_due_date(value: str | datetime | None) -> datetime | None:
-    """Parse and round agent-emitted due dates to deterministic 5-minute steps."""
+    """Parse and round agent-emitted due dates up to the 15-minute grid."""
     parsed = parse_iso(value)
     if parsed is None:
         return None

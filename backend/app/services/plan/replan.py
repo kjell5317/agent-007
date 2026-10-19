@@ -50,9 +50,9 @@ from app.services.plan.timeline import (
     free_good_minutes,
     good_hours,
     meeting_minutes,
-    placement_context,
+    lock_holds,
+    lock_snapshot,
     slot_features,
-    surroundings_unchanged,
 )
 from app.services.recurrence import shift
 from app.timezones import to_user_tz, user_tz
@@ -62,7 +62,6 @@ log = logging.getLogger(__name__)
 # Log-odds cost of moving an already placed task (fixed, not learned).
 STABILITY_MOVE = 1.0
 STABILITY_SOON = 3.0
-STABILITY_USER = 20.0
 SOON = timedelta(hours=24)
 # Utility a deferral loses when the task alone would fill the free time
 # expected before its deadline.
@@ -267,25 +266,31 @@ async def replan(
             candidates.append((task, attrs, None))
         else:
             candidates.append((task, attrs, slot[0] if slot else None))
-    fixed_items = events + list(fixed_tasks.values())
-
-    # Everything at its current place: the surroundings a hand-placed slot
-    # is compared against.
-    current_items = list(fixed_items)
+    locked = _hand_placed_locks(
+        session, candidates, tasks, events, list(fixed_tasks.values()), now=now, dry_run=dry_run,
+    )
     for task, attrs, current in candidates:
-        if current is not None:
-            current_items.append(task_item(task, attrs, current, booked_slot(task)[1]))
+        if task.id in locked:
+            fixed_tasks[task.id] = task_item(task, attrs, *booked_slot(task))
+    candidates = [c for c in candidates if c[0].id not in locked]
+    fixed_items = events + list(fixed_tasks.values())
 
     movable: dict[uuid.UUID, _Movable] = {}
     for task, attrs, current in candidates:
         movable[task.id] = _movable(
             session, task, attrs, current,
             grid=grid, now=now, earliest_now=earliest_now,
-            fixed_tasks=fixed_tasks, current_items=current_items,
             duration_params=None if task.id in user_estimates else duration_params,
-            blocks=(blocks or {}).get(task.id, []), dry_run=dry_run,
+            blocks=(blocks or {}).get(task.id, []),
         )
     open_ids = {t.id for t in tasks}
+    for task_id in locked:
+        task = next(t for t in tasks if t.id == task_id)
+        before = movable.get(task.depends_on_task_id)
+        if before is not None:
+            # A hand-placed successor stays put; its predecessor must end first.
+            start = grid.floor(fixed_tasks[task_id].start)
+            before.solver_task.forbidden += ((start, grid.horizon),)
     for m in movable.values():
         pred = m.task.depends_on_task_id
         if pred in movable:
@@ -373,6 +378,56 @@ async def replan(
     return result
 
 
+def _hand_placed_locks(
+    session: Session,
+    candidates: list,
+    tasks: list[Task],
+    events: list[Item],
+    fixed: list[Item],
+    *,
+    now: datetime,
+    dry_run: bool,
+) -> set[uuid.UUID]:
+    """Hand-placed tasks the solver must leave exactly where they are: the
+    user's choice stands until something new is issued or a deadline or
+    duration changes (see `lock_holds`), or a fixed item now overlaps it."""
+    from app.services.plan.schedule import estimate_minutes
+
+    settings = get_settings()
+    current_tasks = [
+        (str(t.id), to_user_tz(t.due_date), estimate_minutes(t, settings),
+         str(t.recurrence_series_id) if t.recurrence_series_id else None)
+        for t in tasks
+    ]
+    tasks_created = [
+        (str(t.id), to_user_tz(t.created_at) if t.created_at else now,
+         str(t.recurrence_series_id) if t.recurrence_series_id else None)
+        for t in tasks
+    ]
+    events_created = [(e.event_id, e.created) for e in events if e.kind == "event" and e.event_id]
+    taken = [(item.start, item.end) for item in [*events, *fixed]]
+    out: set[uuid.UUID] = set()
+    for task, _, current in candidates:
+        if task.placed_by != "user" or current is None or current <= now:
+            continue
+        slot = booked_slot(task)
+        placed_at = to_user_tz(task.placed_at) if task.placed_at else now
+        snapshot = lock_snapshot(slot, placed_at, current_tasks, events)
+        stored = task.placed_context if (task.placed_context or {}).get("tasks") is not None else None
+        if stored is None:
+            stored = snapshot
+            if not dry_run:
+                task.placed_context = snapshot
+                session.flush()
+        if not lock_holds(stored, snapshot, tasks_created=tasks_created, events_created=events_created):
+            continue
+        if any(start < slot[1] and slot[0] < end for start, end in taken):
+            continue
+        out.add(task.id)
+        taken.append(slot)
+    return out
+
+
 def _movable(
     session: Session,
     task: Task,
@@ -382,11 +437,8 @@ def _movable(
     grid: Grid,
     now: datetime,
     earliest_now: int,
-    fixed_tasks: dict,
-    current_items: list[Item],
     duration_params: dict | None,
     blocks: list[tuple[datetime, datetime]],
-    dry_run: bool,
 ) -> _Movable:
     from app.services.plan.schedule import estimate_minutes
 
@@ -397,7 +449,7 @@ def _movable(
         minutes = duration_model.corrected_minutes(
             duration_params, estimate, duration_model.group_key(attrs.label, attrs.work_type)
         )
-    minutes = max(S.SLOT_MINUTES, math.ceil(minutes / S.SLOT_MINUTES) * S.SLOT_MINUTES)
+    minutes = max(S.TASK_MINUTES, math.ceil(minutes / S.TASK_MINUTES) * S.TASK_MINUTES)
 
     earliest = earliest_now
     occurrence = _repeat_occurrence(session, task)
@@ -412,14 +464,6 @@ def _movable(
     stability = 0.0
     if current is not None:
         stability = STABILITY_SOON if current - now < SOON else STABILITY_MOVE
-        if task.placed_by == "user":
-            slot = booked_slot(task)
-            context = placement_context(task.id, slot[0], slot[1], items=current_items, tz=grid.tz)
-            if task.placed_context is None and not dry_run:
-                task.placed_context = context
-                session.flush()
-            if surroundings_unchanged(task.placed_context or context, context):
-                stability = STABILITY_USER
 
     solver_task = S.SolverTask(
         key=str(task.id),
@@ -569,14 +613,14 @@ def _warm_start(
     def allowed(t: S.SolverTask, start: int) -> bool:
         if start < 0 or start + t.dur > grid.horizon:
             return False
-        if start < t.earliest and start != t.current:
+        if start != t.current and (start < t.earliest or start % S.TASK_GRID):
             return False
         return all(start + t.dur <= fs or start >= fe for fs, fe in t.forbidden)
 
     by_key = {m.solver_task.key: m.solver_task for m in movable}
     ordered = sorted(
         (m.solver_task for m in movable if m.solver_task.current is not None),
-        key=lambda t: (t.stability < STABILITY_USER, t.current),
+        key=lambda t: t.current,
     )
     for t in ordered:
         if allowed(t, t.current) and free(t.current, t.current + t.dur):
@@ -622,7 +666,8 @@ def _greedy_start(t, earliest, occupied, grid, weights, allowed) -> int | None:
     cursor = max(earliest, 0)
     bounds = [(s, e) for s, e in gaps if e > cursor] + [(grid.horizon, grid.horizon)]
     for s, e in bounds:
-        for start in range(cursor, s - t.dur + 1):
+        first = -(-cursor // S.TASK_GRID) * S.TASK_GRID
+        for start in range(first, s - t.dur + 1, S.TASK_GRID):
             if not allowed(t, start):
                 continue
             end = start + t.dur
@@ -755,8 +800,8 @@ async def _write_routes(session, ctx, result, movable, *, grid, now, final_items
         if item.kind == "event":
             obstacles.append((item.event_id or item.ref, item.label or "event", item.start, item.end))
         else:
-            task = movable.get(item.task_id).task if item.task_id in movable else None
-            anchor = task.calendar_event_id if task is not None else item.ref
+            task = movable[item.task_id].task if item.task_id in movable else None
+            anchor = task.calendar_event_id if task is not None else item.event_id
             obstacles.append((anchor or item.ref, "task", item.start, item.end))
     try:
         summary = await routing.write_legs(

@@ -88,15 +88,14 @@ async def build(
             locations.append(resolved[raw])
         return index_of[key]
 
-    task_events = {task_id: item for task_id, item in fixed_tasks.items()}
     located_now = [
-        item for item in [*events, *task_events.values()]
+        item for item in [*events, *fixed_tasks.values()]
         if item.location and item.start <= now < item.end
     ]
     if located_now:
         here = max(located_now, key=lambda item: item.end)
         start_location = await index(here.location) or 0
-        start_key = here.event_id or _task_anchor(fixed_task=here, fixed_tasks=fixed_tasks)
+        start_key = here.event_id or f"task:{here.task_id}"
         available = here.end
     else:
         start_location = await index(state.user_location) or 0
@@ -104,7 +103,8 @@ async def build(
         available = state.available_from or now
     bike_start = await index(state.bike_location) or 0
 
-    fixed = await _route_nodes(grid, now, horizon_end, events, index)
+    # Hand-placed (locked) tasks are fixed for this solve, like events.
+    fixed = await _route_nodes(grid, now, horizon_end, [*events, *fixed_tasks.values()], index)
 
     task_locations: dict[str, int] = {}
     task_anchors: dict[str, str] = {}
@@ -172,10 +172,6 @@ async def build(
         calendar_events=calendar_events,
         weather=weather,
     )
-
-
-def _task_anchor(*, fixed_task: Item, fixed_tasks: dict) -> str:
-    return f"task:{fixed_task.task_id}"
 
 
 def _is_online(location: str) -> bool:

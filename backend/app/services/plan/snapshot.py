@@ -77,14 +77,25 @@ async def calendar_items(
         if ev.all_day:
             lo = datetime.combine(ev.start.date(), time.min, tzinfo=tz)
             hi = datetime.combine(ev.end.date(), time.min, tzinfo=tz)
-            out.append(Item(lo, hi, "event", label=label, event_id=ev.id))
+            out.append(Item(lo, hi, "event", label=label, event_id=ev.id, created=_created(ev)))
             continue
         location = None if is_online_location(ev.location) else resolve_location_alias(ev.location)
         out.append(Item(
             to_user_tz(ev.start), to_user_tz(ev.end), "event", label=label,
             work_type=work_type, effort=effort, event_id=ev.id, location=location,
+            created=_created(ev),
         ))
     return out
+
+
+def _created(event) -> datetime | None:
+    raw = event.raw.get("created")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def task_attrs(task: Task, label_defaults: dict[str, tuple[str | None, str | None]]) -> TaskAttrs:
@@ -107,6 +118,7 @@ def task_item(task: Task, attrs: TaskAttrs, start: datetime, end: datetime) -> I
     return Item(
         to_user_tz(start), to_user_tz(end), "task", label=attrs.label,
         work_type=attrs.work_type, effort=attrs.effort, task_id=task.id, location=location,
+        event_id=getattr(task, "calendar_event_id", None),
     )
 
 

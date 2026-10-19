@@ -154,14 +154,17 @@ _CREATE_TASK_PROPS: dict = {
     "due_date_is_explicit": {"type": "boolean", "description": "True only when the user or source stated this task deadline explicitly."},
     "estimation": {
         "type": "integer",
-        "description": "Estimated duration in minutes. Always set a best-guess value.",
+        "description": (
+            "Estimated duration in minutes, a multiple of 15 (15, 30, 45, 60, …). "
+            "Always set a best-guess value."
+        ),
     },
     "due_date": {
         "type": "string",
         "description": (
-            "ISO 8601 timestamp. Always set: use the explicit deadline if present, "
-            "otherwise a reasonable best-guess based on urgency. Prefer 15-minute "
-            "choices (:00, :15, :30, :45); EOD/end of day means 23:45."
+            "ISO 8601 timestamp on a quarter hour (:00, :15, :30, :45). Always set: "
+            "use the explicit deadline if present, otherwise a reasonable best-guess "
+            "based on urgency. EOD/end of day means 23:45."
         ),
     },
     **_attribute_props(on_create=True),
@@ -181,11 +184,11 @@ _CREATE_TASK_REQUIRED = ["title", "estimation", "due_date"]
 _UPDATE_TASK_PROPS: dict = {
     "title": {"type": "string"},
     "description": {"type": "string"},
-    "estimation": {"type": "integer"},
+    "estimation": {"type": "integer", "description": "Minutes, a multiple of 15."},
     "due_date": {
         "type": "string",
         "description": (
-            "ISO 8601 timestamp. Prefer 15-minute choices (:00, :15, :30, :45); "
+            "ISO 8601 timestamp on a quarter hour (:00, :15, :30, :45); "
             "EOD/end of day means 23:45. When setting status=open to reopen a "
             "closed task whose current due_date or scheduled_date is in the "
             "past, include a new future due_date unless the input explicitly "

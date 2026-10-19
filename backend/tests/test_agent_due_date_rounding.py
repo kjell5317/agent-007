@@ -27,7 +27,7 @@ def _response(tool_call: ToolCall) -> LLMResponse:
     )
 
 
-def test_now_iso_ceil_rounds_current_time_to_five_minutes(monkeypatch):
+def test_now_iso_ceil_rounds_current_time_to_a_quarter_hour(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -36,17 +36,17 @@ def test_now_iso_ceil_rounds_current_time_to_five_minutes(monkeypatch):
 
     monkeypatch.setattr(text, "datetime", FixedDateTime)
 
-    assert text.now_iso("UTC") == "2026-07-01T12:05:00+00:00"
+    assert text.now_iso("UTC") == "2026-07-01T12:15:00+00:00"
 
 
-def test_normalize_agent_due_date_ceil_rounds_to_five_minutes():
+def test_normalize_agent_due_date_ceil_rounds_to_a_quarter_hour():
     assert (
         text.normalize_agent_due_date("2026-07-01T12:00:00+00:00").isoformat()
         == "2026-07-01T12:00:00+00:00"
     )
     assert (
         text.normalize_agent_due_date("2026-07-01T12:01:10+00:00").isoformat()
-        == "2026-07-01T12:05:00+00:00"
+        == "2026-07-01T12:15:00+00:00"
     )
     assert (
         text.normalize_agent_due_date("2026-07-01T23:59:59+00:00").isoformat()
@@ -126,7 +126,7 @@ async def test_new_input_create_task_normalizes_agent_due_date(monkeypatch, rese
     trace = await input_runner.run_new_input_agent(session, raw, [], None)
 
     assert trace["outcome"] == "task_created"
-    assert created_payloads[0].due_date.isoformat() == "2026-07-02T09:05:00+00:00"
+    assert created_payloads[0].due_date.isoformat() == "2026-07-02T09:15:00+00:00"
     assert finalized["status"] == "open"
     assert finalized["task_id"] == task_id
     # create_task now explains itself: reason/confidence land on the trace (which
@@ -165,7 +165,7 @@ async def test_update_task_action_normalizes_agent_due_date(monkeypatch):
         "reason": None,
         "confidence": None,
     }
-    assert patches[0]["due_date"].isoformat() == "2026-07-02T09:05:00+00:00"
+    assert patches[0]["due_date"].isoformat() == "2026-07-02T09:15:00+00:00"
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ async def test_reopen_action_reopens_then_applies_due_date(monkeypatch):
         "confidence": None,
     }
     assert calls == [("reopen", task_id), ("update", task_id)]
-    assert patches == [{"due_date": datetime(2026, 7, 4, 10, 5, tzinfo=timezone.utc)}]
+    assert patches == [{"due_date": datetime(2026, 7, 4, 10, 15, tzinfo=timezone.utc)}]
 
 
 @pytest.mark.asyncio

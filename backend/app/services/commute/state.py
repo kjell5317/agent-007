@@ -1,6 +1,9 @@
-"""Where the user and the bike are now, derived from the commute legs on
-the calendar — the legs carry their mode, and a flipped past leg is
-rewritten, so the calendar is the record of what happened."""
+"""Where the user and the bike are now.
+
+Finished legs are folded into a stored `Position` (the hourly cleanup does
+it right before deleting them); legs that have started since are replayed
+on top from the calendar. A leg carries its mode, and a leg flipped while
+underway is rewritten, so what gets folded is what happened."""
 
 from __future__ import annotations
 
@@ -12,7 +15,8 @@ from sqlalchemy.orm import Session
 from app.services.commute.legs import HOME
 from app.timezones import to_user_tz
 
-BIKE_LOOKBACK = timedelta(days=14)
+# Started legs still on the calendar: the cleanup removes them within the hour.
+REPLAY_LOOKBACK = timedelta(days=1)
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,38 @@ class LegRecord:
 
 
 @dataclass(frozen=True)
+class Position:
+    # None = home.
+    bike_location: str | None = None
+    bike_anchor: str = HOME
+    bike_since: datetime | None = None
+    user_location: str | None = None
+    user_anchor: str = HOME
+    user_since: datetime | None = None
+    applied_through: datetime | None = None
+
+
+def advance(position: Position, legs) -> Position:
+    """Fold legs into the position, in departure order, each at most once."""
+    out = position
+    for leg in sorted(legs, key=lambda leg: leg.depart):
+        if out.applied_through is not None and leg.depart <= out.applied_through:
+            continue
+        home = leg.dest_anchor == HOME
+        where = None if home else leg.destination
+        out = Position(
+            bike_location=where if leg.mode == "bicycling" else out.bike_location,
+            bike_anchor=leg.dest_anchor if leg.mode == "bicycling" else out.bike_anchor,
+            bike_since=leg.arrive if leg.mode == "bicycling" else out.bike_since,
+            user_location=where,
+            user_anchor=leg.dest_anchor,
+            user_since=leg.arrive,
+            applied_through=leg.depart,
+        )
+    return out
+
+
+@dataclass(frozen=True)
 class CommuteState:
     # None = home.
     user_location: str | None = None
@@ -38,23 +74,17 @@ class CommuteState:
     upcoming: dict[tuple[str, str], tuple[str, datetime]] = field(default_factory=dict)
 
 
-def derive_state(legs: list[LegRecord], now: datetime) -> CommuteState:
-    started = sorted((leg for leg in legs if leg.depart <= now), key=lambda leg: leg.depart)
-    today = to_user_tz(now).date()
+def derive_state(legs: list[LegRecord], now: datetime, base: Position | None = None) -> CommuteState:
+    position = advance(base or Position(), [leg for leg in legs if leg.depart <= now])
     user_location, user_anchor, available = None, HOME, None
-    todays = [leg for leg in started if to_user_tz(leg.depart).date() == today]
-    if todays:
-        last = todays[-1]
-        if last.dest_anchor != HOME:
-            user_location, user_anchor = last.destination, last.dest_anchor
-        if last.arrive > now:
-            available = last.arrive
-    bike_location, bike_since = None, None
-    rides = [leg for leg in started if leg.mode == "bicycling" and leg.depart >= now - BIKE_LOOKBACK]
-    if rides:
-        last_ride = rides[-1]
-        if last_ride.dest_anchor != HOME:
-            bike_location, bike_since = last_ride.destination, last_ride.arrive
+    arrived_today = (
+        position.user_since is not None
+        and to_user_tz(position.user_since).date() == to_user_tz(now).date()
+    )
+    if arrived_today:
+        user_location, user_anchor = position.user_location, position.user_anchor
+        if position.user_since > now:
+            available = position.user_since
     upcoming = {
         (leg.origin_anchor, leg.dest_anchor): (leg.mode, leg.depart)
         for leg in legs
@@ -62,10 +92,10 @@ def derive_state(legs: list[LegRecord], now: datetime) -> CommuteState:
     }
     return CommuteState(
         user_location=user_location,
-        user_anchor=user_anchor,
+        user_anchor=user_anchor if user_location else HOME,
         available_from=available,
-        bike_location=bike_location,
-        bike_since=bike_since,
+        bike_location=position.bike_location,
+        bike_since=position.bike_since,
         upcoming=upcoming,
     )
 
@@ -114,5 +144,17 @@ async def load_legs(
 
 
 async def load_state(session: Session, now: datetime, horizon_end: datetime) -> tuple[CommuteState, list]:
-    records, events = await load_legs(session, now - BIKE_LOOKBACK, horizon_end)
-    return derive_state(records, now), events
+    from app.db.clients import commute_state as commute_state_store
+
+    records, events = await load_legs(session, now - REPLAY_LOOKBACK, horizon_end)
+    return derive_state(records, now, commute_state_store.get(session)), events
+
+
+def fold_finished(session: Session, legs: list[LegRecord]) -> None:
+    """Persist finished legs into the stored position (before they're deleted)."""
+    from app.db.clients import commute_state as commute_state_store
+
+    position = commute_state_store.get(session)
+    advanced = advance(position, legs)
+    if advanced != position:
+        commute_state_store.save(session, advanced)

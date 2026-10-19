@@ -24,14 +24,14 @@ decisions in the extraction agent.
 
 | Topic | Decision |
 |---|---|
-| Time grid | 5 minutes. Durations and commute legs round **up** to 5 min. |
+| Time grid | Tasks: 15 minutes — starts on the quarter hour, durations round **up** to whole quarters (agent, storage, UI picker, solver); back to back is fine, a gap isn't required. Commute legs: 5 minutes. The solver's time unit stays 5 min so legs fit; a hand-placed off-grid slot may stay where it is. |
 | Solver | OR-Tools CP-SAT (new dependency). 10 s limit per trigger, 60 s nightly, warm-started from the current calendar. Result = best schedule found within the limit, never worse than the current one; optimality is not proven at realistic sizes (see *Solver limits and horizon*). |
 | Horizon | 7 days, the same look-ahead as the commute planner. Tasks due later may be *deferred*: not placed now, reconsidered on every solve (step 6). |
 | Hard: overlap | No two tasks overlap; no task overlaps a calendar event. |
 | Hard: events | Calendar events not owned by the app never move. |
 | Hard | Nothing starts in the past. `depends_on_task_id` order holds. A repeat occurrence doesn't start before its period. A task whose slot has started stays fixed, including a running *Still working* extension. |
 | Deadline | Per task: `hard`, `firm` or `soft` (step 3, step 5). Lateness is penalised by kind; an overdue task gets placed instead of failing. |
-| User-placed tasks | Movable. A strong anchor while their surroundings are unchanged; normal stability once the surroundings change (step 6). |
+| User-placed tasks | Locked (fixed in the solve) until a new task or event is issued, or a deadline or duration changes; then normal stability (step 6). |
 | Removed | Day windows (10–19, 8–24), the 15-min event buffer, the same-day rule, `LEAD_DAYS`, victim ordering, displacement repair. All become prior weights. |
 | Commute (phase 1) | Not in the solver. The commute planner still derives legs after placement. Legs are derived output, not busy input. |
 | Points | The "−N points, slot missed" notification goes away. The deduction itself stays on *Not done* and on no answer (confirm). |
@@ -50,7 +50,7 @@ decisions in the extraction agent.
 | `deadline_kind` | `hard` \| `firm` \| `soft`, default `firm` |
 | `placed_by` | `planner` \| `user`, default `planner` |
 | `placed_at` | timestamptz; when the current slot was set |
-| `placed_context` | jsonb, user placements only: ids and spans of items within ±2 h and the day load at placement time |
+| `placed_context` | jsonb, user placements only: the slot, every open task's deadline and duration, every event's duration and the existing repeat series at placement time — the lock's reference |
 | `running_since` | timestamptz, set while a *Still working* extension runs |
 | `booked_minutes` | length the current slot was booked with (the corrected estimate); null = the estimate. Calendar sync compares event lengths against it, so a corrected booking doesn't read as a user resize |
 | `schedule_state` | `placed` \| `deferred` \| `unplaced`; `scheduled_date` is null for the last two |
@@ -266,11 +266,14 @@ Model (time unit = 5 min, `t = 0` at horizon start):
   variables.
 - Predecessors: `start_j ≥ end_i`.
 - Stability: moving a planner-placed task costs 1; 3 if its current
-  slot is within 24 h. A user-placed task costs 20 to move while its
-  surroundings match `placed_context`. Once an item within ±2 h appears,
-  disappears or moves, or the day load shifts by more than an hour, it
-  falls back to the planner cost — the user would likely have moved it
-  too.
+  slot is within 24 h.
+- Hand-placed tasks are locked: they enter the solve as fixed items until
+  a new task or event is created after the placement (a new instance of a
+  repeat series that already existed doesn't count), or a deadline or
+  duration of anything that existed then changes. An event moving isn't
+  a release by itself — unless it now overlaps the locked slot, which
+  releases the lock since both can't stay. A locked task's predecessor
+  must end before it. After release the normal stability cost applies.
 - `AddHint` from the current calendar, so the result is never worse than
   the current schedule. `num_workers=2`, fixed `random_seed`; tests use
   one worker.
@@ -398,8 +401,9 @@ no-response rate.
 - `features`: fixture contexts → expected sparse vectors.
 - `solver`: small deterministic instances — no overlap, events never
   move, predecessors respected, lateness only when unavoidable, prior
-  puts a task inside 10–19 when free, user-placed tasks move only after
-  their surroundings change, stability prevents gratuitous moves, a hard
+  puts a task inside 10–19 when free, hand-placed tasks stay locked until
+  something new is issued or a deadline or duration changes, a solve
+  right after a solve writes nothing, stability prevents gratuitous moves, a hard
   deadline is never missed while an on-time slot exists.
 - Deferral: a far-deadline task waits when only poor slots are free and
   is pulled in when the capacity constraints say later weeks are full;
@@ -490,7 +494,8 @@ link that flips its mode; the flips are the training signal.
   Tasks that must happen at home get `location = home` (agent prompt
   tweak for chores).
 - **Travel matrix:** bike times (time-invariant, cached forever) and
-  transit times per pair, rounded up to 5 min. The model uses the
+  transit times per pair, rounded up to 5 min (legs keep the 5-minute
+  resolution). The model uses the
   conservative maximum of the daytime transit buckets; the written leg
   uses the exact departure-time lookup. Only pairs that can follow each
   other within a day are fetched. Soft rules need both modes for most
@@ -504,8 +509,11 @@ link that flips its mode; the flips are the training signal.
   node and an end node (home), located fixed events (overlapping ones
   merged into one node, as today), located movable tasks on their
   candidate days (skipped via self-loop when the task is on another
-  day), home-located tasks, and `K` optional "home stop" nodes (default
-  2) for going home between items. The arc end → start closes the path.
+  day), home-located tasks, and optional "home stop" nodes for going home
+  between items — one per gap between the day's away items (n away items
+  → n − 1 stops), capped by `commute_home_stops` (4). A day with one place
+  away needs none; the cap only bounds model size on unusually busy days.
+  The arc end → start closes the path.
 - **Bike state:** an integer `bike_at_i` per node — the location index
   of the bike while the user is at node `i`. On the chosen arc `j → i`:
   a ride requires `bike_at_j = loc_j` and sets `bike_at_i = loc_i`;
@@ -535,15 +543,16 @@ link that flips its mode; the flips are the training signal.
 
 #### Bike location
 
-The model needs to know where the bike is now. It is derived, not
-entered: the last leg that has already started and was ridden (from the
-commute events, which carry their mode) leaves the bike at its
-destination; with none in the last 14 days, the bike is at home. Past
-legs therefore stay on the calendar for 14 days instead of being deleted
-when they end. Flipping
-a past leg corrects it (see below). Leg descriptions name the bike's
-location whenever it isn't at home ("Bike is at Uni since Tue — riding
-it back"), so a wrong belief is visible before it matters.
+The model needs to know where the bike (and the user) is now. A
+single-row table `commute_state` holds the position after the last
+finished leg; the hourly leg cleanup folds each finished leg into it (a
+ridden leg moves the bike to its destination) right before deleting the
+leg, and each leg is folded once (`applied_through`). A solve starts
+from the stored position and replays legs that have started since and
+are still on the calendar. A leg flipped while underway is rewritten
+first, so what's folded is what happened. Leg descriptions name the
+bike's location whenever it isn't at home ("Bike is at Uni since Tue —
+riding it back"), so a wrong belief is visible before it matters.
 
 #### Flip link
 
@@ -551,8 +560,8 @@ Every commute event's description gets one line, e.g. "Switch to
 transit → <link>" (or "to bike").
 
 - **Link:** a signed URL (HMAC over leg event id, target mode and
-  expiry, with the notification action secret), valid until 24 h after
-  the leg ends. Exempt from the login check, like
+  expiry, with the notification action secret), valid until an hour
+  after the leg ends — by then it's folded and deleted. Exempt from the login check, like
   `/notifications/actions`.
 - **Confirm page:** the link opens a one-button page ("Bike → Transit
   for Uni 9:40?") that POSTs; a plain GET never changes anything, so
@@ -561,8 +570,8 @@ transit → <link>" (or "to bike").
   is rewritten with its new mode and duration, and whatever the change
   implies for the bike (it stays at Uni, so tomorrow's first leg goes by
   transit) follows from the solve.
-- **Past leg (within 24 h):** records what actually happened: the leg's
-  event is rewritten, the bike's derived location changes, the flip is
+- **Leg underway:** records what actually happened: the leg's event is
+  rewritten (so the cleanup folds the corrected mode), the flip is
   logged, and the future is re-solved from the corrected bike location.
 - The page answers with the outcome, e.g. "The bike is at Home — this
   leg stays on transit" when a pin to the bike can't be met.
@@ -581,6 +590,12 @@ a little over the threshold.
 New table `commute_log`: leg key, date, origin, destination, planned
 mode, flipped-to mode, the features of both modes, whether the leg was
 past, created_at.
+
+Only flips teach commute preferences. The solver moving or re-moding its
+own legs is never a training row (that would learn the planner's own
+choices back). A user dragging a leg event in the calendar is overwritten
+by the next solve and not captured — a possible later signal for
+departure buffers.
 
 #### Features and priors (log-odds)
 

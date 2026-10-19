@@ -23,7 +23,9 @@ if TYPE_CHECKING:
     from app.services.commute.flip import FlipRequest
 
 FLIP_PATH = "/commute/flip"
-LINK_LIFETIME = timedelta(hours=24)
+# A finished leg is folded into the stored position and deleted by the hourly
+# cleanup, so a link only needs to outlive its leg until then.
+LINK_LIFETIME = timedelta(hours=1)
 
 _OTHER_MODE = {"bicycling": "transit", "transit": "bicycling"}
 _SIGNED_FIELDS = ("origin", "dest", "depart", "mode", "expires")

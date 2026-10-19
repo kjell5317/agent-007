@@ -69,7 +69,7 @@ def create(session: Session, payload: TaskCreate) -> Task:
         description=payload.description,
         link=payload.link,
         due_date=due_date,
-        estimation=payload.estimation,
+        estimation=quarter_minutes(payload.estimation),
         location=payload.location,
         label=payload.label,
         related_event_id=payload.related_event_id,
@@ -91,6 +91,14 @@ def create(session: Session, payload: TaskCreate) -> Task:
     session.add(row)
     session.flush()
     return row
+
+
+def quarter_minutes(minutes: int | None) -> int | None:
+    """Task durations live on the scheduler's 15-minute grid (only commute
+    legs use 5 minutes)."""
+    if not minutes or minutes <= 0:
+        return minutes
+    return max(15, -(-int(minutes) // 15) * 15)
 
 
 def get(session: Session, task_id: uuid.UUID) -> Task | None:
@@ -230,6 +238,8 @@ def update(session: Session, task_id: uuid.UUID, **fields) -> Task | None:
             continue
         if key == "title" and value is None:
             continue
+        if key == "estimation":
+            value = quarter_minutes(value)
         setattr(row, key, value)
     if "estimation" in fields:
         row.booked_minutes = None

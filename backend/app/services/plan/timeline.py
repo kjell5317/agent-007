@@ -16,9 +16,6 @@ from datetime import date, datetime, time, timedelta, tzinfo
 from app.services.plan import features as F
 from app.services.plan.solver import SLOT_MINUTES, SLOTS_PER_DAY
 
-ANCHOR_RADIUS = timedelta(hours=2)
-# A day-load shift beyond this releases a hand-placed task's anchor.
-ANCHOR_LOAD_MINUTES = 60
 
 
 @dataclass(frozen=True)
@@ -33,6 +30,7 @@ class Item:
     event_id: str | None = None
     # Routable place, None for online or location-less items.
     location: str | None = None
+    created: datetime | None = None
 
     @property
     def ref(self) -> str:
@@ -175,33 +173,60 @@ def slot_features(attrs: TaskAttrs, start: datetime, end: datetime, **kw) -> dic
     return F.features(slot_context(attrs, start, end, **kw))
 
 
-# --- Anchor of a hand-placed task ---------------------------------------------
+# --- Lock of a hand-placed task --------------------------------------------------
 
 
-def placement_context(
-    task_id: uuid.UUID, start: datetime, end: datetime, *, items: list[Item], tz: tzinfo
+def lock_snapshot(
+    slot: tuple[datetime, datetime],
+    placed_at: datetime,
+    tasks: list[tuple[str, datetime, int, str | None]],
+    events: list[Item],
 ) -> dict:
-    """Items within ±2 h of a slot and the day's load — stored when the user
-    places a task, compared later to tell whether its surroundings changed."""
-    ref = str(task_id)
-    lo, hi = start - ANCHOR_RADIUS, end + ANCHOR_RADIUS
-    near = sorted(
-        [i.ref, i.start.isoformat(), i.end.isoformat()]
-        for i in items
-        if i.ref != ref and i.start < hi and i.end > lo
-    )
-    load = day_load(items, start.astimezone(tz).date(), tz, exclude=ref)
-    return {"near": near, "day_load": round(load), "slot": [start.isoformat(), end.isoformat()]}
+    """What the user saw when placing a task by hand: every open task's
+    deadline and duration (`(id, due, minutes, series id)`), every event's
+    duration. The task stays locked while none of that changes and nothing
+    new is issued."""
+    return {
+        "slot": [slot[0].isoformat(), slot[1].isoformat()],
+        "placed_at": placed_at.isoformat(),
+        "tasks": {task_id: [due.isoformat(), minutes] for task_id, due, minutes, _ in tasks},
+        "series": sorted({series for *_, series in tasks if series}),
+        "events": {e.event_id: _minutes(e) for e in events if e.kind == "event" and e.event_id},
+    }
 
 
-def surroundings_unchanged(stored: dict | None, current: dict) -> bool:
-    if not stored:
+def lock_holds(
+    stored: dict | None,
+    current: dict,
+    *,
+    tasks_created: list[tuple[str, datetime, str | None]],
+    events_created: list[tuple[str, datetime | None]],
+) -> bool:
+    """`current` is a `lock_snapshot` of now; `*_created` carry creation
+    times. Released by a new task or event issued after the placement —
+    a repeat instance of a series that already existed doesn't count — or
+    by a changed deadline or duration of anything that existed then."""
+    if not stored or stored.get("slot") != current.get("slot"):
         return False
-    if stored.get("slot") != current.get("slot"):
-        return False
-    if stored.get("near") != current.get("near"):
-        return False
-    return abs(float(stored.get("day_load", 0)) - float(current.get("day_load", 0))) <= ANCHOR_LOAD_MINUTES
+    placed_at = datetime.fromisoformat(stored["placed_at"])
+    series = set(stored.get("series") or [])
+    for task_id, created, series_id in tasks_created:
+        if task_id not in stored["tasks"] and created > placed_at and series_id not in series:
+            return False
+    for event_id, created in events_created:
+        if event_id not in stored["events"] and created is not None and created > placed_at:
+            return False
+    for task_id, values in current["tasks"].items():
+        if task_id in stored["tasks"] and stored["tasks"][task_id] != values:
+            return False
+    for event_id, minutes in current["events"].items():
+        if event_id in stored["events"] and stored["events"][event_id] != minutes:
+            return False
+    return True
+
+
+def _minutes(item: Item) -> int:
+    return round((item.end - item.start).total_seconds() / 60)
 
 
 # --- Free time in good hours (deferral capacity) ------------------------------

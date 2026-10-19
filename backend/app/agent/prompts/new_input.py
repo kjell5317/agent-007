@@ -7,7 +7,7 @@ tool. Do not narrate.
 required fields must be present (omitting any is a bug — double-check):
   * title — short, specific, imperative, list-displayable. No placeholders like
     "No subject" or "Untitled". Start with the GitHub issue number if available.
-  * estimation — minutes; your best guess.
+  * estimation — minutes in quarter hours (15, 30, 45, …); your best guess.
   * due_date — ISO 8601 in the user's local zone (unless the input names
     another), at or after the "Current time:" line. Prefer :00/:15/:30/:45;
     EOD → 23:45.

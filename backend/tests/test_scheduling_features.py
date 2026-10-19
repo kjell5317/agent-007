@@ -106,23 +106,33 @@ def test_neighbours_and_day_load():
     assert T.day_load(items, date(2026, 10, 20), TZ, exclude=str(task_id)) == 60 + 60 + 50
 
 
-def test_anchor_released_when_surroundings_change():
-    task_id = uuid.uuid4()
-    items = [T.Item(dt(20, 13), dt(20, 14), "event", event_id="e1")]
-    stored = T.placement_context(task_id, dt(20, 15), dt(20, 16), items=items, tz=TZ)
-    assert T.surroundings_unchanged(stored, stored)
-    moved = [T.Item(dt(20, 13, 30), dt(20, 14, 30), "event", event_id="e1")]
-    assert not T.surroundings_unchanged(
-        stored, T.placement_context(task_id, dt(20, 15), dt(20, 16), items=moved, tz=TZ)
-    )
-    far = items + [T.Item(dt(20, 22), dt(20, 22, 30), "event", event_id="e2")]
-    assert T.surroundings_unchanged(
-        stored, T.placement_context(task_id, dt(20, 15), dt(20, 16), items=far, tz=TZ)
-    )
-    busy_day = far + [T.Item(dt(20, 6), dt(20, 8), "event", event_id="e3")]
-    assert not T.surroundings_unchanged(
-        stored, T.placement_context(task_id, dt(20, 15), dt(20, 16), items=busy_day, tz=TZ)
-    )
+def test_hand_placed_lock_holds_until_something_changes():
+    placed = dt(19, 9)
+    slot = (dt(20, 15), dt(20, 16))
+    lecture = T.Item(dt(20, 10), dt(20, 12), "event", event_id="e1")
+    tasks = [("a", dt(22, 18), 60, None), ("b", dt(23, 18), 30, "series-1")]
+    stored = T.lock_snapshot(slot, placed, tasks, [lecture])
+
+    def holds(current_tasks=tasks, events=(lecture,), created=(), events_created=()):
+        current = T.lock_snapshot(slot, placed, list(current_tasks), list(events))
+        return T.lock_holds(stored, current, tasks_created=list(created),
+                            events_created=list(events_created))
+
+    assert holds()
+    # A new task issued after the placement releases it …
+    assert not holds(created=[("c", dt(19, 12), None)])
+    # … but not the next instance of a series that already existed,
+    assert holds(created=[("b2", dt(19, 12), "series-1")])
+    # nor an old task the snapshot simply didn't cover.
+    assert holds(created=[("old", dt(18, 9), None)])
+    assert not holds(events_created=[("e2", dt(19, 10))])
+    # Deadline or duration changes release it; an event moving doesn't.
+    assert not holds(current_tasks=[("a", dt(22, 20), 60, None), tasks[1]])
+    assert not holds(current_tasks=[("a", dt(22, 18), 90, None), tasks[1]])
+    longer = T.Item(dt(20, 10), dt(20, 13), "event", event_id="e1")
+    assert not holds(events=(longer,))
+    moved = T.Item(dt(20, 11), dt(20, 13), "event", event_id="e1")
+    assert holds(events=(moved,))
 
 
 def test_free_good_minutes_subtracts_busy_time():

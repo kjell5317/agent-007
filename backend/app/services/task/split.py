@@ -229,11 +229,15 @@ def split_deterministically(session: Session, task: Task) -> list[Task]:
     duration = task.estimation or 0
     if duration <= 0:
         raise ValueError("Set a duration before splitting")
-    count = max(2, math.ceil(duration / 60))
-    quotient, remainder = divmod(duration, count)
+    # Whole quarter hours per part: durations live on the 15-minute grid.
+    quarters = -(-duration // 15)
+    if quarters < 2:
+        raise ValueError("A 15-minute task can't be split")
+    count = min(quarters, max(2, math.ceil(duration / 60)))
+    quotient, remainder = divmod(quarters, count)
     children = []
     for index in range(count):
-        estimate = quotient + (1 if index < remainder else 0)
+        estimate = 15 * (quotient + (1 if index < remainder else 0))
         suffix = f" {roman(index + 1)}"
         child = tasks_store.create(session, TaskCreate(
             title=f"{task.title[:512 - len(suffix)]}{suffix}",

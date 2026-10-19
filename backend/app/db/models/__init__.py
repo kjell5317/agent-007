@@ -8,7 +8,13 @@ from app.db.models.oauth_token import OAuthToken
 from app.db.models.points_entry import PointsEntry
 from app.db.models.raw_input import RawInput
 from app.db.models.route_cache import RouteCache
-from app.db.models.scheduling import CommuteFlip, LearnedModel, ScheduleLog, TaskOverride
+from app.db.models.scheduling import (
+    CommuteFlip,
+    CommuteStateRow,
+    LearnedModel,
+    ScheduleLog,
+    TaskOverride,
+)
 from app.db.models.search_result_click import SearchResultClick
 from app.db.models.task import Task
 
@@ -16,6 +22,7 @@ __all__ = [
     "ChatAnswer",
     "ChatConversation",
     "CommuteFlip",
+    "CommuteStateRow",
     "Document",
     "GeocodeCache",
     "Label",

@@ -194,8 +194,8 @@ async def test_manual_duration_edit_does_not_auto_split(monkeypatch):
 
 
 @pytest.mark.parametrize("duration, expected", [
-    (35, [18, 17]),
-    (125, [42, 42, 41]),
+    (45, [30, 15]),
+    (135, [45, 45, 45]),
 ])
 def test_roman_and_deterministic_piece_lengths(monkeypatch, duration, expected):
     due = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)

@@ -1,7 +1,9 @@
 """CP-SAT model of the task schedule — pure, no I/O.
 
 Time is a grid of 5-minute slots, `t = 0` at local midnight of the first
-horizon day. Hard constraints are only what is physically or logically
+horizon day. Tasks start on the 15-minute grid (`TASK_GRID` slots) and last
+whole quarters, back to back where they fit; only commute legs use the
+5-minute resolution. Hard constraints are only what is physically or logically
 required: no overlap between tasks and fixed items (calendar events, started
 or running tasks), earliest starts (now, a repeat occurrence's period, a fixed
 predecessor), predecessor order between movable tasks, and per-task forbidden
@@ -51,6 +53,8 @@ log = logging.getLogger(__name__)
 SLOT_MINUTES = 5
 SLOTS_PER_HOUR = 12
 SLOTS_PER_DAY = 288
+TASK_GRID = 3
+TASK_MINUTES = TASK_GRID * SLOT_MINUTES
 NEIGHBOUR_SLOTS = F.NEIGHBOUR_MINUTES // SLOT_MINUTES
 SCALE = 1000
 UNPLACED_COST = 10**8
@@ -138,7 +142,8 @@ class CommuteInput:
     available_from: int = 0
     bike_start: int = 0
     buffer: int = 1
-    home_stops: int = 2
+    # Upper bound on trips home between away items per day.
+    home_stops: int = 4
     candidate_days: int = CANDIDATE_DAYS
     # (origin anchor, dest anchor) → mode the user flipped the leg to.
     pins: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -249,7 +254,8 @@ class _TaskVars:
         return self.spans[-1][1]
 
     def allows(self, start: int) -> bool:
-        return any(lo <= start <= hi for lo, hi in self.spans)
+        on_grid = start % TASK_GRID == 0 or start == self.task.current
+        return on_grid and any(lo <= start <= hi for lo, hi in self.spans)
 
 
 class _Builder:
@@ -328,14 +334,29 @@ class _Builder:
         self.m.minimize(cp_model.LinearExpr.sum(self.terms) + self.constant)
 
     def _task_vars(self, task: SolverTask) -> _TaskVars | None:
-        lo, hi = max(task.earliest, 0), self.H - task.dur
+        lo = -(-max(task.earliest, 0) // TASK_GRID) * TASK_GRID
+        hi = (self.H - task.dur) // TASK_GRID * TASK_GRID
         spans = [[lo, hi]] if lo <= hi else []
-        if task.current is not None and 0 <= task.current < lo and task.current <= hi:
-            spans.insert(0, [task.current, task.current])
+        current = task.current
+        # A slot off the 15-minute grid (placed by hand, or by the old planner)
+        # may stay where it is; any move lands on the grid.
+        off_grid = current is not None and 0 <= current <= self.H - task.dur and (
+            current < lo or current % TASK_GRID != 0
+        )
+        if off_grid and not (lo <= current <= hi and current % TASK_GRID == 0):
+            spans.append([current, current])
+            spans.sort()
         if not spans:
             return None
         key = task.key
         start = self.m.new_int_var_from_domain(cp_model.Domain.from_intervals(spans), f"s_{key}")
+        quarter = self.m.new_int_var(spans[0][0] // TASK_GRID, spans[-1][1] // TASK_GRID, f"q_{key}")
+        if off_grid:
+            at_current = self._bool(f"offgrid_{key}")
+            self.m.add(start == current).only_enforce_if(at_current)
+            self.m.add(start == TASK_GRID * quarter).only_enforce_if(~at_current)
+        else:
+            self.m.add(start == TASK_GRID * quarter)
         present = self._bool(f"p_{key}")
         interval = self.m.new_optional_fixed_size_interval_var(start, task.dur, present, f"iv_{key}")
         # An absent task parks at its first allowed start so every derived
@@ -702,8 +723,11 @@ class _Builder:
                 anchor = C.task_anchors.get(key, f"task:{key}")
                 node("task", anchor, anchor, loc, start=tv.start, end=tv.start + tv.task.dur,
                      present=tv.day_lits[d], physical=C.task_physical.get(key, False), task=key)
+            # Going home between two away items needs one stop per gap, so a
+            # day with n places away can use at most n − 1 (capped).
+            away = sum(1 for nd in nodes if nd["kind"] in ("item", "task", "S") and nd["loc"] != 0)
             stops = []
-            for k in range(C.home_stops):
+            for k in range(min(C.home_stops, max(0, away - 1))):
                 stops.append(node("stop", HOME, HOME, 0, present=self._bool(f"stop_{d}_{k}")))
 
             for n_idx, nd in enumerate(nodes):

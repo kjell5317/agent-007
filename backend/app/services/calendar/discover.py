@@ -118,6 +118,7 @@ async def discover_updated_events(
     summary: dict = {
         "checked": 0,
         "updated": 0,
+        "foreign": 0,
         "overlapping": 0,
         "scheduled_updates": 0,
         "deleted": 0,
@@ -154,6 +155,9 @@ async def discover_updated_events(
             it for it in raw_items if it.get("status") == "cancelled" and it.get("id")
         ]
         summary["updated"] += len(active)
+        # Changes the app didn't make itself — only these warrant re-planning;
+        # our own task and leg writes come back through this sync too.
+        summary["foreign"] += sum(1 for ev in active if not is_managed_event(ev))
         changed_physical.extend(active)
         cancelled_docs.extend((cid, it["id"]) for it in cancelled_items)
 
@@ -187,6 +191,7 @@ async def discover_updated_events(
             span = await _cancelled_event_span(session, cid, item, account_key=account_key)
             if span is None:
                 continue
+            summary["foreign"] += 1
             # Incremental sync is unbounded in time: deleting a long recurring
             # series streams back tombstones for instances years outside the
             # look-ahead window. Only deletions that touch the window can move
@@ -426,6 +431,10 @@ async def _cancelled_event_span(
             item["id"], exc,
         )
         return None
+    if is_managed_event(event):
+        # A leg (or task mirror) the planner itself removed: re-planning
+        # around it would only answer our own write.
+        return None
     return event.start, event.end
 
 
@@ -599,6 +608,12 @@ def _sync_task_schedule_from_event(
         row.scheduled_date = event.start
         changed = moved = True
     updates = _synced_field_updates(event, row)
+    if "estimation" in updates:
+        from app.db.clients.tasks import quarter_minutes
+
+        updates["estimation"] = quarter_minutes(updates["estimation"])
+        if updates["estimation"] == row.estimation and row.booked_minutes is None:
+            updates.pop("estimation")
     resized = "estimation" in updates
     if resized:
         from app.db.clients import overrides as overrides_store
@@ -820,6 +835,7 @@ def _empty_summary() -> dict:
     return {
         "checked": 0,
         "updated": 0,
+        "foreign": 0,
         "overlapping": 0,
         "scheduled_updates": 0,
         "deleted": 0,

@@ -116,7 +116,9 @@ async def _calendar_discover() -> None:
                 summary["deleted"],
                 summary.get("cached", 0),
             )
-            if summary["updated"] or summary["deleted"]:
+            # Only changes the app didn't make itself free or take room; a retry
+            # on our own writes would re-solve after every solve.
+            if summary.get("foreign") or summary["deleted"] or summary["scheduled_updates"]:
                 retry = await retry_unscheduled_tasks_once(respect_backoff=False)
                 if retry["attempted"]:
                     log.info(

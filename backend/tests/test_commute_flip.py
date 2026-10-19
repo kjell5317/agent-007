@@ -59,7 +59,7 @@ def test_flip_url_targets_the_other_mode_on_the_backend():
     assert params["dest"] == "ev1"
     assert params["mode"] == "transit"
     assert params["depart"] == str(int(DEPART.timestamp()))
-    assert params["expires"] == str(int((ARRIVE + timedelta(hours=24)).timestamp()))
+    assert params["expires"] == str(int((ARRIVE + timedelta(hours=1)).timestamp()))
     assert _params(flip_url("home", "ev1", DEPART, ARRIVE, "transit"))["mode"] == "bicycling"
 
 
@@ -130,9 +130,9 @@ def test_verify_round_trip():
 def test_verify_rejects_expired_link():
     params = _params(flip_url("home", "ev1", DEPART, ARRIVE, "transit"))
 
-    verify_flip(params, ARRIVE + timedelta(hours=24))
+    verify_flip(params, ARRIVE + timedelta(hours=1))
     with pytest.raises(ValueError, match="expired"):
-        verify_flip(params, ARRIVE + timedelta(hours=24, seconds=1))
+        verify_flip(params, ARRIVE + timedelta(hours=1, seconds=1))
 
 
 @pytest.mark.parametrize(

@@ -110,7 +110,7 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
     assert len(calls[1]["messages"]) == 3
     assert calls[1]["messages"][-1].role == "tool"
     assert payload["title"] == "Send quarterly report"
-    assert payload["due_date"].isoformat() == "2026-07-02T09:05:00+00:00"
+    assert payload["due_date"].isoformat() == "2026-07-02T09:15:00+00:00"
     assert trace["branch"] == "manual"
     assert trace["iterations"][0]["blocks"] == [
         {
