@@ -48,7 +48,7 @@ import { inputTitle, senderName } from "@/lib/inbox";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { fmtRecurrence } from "@/lib/tasks";
+import { fmtRecurrence, taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import type { Label, RecurrenceUnit, Task, TaskRawInput } from "@/lib/types";
 
@@ -242,7 +242,9 @@ export function TaskDetailModal({
         syncTaskState(result);
         count = result.subtasks.length;
       }
-      toast.success(`Created ${count} subtasks`);
+      toast.success(current.recurrence_unit
+        ? `Split this occurrence into ${count} subtasks`
+        : `Created ${count} subtasks`);
       await onChanged();
     } catch (e) {
       toast.error((e as Error).message);
@@ -814,6 +816,7 @@ function TaskSummary({
     if (commit && order) onMoveSubtask(order);
   };
   const labelMeta = labels.find((l) => l.name === task.label);
+  const repeat = taskRecurrence(task);
   const dueOverdue = isOverdue(task.due_date);
   const dueUrgent = isUrgent(task.due_date, task.estimation);
   const dueClass = dueOverdue
@@ -967,11 +970,13 @@ function TaskSummary({
               <button
                 type="button"
                 onClick={() => onEditPicker("recurrence")}
-                disabled={busy || task.is_container || !!task.parent_task_id}
+                disabled={busy || !!task.parent_task_id}
                 title={
-                  task.is_container || task.parent_task_id
-                    ? "Subtasks and split tasks can't repeat"
-                    : "Set repeat"
+                  !task.parent_task_id
+                    ? "Set repeat"
+                    : repeat
+                      ? `Its parent task repeats ${repeat.label.toLowerCase()}`
+                      : "Subtasks can't repeat"
                 }
                 className={cn(
                   TASK_SUMMARY_BADGE_BUTTON_CLASS,
@@ -980,9 +985,7 @@ function TaskSummary({
               >
                 <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                   <Repeat className="h-3 w-3" />
-                  {task.recurrence_unit && task.recurrence_interval
-                    ? fmtRecurrence(task.recurrence_unit, task.recurrence_interval)
-                    : "Repeat"}
+                  {repeat?.label ?? "Repeat"}
                 </span>
               </button>
             </PickerAnchor>

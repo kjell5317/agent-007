@@ -39,7 +39,7 @@ def test_day_shift_keeps_wall_clock_time_across_dst():
 
 @pytest.mark.parametrize(
     ("unit", "interval", "ok"),
-    [("day", 7, True), ("day", 8, False), ("week", 4, True), ("week", 5, False),
+    [("day", 6, True), ("day", 7, False), ("week", 4, True), ("week", 5, False),
      ("month", 12, True), ("month", 13, False), ("day", 0, False), ("year", 1, False)],
 )
 def test_interval_limits_fit_the_next_unit(unit, interval, ok):
@@ -178,3 +178,92 @@ async def test_planner_keeps_a_repeat_instance_inside_its_period(monkeypatch):
     window_start, window_end = windows[0]
     assert window_start == to_user_tz(due) - timedelta(days=1)
     assert window_end == to_user_tz(due)
+
+
+def test_a_split_occurrence_can_take_a_repeat_rule(monkeypatch):
+    due = datetime(2026, 10, 20, 23, 45, tzinfo=timezone.utc)
+    container = SimpleNamespace(
+        id=uuid.uuid4(), parent_task_id=None, is_container=True, due_date=due,
+        recurrence_unit=None, recurrence_interval=None, recurrence_series_id=None,
+    )
+    applied = {}
+    monkeypatch.setattr(recur.tasks_store, "get", lambda session, task_id: container)
+    monkeypatch.setattr(recur.tasks_store, "series", lambda session, series_id: [])
+    monkeypatch.setattr(
+        recur.tasks_store, "set_series_recurrence",
+        lambda session, series_id, **rule: applied.update(series_id=series_id, **rule),
+    )
+    session = SimpleNamespace(flush=lambda: None, commit=lambda: None)
+
+    task, stale = recur.set_recurrence(session, container.id, "week", 1)
+
+    assert stale == []
+    assert applied == {
+        "series_id": container.recurrence_series_id, "unit": "week", "interval": 1, "anchor": due,
+    }
+
+
+def test_rule_change_keeps_split_and_completed_occurrences(monkeypatch):
+    series_id = uuid.uuid4()
+    due = datetime(2026, 10, 20, 23, 45, tzinfo=timezone.utc)
+
+    def occurrence(days, *, split=False):
+        return SimpleNamespace(
+            id=uuid.uuid4(), parent_task_id=None, is_container=split,
+            due_date=due + timedelta(days=days), recurrence_unit="day",
+            recurrence_interval=1, recurrence_series_id=series_id,
+        )
+
+    current, split, done, plain = occurrence(0), occurrence(1, split=True), occurrence(2), occurrence(3)
+    monkeypatch.setattr(recur.tasks_store, "get", lambda session, task_id: current)
+    monkeypatch.setattr(recur.tasks_store, "series", lambda session, sid: [current, split, done, plain])
+    monkeypatch.setattr(
+        recur.tasks_store, "latest_status_for",
+        lambda session, ids: {done.id: "closed"},
+    )
+    monkeypatch.setattr(recur.tasks_store, "set_series_recurrence", lambda *a, **k: None)
+    monkeypatch.setattr(recur, "publish_task", lambda session, task_id: None)
+    session = SimpleNamespace(flush=lambda: None, commit=lambda: None)
+
+    _, stale = recur.set_recurrence(session, current.id, "week", 1)
+
+    assert stale == [plain.id]
+
+
+@pytest.mark.asyncio
+async def test_planner_keeps_subtasks_of_a_split_occurrence_inside_its_period(monkeypatch):
+    parent_due = datetime.now(timezone.utc) + timedelta(days=3)
+    parent = SimpleNamespace(
+        id=uuid.uuid4(), due_date=parent_due, recurrence_unit="day", recurrence_interval=1,
+    )
+    subtask = SimpleNamespace(
+        id=uuid.uuid4(), title="Stretch I", due_date=parent_due - timedelta(minutes=45),
+        scheduled_date=None, calendar_event_id=None, estimation=30,
+        parent_task_id=parent.id, recurrence_unit=None,
+    )
+    windows = []
+    slot_start = to_user_tz(subtask.due_date).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    def fake_find_free_slot(busy, duration, window_start, window_end, gaps, *, extended_window=False):
+        windows.append(window_start)
+        return slot_start, slot_start + timedelta(minutes=30)
+
+    monkeypatch.setattr(
+        schedule_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            commute_event_buffer_minutes=0, event_buffer_minutes=0,
+            google_calendar_default_event_minutes=30, google_calendar_id="",
+            google_busy_calendar_ids=[], slot_min_lead_minutes=0,
+            commute_enabled=False, google_maps_api_key="",
+        ),
+    )
+    monkeypatch.setattr(schedule_service.tasks_store, "get", lambda session, task_id: parent)
+    monkeypatch.setattr(schedule_service, "_find_free_slot", fake_find_free_slot)
+    monkeypatch.setattr(
+        schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy
+    )
+
+    await schedule_service.plan_task_slot(SimpleNamespace(), subtask)
+
+    assert windows[0] == to_user_tz(parent_due) - timedelta(days=1)

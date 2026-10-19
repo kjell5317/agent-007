@@ -5,6 +5,8 @@ rule. Like commute legs, instances are only created a week ahead — plus the
 next one whenever nothing open lies ahead, so a monthly task always has its
 next occurrence planned. Every instance is a plain task anchored by its own
 `recurrence` input, so it closes, scores and reschedules like any other.
+Splitting one only splits that occurrence: new instances are never copied
+as split, and its subtasks stay inside the occurrence's period.
 """
 
 from __future__ import annotations
@@ -40,8 +42,8 @@ def set_recurrence(
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
-    if task.parent_task_id or task.is_container:
-        raise ValueError("Subtasks and split tasks can't repeat")
+    if task.parent_task_id:
+        raise ValueError("Subtasks can't repeat — set it on the parent task")
     validate(unit, interval)
     if (task.recurrence_unit, task.recurrence_interval) == (unit, interval):
         return task, []
@@ -80,10 +82,10 @@ def remove_recurrence(session: Session, task_id: uuid.UUID) -> tuple[Task, list[
 
 async def drop_instances(session: Session, task_ids: Iterable[uuid.UUID]) -> None:
     """Delete generated instances along with their calendar mirrors. One the
-    user completed in the meantime is kept."""
+    user completed or split in the meantime is kept."""
     for task_id in task_ids:
         task = tasks_store.get(session, task_id)
-        if task is None:
+        if task is None or task.is_container:
             continue
         if tasks_store.latest_status_for(session, [task_id]).get(task_id, "open") != "open":
             continue
@@ -168,9 +170,11 @@ def _create_instance(session: Session, template: Task, due: datetime) -> Task:
 
 
 def _open_after(session: Session, task: Task) -> list[uuid.UUID]:
+    # A split occurrence carries the user's own subtasks; it survives a rule
+    # change like a completed one instead of being regenerated.
     later = [
         member for member in tasks_store.series(session, task.recurrence_series_id)
-        if member.id != task.id and member.due_date > task.due_date
+        if member.id != task.id and member.due_date > task.due_date and not member.is_container
     ]
     statuses = tasks_store.latest_status_for(session, [member.id for member in later])
     return [member.id for member in later if statuses.get(member.id, "open") == "open"]

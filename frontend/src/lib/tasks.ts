@@ -16,6 +16,21 @@ export function fmtRecurrence(unit: RecurrenceUnit, interval: number): string {
   return interval === 1 ? RECURRENCE_ADVERB[unit] : `Every ${interval} ${unit}s`;
 }
 
+// Splitting a repeating occurrence only splits that occurrence: its subtasks
+// don't repeat themselves, they show the rule of the occurrence they belong to.
+export function taskRecurrence(
+  task: Pick<Task, "recurrence_unit" | "recurrence_interval" | "parent_card">,
+): { label: string; inherited: boolean } | null {
+  if (task.recurrence_unit && task.recurrence_interval) {
+    return { label: fmtRecurrence(task.recurrence_unit, task.recurrence_interval), inherited: false };
+  }
+  const parent = task.parent_card;
+  if (parent?.recurrence_unit && parent.recurrence_interval) {
+    return { label: fmtRecurrence(parent.recurrence_unit, parent.recurrence_interval), inherited: true };
+  }
+  return null;
+}
+
 export function isTaskOverdue(task: Task, now = Date.now()): boolean {
   if (task.status !== "open") return false;
   const due = timeOrNull(task.due_date);

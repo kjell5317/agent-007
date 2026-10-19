@@ -20,7 +20,7 @@ import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { fmtRecurrence, isTaskOverdue } from "@/lib/tasks";
+import { isTaskOverdue, taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -82,10 +82,10 @@ export function TaskCard({
   const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
-  const recurrence =
-    task.recurrence_unit && task.recurrence_interval
-      ? fmtRecurrence(task.recurrence_unit, task.recurrence_interval)
-      : null;
+  const recurrence = taskRecurrence(task);
+  const recurrenceTitle = recurrence
+    ? `${recurrence.inherited ? "Part of a task that repeats" : "Repeats"} ${recurrence.label.toLowerCase()}`
+    : null;
   const cardBorderClass =
     task.is_container ? null : task.schedule_status === "pending"
       ? "border-emerald-500/70"
@@ -100,7 +100,7 @@ export function TaskCard({
     displayDate ?? "",
     task.estimation ?? "",
     task.label ?? "",
-    recurrence ?? "",
+    recurrenceTitle ?? "",
     displayLocation ?? "",
     measurementVersion,
   ].join("|");
@@ -362,8 +362,8 @@ export function TaskCard({
                 </Badge>
               )}
 
-              {recurrence && (
-                <span title={`Repeats ${recurrence.toLowerCase()}`} aria-label={`Repeats ${recurrence.toLowerCase()}`}>
+              {recurrenceTitle && (
+                <span title={recurrenceTitle} aria-label={recurrenceTitle}>
                   <Repeat className="h-3 w-3" />
                 </span>
               )}

@@ -420,10 +420,15 @@ async def plan_task_slot(
     now = datetime.now(user_tz()) + timedelta(minutes=settings.slot_min_lead_minutes)
     window_start = max(now, due - timedelta(days=LEAD_DAYS))
     window_end = due
-    if unit := getattr(task, "recurrence_unit", None):
-        # A repeat instance belongs to its own period: scanning from the
-        # LEAD_DAYS floor would stack a week of daily instances onto today.
-        window_start = max(window_start, shift(due, unit, -task.recurrence_interval))
+    if occurrence := _repeat_occurrence(session, task):
+        # A repeat occurrence (or a subtask of a split one) belongs to its own
+        # period: scanning from the LEAD_DAYS floor would stack a week of
+        # daily occurrences onto today.
+        window_start = max(window_start, shift(
+            to_user_tz(occurrence.due_date),
+            occurrence.recurrence_unit,
+            -occurrence.recurrence_interval,
+        ))
     predecessor_id = getattr(task, "depends_on_task_id", None)
     if predecessor_id:
         predecessor = tasks_store.get(session, predecessor_id)
@@ -614,6 +619,14 @@ async def plan_task_slot(
 
 
 # --- Trip-block geometry -------------------------------------------------
+
+
+def _repeat_occurrence(session: Session, task: Task) -> Task | None:
+    if getattr(task, "recurrence_unit", None):
+        return task
+    parent_id = getattr(task, "parent_task_id", None)
+    parent = tasks_store.get(session, parent_id) if parent_id else None
+    return parent if parent is not None and parent.recurrence_unit else None
 
 
 def _block_total(duration: timedelta, buffer: timedelta, out_s: int, in_s: int) -> timedelta:
