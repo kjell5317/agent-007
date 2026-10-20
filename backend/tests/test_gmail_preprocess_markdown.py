@@ -139,3 +139,19 @@ def test_html_conditional_comment_is_not_rendered():
     result = preprocess_message({"payload": {"mimeType": "text/html", "body": {"data": _b64url(html)}}})
     assert "mso" not in result.body.lower()
     assert "[task](https://example.org/task)" in result.body
+
+
+def test_directed_at_me_counts_every_address_of_mine():
+    def directed(to, cc=""):
+        raw = {"payload": {"mimeType": "text/plain", "headers": [
+            {"name": "To", "value": to}, {"name": "Cc", "value": cc},
+        ], "body": {"data": _b64url("Hi")}}}
+        mine = ["me@gmail.com", "Me@Uni.example"]
+        return preprocess_message(raw, my_addresses=mine).metadata["directed_at_me"]
+
+    assert directed("Me <me@uni.example>")
+    assert directed("me@uni.example, me@gmail.com", cc="colleague@uni.example")
+    assert not directed("me@uni.example, a@x.com", cc="b@x.com")
+    assert not directed("a@x.com", cc="me@gmail.com")
+    assert not preprocess_message({"payload": {"headers": [{"name": "To", "value": "me@gmail.com"}]}}) \
+        .metadata["directed_at_me"]

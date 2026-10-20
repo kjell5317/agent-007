@@ -76,3 +76,23 @@ test("subtask inputs group under the parent task", () => {
   assert.equal(groups[0].liveTask.id, "parent");
   assert.equal(groups[0].members.length, 3);
 });
+
+test("a thread the agent judged not a task has no task to reopen", () => {
+  const base = {
+    source: "gmail",
+    source_metadata: { thread_id: "t-1" },
+    content: "Newsletter",
+    task_id: null,
+    agent_trace: null,
+    status: "not_task",
+  };
+  const [group] = exports.groupInputs([
+    { ...base, id: "first", received_at: "2026-09-01T10:00:00Z" },
+    { ...base, id: "reply", received_at: "2026-09-02T10:00:00Z" },
+  ]);
+
+  assert.equal(group.key, "gmail:thread:t-1");
+  assert.equal(group.dismissedTask, null);
+  assert.equal(group.closedTask, null);
+  assert.equal(group.liveTask, null);
+});

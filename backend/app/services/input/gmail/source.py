@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from app.config import get_settings
 from app.services.input.base import IngestionSource, register_source
 from app.services.input.gmail.client import GmailClient, HistoryExpiredError
 from app.services.input.gmail.preprocess import preprocess_message
@@ -67,7 +68,9 @@ class GmailSource(IngestionSource):
                 log.debug("gmail · skip id=%s labels=%s", message_id, sorted(skip))
                 continue
 
-            result = preprocess_message(raw, account_email=self.account_key)
+            result = preprocess_message(
+                raw, my_addresses=[self.account_key, *get_settings().my_email_addresses],
+            )
 
             # TODO: optional second-pass filter (sender allowlist, subject regex, ...)
 

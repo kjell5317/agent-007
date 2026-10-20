@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import getaddresses
@@ -80,7 +81,7 @@ class PreprocessResult:
 def preprocess_message(
     raw_message: dict,
     *,
-    account_email: str | None = None,
+    my_addresses: Iterable[str] = (),
 ) -> PreprocessResult:
     """Turn a Gmail API message resource into clean body text + metadata.
 
@@ -88,8 +89,8 @@ def preprocess_message(
     `format=full`. Robust against missing fields — Gmail sometimes returns
     very minimal payloads (e.g. deleted or filtered messages).
 
-    `account_email` is the address of the connected Gmail account; passed
-    in so we can compute `directed_at_me` in the metadata.
+    `my_addresses` are the user's addresses (the connected account plus
+    aliases); passed in so we can compute `directed_at_me` in the metadata.
     """
     payload = raw_message.get("payload") or {}
     headers = _index_headers(payload.get("headers") or [])
@@ -129,7 +130,7 @@ def preprocess_message(
         "label_ids": raw_message.get("labelIds", []),
         "urls": urls,
         "has_attachments": _has_attachments(payload),
-        "directed_at_me": _directed_at_me(headers, account_email),
+        "directed_at_me": _directed_at_me(headers, my_addresses),
     }
     _apply_github_identity(metadata, headers)
     return PreprocessResult(
@@ -179,20 +180,19 @@ def _apply_github_identity(metadata: dict[str, Any], headers: dict[str, str]) ->
             return
 
 
-def _directed_at_me(headers: dict[str, str], account_email: str | None) -> bool:
-    """True when the user is one of at most two direct (To:) recipients.
+def _directed_at_me(headers: dict[str, str], my_addresses: Iterable[str]) -> bool:
+    """True when the user is a direct (To:) recipient alongside at most one
+    other person.
 
-    Returns False when the user only appears in Cc, when To+Cc exceeds two
-    distinct addresses, or when `account_email` is unknown.
+    Returns False when the user only appears in Cc, when To+Cc names more
+    than one address that isn't theirs, or when no address of theirs is known.
     """
-    if not account_email:
-        return False
-    me = account_email.strip().lower()
+    me = {a.strip().lower() for a in my_addresses if a and a.strip()}
     to = {a.lower() for _, a in getaddresses([headers.get("to") or ""]) if a}
     cc = {a.lower() for _, a in getaddresses([headers.get("cc") or ""]) if a}
-    if me not in to:
+    if not me & to:
         return False
-    return len(to | cc) <= 2
+    return len((to | cc) - me) <= 1
 
 
 # --- MIME walk ----------------------------------------------------------------

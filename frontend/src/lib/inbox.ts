@@ -239,8 +239,9 @@ export function groupInputs(inputs: RawInput[]): InboxGroup[] {
     const members = [...rows].sort(byReceivedDesc);
     const newest = members[0];
     const parentId = key.startsWith("task:") ? key.slice(5) : null;
-    const anchor = members.find((m) => m.task_id === parentId && m.status !== "duplicate" && m.status !== "processing")
-      ?? members.find((m) => m.task_id && m.status !== "duplicate" && m.status !== "processing");
+    // Without a parent, `task_id === parentId` would match task-less members.
+    const anchor = (parentId && members.find((m) => m.task_id === parentId && m.status !== "duplicate" && m.status !== "processing"))
+      || members.find((m) => m.task_id && m.status !== "duplicate" && m.status !== "processing");
     const liveTask = anchor?.status === "open" ? anchor : null;
     const closedTask = anchor?.status === "closed" ? anchor : null;
     const dismissedTask = anchor?.status === "not_task" ? anchor : null;

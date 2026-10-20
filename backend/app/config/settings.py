@@ -158,6 +158,9 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     # Gmail & Calendar
     google_oauth_redirect_uri: str = "http://localhost:8001/oauth/google/callback"
+    # Addresses that reach me besides the connected account (aliases, inboxes
+    # forwarded into it): mail addressed To: any of them is directed at me.
+    my_email_addresses: Annotated[list[str], NoDecode] = Field(default_factory=list)
     # Health sleep — a separate grant on the same client, health-only scopes
     # (the Health API rejects tokens that also carry Gmail/Calendar scopes).
     google_oauth_health_redirect_uri: str = "http://localhost:8001/oauth/google_health/callback"
@@ -165,7 +168,7 @@ class Settings(BaseSettings):
     google_oauth_login_redirect_uri: str = "http://localhost:8001/auth/callback"
     auth_allowed_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
-    @field_validator("auth_allowed_emails", mode="before")
+    @field_validator("auth_allowed_emails", "my_email_addresses", mode="before")
     @classmethod
     def _parse_emails(cls, v):
         if isinstance(v, str):
