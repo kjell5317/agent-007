@@ -861,7 +861,8 @@ def _partition(
 ) -> tuple[list[Anchor], list[CalendarEvent], list[CalendarEvent]]:
     """Split events into routable anchors, managed commute legs, and online
     or location-less events — not routed to, but legs shouldn't sit on top
-    of them either."""
+    of them either. Location-less tasks are none of these: they can move,
+    so a leg landing on one re-places the task instead of dodging it."""
     anchors: list[Anchor] = []
     commutes: list[CalendarEvent] = []
     online: list[CalendarEvent] = []
@@ -875,7 +876,8 @@ def _partition(
         if is_declined_event(ev):
             continue
         if is_online_location(ev.location):
-            online.append(ev)
+            if not is_task_event(ev):
+                online.append(ev)
             continue
         anchors.append(
             Anchor(

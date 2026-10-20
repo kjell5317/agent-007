@@ -1202,7 +1202,9 @@ def _cached_trip_legs(
             mode="bicycling",
             hour_bucket=0,
         )
-        return row.duration_seconds if row is not None else 0
+        if row is None or row.duration_seconds is None:
+            return 0
+        return row.duration_seconds
 
     return _step_seconds(cached(home, location)), _step_seconds(cached(location, home))
 

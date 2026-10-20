@@ -17,7 +17,7 @@ from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar.events import is_declined_event  # noqa: E402
 from app.services.calendar.discover import _replan_span  # noqa: E402
 from app.services.commute import planner as commute_planner  # noqa: E402
-from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg  # noqa: E402
+from app.services.commute.legs import FAILED_MODE, Anchor, PlannedLeg, derive_legs  # noqa: E402
 from app.services.commute.planner import (  # noqa: E402
     _description_for,
     _partition,
@@ -939,6 +939,41 @@ def test_partition_skips_declined_events_but_keeps_commutes_visible():
     assert [anchor.id for anchor in anchors] == ["accepted-physical"]
     assert [ev.id for ev in existing_commutes] == ["commute"]
     assert [ev.id for ev in online_spans] == ["accepted-online"]
+
+
+def test_location_less_tasks_yield_to_a_ride_home_dodging_a_lecture():
+    # Clearing the lecture *and* both tasks behind it exceeds MAX_DODGE, which
+    # used to drop the ride back onto the lecture. Tasks can move, so the
+    # ride leaves right after the lecture and the task gets re-placed.
+    task = {"managed_by": "plan_service", "kind": "task"}
+    events = [
+        _calendar_event("seminar", _day_at(12, 30), _day_at(13, 50), location=LIBRARY),
+        _calendar_event("lecture", _day_at(14), _day_at(15, 20)),
+        _calendar_event("plan-trip", _day_at(15, 30), _day_at(16), props=task),
+        _calendar_event("case-study", _day_at(16, 15), _day_at(17), props=task),
+    ]
+    anchors, _, online = _partition(events, "primary")
+    assert [ev.id for ev in online] == ["lecture"]
+
+    home = "Homestreet 1"
+    durations = {
+        (home, LIBRARY, "bicycling"): None,
+        (home, LIBRARY, "transit"): 35 * 60,
+        (LIBRARY, home, "bicycling"): None,
+        (LIBRARY, home, "transit"): 35 * 60,
+    }
+    settings = SimpleNamespace(
+        commute_bike_max_minutes=25,
+        commute_rain_threshold_pct=30,
+        commute_home_layover_minutes=60,
+        commute_event_buffer_minutes=5,
+        event_buffer_minutes=15,
+    )
+    legs, _ = derive_legs(
+        anchors, home, durations, None, settings, avoid=[(ev.start, ev.end) for ev in online],
+    )
+    ride_home = next(leg for leg in legs if leg.dest_anchor == "home")
+    assert ride_home.depart == _day_at(15, 25)
 
 
 def test_span_touches_window_drops_out_of_window_deletions():

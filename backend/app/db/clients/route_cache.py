@@ -54,9 +54,13 @@ def location_suggestions(session: Session, *, query: str, limit: int = 3) -> lis
     """Return cached origin/destination strings matching a location draft."""
     trimmed = query.strip()
 
-    origin_stmt = select(RouteCache.origin.label("location")).where(RouteCache.origin != "")
+    # No-route rows often hold an address Google couldn't find — never suggest those.
+    routed = RouteCache.duration_seconds.is_not(None)
+    origin_stmt = select(RouteCache.origin.label("location")).where(
+        RouteCache.origin != "", routed
+    )
     destination_stmt = select(RouteCache.destination.label("location")).where(
-        RouteCache.destination != ""
+        RouteCache.destination != "", routed
     )
     if trimmed:
         pattern = f"%{trimmed}%"
@@ -81,7 +85,7 @@ def upsert(
     destination: str,
     mode: str,
     hour_bucket: int,
-    duration_seconds: int,
+    duration_seconds: int | None,
     distance_meters: int | None,
 ) -> RouteCache:
     """Insert or refresh a cached route. Returns the persisted row.

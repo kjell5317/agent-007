@@ -37,7 +37,8 @@ class RouteCache(Base):
     mode: Mapped[str] = mapped_column(String(16))
     hour_bucket: Mapped[int] = mapped_column(Integer)
 
-    duration_seconds: Mapped[int] = mapped_column(Integer)
+    # NULL: Google answered that no route exists (see `resolver`).
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

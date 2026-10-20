@@ -191,6 +191,25 @@ async def test_stale_transit_survives_transient_api_failure(monkeypatch):
     assert result == 1200  # stale beats nothing
 
 
+@pytest.mark.asyncio
+async def test_no_route_answer_is_cached(monkeypatch):
+    session = _session()
+    calls = []
+
+    async def no_route(**kwargs):
+        calls.append(kwargs)
+        raise resolver.MapsLookupError("element status=ZERO_RESULTS", cacheable=True)
+
+    monkeypatch.setattr(resolver, "distance", no_route)
+
+    for _ in range(2):
+        result = await resolver.resolve_duration(
+            session, origin="Home", destination="Kahului Airport", mode="bicycling",
+        )
+        assert result is None
+    assert len(calls) == 1
+
+
 def test_online_location_detection():
     online = [
         None,

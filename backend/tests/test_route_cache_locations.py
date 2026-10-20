@@ -44,6 +44,24 @@ def test_location_suggestions_match_origins_and_destinations():
     assert route_cache_store.location_suggestions(session, query="off") == ["Office"]
 
 
+def test_location_suggestions_skip_unroutable_places():
+    session = _session()
+    _seed(session, "Home", "Office")
+    session.add(
+        RouteCache(
+            origin="Home",
+            destination="Ofice TBD",
+            mode="bicycling",
+            hour_bucket=0,
+            duration_seconds=None,
+            distance_meters=None,
+        )
+    )
+    session.commit()
+
+    assert route_cache_store.location_suggestions(session, query="of") == ["Office"]
+
+
 def test_location_suggestions_deduplicate_origins_and_destinations():
     session = _session()
     _seed(session, "Home", "Office")

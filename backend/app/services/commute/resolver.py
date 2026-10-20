@@ -51,18 +51,21 @@ async def resolve_duration(
             departure=departure,
         )
     except MapsLookupError as exc:
-        if exc.cacheable:
-            log.debug("route resolver · no route %s -> %s mode=%s", origin, destination, mode)
-            return None
-        if cached is not None:
-            # Transient failure with an expired entry in hand — stale beats
-            # nothing, and the next successful call refreshes it.
-            log.info(
-                "route resolver · transient failure, serving stale %s -> %s mode=%s",
-                origin, destination, mode,
-            )
-            return cached.duration_seconds
-        raise
+        if not exc.cacheable:
+            if cached is not None:
+                # Transient failure with an expired entry in hand — stale beats
+                # nothing, and the next successful call refreshes it.
+                log.info(
+                    "route resolver · transient failure, serving stale %s -> %s mode=%s",
+                    origin, destination, mode,
+                )
+                return cached.duration_seconds
+            raise
+        # Cached as NULL: the solver asks for every location pair on every
+        # solve, so an unroutable place would otherwise cost live calls each
+        # time and drain the daily quota.
+        log.debug("route resolver · no route %s -> %s mode=%s", origin, destination, mode)
+        duration_seconds, distance_meters = None, None
 
     route_cache.upsert(
         session,
