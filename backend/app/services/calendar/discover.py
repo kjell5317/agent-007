@@ -57,6 +57,7 @@ from app.services.calendar.events import (
     task_event_footer,
 )
 from app.services.commute.legs import _norm
+from app.services.commute.state import forget_trips_to
 from app.services.location import (
     is_online_location,
     resolve_location_alias,
@@ -138,6 +139,7 @@ async def discover_updated_events(
     changed_physical: list[CalendarEvent] = []
     user_moves: list[UserMove] = []
     deleted_spans: list[tuple[datetime, datetime]] = []
+    deleted_events: set[str] = set()
     cancelled_docs: list[tuple[str, str]] = []
     for cid in ids:
         raw_items, new_token, new_baseline = await _sync_calendar(
@@ -192,6 +194,9 @@ async def discover_updated_events(
                     session, item["id"], account_key=account_key,
                 )
                 if rescheduled is not None:
+                    # TODO: a started leg to the deleted task event still
+                    # replays as travelled; forgetting it needs a re-solve
+                    # after the reschedule above (see `forget_trips_to`).
                     summary["deleted"] += 1
                     publish_task(session, rescheduled)
                     continue
@@ -216,6 +221,7 @@ async def discover_updated_events(
                 item["id"], cid, span[0].isoformat(), span[1].isoformat(),
             )
             deleted_spans.append(span)
+            deleted_events.add(item["id"])
         if skipped_out_of_window:
             log.info(
                 "discover · %d deleted event(s) on %s outside window %s..%s; skipped",
@@ -259,6 +265,9 @@ async def discover_updated_events(
             )
             for event_id in targets:
                 await reschedule_event(session, event_id, account_key=account_key)
+
+    if deleted_events:
+        await forget_trips_to(session, deleted_events, now)
 
     # Persist cursors only after a successful pass. If anything above raised
     # we'll re-check with the same tokens next run, which keeps overlap and

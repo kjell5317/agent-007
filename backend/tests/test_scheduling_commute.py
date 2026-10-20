@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.commute.state import LegRecord, derive_state
 from app.services.learn import data
 from app.services.plan import features as F
@@ -218,3 +220,114 @@ def test_finished_legs_fold_into_the_stored_position_once():
     assert state.user_location == "Office, X"
     # Yesterday's arrival doesn't place the user anywhere today.
     assert derive_state([], now, stored).user_location is None
+
+
+def test_a_deleted_event_undoes_the_arrival_folded_there():
+    from app.services.commute.state import Position, forget
+
+    now = datetime(2026, 10, 20, 15, tzinfo=timezone.utc)
+    there = Position(bike_location="Uni, Somewhere", bike_anchor="lec", bike_since=now,
+                     user_location="Uni, Somewhere", user_anchor="lec", user_since=now,
+                     applied_through=now)
+    gone = forget(there, {"lec"})
+    assert derive_state([], now, gone).user_location is None
+    assert gone.bike_location is None and gone.applied_through == now
+    assert forget(there, {"other"}) == there
+
+
+def _leg_event(event_id, origin, dest, depart):
+    from app.services.calendar.client import normalize
+
+    return normalize({
+        "id": event_id, "status": "confirmed",
+        "start": {"dateTime": depart.isoformat()},
+        "end": {"dateTime": (depart + timedelta(minutes=20)).isoformat()},
+        "extendedProperties": {"private": {
+            "managed_by": "plan_service", "kind": "commute",
+            "origin_anchor": origin, "dest_anchor": dest,
+        }},
+    }, "write")
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_event_drops_the_started_legs_to_it(monkeypatch):
+    from app.services.commute import state
+
+    now = datetime.now(timezone.utc)
+    out = _leg_event("out", "home", "dinner", now - timedelta(minutes=30))
+    earlier = _leg_event("ride", "home", "lec", now - timedelta(hours=5))
+
+    async def load_legs(_session, _start, _end, **_kw):
+        return [], [out, earlier]
+
+    deleted, saved = [], []
+
+    async def delete_event(_session, *, calendar_id, event_id, account_key=None):
+        deleted.append(event_id)
+
+    monkeypatch.setattr(state, "load_legs", load_legs)
+    monkeypatch.setattr("app.services.calendar.delete_event", delete_event)
+    monkeypatch.setattr(
+        "app.db.clients.commute_state.get",
+        lambda _s: state.Position(user_location="Restaurant", user_anchor="dinner", user_since=now),
+    )
+    monkeypatch.setattr("app.db.clients.commute_state.save", lambda _s, position: saved.append(position))
+    await state.forget_trips_to(SimpleNamespace(), {"dinner"}, now)
+    assert deleted == ["out"]
+    assert [p.user_anchor for p in saved] == ["home"]
+
+
+@pytest.mark.asyncio
+async def test_discover_forgets_trips_to_a_deleted_event(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+    from app.services.calendar.client import normalize
+
+    now = datetime.now(timezone.utc)
+    settings = SimpleNamespace(google_calendar_id="write", event_buffer_minutes=15, commute_enabled=False)
+    monkeypatch.setattr(discover_mod, "get_settings", lambda: settings)
+    recent = (now - timedelta(hours=1)).isoformat()
+    token_row = SimpleNamespace(account_key="acct", extra={
+        "calendar_sync_tokens": {"write": "w", "read": "r"},
+        "calendar_sync_baselines": {"write": recent, "read": recent},
+    })
+    monkeypatch.setattr(discover_mod.oauth_tokens, "get_decrypted", lambda _s, *, provider, account_key: token_row)
+    monkeypatch.setattr(discover_mod.oauth_tokens, "set_extra", lambda *a, **k: None)
+
+    async def no_cache(_session, *, active, cancelled):
+        return {"upserted": 0, "embedded": 0}
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(discover_mod, "cache_calendar_events", no_cache)
+    monkeypatch.setattr(discover_mod, "_refresh_related_task_deadlines", noop)
+
+    class FakeClient:
+        async def sync_events(self, cid, *, sync_token=None, time_min=None, time_max=None):
+            return ([{"id": "dinner", "status": "cancelled"}] if cid == "read" else []), "next"
+
+        async def list_events(self, cid, *, time_min=None, time_max=None):
+            return []
+
+    async def fake_authorized_client(_session, _account_key):
+        return FakeClient()
+
+    async def get_event(_session, *, calendar_id, event_id, account_key=None):
+        return normalize({
+            "id": event_id, "status": "cancelled", "location": "Restaurant",
+            "start": {"dateTime": (now - timedelta(minutes=10)).isoformat()},
+            "end": {"dateTime": (now + timedelta(hours=1)).isoformat()},
+        }, calendar_id)
+
+    forgotten = []
+
+    async def forget_trips_to(_session, anchors, _now):
+        forgotten.append(anchors)
+
+    monkeypatch.setattr(discover_mod, "authorized_client", fake_authorized_client)
+    monkeypatch.setattr("app.services.calendar.get_event", get_event)
+    monkeypatch.setattr(discover_mod, "forget_trips_to", forget_trips_to)
+    await discover_mod.discover_updated_events(
+        SimpleNamespace(commit=lambda: None), calendar_ids=["write", "read"],
+    )
+    assert forgotten == [{"dinner"}]

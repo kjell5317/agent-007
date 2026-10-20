@@ -7,7 +7,7 @@ underway is rewritten, so what gets folded is what happened."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -158,3 +158,35 @@ def fold_finished(session: Session, legs: list[LegRecord]) -> None:
     advanced = advance(position, legs)
     if advanced != position:
         commute_state_store.save(session, advanced)
+
+
+def forget(position: Position, anchors: set[str]) -> Position:
+    """Undo a folded arrival at a deleted event: that trip didn't happen."""
+    out = position
+    if out.user_anchor in anchors:
+        out = replace(out, user_location=None, user_anchor=HOME, user_since=None)
+    if out.bike_anchor in anchors:
+        out = replace(out, bike_location=None, bike_anchor=HOME, bike_since=None)
+    return out
+
+
+async def forget_trips_to(session: Session, anchors: set[str], now: datetime) -> None:
+    """Trips to deleted events didn't happen. The replan drops their future
+    legs but leaves started ones as history — replayed, those would keep the
+    user at the event all day and plan a ride home from it."""
+    from app.config import get_settings
+    from app.db.clients import commute_state as commute_state_store
+    from app.services.calendar import commute_leg_key, delete_event
+
+    settings = get_settings()
+    if not settings.commute_enabled:
+        return
+    _, events = await load_legs(session, now - REPLAY_LOOKBACK, now)
+    for ev in events:
+        key = commute_leg_key(ev)
+        if key is not None and anchors & set(key):
+            await delete_event(session, calendar_id=ev.calendar_id, event_id=ev.id)
+    position = commute_state_store.get(session)
+    forgotten = forget(position, anchors)
+    if forgotten != position:
+        commute_state_store.save(session, forgotten)
