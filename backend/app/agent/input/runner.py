@@ -56,6 +56,7 @@ from app.agent.helpers.precedents import (
 from app.agent.tools import INPUT_LINK_RESEARCH_TOOL, new_input_tools
 from app.config import get_settings
 from app.db.schemas.task import TaskCreate
+from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
 from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context
@@ -297,7 +298,7 @@ async def run_new_input_agent(
             label = str(payload.get("label")) if payload.get("label") else None
             task = tasks.create(
                 session,
-                TaskCreate(
+                with_learned_estimate(session, TaskCreate(
                     title=str(payload["title"]),
                     description=str(payload.get("description")) if payload.get("description") else None,
                     estimation=payload.get("estimation") if payload.get("estimation") else None,
@@ -315,7 +316,7 @@ async def run_new_input_agent(
                         explicit_due=explicit_due,
                         related_event=bool(event_fields.get("related_event_id")),
                     ),
-                ),
+                )),
             )
             trace["outcome"] = "task_created"
             trace["task_id"] = str(task.id)

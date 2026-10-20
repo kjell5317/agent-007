@@ -57,9 +57,7 @@ def world(monkeypatch):
     monkeypatch.setattr(replan.tasks_store, "get", lambda _s, _id: None)
     monkeypatch.setattr(replan.log_store, "by_slot_for_tasks", lambda _s, _ids, _kinds: state.resolved)
     monkeypatch.setattr(replan.log_store, "add", lambda _s, **kw: state.logs.append(kw))
-    monkeypatch.setattr(replan.overrides_store, "task_ids_with_user_override", lambda _s, _f: set())
     monkeypatch.setattr("app.services.learn.jobs.weights_for", lambda _s, _d: F.prior_mean())
-    monkeypatch.setattr("app.services.learn.jobs.duration_params", lambda _s: None)
     monkeypatch.setattr("app.services.learn.jobs.rho", lambda _s: 0.5)
     monkeypatch.setattr("app.events.publish_task", lambda _s, _id: None)
 
@@ -99,6 +97,21 @@ async def test_replan_places_moves_and_leaves_alone(world):
     assert waiting.id not in result.placed  # check-in outcome still open
     assert all(log["kind"] == "placed" and log["features"]["slot"] for log in world.logs)
     assert fresh.schedule_state == "placed"
+
+
+@pytest.mark.asyncio
+async def test_a_task_is_booked_exactly_as_long_as_it_is_set(world, monkeypatch):
+    from app.services.learn import duration
+
+    overruns = duration.fit([duration.Observation(60, 120, "-|-") for _ in range(30)])
+    monkeypatch.setattr("app.services.learn.jobs.duration_params", lambda _s: overruns)
+    task = make_task("sheet", due=NOW + timedelta(days=2), minutes=120, agent_estimation=90)
+    world.tasks = [task]
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    start, end = result.placed[task.id]
+    assert end - start == timedelta(minutes=120)
+    # The duration model keeps learning from the agent's raw estimate.
+    assert [log["features"]["meta"]["estimate"] for log in world.logs] == [90]
 
 
 @pytest.mark.asyncio

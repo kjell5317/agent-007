@@ -64,6 +64,7 @@ from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
 from app.db.schemas.search import ChatSearchScope, SearchHit
 from app.db.schemas.task import TaskCreate
+from app.services.learn.jobs import with_learned_estimate
 from app.services import github, notion_mcp
 from app.services.input.embedding import embed
 from app.services.plan import schedule_task
@@ -793,7 +794,7 @@ async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict
     label = str(tin.get("label")) if tin.get("label") else None
     task = tasks_store.create(
         session,
-        TaskCreate(
+        with_learned_estimate(session, TaskCreate(
             title=str(tin["title"]),
             description=str(tin.get("description")) if tin.get("description") else None,
             estimation=tin.get("estimation") if tin.get("estimation") else None,
@@ -811,7 +812,7 @@ async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict
                 explicit_due=explicit_due,
                 related_event=bool(event_fields.get("related_event_id")),
             ),
-        ),
+        )),
     )
     anchor_text = "\n".join(
         part for part in (task.title, task.description or "") if part

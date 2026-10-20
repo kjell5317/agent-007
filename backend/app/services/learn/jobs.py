@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db.clients import learned_models as models_store
 from app.db.clients import schedule_log as log_store
+from app.db.schemas.task import TaskCreate
 from app.services.learn import data, duration, preference
 from app.services.plan import features as F
 from app.timezones import user_tz
@@ -115,6 +116,19 @@ def refit_duration(session: Session, now: datetime) -> dict:
 def duration_params(session: Session) -> dict | None:
     row = models_store.active(session, DURATION)
     return row.params if row is not None else None
+
+
+def with_learned_estimate(session: Session, payload: TaskCreate) -> TaskCreate:
+    """Correct an agent's duration estimate once, as the task is created; the
+    planner then books it exactly as set. The raw estimate stays on the task
+    as what the duration model trains on."""
+    if not payload.estimation:
+        return payload
+    group = duration.group_key(payload.label, payload.work_type)
+    minutes = duration.corrected_minutes(duration_params(session), payload.estimation, group)
+    return payload.model_copy(
+        update={"estimation": round(minutes), "agent_estimation": payload.estimation},
+    )
 
 
 def rho(session: Session) -> float:

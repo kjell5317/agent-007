@@ -27,6 +27,7 @@ from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs, tasks
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
+from app.services.learn.jobs import with_learned_estimate
 from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_github_subject
 from app.services.kotx import client as kotx_client
 from app.services.notify import (
@@ -308,7 +309,7 @@ async def _create_task_from_brief(
     )
     task = tasks.create(
         session,
-        TaskCreate(
+        with_learned_estimate(session, TaskCreate(
             title=title,
             estimation=payload.get("estimation"),
             due_date=payload.get("due_date"),
@@ -316,7 +317,7 @@ async def _create_task_from_brief(
             work_type=default_work_type or "cognitive",
             effort=default_effort or payload.get("effort"),
             deadline_kind=payload.get("deadline_kind") or "firm",
-        ),
+        )),
     )
     task.kotx_task_id = kotx_id
     session.flush()

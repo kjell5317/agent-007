@@ -32,6 +32,7 @@ from app.agent.retrieval import precedent_query_text, search_raw_inputs
 from app.db import SessionLocal
 from app.events import publish_input, publish_task
 from app.db.schemas.task import TaskCreate
+from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
 from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context, mentions_event
@@ -224,29 +225,30 @@ async def _process(
         )
         if event_warning:
             agent_trace["event_warning"] = event_warning
-        task = tasks_store.create(
-            session,
-            TaskCreate(
-                title=merged["title"],
-                description=merged.get("description"),
-                estimation=merged.get("estimation"),
-                due_date=merged.get("due_date"),
-                location=merged.get("location"),
-                link=merged.get("link"),
+        new_task = TaskCreate(
+            title=merged["title"],
+            description=merged.get("description"),
+            estimation=merged.get("estimation"),
+            due_date=merged.get("due_date"),
+            location=merged.get("location"),
+            link=merged.get("link"),
+            label=merged.get("label"),
+            related_event_id=merged.get("related_event_id"),
+            related_event_calendar_id=merged.get("related_event_calendar_id"),
+            related_event_due_derived=bool(merged.get("related_event_due_derived")),
+            **new_task_attributes(
+                merged,
+                labels_store.defaults_by_name(session),
                 label=merged.get("label"),
-                related_event_id=merged.get("related_event_id"),
-                related_event_calendar_id=merged.get("related_event_calendar_id"),
-                related_event_due_derived=bool(merged.get("related_event_due_derived")),
-                **new_task_attributes(
-                    merged,
-                    labels_store.defaults_by_name(session),
-                    label=merged.get("label"),
-                    explicit_due=user_fields.get("due_date") is not None
-                    or bool(agent_fields.get("due_date_is_explicit")),
-                    related_event=bool(merged.get("related_event_id")),
-                ),
+                explicit_due=user_fields.get("due_date") is not None
+                or bool(agent_fields.get("due_date_is_explicit")),
+                related_event=bool(merged.get("related_event_id")),
             ),
         )
+        # A duration the user typed is kept as-is.
+        if user_fields.get("estimation") is None:
+            new_task = with_learned_estimate(session, new_task)
+        task = tasks_store.create(session, new_task)
 
         if getattr(raw, "source", None) == "manual" and getattr(raw, "embedding", None) is None:
             try:

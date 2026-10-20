@@ -76,6 +76,7 @@ def create(session: Session, payload: TaskCreate) -> Task:
         link=payload.link,
         due_date=due_date,
         estimation=quarter_minutes(payload.estimation),
+        agent_estimation=payload.agent_estimation,
         location=payload.location,
         label=payload.label,
         related_event_id=payload.related_event_id,

@@ -201,7 +201,9 @@ def meta(task: Task, attrs: TaskAttrs) -> dict:
     from app.services.plan.schedule import estimate_minutes
 
     return {
-        "estimate": estimate_minutes(task, get_settings()),
+        # The duration model learns from the agent's raw estimate: training on
+        # the corrected one would learn the correction away.
+        "estimate": task.agent_estimation or estimate_minutes(task, get_settings()),
         "label": attrs.label,
         "work_type": attrs.work_type,
         "effort": attrs.effort,

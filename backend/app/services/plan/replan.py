@@ -33,11 +33,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.clients import labels as labels_store
-from app.db.clients import overrides as overrides_store
 from app.db.clients import schedule_log as log_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
-from app.services.learn import duration as duration_model
 from app.services.plan import features as F
 from app.services.plan import routing
 from app.services.plan import solver as S
@@ -241,8 +239,6 @@ async def replan(
     events = [item for item in calendar if item.kind == "event"]
     blockers = [item for item in calendar if item.kind == "blocker"]
     weights = jobs.weights_for(session, grid.origin)
-    duration_params = jobs.duration_params(session)
-    user_estimates = overrides_store.task_ids_with_user_override(session, "estimation")
 
     tasks = tasks_store.open_schedulable(session)
     resolved = log_store.by_slot_for_tasks(
@@ -297,7 +293,6 @@ async def replan(
             session, task, attrs, current,
             grid=grid, now=now, earliest_now=earliest_now,
             stability_floor=STABILITY_YIELD if task.id in yielding else 0.0,
-            duration_params=None if task.id in user_estimates else duration_params,
             blocks=(blocks or {}).get(task.id, []),
         )
     open_ids = {t.id for t in tasks}
@@ -458,19 +453,15 @@ def _movable(
     now: datetime,
     earliest_now: int,
     stability_floor: float,
-    duration_params: dict | None,
     blocks: list[tuple[datetime, datetime]],
 ) -> _Movable:
     from app.services.plan.schedule import estimate_minutes
 
     settings = get_settings()
+    # Booked exactly as set: the learned correction shapes a task's length
+    # once, at creation (`with_learned_estimate`), never at planning time.
     estimate = estimate_minutes(task, settings)
-    minutes = estimate
-    if duration_params:
-        minutes = duration_model.corrected_minutes(
-            duration_params, estimate, duration_model.group_key(attrs.label, attrs.work_type)
-        )
-    minutes = max(S.TASK_MINUTES, math.ceil(minutes / S.TASK_MINUTES) * S.TASK_MINUTES)
+    minutes = max(S.TASK_MINUTES, math.ceil(estimate / S.TASK_MINUTES) * S.TASK_MINUTES)
 
     earliest = earliest_now
     occurrence = _repeat_occurrence(session, task)
@@ -759,7 +750,8 @@ async def _apply(
                 "slot": slot_features(
                     m.attrs, span[0], span[1], now=now, items=final_items, tz=grid.tz,
                 ),
-                "meta": {"estimate": estimate_minutes(task, settings), "label": m.attrs.label,
+                "meta": {"estimate": task.agent_estimation or estimate_minutes(task, settings),
+                         "label": m.attrs.label,
                          "work_type": m.attrs.work_type, "effort": m.attrs.effort},
             }
             log_store.add(

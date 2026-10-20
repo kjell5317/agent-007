@@ -50,6 +50,7 @@ class TaskBase(BaseModel):
 class TaskCreate(TaskBase):
     recurrence_anchor: datetime | None = None
     recurrence_series_id: uuid.UUID | None = None
+    agent_estimation: int | None = None
 
 
 class TaskRecurrence(BaseModel):

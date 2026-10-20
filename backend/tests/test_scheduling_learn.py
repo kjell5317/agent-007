@@ -81,6 +81,20 @@ def test_duration_learns_an_underestimate():
     assert abs(duration.corrected_minutes(params, 60, "Sport|physical") - 60) < 20
 
 
+def test_a_new_task_gets_the_correction_once_and_keeps_the_raw_estimate(monkeypatch):
+    from app.db.schemas.task import TaskCreate
+    from app.services.learn import jobs
+
+    params = duration.fit([duration.Observation(60, 90, "Uni|cognitive") for _ in range(30)])
+    monkeypatch.setattr(jobs, "duration_params", lambda _s: params)
+    task = jobs.with_learned_estimate(
+        None, TaskCreate(title="Sheet", estimation=60, label="Uni", work_type="cognitive"),
+    )
+    assert 80 < task.estimation < 92 and task.agent_estimation == 60
+    unset = TaskCreate(title="Sheet", label="Uni", work_type="cognitive")
+    assert jobs.with_learned_estimate(None, unset) == unset
+
+
 def test_upper_bounds_only_pull_down():
     # "Done" within a 60-minute slot: at most 60 — no evidence it was shorter.
     obs = [duration.Observation(60, 60, "g", upper_bound=True) for _ in range(30)]

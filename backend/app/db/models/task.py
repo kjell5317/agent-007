@@ -34,6 +34,9 @@ class Task(Base):
         DateTime(timezone=True), nullable=True, server_default=func.now()
     )
     estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The agent's own estimate, before the learned duration correction set
+    # `estimation` at creation. Null for durations the user gave.
+    agent_estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     # Label name, matching a row in `labels` (mirrored from the Google Calendar
@@ -88,10 +91,10 @@ class Task(Base):
     # Set while a "Still working" extension runs; the slot then stays fixed and
     # its calendar event grows in 15-minute steps until the task is closed.
     running_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Length the current slot was booked with — the estimate after the learned
-    # duration correction. Null means the estimate itself. Calendar sync
-    # compares event lengths against this, so a corrected booking doesn't
-    # read as a user resize.
+    # Length the current slot was booked with when it differs from the
+    # estimate (a closed "Still working" task trimmed to its actual time).
+    # Null means the estimate itself. Calendar sync compares event lengths
+    # against this, so such a booking doesn't read as a user resize.
     booked_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # placed | deferred | unplaced — `scheduled_date` is null for the last two.
     schedule_state: Mapped[str] = mapped_column(

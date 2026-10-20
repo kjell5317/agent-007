@@ -6,7 +6,8 @@ label catalog from the DB — for the tool enum, the calendar mirror's
 `eventLabelId`, the kotx repo mapping and the work type / effort defaults —
 so stub those lookups out by default. Tests that exercise labels override
 them in the test body. The related-calendar-events lookup (DB query, possibly
-an embedding call) is stubbed to "no events" the same way.
+an embedding call) is stubbed to "no events" the same way, and the learned
+duration model a new task's estimate is corrected with to "none fitted yet".
 """
 
 import os
@@ -17,6 +18,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent import retrieval  # noqa: E402
 from app.db.clients import labels as labels_store  # noqa: E402
+from app.services.learn import jobs as learn_jobs  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -33,3 +35,8 @@ def _no_related_calendar_events(monkeypatch):
         return []
 
     monkeypatch.setattr(retrieval, "related_calendar_events", none)
+
+
+@pytest.fixture(autouse=True)
+def _no_learned_durations(monkeypatch):
+    monkeypatch.setattr(learn_jobs, "duration_params", lambda session: None)
