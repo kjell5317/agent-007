@@ -90,7 +90,7 @@ async def test_list_tasks_includes_all_linked_inputs_newest_first(monkeypatch):
         lambda *_args: [newer_duplicate, older],
     )
 
-    reads = await tasks_api.list_tasks(session=object())
+    reads = tasks_api.list_tasks(session=object())
 
     assert len(reads) == 1
     payload = reads[0].model_dump(mode="json")
@@ -132,7 +132,7 @@ async def test_get_task_includes_linked_inputs(monkeypatch):
     monkeypatch.setattr(tasks_api.raw_inputs_store, "latest_for_task", lambda *_args: raw)
     monkeypatch.setattr(tasks_api.raw_inputs_store, "list_for_task", lambda *_args: [raw])
 
-    read = await tasks_api.get_task(str(task_id), session=object())
+    read = tasks_api.get_task(str(task_id), session=object())
 
     payload = read.model_dump(mode="json")
     assert payload["id"] == str(task_id)
@@ -162,7 +162,7 @@ async def test_subtask_includes_parent_source_input(monkeypatch):
         lambda _session, task_id: [parent_input] if task_id == parent.id else [child_input],
     )
 
-    read = await tasks_api.get_task(str(child.id), session=object())
+    read = tasks_api.get_task(str(child.id), session=object())
 
     assert [linked.id for linked in read.raw_inputs] == [child_input.id, parent_input.id]
     assert read.raw_inputs[1].task_title == parent.title

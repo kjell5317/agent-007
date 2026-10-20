@@ -18,7 +18,7 @@ router = APIRouter(prefix="/stats", tags=["stats"])
 
 
 @router.get("/scheduling")
-async def get_scheduling_stats(
+def get_scheduling_stats(
     weeks: int = Query(8, ge=1, le=52), session: Session = Depends(get_session)
 ) -> dict:
     return scheduling_stats(session, now=datetime.now(user_tz()), weeks=weeks)

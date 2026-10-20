@@ -32,7 +32,7 @@ async def test_list_notes_returns_enriched_reads(monkeypatch):
     item = _item(uuid.uuid4())
     monkeypatch.setattr(notes_api.notes_store, "list_all", lambda *_a, **_k: [item])
 
-    reads = await notes_api.list_notes(session=object())
+    reads = notes_api.list_notes(session=object())
 
     assert len(reads) == 1
     payload = reads[0].model_dump(mode="json")

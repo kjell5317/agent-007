@@ -37,7 +37,7 @@ class KotxDiscardResult(BaseModel):
 
 
 @router.get("", response_model=list[RawInputRead])
-async def list_inputs(
+def list_inputs(
     status_filter: str | None = Query(None, alias="status"),
     source: str | None = Query(None),
     limit: int = Query(
@@ -60,7 +60,7 @@ async def list_inputs(
 # Static paths must precede the dynamic /{raw_input_id} GET below — FastAPI
 # matches in registration order.
 @router.get("/unread_count", response_model=UnreadCount)
-async def get_unread_count(session: Session = Depends(get_session)) -> UnreadCount:
+def get_unread_count(session: Session = Depends(get_session)) -> UnreadCount:
     return UnreadCount(
         count=raw_inputs.count_since(session, state.last_seen_input_at),
         last_seen_at=state.last_seen_input_at,
@@ -77,7 +77,7 @@ async def mark_inputs_seen(session: Session = Depends(get_session)) -> UnreadCou
 
 
 @router.get("/{raw_input_id}", response_model=RawInputRead)
-async def get_input(
+def get_input(
     raw_input_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> RawInputRead:
     row = raw_inputs.get(session, raw_input_id)

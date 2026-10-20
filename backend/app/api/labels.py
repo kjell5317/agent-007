@@ -21,7 +21,7 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 
 
 @router.get("", response_model=list[LabelRead])
-async def list_labels(session: Session = Depends(get_session)) -> list[LabelRead]:
+def list_labels(session: Session = Depends(get_session)) -> list[LabelRead]:
     return [LabelRead.from_row(row) for row in labels_store.list_all(session)]
 
 

@@ -94,7 +94,7 @@ async def test_location_suggestions_endpoint_returns_payload(monkeypatch):
         fake_location_suggestions,
     )
 
-    result = await tasks_api.location_suggestions(q=" gym ", session=session)
+    result = tasks_api.location_suggestions(q=" gym ", session=session)
 
     assert calls == [(session, " gym ", 3)]
     assert result.suggestions == ["Gym", "Office"]

@@ -98,7 +98,7 @@ def _parse_types(types: str | None) -> frozenset[str] | None:
 
 
 @router.get("/suggest", response_model=SuggestResponse)
-async def suggest(
+def suggest(
     q: str = Query("", max_length=256),
     limit: int | None = Query(None, ge=1, le=_MAX_LIMIT),
     types: str | None = Query(None, max_length=64),

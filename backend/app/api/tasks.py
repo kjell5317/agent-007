@@ -170,7 +170,7 @@ def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
 
 
 @router.get("", response_model=list[TaskRead])
-async def list_tasks(
+def list_tasks(
     status_filter: str | None = Query(None, alias="status"),
     limit: int = Query(100, le=500),
     session: Session = Depends(get_session),
@@ -181,7 +181,7 @@ async def list_tasks(
 
 
 @router.get("/location_suggestions", response_model=LocationSuggestionsRead)
-async def location_suggestions(
+def location_suggestions(
     q: str = Query("", max_length=512),
     session: Session = Depends(get_session),
 ) -> LocationSuggestionsRead:
@@ -190,7 +190,7 @@ async def location_suggestions(
 
 
 @router.get("/{task_id}", response_model=TaskRead)
-async def get_task(task_id: str, session: Session = Depends(get_session)) -> TaskRead:
+def get_task(task_id: str, session: Session = Depends(get_session)) -> TaskRead:
     try:
         parsed_id = uuid.UUID(task_id)
     except ValueError:

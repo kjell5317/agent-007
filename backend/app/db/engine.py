@@ -11,7 +11,13 @@ class Base(DeclarativeBase):
 
 
 _settings = get_settings()
-engine = create_engine(_settings.database_url, pool_pre_ping=True, future=True)
+# One process holds connections across awaits from every background loop plus
+# the solver's parallel route lookups. The default 5+10 ran dry under that, and
+# a checkout made on the event loop then freezes it — the holders can't resume
+# to release — until the 30 s pool timeout. Postgres allows 100.
+engine = create_engine(
+    _settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=30, future=True,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 

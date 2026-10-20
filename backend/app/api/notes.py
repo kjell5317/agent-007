@@ -23,7 +23,7 @@ router = APIRouter(prefix="/notes", tags=["notes"])
 
 
 @router.get("", response_model=list[NoteRead])
-async def list_notes(
+def list_notes(
     limit: int = Query(500, le=500),
     source: str | None = Query(None, max_length=64),
     query: str | None = Query(None, max_length=256),
