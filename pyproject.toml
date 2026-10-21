@@ -27,8 +27,11 @@ dependencies = [
     # otherwise raises on minimal Python images that omit /usr/share/zoneinfo,
     # silently degrading every planner/notification path to UTC.
     "tzdata>=2024.1",
-    "haystack-ai>=2.30.2",
-    "anthropic-haystack>=5.11.0",
+    "haystack-ai>=2.30.2,<3",
+    "anthropic-haystack>=5.11.0,<6",
+    # Not imported directly: anthropic 2 turned `MessageParam` into a Union,
+    # which anthropic-haystack (through 8.0.0) still instantiates.
+    "anthropic>=0.74,<2",
     "google-genai>=2.25.0",
     "mcp>=1.28.1,<2",
     "langfuse>=4,<5",

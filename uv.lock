@@ -2684,6 +2684,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "anthropic" },
     { name = "anthropic-haystack" },
     { name = "authlib" },
     { name = "beautifulsoup4" },
@@ -2722,14 +2723,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
-    { name = "anthropic-haystack", specifier = ">=5.11.0" },
+    { name = "anthropic", specifier = ">=0.74,<2" },
+    { name = "anthropic-haystack", specifier = ">=5.11.0,<6" },
     { name = "authlib", specifier = ">=1.3" },
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "google-genai", specifier = ">=2.25.0" },
     { name = "google-genai-haystack", specifier = ">=4.4.1" },
-    { name = "haystack-ai", specifier = ">=2.30.2" },
+    { name = "haystack-ai", specifier = ">=2.30.2,<3" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "itsdangerous", specifier = ">=2.2" },
     { name = "langfuse", specifier = ">=4,<5" },
