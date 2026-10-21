@@ -135,6 +135,28 @@ def test_create_due_instances_copies_the_latest_instance(monkeypatch):
     assert added[0].task_id == created[0].id
 
 
+@pytest.mark.parametrize(("status", "created"), [("open", 0), ("closed", 1)])
+def test_a_late_open_occurrence_holds_the_series(monkeypatch, status, created):
+    now = datetime.now(user_tz())
+    series_id = uuid.uuid4()
+    due = now - timedelta(days=1)
+    late = SimpleNamespace(
+        id=uuid.uuid4(), title="Weekly review", description=None, link=None,
+        estimation=180, location=None, label=None, due_date=due, is_container=True,
+        recurrence_unit="week", recurrence_interval=1,
+        recurrence_anchor=due, recurrence_series_id=series_id,
+    )
+    monkeypatch.setattr(recur.tasks_store, "series", lambda s, sid: [late])
+    monkeypatch.setattr(recur.tasks_store, "latest_status_for", lambda s, ids: {late.id: status})
+    monkeypatch.setattr(
+        recur.tasks_store, "create",
+        lambda session, payload: SimpleNamespace(id=uuid.uuid4(), title=payload.title),
+    )
+    session = SimpleNamespace(add=lambda row: None, commit=lambda: None)
+
+    assert len(recur.create_due_instances(session, now, [series_id])) == created
+
+
 def test_subtasks_cannot_repeat(monkeypatch):
     subtask = SimpleNamespace(parent_task_id=uuid.uuid4(), is_container=False)
     monkeypatch.setattr(recur.tasks_store, "get", lambda session, task_id: subtask)

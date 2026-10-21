@@ -3,7 +3,9 @@
 A series is every task sharing `recurrence_series_id`, each carrying the same
 rule. Like commute legs, instances are only created a week ahead — plus the
 next one whenever nothing open lies ahead, so a monthly task always has its
-next occurrence planned. Every instance is a plain task anchored by its own
+next occurrence planned. An occurrence still open past its due date holds the
+series: nothing new is created until it is closed, and missed dates are
+skipped. Every instance is a plain task anchored by its own
 `recurrence` input, so it closes, scores and reschedules like any other.
 Splitting one only splits that occurrence: new instances are never copied
 as split, and its subtasks stay inside the occurrence's period.
@@ -128,17 +130,21 @@ def create_due_instances(
             continue
         latest = instances[-1]
         statuses = tasks_store.latest_status_for(session, [t.id for t in instances])
-        has_upcoming = any(
-            statuses.get(t.id, "open") == "open" and to_user_tz(t.due_date) > now
-            for t in instances
-        )
+        open_dues = [
+            to_user_tz(t.due_date) for t in instances if statuses.get(t.id, "open") == "open"
+        ]
+        # The late occurrence is still the work to do; the next would land in
+        # the same days it is being rescheduled into. Closing it replans the
+        # series at once.
+        if any(due <= now for due in open_dues):
+            continue
         for due in occurrences_to_create(
             to_user_tz(latest.recurrence_anchor),
             latest.recurrence_unit,
             latest.recurrence_interval,
             latest_due=to_user_tz(latest.due_date),
             now=now,
-            has_upcoming=has_upcoming,
+            has_upcoming=bool(open_dues),
         ):
             created.append(_create_instance(session, latest, due))
     session.commit()
