@@ -54,6 +54,8 @@ def world(monkeypatch):
     monkeypatch.setattr("app.services.calendar.delete_task_event", delete_task_event)
     monkeypatch.setattr(replan, "_replan_commutes", no_commutes)
     monkeypatch.setattr(replan.tasks_store, "open_schedulable", lambda _s: state.tasks)
+    monkeypatch.setattr(replan.tasks_store, "schedulable_estimations",
+                        lambda _s: {t.id: t.estimation for t in state.tasks})
     monkeypatch.setattr(replan.tasks_store, "get", lambda _s, _id: None)
     monkeypatch.setattr(replan.log_store, "by_slot_for_tasks", lambda _s, _ids, _kinds: state.resolved)
     monkeypatch.setattr(replan.log_store, "add", lambda _s, **kw: state.logs.append(kw))
@@ -327,6 +329,74 @@ async def test_a_task_split_while_solving_gets_no_slot(world, monkeypatch):
     assert result.ok and whole.id in result.placed
     assert world.writes == [] and world.logs == []
     assert whole.calendar_event_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_duration_edited_while_solving_is_left_to_the_next_solve(world, monkeypatch):
+    subtask = make_task("subtask", due=NOW + timedelta(days=2), minutes=30)
+    world.tasks = [subtask]
+    solve = replan.S.solve
+
+    def edit_meanwhile(inp):
+        subtask.estimation = 60
+        return solve(inp)
+
+    monkeypatch.setattr(replan.S, "solve", edit_meanwhile)
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert world.writes == []
+
+    monkeypatch.setattr(replan.S, "solve", solve)
+    await replan.replan(session(), reason="the edit's solve", now=NOW, time_limit=5)
+    [(_, start, end)] = world.writes
+    assert end - start == timedelta(minutes=60)
+
+
+@pytest.mark.asyncio
+async def test_reschedule_pulls_a_later_task_into_the_week_and_keeps_it(world, monkeypatch):
+    monkeypatch.setattr(replan, "_defer_utility", lambda *_args, **_kw: 100.0)
+    due = NOW + timedelta(days=20)
+    later = make_task("later", due=due, created_at=NOW - timedelta(days=1))
+    world.tasks = [later]
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert later.id in result.deferred
+
+    result = await replan.replan(session(), reason="reschedule", now=NOW, time_limit=5,
+                                 pulled_in={later.id})
+    assert later.id in result.placed and later.schedule_state == "placed"
+    assert later.placed_by == "user" and later.due_date == due
+
+    result = await replan.replan(session(), reason="next", now=NOW, time_limit=5)
+    assert later.id not in result.deferred and later.schedule_state == "placed"
+
+
+@pytest.mark.asyncio
+async def test_reschedule_moves_a_locked_hand_placed_task(world):
+    slot = (NOW + timedelta(days=1)).replace(hour=14)
+    mine = make_task("mine", due=NOW + timedelta(days=3), scheduled=slot, placed_by="user",
+                     placed_at=NOW - timedelta(hours=1), created_at=NOW - timedelta(days=2))
+    world.tasks = [mine]
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert world.writes == []
+
+    rejected = (slot, slot + timedelta(minutes=60))
+    await replan.replan(session(), reason="reschedule", now=NOW, time_limit=5,
+                        blocks={mine.id: [rejected]})
+    [(_, start, end)] = world.writes
+    assert end <= rejected[0] or start >= rejected[1]
+    assert mine.placed_by == "planner"
+
+
+@pytest.mark.asyncio
+async def test_hand_placed_task_past_the_horizon_stays_after_a_release(world):
+    far = (NOW + timedelta(days=12)).replace(hour=14)
+    later = make_task("later", due=NOW + timedelta(days=20), scheduled=far, placed_by="user",
+                      placed_at=NOW - timedelta(hours=1), created_at=NOW - timedelta(days=2))
+    # Issued after the placement: releases every hand-placed lock.
+    world.tasks = [later, make_task("new", due=NOW + timedelta(days=2), created_at=NOW)]
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert "later" not in {title for title, _, _ in world.writes}
+    assert world.deletes == [] and later.id not in result.deferred
+    assert later.scheduled_date == far and later.schedule_state == "placed"
 
 
 @pytest.mark.asyncio

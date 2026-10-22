@@ -216,7 +216,7 @@ def test_warm_start_keeps_valid_slots_and_places_the_rest():
     def movable(key, current=None, schedule_state="placed"):
         task = SimpleNamespace(schedule_state=schedule_state)
         st = S.SolverTask(key=key, dur=12, earliest=9 * 12, due=2 * 288 - 1, current=current, stability=1.0)
-        return replan._Movable(task, _attrs(), 60, None, st)
+        return replan._Movable(task, _attrs(), 60, None, st, 60)
 
     keep = movable("keep", current=11 * 12)
     clash = movable("clash", current=13 * 12 + 6)  # overlaps the event now

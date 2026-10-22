@@ -153,5 +153,20 @@ def test_closed_outside_the_slot_is_not_an_observation():
     assert data.preference_rows(rows, NOW) == []
 
 
+def test_a_rescheduled_slot_is_a_negative_outcome():
+    tapped, redone = uuid.uuid4(), uuid.uuid4()
+    start = NOW - timedelta(days=1)
+    end = start + timedelta(hours=1)
+    snap = {"slot": {"h_start:8": 1.0}, "meta": {"estimate": 60}}
+    rows = [
+        LogRow(tapped, "placed", start, end, snap, start - timedelta(days=1)),
+        LogRow(tapped, "rescheduled", start, end, snap, start - timedelta(hours=2)),
+        # Put back there by hand and done after all: the outcome wins.
+        LogRow(redone, "rescheduled", start, end, snap, start - timedelta(hours=2)),
+        LogRow(redone, "done_confirmed", start, end, snap, end + timedelta(minutes=20)),
+    ]
+    assert sorted(r.y for r in data.preference_rows(rows, NOW)) == [0.0, 1.0]
+
+
 def test_old_rows_weigh_less():
     assert data.decay(NOW - timedelta(days=90), NOW) == 0.5

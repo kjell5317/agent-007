@@ -38,7 +38,9 @@ HELD_OUT_SHARE = 0.2
 LOG_WINDOW = timedelta(days=730)
 REFIT_DELAY_S = 30
 
-LABELLED_KINDS = frozenset({"moved_by_user", "done_confirmed", "not_done", "still_working", "closed"})
+LABELLED_KINDS = frozenset({
+    "moved_by_user", "done_confirmed", "not_done", "still_working", "closed", "rescheduled",
+})
 
 
 def posterior(session: Session) -> preference.Posterior:

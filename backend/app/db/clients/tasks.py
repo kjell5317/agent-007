@@ -487,6 +487,19 @@ def open_schedulable(session: Session) -> list[Task]:
     return list(session.execute(stmt).scalars())
 
 
+def schedulable_estimations(session: Session) -> dict[uuid.UUID, int | None]:
+    """`{id: estimation}` over `open_schedulable`, read from the DB: row
+    objects loaded before a long solve still hold their old values."""
+    latest = _latest_status_subquery()
+    stmt = (
+        select(Task.id, Task.estimation)
+        .outerjoin(latest, and_(latest.c.task_id == Task.id, latest.c.rn == 1))
+        .where(Task.is_container.is_(False))
+        .where(func.coalesce(latest.c.status, "open") == "open")
+    )
+    return dict(session.execute(stmt).tuples().all())
+
+
 def running_open(session: Session) -> list[Task]:
     latest = _latest_status_subquery()
     stmt = (

@@ -60,15 +60,18 @@ def preference_rows(log_rows, now: datetime) -> list[Row]:
         snapshot = _slot_features(slot_rows)
         if snapshot is None:
             continue
+        closed = next((r for r in slot_rows if r.kind == "closed"), None)
         if "not_done" in kinds:
             outcome = 0.0
         elif kinds & {"done_confirmed", "still_working"}:
             outcome = 1.0
-        elif "closed" in kinds:
-            closed = next(r for r in slot_rows if r.kind == "closed")
-            if closed.slot_end is None or not _closed_in_slot(closed, closed.slot_start, closed.slot_end):
-                continue
+        elif closed is not None and closed.slot_end is not None and _closed_in_slot(
+            closed, closed.slot_start, closed.slot_end
+        ):
             outcome = 1.0
+        elif "rescheduled" in kinds:
+            # Tapped away from: the task wasn't going to happen there.
+            outcome = 0.0
         else:
             continue
         stamp = max(r.created_at for r in slot_rows)

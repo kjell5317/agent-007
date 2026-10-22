@@ -41,7 +41,6 @@ from app.services.kotx import (
     create_issue_run,
     has_github_url,
 )
-from app.services.plan import schedule_task, scheduled_interval_for
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import cleanup_dismissed_container, dismiss_container, dismiss_task
@@ -50,6 +49,7 @@ from app.services.task.recur import (
     drop_instances, plan_recurring_tasks, remove_recurrence, set_recurrence,
 )
 from app.services.task.reopen import enqueue_reopen_task
+from app.services.task.reschedule import reschedule_task as reschedule_task_svc
 from app.services.task.split import (
     create_subtask as create_subtask_svc, reflow_children,
     split_deterministically, split_task as split_task_svc,
@@ -89,8 +89,12 @@ async def _reschedule_in_background(task_id: uuid.UUID) -> None:
         if row is None:
             return
         try:
-            result = await schedule_task(session, row, block=scheduled_interval_for(row))
-            if result is None:
+            result = await reschedule_task_svc(session, row)
+            if result is None and row.schedule_state == "deferred":
+                # Due past the horizon, and waiting beat every other slot this week.
+                from app.services.notify import notify_task_deferred
+                await notify_task_deferred(row)
+            elif result is None:
                 raise RuntimeError("Task could not be scheduled")
             publish_task(session, task_id)
         except Exception as exc:  # noqa: BLE001

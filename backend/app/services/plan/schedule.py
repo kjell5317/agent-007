@@ -160,6 +160,7 @@ async def schedule_task(
     task: Task,
     *,
     block: Interval | None = None,
+    pull_in: bool = False,
     account_key: str | None = None,
     notify: bool = True,
     primary_action: dict[str, str] | None = None,
@@ -171,6 +172,10 @@ async def schedule_task(
     The planner searches the normal 10:00–19:00 window first. If that
     cannot place the task, it automatically tries the extended 08:00–24:00
     fallback before reporting no slot.
+
+    `pull_in=True` (solver only) plans a task due past the horizon this
+    week instead of leaving it for later, and keeps the slot it gets like
+    a hand placement.
 
     `notify=False` suppresses the per-task scheduled/no-slot notification —
     batch callers (commute reschedule of many tasks) handle their own
@@ -195,8 +200,8 @@ async def schedule_task(
             log.info("plan.schedule · solver mode ignores nested reschedule task=%s", task.id)
             interval = scheduled_interval_for(task)
             return (interval.start, interval.end) if interval is not None else None
-        options = {"block": block, "account_key": account_key, "notify": notify,
-                   "primary_action": primary_action}
+        options = {"block": block, "pull_in": pull_in, "account_key": account_key,
+                   "notify": notify, "primary_action": primary_action}
         from app.services.plan.replan import batched
 
         pending = batched()
@@ -261,10 +266,12 @@ async def schedule_tasks(
         if block is not None:
             blocks.setdefault(task.id, []).append((block.start, block.end))
         account_key = account_key or options.get("account_key")
+    pulled_in = {task.id for task, options in requests if options.get("pull_in")}
     session.commit()
     try:
         result = await request_replan(
-            session, reason="schedule_task", blocks=blocks, account_key=account_key,
+            session, reason="schedule_task", blocks=blocks, pulled_in=pulled_in,
+            account_key=account_key,
         )
     except Exception as exc:  # noqa: BLE001
         log.error("plan.schedule · solve failed err=%s", exc, exc_info=True)

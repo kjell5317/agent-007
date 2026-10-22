@@ -46,6 +46,7 @@ def _task(*, label: str | None = None, link: str | None = None):
         due_date=now,
         scheduled_date=now,
         calendar_event_id="evt_existing",
+        schedule_state="placed",
         estimation=30,
         location=None,
         label=label,
@@ -69,6 +70,18 @@ def _patch_read_helpers(monkeypatch, task):
     )
 
 
+def _patch_reschedule(monkeypatch, fake_schedule_task):
+    from app.services.task import reschedule as reschedule_svc
+
+    async def no_snapshot(*_args, **_kw):
+        return None
+
+    monkeypatch.setattr(reschedule_svc, "schedule_task", fake_schedule_task)
+    monkeypatch.setattr(reschedule_svc, "features_snapshot", no_snapshot)
+    monkeypatch.setattr(reschedule_svc.log_store, "add", lambda _s, **_kw: None)
+    monkeypatch.setattr("app.services.learn.jobs.refit_soon", lambda: None)
+
+
 @pytest.mark.asyncio
 async def test_reschedule_returns_before_scheduler_runs(monkeypatch):
     task = _task()
@@ -77,7 +90,7 @@ async def test_reschedule_returns_before_scheduler_runs(monkeypatch):
     calls = []
     published = []
 
-    async def fake_schedule_task(_session, row, *, block=None):
+    async def fake_schedule_task(_session, row, *, block=None, **_kw):
         calls.append((_session, row, block))
         row.scheduled_date = datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc)
         return (row.scheduled_date, datetime(2026, 7, 1, 14, 30, tzinfo=timezone.utc))
@@ -88,7 +101,7 @@ async def test_reschedule_returns_before_scheduler_runs(monkeypatch):
 
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
     monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
-    monkeypatch.setattr(tasks_api, "schedule_task", fake_schedule_task)
+    _patch_reschedule(monkeypatch, fake_schedule_task)
     monkeypatch.setattr(tasks_api, "publish_task", lambda _session, task_id: published.append(task_id))
     _patch_read_helpers(monkeypatch, task)
 
@@ -112,7 +125,7 @@ async def test_reschedule_failure_notifies(monkeypatch):
         def __enter__(self): return session
         def __exit__(self, *_args): return None
 
-    async def fake_schedule_task(_session, _task, *, block=None):
+    async def fake_schedule_task(_session, _task, *, block=None, **_kw):
         return None
 
     async def fake_notify(title, exc, *, context=None):
@@ -121,10 +134,42 @@ async def test_reschedule_failure_notifies(monkeypatch):
     from app.services import notify
     monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
-    monkeypatch.setattr(tasks_api, "schedule_task", fake_schedule_task)
+    _patch_reschedule(monkeypatch, fake_schedule_task)
     monkeypatch.setattr(notify, "notify_error", fake_notify)
     await tasks_api._reschedule_in_background(task.id)
     assert notifications == [("Task rescheduling failed", "Task could not be scheduled", task.title)]
+
+
+@pytest.mark.asyncio
+async def test_reschedule_into_later_is_not_a_failure(monkeypatch):
+    task = _task()
+    session = FakeSession()
+    errors, deferred, published = [], [], []
+
+    class SessionContext:
+        def __enter__(self): return session
+        def __exit__(self, *_args): return None
+
+    async def fake_schedule_task(_session, row, *, block=None, **_kw):
+        row.schedule_state = "deferred"
+        row.calendar_event_id = None
+        return None
+
+    async def fake_error(title, exc, *, context=None):
+        errors.append(title)
+
+    async def fake_deferred(row, **_kw):
+        deferred.append(row.id)
+
+    from app.services import notify
+    monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
+    monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
+    _patch_reschedule(monkeypatch, fake_schedule_task)
+    monkeypatch.setattr(tasks_api, "publish_task", lambda _session, task_id: published.append(task_id))
+    monkeypatch.setattr(notify, "notify_error", fake_error)
+    monkeypatch.setattr(notify, "notify_task_deferred", fake_deferred)
+    await tasks_api._reschedule_in_background(task.id)
+    assert errors == [] and deferred == [task.id] and published == [task.id]
 
 
 @pytest.mark.asyncio
