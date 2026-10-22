@@ -298,6 +298,38 @@ async def test_released_hand_placed_task_only_yields_when_in_the_way(world):
 
 
 @pytest.mark.asyncio
+async def test_hand_placed_snapshot_is_committed_before_the_solve(world, monkeypatch):
+    calls = []
+    solve = replan.S.solve
+    monkeypatch.setattr(replan.S, "solve", lambda inp: calls.append("solve") or solve(inp))
+    early = (NOW + timedelta(days=1)).replace(hour=6)
+    world.tasks = [make_task("mine", due=NOW + timedelta(days=3), scheduled=early, placed_by="user",
+                             placed_at=NOW - timedelta(hours=1), created_at=NOW - timedelta(days=2))]
+    tracked = SimpleNamespace(commit=lambda: calls.append("commit"),
+                              flush=lambda: calls.append("flush"), rollback=lambda: None)
+    await replan.replan(tracked, reason="test", now=NOW, time_limit=5)
+    assert world.tasks[0].placed_context["tasks"]
+    assert calls.index("commit") < calls.index("solve")
+
+
+@pytest.mark.asyncio
+async def test_a_task_split_while_solving_gets_no_slot(world, monkeypatch):
+    whole = make_task("whole", due=NOW + timedelta(days=2), minutes=150)
+    world.tasks = [whole]
+    solve = replan.S.solve
+
+    def split_meanwhile(inp):
+        world.tasks = []  # now a container, out of the solver's universe
+        return solve(inp)
+
+    monkeypatch.setattr(replan.S, "solve", split_meanwhile)
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert result.ok and whole.id in result.placed
+    assert world.writes == [] and world.logs == []
+    assert whole.calendar_event_id is None
+
+
+@pytest.mark.asyncio
 async def test_released_hand_placed_task_gives_way_to_a_deadline(world, monkeypatch):
     # Today is booked except 14:00–15:00, which the user filled by hand.
     world.events = [

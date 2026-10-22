@@ -433,7 +433,9 @@ def _hand_placed_locks(
             )
             if not dry_run:
                 task.placed_context = stored
-                session.flush()
+                # Commit, not flush: the solve awaits for seconds, and a row
+                # lock held across that freezes the loop on any sync write to it.
+                session.commit()
         holds = lock_holds(stored, snapshot, tasks_created=tasks_created, events_created=events_created)
         if not holds or any(start < slot[1] and slot[0] < end for start, end in taken):
             yielding.add(task.id)
@@ -720,7 +722,11 @@ async def _apply(
     ]
     touched: list[tuple[datetime, datetime]] = []
     changed: list[uuid.UUID] = []
+    # A task split into a container or closed while the solve ran keeps no slot.
+    schedulable = {t.id for t in tasks_store.open_schedulable(session)}
     for task_id, m in movable.items():
+        if task_id not in schedulable:
+            continue
         task = m.task
         prior = booked_slot(task) if task.schedule_state == "placed" else None
         span = result.placed.get(task_id)

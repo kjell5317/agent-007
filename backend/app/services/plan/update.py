@@ -87,10 +87,16 @@ async def _update_with_solver(session: Session, task, changed: set[str]) -> None
     from app.services.plan.schedule import schedule_task, scheduled_interval_for
 
     prior = scheduled_interval_for(task)
-    if task.calendar_event_id and changed & {
+    # The solve leaves a slot whose start holds untouched, so a new length is
+    # written here — else the next calendar sync reads the stale end as a resize.
+    resized = prior if "estimation" in changed and prior is not None else None
+    if task.calendar_event_id and (resized or changed & {
         "title", "description", "link", "location", "label", "due_date", "deadline_kind",
-    }:
-        await update_task_event(session, task, changed_fields=changed)
+    }):
+        await update_task_event(
+            session, task, changed_fields=changed,
+            start=resized.start if resized else None, end=resized.end if resized else None,
+        )
     await schedule_task(session, task)
     if "location" in changed and prior is not None:
         await _replan_window(session, prior.start, prior.end)

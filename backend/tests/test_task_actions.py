@@ -11,6 +11,7 @@ from fastapi import BackgroundTasks, HTTPException
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.api import tasks as tasks_api  # noqa: E402
+from app.db.clients import raw_inputs as raw_inputs_store  # noqa: E402
 from app.services.kotx import runs as kotx_runs  # noqa: E402
 from app.services.task import reopen as reopen_svc  # noqa: E402
 from app.services.task import dismiss as dismiss_svc  # noqa: E402
@@ -54,8 +55,8 @@ def _task(*, label: str | None = None, link: str | None = None):
 
 
 def _patch_read_helpers(monkeypatch, task):
-    monkeypatch.setattr(tasks_api.raw_inputs_store, "latest_for_task", lambda *_args: None)
-    monkeypatch.setattr(tasks_api.raw_inputs_store, "list_for_task", lambda *_args: [])
+    monkeypatch.setattr(raw_inputs_store, "latest_for_task", lambda *_args: None)
+    monkeypatch.setattr(raw_inputs_store, "list_for_task", lambda *_args: [])
     monkeypatch.setattr(
         tasks_api.tasks_store,
         "latest_status_for",

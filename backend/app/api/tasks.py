@@ -23,20 +23,17 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_session
 from app.db.clients import route_cache as route_cache_store
-from app.db.clients import raw_inputs as raw_inputs_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.task import (
     LocationSuggestionsRead,
     TaskCreationAccepted,
     TaskOpenRequest,
     TaskPromote,
-    TaskRawInputRead,
     TaskRead,
     TaskRecurrence,
-    SubtaskSummary,
     TaskUpdate,
 )
-from app.events import publish_task
+from app.events import publish_task, task_read
 from app.services.kotx import (
     KotxConfigError,
     KotxRunError,
@@ -45,7 +42,6 @@ from app.services.kotx import (
     has_github_url,
 )
 from app.services.plan import schedule_task, scheduled_interval_for
-from app.services.source_url import source_url_for_raw_input
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import cleanup_dismissed_container, dismiss_container, dismiss_task
@@ -132,43 +128,6 @@ async def _refresh_series_in_background(
             await notify_error("Repeat planning failed", exc)
 
 
-def _to_read(task, status_: str, is_manual: bool, session: Session) -> TaskRead:
-    raw = raw_inputs_store.latest_for_task(session, task.id)
-    linked_inputs = raw_inputs_store.list_for_task(session, task.id)
-    parent_card = None
-    if parent_id := getattr(task, "parent_task_id", None):
-        # The parent's original input is the source of each derived subtask.
-        parent_inputs = raw_inputs_store.list_for_task(session, parent_id)
-        linked_inputs.extend(parent_inputs)
-        parent = tasks_store.get(session, parent_id)
-        if parent is not None:
-            parent_status = next((item.status for item in parent_inputs if item.status != "duplicate"), "open")
-            parent_manual = bool(parent_inputs) and all(item.source in {"manual", "web_research"} for item in parent_inputs)
-            parent_card = TaskRead.build(parent, parent_status, parent_manual)
-    children = tasks_store.children(session, task.id) if getattr(task, "is_container", False) else []
-    child_statuses = tasks_store.latest_status_for(session, [child.id for child in children])
-    return TaskRead.build(
-        task,
-        status_,
-        is_manual,
-        parent_card=parent_card,
-        source_url=source_url_for_raw_input(raw),
-        raw_inputs=[
-            TaskRawInputRead.build(
-                linked,
-                source_url=source_url_for_raw_input(linked),
-            )
-            for linked in linked_inputs
-        ],
-        subtasks=[SubtaskSummary(
-            id=child.id, public_id=child.public_id, title=child.title, due_date=child.due_date,
-            estimation=child.estimation,
-            status=child_statuses.get(child.id, "open"),
-            depends_on_task_id=child.depends_on_task_id,
-        ) for child in children],
-    )
-
-
 @router.get("", response_model=list[TaskRead])
 def list_tasks(
     status_filter: str | None = Query(None, alias="status"),
@@ -177,7 +136,7 @@ def list_tasks(
 ) -> list[TaskRead]:
     rows = tasks_store.list_(session, status=status_filter, limit=limit, include_containers=False)
     manual_map = tasks_store.is_manual_for(session, [t.id for t, _ in rows])
-    return [_to_read(t, s, manual_map.get(t.id, False), session) for t, s in rows]
+    return [task_read(session, t, s, manual_map.get(t.id, False)) for t, s in rows]
 
 
 @router.get("/location_suggestions", response_model=LocationSuggestionsRead)
@@ -200,7 +159,7 @@ def get_task(task_id: str, session: Session = Depends(get_session)) -> TaskRead:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     status_ = tasks_store.latest_status_for(session, [row.id]).get(row.id, "open")
     is_manual = tasks_store.is_manual_for(session, [row.id]).get(row.id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.post("/{task_id}/split", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
@@ -215,7 +174,7 @@ async def split_task(
     background_tasks.add_task(_split_in_background, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.post("/{task_id}/split_deterministic", response_model=TaskRead)
@@ -234,7 +193,7 @@ async def split_task_deterministic(
     )
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.post("/{task_id}/subtasks", response_model=TaskRead)
@@ -260,7 +219,7 @@ async def add_subtask(
     )
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(parent, status_, is_manual, session)
+    return task_read(session, parent, status_, is_manual)
 
 
 @router.put("/{task_id}/subtasks/order", response_model=TaskRead)
@@ -281,7 +240,7 @@ async def reorder_subtasks(
     )
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(parent, status_, is_manual, session)
+    return task_read(session, parent, status_, is_manual)
 
 
 @router.post(
@@ -350,7 +309,7 @@ async def update_task(
     background_tasks.add_task(_sync_task_changes, affected_tasks(session, row, set(fields)))
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.put("/{task_id}/recurrence", response_model=TaskRead)
@@ -367,7 +326,7 @@ async def set_task_recurrence(
     background_tasks.add_task(_refresh_series_in_background, row.recurrence_series_id, stale)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.delete("/{task_id}/recurrence", response_model=TaskRead)
@@ -381,7 +340,7 @@ async def remove_task_recurrence(
     background_tasks.add_task(_refresh_series_in_background, None, stale)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.post("/{task_id}/reschedule", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
@@ -395,7 +354,7 @@ async def reschedule_task(
     background_tasks.add_task(_reschedule_in_background, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.post("/{task_id}/github_issue", response_model=TaskRead)
@@ -420,7 +379,7 @@ async def create_github_issue(task_id: uuid.UUID, session: Session = Depends(get
     publish_task(session, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return _to_read(row, status_, is_manual, session)
+    return task_read(session, row, status_, is_manual)
 
 
 @router.post("/{task_id}/close", status_code=status.HTTP_204_NO_CONTENT)

@@ -4,6 +4,7 @@ from app.events.publish import (
     publish_points,
     publish_task,
     publish_task_removed,
+    task_read,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "publish_points",
     "publish_task",
     "publish_task_removed",
+    "task_read",
 ]

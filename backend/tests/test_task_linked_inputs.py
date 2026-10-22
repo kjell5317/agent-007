@@ -10,6 +10,7 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.api import tasks as tasks_api  # noqa: E402
+from app.db.clients import raw_inputs as raw_inputs_store  # noqa: E402
 
 
 def _task(task_id: uuid.UUID):
@@ -83,9 +84,9 @@ async def test_list_tasks_includes_all_linked_inputs_newest_first(monkeypatch):
         "is_manual_for",
         lambda *_args: {task_id: False},
     )
-    monkeypatch.setattr(tasks_api.raw_inputs_store, "latest_for_task", lambda *_args: older)
+    monkeypatch.setattr(raw_inputs_store, "latest_for_task", lambda *_args: older)
     monkeypatch.setattr(
-        tasks_api.raw_inputs_store,
+        raw_inputs_store,
         "list_for_task",
         lambda *_args: [newer_duplicate, older],
     )
@@ -129,8 +130,8 @@ async def test_get_task_includes_linked_inputs(monkeypatch):
         "is_manual_for",
         lambda *_args: {task_id: False},
     )
-    monkeypatch.setattr(tasks_api.raw_inputs_store, "latest_for_task", lambda *_args: raw)
-    monkeypatch.setattr(tasks_api.raw_inputs_store, "list_for_task", lambda *_args: [raw])
+    monkeypatch.setattr(raw_inputs_store, "latest_for_task", lambda *_args: raw)
+    monkeypatch.setattr(raw_inputs_store, "list_for_task", lambda *_args: [raw])
 
     read = tasks_api.get_task(str(task_id), session=object())
 
@@ -155,9 +156,9 @@ async def test_subtask_includes_parent_source_input(monkeypatch):
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: child)
     monkeypatch.setattr(tasks_api.tasks_store, "latest_status_for", lambda *_args: {child.id: "open"})
     monkeypatch.setattr(tasks_api.tasks_store, "is_manual_for", lambda *_args: {child.id: False})
-    monkeypatch.setattr(tasks_api.raw_inputs_store, "latest_for_task", lambda *_args: child_input)
+    monkeypatch.setattr(raw_inputs_store, "latest_for_task", lambda *_args: child_input)
     monkeypatch.setattr(
-        tasks_api.raw_inputs_store,
+        raw_inputs_store,
         "list_for_task",
         lambda _session, task_id: [parent_input] if task_id == parent.id else [child_input],
     )
@@ -166,3 +167,33 @@ async def test_subtask_includes_parent_source_input(monkeypatch):
 
     assert [linked.id for linked in read.raw_inputs] == [child_input.id, parent_input.id]
     assert read.raw_inputs[1].task_title == parent.title
+
+
+def test_live_update_for_a_subtask_carries_its_parent(monkeypatch):
+    from app.events import publish
+
+    parent = _task(uuid.uuid4())
+    parent.title = "Prepare the proposal"
+    parent.is_container = True
+    child = _task(uuid.uuid4())
+    child.parent_task_id = parent.id
+    child_input = _raw(child, source="subtask", status="open", received_at=child.created_at)
+    parent_input = _raw(parent, source="manual", status="open", received_at=parent.created_at)
+
+    monkeypatch.setattr(tasks_api.tasks_store, "get", lambda _s, task_id: parent if task_id == parent.id else child)
+    monkeypatch.setattr(tasks_api.tasks_store, "latest_status_for", lambda _s, ids: {i: "open" for i in ids})
+    monkeypatch.setattr(tasks_api.tasks_store, "is_manual_for", lambda _s, ids: {i: False for i in ids})
+    monkeypatch.setattr(raw_inputs_store, "latest_for_task", lambda *_args: child_input)
+    monkeypatch.setattr(
+        raw_inputs_store,
+        "list_for_task",
+        lambda _session, task_id: [parent_input] if task_id == parent.id else [child_input],
+    )
+    emitted = []
+    monkeypatch.setattr(publish, "_emit", emitted.append)
+
+    publish.publish_task(object(), child.id)
+
+    pushed = emitted[0]["data"]
+    assert pushed == tasks_api.get_task(str(child.id), session=object()).model_dump(mode="json")
+    assert pushed["parent_card"]["id"] == str(parent.id)
