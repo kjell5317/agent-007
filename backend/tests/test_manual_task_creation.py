@@ -212,11 +212,12 @@ async def test_short_manual_input_creates_task_when_extraction_fails(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_failed_manual_update_does_not_create_duplicate_task(monkeypatch):
+async def test_failed_promoted_update_does_not_create_duplicate_task(monkeypatch):
     raw_id = uuid.uuid4()
     raw = SimpleNamespace(
-        id=raw_id, source="manual", content="Move the report deadline",
-        task_id=None, processed_at=None, agent_trace=None, status="processing",
+        id=raw_id, source="gmail", content="Move the report deadline",
+        task_id=None, processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        agent_trace={"outcome": "not_task"}, status="not_task",
     )
     candidate = _hit(status="open", task_id=uuid.uuid4())
     session = SimpleNamespace()
@@ -338,19 +339,19 @@ async def test_manual_queue_uses_extracted_title_when_no_structured_title(monkey
 
 
 @pytest.mark.asyncio
-async def test_manual_queue_passes_embedding_precedents_to_extractor(monkeypatch):
+async def test_promoted_queue_passes_embedding_precedents_to_extractor(monkeypatch):
     raw_id = uuid.UUID("20000000-0000-0000-0000-000000000004")
     hit = _hit(status="open", task_id=uuid.uuid4())
     raw = SimpleNamespace(
         id=raw_id,
-        source="manual",
+        source="gmail",
         content="Please turn this into a task.",
-        source_metadata={"manual": True},
+        source_metadata={},
         embedding=[0.1, 0.2],
         task_id=None,
-        processed_at=None,
-        agent_trace=None,
-        status="processing",
+        processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        agent_trace={"outcome": "not_task"},
+        status="not_task",
     )
     session = SimpleNamespace(commit=lambda: None)
     search_calls = []
@@ -376,12 +377,10 @@ async def test_manual_queue_passes_embedding_precedents_to_extractor(monkeypatch
         context_inputs,
         include_trace,
         precedent_candidates,
-        research,
     ):
         assert context_inputs == []
         assert include_trace is True
         assert precedent_candidates == [hit]
-        assert research is False
         return {
             "title": "Created from precedent",
             "estimation": 25,
@@ -415,9 +414,69 @@ async def test_manual_queue_passes_embedding_precedents_to_extractor(monkeypatch
             "k": task_queue.EXTRACT_PRECEDENT_K,
         }
     ]
-    assert raw.agent_trace["candidates"] == [
+    assert raw.agent_trace["manual_override"]["candidates"] == [
         {"ref": "candidate:00000000-0000-0000-0000-000000000001"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_manual_queue_never_offers_existing_tasks_to_extractor(monkeypatch):
+    raw_id = uuid.UUID("20000000-0000-0000-0000-000000000007")
+    raw = SimpleNamespace(
+        id=raw_id,
+        source="manual",
+        content="Move the report deadline",
+        source_metadata={"manual": True},
+        embedding=[0.1, 0.2],
+        task_id=None,
+        processed_at=None,
+        agent_trace=None,
+        status="processing",
+    )
+    session = SimpleNamespace(commit=lambda: None)
+    extract_kwargs = []
+    created = []
+
+    class FakeSessionLocal:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_search_raw_inputs(*_args, **_kwargs):
+        raise AssertionError("manual entries must not look up existing tasks")
+
+    async def fake_extract_task_fields(_session, _raw, **kwargs):
+        extract_kwargs.append(kwargs)
+        return {
+            "title": "Move the report deadline",
+            "estimation": 15,
+            "due_date": datetime(2026, 7, 4, 9, 0, tzinfo=timezone.utc),
+        }, {"branch": "manual", "iterations": []}
+
+    def fake_create(_session, payload):
+        created.append(payload)
+        return SimpleNamespace(id=uuid.UUID("30000000-0000-0000-0000-000000000007"))
+
+    async def fake_schedule_task(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(task_queue, "SessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(task_queue.raw_inputs_store, "get", lambda _session, _raw_id: raw)
+    monkeypatch.setattr(task_queue, "search_raw_inputs", fake_search_raw_inputs)
+    monkeypatch.setattr(task_queue, "extract_task_fields", fake_extract_task_fields)
+    monkeypatch.setattr(task_queue.tasks_store, "create", fake_create)
+    monkeypatch.setattr(task_queue, "schedule_task", fake_schedule_task)
+    monkeypatch.setattr(task_queue, "publish_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(task_queue, "publish_input", lambda *_args, **_kwargs: None)
+
+    await task_queue._process(raw_id, {}, [])
+
+    assert "precedent_candidates" not in extract_kwargs[0]
+    assert created[0].title == "Move the report deadline"
+    assert raw.status == "open"
+    assert raw.task_id == uuid.UUID("30000000-0000-0000-0000-000000000007")
 
 
 @pytest.mark.asyncio
@@ -469,7 +528,7 @@ async def test_manual_queue_structured_title_overrides_extracted_title(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_collect_extraction_precedents_embeds_and_stores_manual_row(monkeypatch):
+async def test_collect_extraction_precedents_embeds_manual_row_without_candidates(monkeypatch):
     raw_id = uuid.UUID("20000000-0000-0000-0000-000000000005")
     raw = SimpleNamespace(
         id=raw_id,
@@ -481,8 +540,6 @@ async def test_collect_extraction_precedents_embeds_and_stores_manual_row(monkey
     session = SimpleNamespace()
     stored = []
     embedded = []
-    searched = []
-    hit = _hit(status="open", task_id=uuid.uuid4())
 
     async def fake_embed(text):
         embedded.append(text)
@@ -491,9 +548,8 @@ async def test_collect_extraction_precedents_embeds_and_stores_manual_row(monkey
     def fake_set_embedding(_session, stored_raw_id, vector):
         stored.append((stored_raw_id, vector))
 
-    def fake_search_raw_inputs(_session, **kwargs):
-        searched.append(kwargs)
-        return [hit]
+    def fake_search_raw_inputs(*_args, **_kwargs):
+        raise AssertionError("manual entries must not look up existing tasks")
 
     monkeypatch.setattr(task_queue, "embed", fake_embed)
     monkeypatch.setattr(task_queue.raw_inputs_store, "set_embedding", fake_set_embedding)
@@ -501,21 +557,17 @@ async def test_collect_extraction_precedents_embeds_and_stores_manual_row(monkey
 
     precedents = await task_queue._collect_extraction_precedents(session, raw, raw_id)
 
-    assert precedents == [hit]
+    assert precedents == []
     assert embedded == ["from: me@example.com\nExpenses\nPlease file the expense report."]
     assert stored == [(raw_id, [0.3, 0.4])]
-    assert searched[0]["embedding"] == [0.3, 0.4]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source,processed", [
-    ("manual", None),
-    ("gmail", datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)),
-])
-async def test_manual_and_promoted_paths_ignore_not_task_precedents(monkeypatch, source, processed):
+async def test_promoted_path_ignores_not_task_precedents(monkeypatch):
     raw = SimpleNamespace(
-        id=uuid.uuid4(), source=source, content="Change the report deadline",
-        source_metadata={}, embedding=[0.1, 0.2], processed_at=processed,
+        id=uuid.uuid4(), source="gmail", content="Change the report deadline",
+        source_metadata={}, embedding=[0.1, 0.2],
+        processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
     )
     open_hit = _hit(status="open", task_id=uuid.uuid4())
     rejected_hit = _hit()
@@ -533,18 +585,12 @@ async def test_manual_and_promoted_paths_ignore_not_task_precedents(monkeypatch,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source,prior_trace,processed", [
-    ("manual", None, None),
-    ("gmail", {"outcome": "not_task"}, datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)),
-])
-async def test_manual_and_promoted_paths_update_candidate_task(
-    monkeypatch, source, prior_trace, processed,
-):
+async def test_promoted_path_updates_candidate_task(monkeypatch):
     raw_id, task_id = uuid.uuid4(), uuid.uuid4()
     raw = SimpleNamespace(
-        id=raw_id, source=source, content="Move the report deadline",
-        task_id=None, processed_at=processed, agent_trace=prior_trace,
-        status="processing" if processed is None else "not_task",
+        id=raw_id, source="gmail", content="Move the report deadline",
+        task_id=None, processed_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        agent_trace={"outcome": "not_task"}, status="not_task",
     )
     task = SimpleNamespace(id=task_id)
     session = SimpleNamespace(commit=lambda: None)
@@ -586,8 +632,7 @@ async def test_manual_and_promoted_paths_update_candidate_task(
     assert applied[0][1]["existing_task_id"] == str(task_id)
     assert raw.task_id == task_id
     assert raw.status == "duplicate"
-    trace = raw.agent_trace if processed is None else raw.agent_trace["manual_override"]
-    assert trace["outcome"] == "updated"
+    assert raw.agent_trace["manual_override"]["outcome"] == "updated"
     assert published == ["task", "input"]
 
 

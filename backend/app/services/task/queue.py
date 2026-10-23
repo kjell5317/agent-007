@@ -4,7 +4,7 @@ Two callers enqueue here:
 
   * `POST /tasks` — fresh manual create. The router writes a synthetic
     raw_input(status="processing"), then enqueues for the worker to run
-    the agent extractor and create or update a task.
+    the agent extractor and create a new task.
   * `POST /tasks/open/{raw_input_id}` — manual override of an existing
     raw_input the agent already marked `not_task` / `duplicate`. The
     worker can create or update a task, preserving the prior `agent_trace` under a
@@ -148,7 +148,6 @@ async def _process(
         agent_fields: dict = {}
         agent_trace: dict[str, Any] = {"branch": "manual"}
         if needs_agent:
-            precedent_candidates = []
             try:
                 context_inputs = _load_context_inputs(session, raw_input_id, context_input_ids)
                 precedent_candidates = await _collect_extraction_precedents(
@@ -168,7 +167,7 @@ async def _process(
                 else:
                     agent_fields = extraction
             except Exception:  # noqa: BLE001 — fall back only when no existing task could be affected
-                if getattr(raw, "source", None) != "manual" or is_override or precedent_candidates:
+                if getattr(raw, "source", None) != "manual" or is_override:
                     raise
                 log.exception("manual extraction failed · raw=%s; using input as title", raw_input_id)
                 agent_trace = {"branch": "manual", "extraction_fallback": True}
@@ -328,11 +327,12 @@ def _load_context_inputs(
 async def _collect_extraction_precedents(
     session, raw, raw_input_id: uuid.UUID
 ) -> list[SimilarInput]:
-    """Find prior similar decisions for manual/promoted extraction.
+    """Find prior similar decisions for promoted extraction.
 
-    Fresh manual rows are not embedded by the synchronous create path, so this
-    computes and stores the same canonical embedding the ingestion pipeline uses.
-    KOTX rows stay out of similarity lookup by design.
+    Manual rows are not embedded by the synchronous create path, so this
+    computes and stores the same canonical embedding the ingestion pipeline uses
+    (calendar matching reuses it), but returns no candidates: a manual entry
+    always becomes a new task. KOTX rows stay out of similarity lookup by design.
     """
     if getattr(raw, "source", None) == "kotx":
         return []
@@ -353,6 +353,9 @@ async def _collect_extraction_precedents(
             )
             return []
         raw_inputs_store.set_embedding(session, raw_input_id, query_embedding)
+
+    if getattr(raw, "source", None) == "manual":
+        return []
 
     hits = search_raw_inputs(
         session,
