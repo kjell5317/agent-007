@@ -8,6 +8,7 @@ embedding + candidate search entirely and ask the LLM to pick one of:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -79,16 +80,23 @@ async def run_thread_followup(
     is_web_research = raw.source == "web_research"
     require_change = require_change or is_web_research
 
-    subtasks = subtasks or []
-    current_status = tasks_store.latest_status_for(session, [task.id]).get(task.id, "open")
-    subtask_statuses = tasks_store.latest_status_for(session, [child.id for child in subtasks])
-    user_msg = _build_thread_user_message(raw, task, current_status, subtasks, subtask_statuses)
     trace: dict[str, Any] = {
         "outcome": None,
         "branch": "thread_followup",
         "task_id": str(task.id),
         "current_task": _task_trace_snapshot(task),
     }
+    if is_reopen and _upcoming_occurrence(task):
+        # The series sets a repeat occurrence's due date; while it's still
+        # ahead there is no new deadline to pick.
+        trace.update(await apply_task_action(session, task, "update_task", {"status": "open"}))
+        trace["reason"] = "Reopened a recurring occurrence that is still upcoming; kept its due date."
+        return _finalize(session, raw, task, trace, require_change=require_change)
+
+    subtasks = subtasks or []
+    current_status = tasks_store.latest_status_for(session, [task.id]).get(task.id, "open")
+    subtask_statuses = tasks_store.latest_status_for(session, [child.id for child in subtasks])
+    user_msg = _build_thread_user_message(raw, task, current_status, subtasks, subtask_statuses)
 
     messages: list[LLMMessage] = [user_message(user_msg)]
     log.info("llm call · branch=thread_followup raw=%s task=%s", raw.id, task.id)
@@ -221,6 +229,19 @@ async def run_thread_followup(
             }
         ]
 
+    return _finalize(session, raw, task, trace, require_change=require_change)
+
+
+def _upcoming_occurrence(task) -> bool:
+    due = getattr(task, "due_date", None)
+    return (
+        getattr(task, "recurrence_series_id", None) is not None
+        and due is not None
+        and due > datetime.now(timezone.utc)
+    )
+
+
+def _finalize(session: Session, raw, task, trace: dict, *, require_change: bool) -> dict:
     # The follow-up references an existing task; its lifecycle state lives on
     # that task's own anchor row, which close/reopen flip directly. Recording
     # the follow-up as a `duplicate` keeps it out of status derivation, so a

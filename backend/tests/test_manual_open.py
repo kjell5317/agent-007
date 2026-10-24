@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -336,6 +336,47 @@ async def test_reopen_only_applies_due_date_and_open_status(monkeypatch):
         "due_date": "2026-12-01T12:00:00+00:00", "status": "open",
         "reason": None, "confidence": None,
     }]
+
+
+@pytest.mark.asyncio
+async def test_reopen_keeps_an_upcoming_occurrence_due_date(monkeypatch):
+    import app.agent.thread.runner as thread_runner
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), title="Case Study", description=None,
+        due_date=datetime.now(timezone.utc) + timedelta(days=10), scheduled_date=None,
+        estimation=90, location=None, link=None, label=None,
+        recurrence_series_id=uuid.uuid4(),
+    )
+    raw = SimpleNamespace(
+        id=uuid.uuid4(), source="manual",
+        source_metadata={"action": "reopen_task"},
+        content="Reopen task", task_id=None, agent_trace=None,
+    )
+    applied, finalized = [], []
+
+    async def no_chat(*_args, **_kwargs):
+        raise AssertionError("an upcoming occurrence keeps its date without asking the agent")
+
+    async def fake_apply(_session, _task, name, action_input):
+        applied.append((name, action_input))
+        return {"outcome": "reopened", "status_change": "open"}
+
+    monkeypatch.setattr(thread_runner, "chat", no_chat)
+    monkeypatch.setattr(thread_runner, "apply_task_action", fake_apply)
+    monkeypatch.setattr(
+        thread_runner.raw_inputs, "finalize",
+        lambda _session, _raw_id, **kwargs: finalized.append(kwargs),
+    )
+
+    trace = await thread_runner.run_thread_followup(
+        SimpleNamespace(commit=lambda: None), raw, task, require_change=True,
+    )
+
+    assert applied == [("update_task", {"status": "open"})]
+    assert trace["outcome"] == "reopened"
+    assert finalized[0]["task_id"] == task.id
+    assert finalized[0]["status"] == "duplicate"
 
 
 @pytest.mark.asyncio

@@ -42,6 +42,12 @@ def _sqlite_points_session():
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
 
 
+@pytest.fixture
+def open_task_status(monkeypatch):
+    # latest_status_for uses Postgres ANY(:ids), which SQLite lacks.
+    monkeypatch.setattr(discover.tasks_store, "latest_status_for", lambda _session, ids: {})
+
+
 def _event(event_id: str, start: datetime, end: datetime, task_id: uuid.UUID) -> CalendarEvent:
     return CalendarEvent(
         id=event_id,
@@ -348,6 +354,36 @@ def test_overdue_due_open_survives_limit_and_filters_closed_future():
     assert [t.title for t in rows] == ["open-overdue"]
 
 
+def test_discover_ignores_edits_to_a_closed_tasks_event(monkeypatch):
+    session = _sqlite_session()
+    booked = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    task = Task(
+        title="Write report",
+        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        scheduled_date=booked,
+        calendar_event_id="event-1",
+    )
+    session.add(task)
+    session.commit()
+    monkeypatch.setattr(
+        discover.tasks_store, "latest_status_for", lambda _session, ids: {task.id: "closed"},
+    )
+
+    moved_start = datetime(2026, 7, 1, 13, 0, tzinfo=timezone.utc)
+    moves: list = []
+    synced_task_id = discover._sync_task_schedule_from_event(
+        session,
+        _event("event-1", moved_start, moved_start + timedelta(minutes=30), task.id),
+        moves,
+    )
+
+    session.refresh(task)
+    assert synced_task_id is None
+    assert task.scheduled_date == booked.replace(tzinfo=None)
+    assert moves == []
+
+
+@pytest.mark.usefixtures("open_task_status")
 def test_discover_syncs_moved_managed_task_event():
     session = _sqlite_session()
     task = Task(
@@ -870,6 +906,7 @@ def test_hourly_overdue_penalty_job_is_not_registered():
     assert "overdue-due-tasks" not in {name for name, _ in cron._JOBS}
 
 
+@pytest.mark.usefixtures("open_task_status")
 def test_discover_syncs_edited_fields_from_event():
     session = _sqlite_session()
     start = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
@@ -917,6 +954,7 @@ def test_discover_syncs_edited_fields_from_event():
     assert task.description == "Rewritten body"
 
 
+@pytest.mark.usefixtures("open_task_status")
 def test_discover_ignores_event_matching_pushed_state():
     session = _sqlite_session()
     start = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
@@ -1118,6 +1156,7 @@ def test_task_event_body_carries_deadline_and_modal_link(monkeypatch):
     assert anchor == f'<a href="https://example.test/app#task/{task.id}">Open task</a>'
 
 
+@pytest.mark.usefixtures("open_task_status")
 @pytest.mark.parametrize("encoding", ["verbatim", "html"])
 def test_discover_strips_generated_footer_from_edited_body(encoding):
     session = _sqlite_session()

@@ -422,6 +422,9 @@ async def _schedule_task_locked(
             )
         return None
 
+    if await drop_if_closed(session, task):
+        return None
+
     await _log_legacy_placement(session, task, planned, prior)
     from app.events import publish_task
 
@@ -471,6 +474,22 @@ async def _schedule_task_locked(
 
                 await notify_unroutable_location(task, location)
     return planned
+
+
+async def drop_if_closed(session: Session, task: Task) -> bool:
+    """Undo a just-written placement when the task was closed meanwhile.
+
+    A close that committed before the event existed found nothing to delete,
+    and a status check made before the write can't see that close. Checking
+    after the write closes the gap: of the two, whichever commits last sees
+    the other."""
+    if tasks_store.latest_status_for(session, [task.id]).get(task.id) != "closed":
+        return False
+    from app.services.calendar import delete_task_event
+
+    log.info("plan.schedule · task=%s closed while being placed; dropping its event", task.id)
+    await delete_task_event(session, task)
+    return True
 
 
 async def _log_legacy_placement(

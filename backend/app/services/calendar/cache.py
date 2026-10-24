@@ -13,7 +13,9 @@ Two entry points keep the cache current:
 Our own managed events are skipped — task mirrors (`kind=task`) are already
 represented in search by their task, and commute legs are ephemeral planner
 artifacts; caching either would duplicate a task as a calendar event. Real
-events (agent invitations, externally-created events) are cached. Past events
+events (agent invitations, externally-created events) are cached, show-as-free
+ones included — the scheduler ignores those, but a task can still prepare for
+one (an all-day trip marker is free by default). Past events
 are kept (no time-based eviction). Embeddings are only recomputed when an
 event's text actually changed, so re-syncs and time-only edits don't burn
 embedding calls. Each upsert also re-derives the event's work type and effort

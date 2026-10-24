@@ -32,7 +32,7 @@ def make_task(title, *, due, scheduled=None, minutes=60, **kw) -> Task:
 @pytest.fixture
 def world(monkeypatch):
     state = SimpleNamespace(tasks=[], events=[], writes=[], deletes=[], logs=[], resolved={},
-                            pushed=[])
+                            pushed=[], closed=set())
 
     async def calendar_items(_session, _start, _end, account_key=None, blockers=False):
         return [e for e in state.events if blockers or e.kind != "blocker"]
@@ -56,6 +56,8 @@ def world(monkeypatch):
     monkeypatch.setattr(replan.tasks_store, "open_schedulable", lambda _s: state.tasks)
     monkeypatch.setattr(replan.tasks_store, "schedulable_estimations",
                         lambda _s: {t.id: t.estimation for t in state.tasks})
+    monkeypatch.setattr(replan.tasks_store, "latest_status_for",
+                        lambda _s, ids: {i: "closed" for i in ids if i in state.closed})
     monkeypatch.setattr(replan.tasks_store, "get", lambda _s, _id: None)
     monkeypatch.setattr(replan.log_store, "by_slot_for_tasks", lambda _s, _ids, _kinds: state.resolved)
     monkeypatch.setattr(replan.log_store, "add", lambda _s, **kw: state.logs.append(kw))
@@ -349,6 +351,27 @@ async def test_a_duration_edited_while_solving_is_left_to_the_next_solve(world, 
     await replan.replan(session(), reason="the edit's solve", now=NOW, time_limit=5)
     [(_, start, end)] = world.writes
     assert end - start == timedelta(minutes=60)
+
+
+@pytest.mark.asyncio
+async def test_a_task_closed_while_its_event_is_written_loses_the_event(world, monkeypatch):
+    fresh = make_task("fresh", due=NOW + timedelta(days=2))
+    world.tasks = [fresh]
+    import app.services.calendar as calendar
+
+    write = calendar.update_task_event
+
+    async def close_meanwhile(session, task, **kwargs):
+        await write(session, task, **kwargs)
+        world.closed.add(task.id)
+
+    monkeypatch.setattr(calendar, "update_task_event", close_meanwhile)
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+
+    assert [title for title, _start, _end in world.writes] == ["fresh"]
+    assert world.deletes == ["fresh"]
+    assert fresh.calendar_event_id is None
+    assert not any(log["kind"] == "placed" for log in world.logs)
 
 
 @pytest.mark.asyncio

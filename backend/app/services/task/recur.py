@@ -3,9 +3,9 @@
 A series is every task sharing `recurrence_series_id`, each carrying the same
 rule. Like commute legs, instances are only created a week ahead — plus the
 next one whenever nothing open lies ahead, so a monthly task always has its
-next occurrence planned. An occurrence still open past its due date holds the
-series: nothing new is created until it is closed, and missed dates are
-skipped. Every instance is a plain task anchored by its own
+next occurrence planned. Reopening an occurrence drops that far-off next one
+again. An occurrence still open past its due date holds the series: nothing
+new is created until it is closed, and missed dates are skipped. Every instance is a plain task anchored by its own
 `recurrence` input, so it closes, scores and reschedules like any other.
 Splitting one only splits that occurrence: new instances are never copied
 as split, and its subtasks stay inside the occurrence's period.
@@ -30,7 +30,7 @@ from app.services.notify import clear_task_notification
 from app.services.plan import schedule_task
 from app.services.plan.replan import batch as replan_batch
 from app.services.task.split import inherited_attributes
-from app.services.recurrence import occurrences_to_create, validate
+from app.services.recurrence import LOOKAHEAD, occurrences_to_create, validate
 from app.services.task.vacate import replan_vacated_window, vacated_commute_window
 from app.timezones import to_user_tz, user_tz
 
@@ -178,6 +178,19 @@ def _create_instance(session: Session, template: Task, due: datetime) -> Task:
         processed_at=datetime.now(timezone.utc),
     ))
     return task
+
+
+def surplus_after_reopen(session: Session, task: Task, now: datetime) -> list[uuid.UUID]:
+    """Open instances a reopened occurrence makes redundant. Past the week
+    ahead, an instance only exists because nothing lay open when `task`
+    closed; with it open again the series would not have planned one."""
+    if task.recurrence_series_id is None:
+        return []
+    beyond = {
+        member.id for member in tasks_store.series(session, task.recurrence_series_id)
+        if member.due_date > now + LOOKAHEAD
+    }
+    return [task_id for task_id in _open_after(session, task) if task_id in beyond]
 
 
 def _open_after(session: Session, task: Task) -> list[uuid.UUID]:

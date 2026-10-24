@@ -11,6 +11,7 @@ from app.db.models.raw_input import RawInput
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.events import publish_input, publish_task
 from app.services.plan import schedule_task
+from app.services.task.recur import drop_instances, surplus_after_reopen
 
 
 async def enqueue_reopen_task(session: Session, task_id: uuid.UUID) -> RawInput:
@@ -70,6 +71,7 @@ async def reopen_task(session: Session, task_id: uuid.UUID) -> None:
     # If there's no anchor raw_input (orphan task), the task already
     # surfaces as "open" by default in tasks.list_, so no flip is
     # needed — fall through to re-mirror it on the calendar.
+    await drop_instances(session, surplus_after_reopen(session, task, datetime.now(timezone.utc)))
     if not getattr(task, "is_container", False):
         await schedule_task(session, task)
     parent_id = getattr(task, "parent_task_id", None)

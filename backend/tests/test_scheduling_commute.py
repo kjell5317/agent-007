@@ -331,3 +331,66 @@ async def test_discover_forgets_trips_to_a_deleted_event(monkeypatch):
         SimpleNamespace(commit=lambda: None), calendar_ids=["write", "read"],
     )
     assert forgotten == [{"dinner"}]
+
+
+@pytest.mark.asyncio
+async def test_discover_caches_free_events_without_replanning_around_them(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+
+    now = datetime.now(timezone.utc)
+    settings = SimpleNamespace(google_calendar_id="write", event_buffer_minutes=15, commute_enabled=False)
+    monkeypatch.setattr(discover_mod, "get_settings", lambda: settings)
+    recent = (now - timedelta(hours=1)).isoformat()
+    token_row = SimpleNamespace(account_key="acct", extra={
+        "calendar_sync_tokens": {"read": "r"},
+        "calendar_sync_baselines": {"read": recent},
+    })
+    monkeypatch.setattr(discover_mod.oauth_tokens, "get_decrypted", lambda _s, *, provider, account_key: token_row)
+    monkeypatch.setattr(discover_mod.oauth_tokens, "set_extra", lambda *a, **k: None)
+    trip_day = (now + timedelta(days=20)).date()
+    trip = {
+        "id": "sfo", "status": "confirmed", "summary": "SFO", "transparency": "transparent",
+        "start": {"date": trip_day.isoformat()},
+        "end": {"date": (trip_day + timedelta(days=1)).isoformat()},
+    }
+    meeting = {
+        "id": "sync", "status": "confirmed", "summary": "Sync",
+        "start": {"dateTime": (now + timedelta(days=1)).isoformat()},
+        "end": {"dateTime": (now + timedelta(days=1, hours=1)).isoformat()},
+    }
+
+    class FakeClient:
+        async def sync_events(self, cid, *, sync_token=None, time_min=None, time_max=None):
+            return ([trip, meeting] if cid == "read" else []), "next"
+
+        async def list_events(self, cid, *, time_min=None, time_max=None):
+            return []
+
+    async def fake_authorized_client(_session, _account_key):
+        return FakeClient()
+
+    cached, refreshed, planned = [], [], []
+
+    async def cache(_session, *, active, cancelled):
+        cached.extend(ev.id for ev in active)
+        return {"upserted": 0, "embedded": 0}
+
+    async def refresh(_session, changed, _cancelled):
+        refreshed.extend(ev.id for ev in changed)
+
+    async def plan_legs(_session, events, **_kwargs):
+        planned.extend(ev.id for ev in events)
+
+    monkeypatch.setattr(discover_mod, "authorized_client", fake_authorized_client)
+    monkeypatch.setattr(discover_mod, "cache_calendar_events", cache)
+    monkeypatch.setattr(discover_mod, "_refresh_related_task_deadlines", refresh)
+    monkeypatch.setattr(discover_mod, "_plan_legs_for_changed_events", plan_legs)
+
+    summary = await discover_mod.discover_updated_events(
+        SimpleNamespace(commit=lambda: None), calendar_ids=["write", "read"],
+    )
+
+    assert cached == ["sfo", "sync"]
+    assert refreshed == ["sfo", "sync"]
+    assert planned == ["sync"]
+    assert summary["updated"] == 1

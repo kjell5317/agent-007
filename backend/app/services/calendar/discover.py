@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db.clients import oauth_tokens
+from app.db.clients import oauth_tokens, tasks as tasks_store
 from app.db.models.task import Task
 from app.events import publish_task
 from app.services.calendar.attributes import classify_pending_events
@@ -137,6 +137,10 @@ async def discover_updated_events(
     }
 
     changed_physical: list[CalendarEvent] = []
+    # Also show-as-free events: they never shape the schedule, but a task can
+    # still prepare for one (an all-day trip marker), so they stay searchable
+    # and keep linked deadlines current.
+    changed_events: list[CalendarEvent] = []
     user_moves: list[UserMove] = []
     deleted_spans: list[tuple[datetime, datetime]] = []
     deleted_events: set[str] = set()
@@ -163,7 +167,8 @@ async def discover_updated_events(
             log.info("discover · sync overflowed for %s; dropping token to re-baseline", cid)
         baselines[cid] = new_baseline.isoformat()
 
-        active = _active_events(raw_items, cid)
+        live = _live_events(raw_items, cid)
+        active = _busy(live)
         cancelled_items = [
             it for it in raw_items if it.get("status") == "cancelled" and it.get("id")
         ]
@@ -172,6 +177,7 @@ async def discover_updated_events(
         # our own task and leg writes come back through this sync too.
         summary["foreign"] += sum(1 for ev in active if not is_managed_event(ev))
         changed_physical.extend(active)
+        changed_events.extend(live)
         cancelled_docs.extend((cid, it["id"]) for it in cancelled_items)
 
         if cid == write_id:
@@ -285,7 +291,7 @@ async def discover_updated_events(
     # must not undo the reconcile that already committed.
     try:
         cache_summary = await cache_calendar_events(
-            session, active=changed_physical, cancelled=cancelled_docs,
+            session, active=changed_events, cancelled=cancelled_docs,
         )
         session.commit()
         summary["cached"] = cache_summary["upserted"]
@@ -306,7 +312,7 @@ async def discover_updated_events(
             log.exception("discover · calendar event classification failed")
             session.rollback()
 
-    await _refresh_related_task_deadlines(session, changed_physical, cancelled_docs)
+    await _refresh_related_task_deadlines(session, changed_events, cancelled_docs)
     await _record_user_moves(session, user_moves, account_key=account_key)
 
     await _plan_legs_for_changed_events(
@@ -619,6 +625,10 @@ def _sync_task_schedule_from_event(
     row = _task_for_event(session, event)
     if row is None:
         return None
+    # A closed task's event is a record of the work (or a stray placement);
+    # edits to it are no hand placement and must not reshape the task.
+    if tasks_store.latest_status_for(session, [row.id]).get(row.id) == "closed":
+        return None
 
     prev = booked_slot(row)
     changed = False
@@ -675,7 +685,6 @@ async def _record_user_moves(
     if not moves:
         return
     from app.db.clients import schedule_log as log_store
-    from app.db.clients import tasks as tasks_store
     from app.services.learn.jobs import refit_soon
     from app.services.plan.snapshot import features_snapshot
 
@@ -864,16 +873,16 @@ def _task_for_event(session: Session, event: CalendarEvent) -> Task | None:
     return session.query(Task).filter(Task.calendar_event_id == event.id).one_or_none()
 
 
+def _live_events(items: Iterable[dict], calendar_id: str) -> list[CalendarEvent]:
+    return [normalize(item, calendar_id) for item in items if item.get("status") != "cancelled"]
+
+
+def _busy(events: Iterable[CalendarEvent]) -> list[CalendarEvent]:
+    return [ev for ev in events if not is_free_event(ev) or is_location_blocker(ev)]
+
+
 def _active_events(items: Iterable[dict], calendar_id: str) -> list[CalendarEvent]:
-    out: list[CalendarEvent] = []
-    for item in items:
-        if item.get("status") == "cancelled":
-            continue
-        event = normalize(item, calendar_id)
-        if is_free_event(event) and not is_location_blocker(event):
-            continue
-        out.append(event)
-    return out
+    return _busy(_live_events(items, calendar_id))
 
 
 def _calendar_ids(calendar_ids: Iterable[str]) -> list[str]:

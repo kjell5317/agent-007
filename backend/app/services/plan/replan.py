@@ -734,7 +734,7 @@ async def _apply(
 ) -> None:
     from app.events import publish_task
     from app.services.calendar import delete_task_event, update_task_event
-    from app.services.plan.schedule import estimate_minutes
+    from app.services.plan.schedule import drop_if_closed, estimate_minutes
 
     settings = get_settings()
     final_items = list(fixed_items) + [
@@ -770,6 +770,8 @@ async def _apply(
             except Exception as exc:  # noqa: BLE001
                 log.error("replan · calendar write failed task=%s err=%s", task_id, exc, exc_info=True)
                 session.rollback()
+                continue
+            if await drop_if_closed(session, task):
                 continue
             task.schedule_state = "placed"
             # Asked for this week: the slot stays like one placed by hand, or

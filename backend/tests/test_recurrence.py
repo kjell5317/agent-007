@@ -252,6 +252,59 @@ def test_rule_change_keeps_split_and_completed_occurrences(monkeypatch):
     assert stale == [plain.id]
 
 
+def test_reopening_drops_the_next_occurrence_planned_beyond_the_week(monkeypatch):
+    series_id = uuid.uuid4()
+    now = datetime(2026, 10, 23, 23, 0, tzinfo=timezone.utc)
+
+    def occurrence(days, *, split=False):
+        return SimpleNamespace(
+            id=uuid.uuid4(), is_container=split, due_date=now + timedelta(days=days),
+            recurrence_series_id=series_id,
+        )
+
+    reopened, within_week, next_one = occurrence(3), occurrence(5), occurrence(10)
+    split, done = occurrence(17, split=True), occurrence(24)
+    monkeypatch.setattr(
+        recur.tasks_store, "series",
+        lambda session, sid: [reopened, within_week, next_one, split, done],
+    )
+    monkeypatch.setattr(recur.tasks_store, "latest_status_for", lambda session, ids: {done.id: "closed"})
+
+    assert recur.surplus_after_reopen(SimpleNamespace(), reopened, now) == [next_one.id]
+    assert recur.surplus_after_reopen(
+        SimpleNamespace(), SimpleNamespace(recurrence_series_id=None), now,
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_reopen_drops_surplus_occurrences_before_replanning(monkeypatch):
+    from app.services.task import reopen as reopen_mod
+
+    task = SimpleNamespace(id=uuid.uuid4(), is_container=False, parent_task_id=None)
+    latest = SimpleNamespace(id=uuid.uuid4(), status="closed", processed_at=None)
+    surplus = [uuid.uuid4()]
+    calls = []
+
+    async def drop_instances(_session, task_ids):
+        calls.append(("drop", list(task_ids)))
+
+    async def schedule_task(_session, scheduled):
+        calls.append(("schedule", scheduled.id))
+
+    monkeypatch.setattr(reopen_mod.tasks_store, "get", lambda session, task_id: task)
+    monkeypatch.setattr(reopen_mod.raw_inputs_store, "latest_for_task", lambda session, task_id: latest)
+    monkeypatch.setattr(reopen_mod, "surplus_after_reopen", lambda session, reopened, now: surplus)
+    monkeypatch.setattr(reopen_mod, "drop_instances", drop_instances)
+    monkeypatch.setattr(reopen_mod, "schedule_task", schedule_task)
+    monkeypatch.setattr(reopen_mod, "publish_input", lambda *a: None)
+    monkeypatch.setattr(reopen_mod, "publish_task", lambda *a: None)
+
+    await reopen_mod.reopen_task(SimpleNamespace(commit=lambda: None), task.id)
+
+    assert latest.status == "open"
+    assert calls == [("drop", surplus), ("schedule", task.id)]
+
+
 @pytest.mark.asyncio
 async def test_planner_keeps_subtasks_of_a_split_occurrence_inside_its_period(monkeypatch):
     parent_due = datetime.now(timezone.utc) + timedelta(days=3)
