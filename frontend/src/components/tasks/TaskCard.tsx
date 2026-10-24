@@ -15,12 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { actionHint } from "@/components/runs/runLabels";
 import { useLabels } from "@/hooks/useLabels";
+import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { api } from "@/lib/api";
-import { dueDateBadgeVariant, fmtClock, fmtDue } from "@/lib/dates";
+import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { isTaskOverdue, taskRecurrence, taskRunningSince } from "@/lib/tasks";
+import { isTaskOverdue, runningOvertime, taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -60,11 +61,7 @@ export function TaskCard({
   compact = false,
 }: Props) {
   const [busy, setBusy] = useState(false);
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
+  const now = useMinuteClock();
   const [crossing, setCrossing] = useState(false);
   const [locationVisible, setLocationVisible] = useState(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
@@ -82,7 +79,7 @@ export function TaskCard({
   const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
-  const runningSince = taskRunningSince(task);
+  const overtime = runningOvertime(task, now);
   const deferred = task.schedule_status === "deferred";
   const recurrence = taskRecurrence(task);
   const recurrenceTitle = recurrence
@@ -99,7 +96,7 @@ export function TaskCard({
           ? "border-emerald-500/70"
           : null;
   const locationProbeKey = [
-    runningSince ?? "",
+    overtime ?? "",
     deferred,
     displayDate ?? "",
     task.estimation ?? "",
@@ -364,16 +361,6 @@ export function TaskCard({
               ref={metadataRef}
               className={cn("mt-1 flex items-center gap-x-2 gap-y-1 text-xs text-muted-foreground", compact ? "overflow-hidden whitespace-nowrap" : "flex-wrap")}
             >
-              {runningSince && (
-                <span
-                  title={`Running since ${fmtClock(runningSince)}`}
-                  className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-300"
-                >
-                  <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-                  Running
-                </span>
-              )}
-
               {displayDate && (
                 <Badge variant={displayDateVariant}>
                   {fmtDue(displayDate)}
@@ -396,10 +383,15 @@ export function TaskCard({
                 </span>
               )}
 
-              {task.estimation != null && (
+              {(task.estimation != null || overtime != null) && (
                 <span className="inline-flex items-center gap-1">
                   <Timer className="h-3 w-3" />
-                  {task.estimation} min
+                  {task.estimation != null && `${task.estimation} min`}
+                  {overtime != null && (
+                    <span className="font-semibold tabular-nums" title="Still working past the booked slot">
+                      +{overtime} min
+                    </span>
+                  )}
                 </span>
               )}
               {displayLocation && locationVisible && (

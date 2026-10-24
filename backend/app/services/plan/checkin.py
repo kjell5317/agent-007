@@ -6,10 +6,10 @@ signal for the preference model and the duration correction:
 
 * Done — close the task, completion time = slot end.
 * Still working — no further notification; the calendar event grows by
-  15 minutes every 15 minutes until the task is marked done in the app
-  (actual duration = done time − slot start), stopping short of the next
-  calendar event. After 2× its booked duration it stops and counts as
-  abandoned.
+  15 minutes right away and again every 15 minutes from the answer until
+  the task is marked done in the app (actual duration = done time − slot
+  start), stopping short of the next calendar event. After 2× its booked
+  duration it stops and counts as abandoned.
 * Not done — the penalty is deducted silently and the task is re-planned.
 * No answer within 2 h — same as Not done, but excluded from learning.
 """
@@ -68,14 +68,13 @@ def awaiting_checkin(slot_end: datetime, now: datetime, resolved: bool) -> bool:
     return not resolved and slot_end <= now < slot_end + CHECKIN_DELAY + NO_RESPONSE_AFTER
 
 
-def running_end(start: datetime, booked_end: datetime, now: datetime) -> datetime:
+def running_end(start: datetime, booked_end: datetime, now: datetime, since: datetime) -> datetime:
     """Where a running extension's event ends at `now`: the next 15-minute
-    step past now, counted from the booked end, capped at the abandon point."""
+    step past now, counted from the "Still working" answer at `since`,
+    capped at the abandon point and never short of the booked end."""
     cap = start + ABANDON_FACTOR * (booked_end - start)
-    if now < booked_end:
-        return booked_end
-    steps = math.floor((now - booked_end) / EXTENSION_STEP) + 1
-    return min(cap, booked_end + steps * EXTENSION_STEP)
+    steps = math.floor(max(now - since, timedelta(0)) / EXTENSION_STEP) + 1
+    return max(booked_end, min(cap, since + steps * EXTENSION_STEP))
 
 
 def abandoned(start: datetime, booked_end: datetime, now: datetime) -> bool:
@@ -199,48 +198,58 @@ _extended_to: dict[uuid.UUID, datetime] = {}
 
 
 async def _extend_running(session: Session, now: datetime) -> tuple[int, int]:
+    extended = dropped = 0
+    for task in tasks_store.running_open(session):
+        outcome = await _extend(session, task, now)
+        if outcome == "extended":
+            extended += 1
+        elif outcome == "abandoned":
+            dropped += 1
+    return extended, dropped
+
+
+async def _extend(session: Session, task, now: datetime) -> str | None:
+    """Grow a running task's event to the current step, or end the run once
+    it's abandoned. Returns "extended", "abandoned", or None when unchanged."""
     from app.events import publish_task
     from app.services.calendar import update_task_event
     from app.services.plan.schedule import schedule_task
     from app.services.plan.snapshot import calendar_items
 
-    extended = dropped = 0
-    for task in tasks_store.running_open(session):
-        slot = booked_slot(task)
-        if slot is None:
-            continue
-        start, booked_end = slot
-        if abandoned(start, booked_end, now):
-            log_store.add(session, task_id=task.id, kind="abandoned", actor="system",
-                          slot_start=task.scheduled_date, slot_end=running_end(start, booked_end, now))
-            task.running_since = None
-            session.commit()
-            _extended_to.pop(task.id, None)
-            await schedule_task(session, task, notify=False)
-            publish_task(session, task.id)
-            dropped += 1
-            continue
-        target = running_end(start, booked_end, now)
-        try:
-            events = await calendar_items(session, booked_end, target)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("checkin · extension context failed task=%s err=%s", task.id, exc)
-            events = []
-        # Events never move: stop short of the next one, the clock keeps running.
-        blocking = [e.start for e in events if booked_end <= e.start < target]
-        if blocking:
-            target = max(booked_end, min(blocking))
-        if _extended_to.get(task.id) == target:
-            continue
-        try:
-            await update_task_event(session, task, start=start, end=target)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("checkin · extension write failed task=%s err=%s", task.id, exc)
-            continue
-        _extended_to[task.id] = target
-        extended += 1
-        await _clear_way(session, task, booked_end, target)
-    return extended, dropped
+    slot = booked_slot(task)
+    if slot is None:
+        return None
+    start, booked_end = slot
+    if abandoned(start, booked_end, now):
+        log_store.add(session, task_id=task.id, kind="abandoned", actor="system",
+                      slot_start=task.scheduled_date,
+                      slot_end=running_end(start, booked_end, now, task.running_since))
+        task.running_since = None
+        session.commit()
+        _extended_to.pop(task.id, None)
+        await schedule_task(session, task, notify=False)
+        publish_task(session, task.id)
+        return "abandoned"
+    target = running_end(start, booked_end, now, task.running_since)
+    try:
+        events = await calendar_items(session, booked_end, target)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("checkin · extension context failed task=%s err=%s", task.id, exc)
+        events = []
+    # Events never move: stop short of the next one, the clock keeps running.
+    blocking = [e.start for e in events if booked_end <= e.start < target]
+    if blocking:
+        target = max(booked_end, min(blocking))
+    if _extended_to.get(task.id) == target:
+        return None
+    try:
+        await update_task_event(session, task, start=start, end=target)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("checkin · extension write failed task=%s err=%s", task.id, exc)
+        return None
+    _extended_to[task.id] = target
+    await _clear_way(session, task, booked_end, target)
+    return "extended"
 
 
 async def _clear_way(session: Session, running, start: datetime, end: datetime) -> None:
@@ -290,9 +299,12 @@ async def handle_checkin_action(session: Session, task, action: str) -> None:
     elif action == ACTION_CHECKIN_STILL_WORKING:
         log_store.add(session, task_id=task.id, kind="still_working", actor="checkin",
                       slot_start=slot_start, slot_end=slot_end, features=snapshot)
-        task.running_since = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        task.running_since = now
         session.commit()
         await clear_task_notification(task.id)
+        # The first step lands now; the sweep adds one every step after.
+        await _extend(session, task, now)
         publish_task(session, task.id)
     else:
         await record_missed(session, task, kind="not_done", actor="checkin",

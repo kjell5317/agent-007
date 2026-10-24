@@ -51,8 +51,9 @@ import {
   RunStatusBadge,
 } from "@/components/runs/RunStatusBadge";
 import { useLabels } from "@/hooks/useLabels";
+import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { api } from "@/lib/api";
-import { fmtClock, fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
+import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
@@ -64,8 +65,8 @@ import {
   EFFORT_LABEL,
   fmtEstimation,
   fmtRecurrence,
+  runningOvertime,
   taskRecurrence,
-  taskRunningSince,
   WORK_TYPE_LABEL,
 } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -678,7 +679,6 @@ export function TaskDetailModal({
           onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
           onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
           onAttributeChange={autoSavePatch}
-          onMarkDone={markDone}
           onSaveRecurrence={(unit, interval) => { void saveRecurrence(unit, interval); }}
           onRemoveRecurrence={() => { void removeRecurrence(); }}
           onKotxActionPendingChange={setKotxActionPending}
@@ -798,7 +798,6 @@ function TaskSummary({
   onPickerEstimationChange,
   onPickerLabelChange,
   onAttributeChange,
-  onMarkDone,
   onSaveRecurrence,
   onRemoveRecurrence,
   onKotxActionPendingChange,
@@ -840,7 +839,6 @@ function TaskSummary({
   onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
   onAttributeChange: (patch: AttributePatch) => void;
-  onMarkDone: () => void;
   onSaveRecurrence: (unit: RecurrenceUnit, interval: number) => void;
   onRemoveRecurrence: () => void;
   onKotxActionPendingChange: (pending: boolean) => void;
@@ -887,6 +885,7 @@ function TaskSummary({
     onDragSubtask(null);
     if (commit && order) onMoveSubtask(order);
   };
+  const now = useMinuteClock();
   const labelMeta = labels.find((l) => l.name === task.label);
   const repeat = taskRecurrence(task);
   const dueOverdue = isOverdue(task.due_date);
@@ -901,26 +900,12 @@ function TaskSummary({
     task.effort && `${EFFORT_LABEL[task.effort]} effort`,
   ].filter(Boolean).join(" · ");
   const correctedMinutes = correctedEstimation(task);
-  const runningSince = taskRunningSince(task);
+  const overtime = runningOvertime(task, now);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-4 sm:px-4">
       <div className="space-y-5">
         {title}
-        {runningSince && (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-500/40 bg-emerald-50 px-3 py-2 dark:bg-emerald-500/10">
-            <span className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 dark:text-emerald-200">
-              <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
-              Running since {fmtClock(runningSince)}
-            </span>
-            {!kotxTask && (
-              <Button type="button" size="sm" disabled={busy} onClick={onMarkDone}>
-                <CircleCheckBig className="h-4 w-4" />
-                Done
-              </Button>
-            )}
-          </div>
-        )}
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
           <PickerAnchor
             open={activePicker === "label"}
@@ -1040,6 +1025,11 @@ function TaskSummary({
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                 <Timer className="h-3 w-3" />
                 {fmtEstimation(task) ?? "No estimate"}
+                {overtime != null && (
+                  <span className="font-semibold tabular-nums" title="Still working past the booked slot">
+                    +{overtime} min
+                  </span>
+                )}
               </span>
             </button>
           </PickerAnchor>

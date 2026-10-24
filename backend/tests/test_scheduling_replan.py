@@ -121,8 +121,9 @@ async def test_a_task_is_booked_exactly_as_long_as_it_is_set(world, monkeypatch)
 @pytest.mark.asyncio
 async def test_running_task_blocks_its_extension(world):
     running = make_task("running", due=NOW + timedelta(days=1),
-                        scheduled=NOW - timedelta(minutes=90), running_since=NOW - timedelta(minutes=10))
-    # Booked 60 min ending 08:30; at 09:00 the extension runs to 09:15.
+                        scheduled=NOW - timedelta(minutes=90), running_since=NOW - timedelta(minutes=15))
+    # Booked 60 min ending 08:30, "Still working" at 08:45; at 09:00 the
+    # extension runs to 09:15.
     blocked = make_task("next", due=NOW + timedelta(hours=8), scheduled=NOW.replace(hour=9, minute=15))
     world.tasks = [running, blocked]
     result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
@@ -134,7 +135,7 @@ async def test_running_task_blocks_its_extension(world):
 @pytest.mark.asyncio
 async def test_running_extension_moves_slots_that_already_began(world):
     running = make_task("running", due=NOW + timedelta(days=1),
-                        scheduled=NOW - timedelta(minutes=90), running_since=NOW - timedelta(minutes=10))
+                        scheduled=NOW - timedelta(minutes=90), running_since=NOW - timedelta(minutes=15))
     # The extension runs 08:30–09:15: one slot inside it is over, one is "in progress".
     elapsed = make_task("elapsed", due=NOW + timedelta(hours=8), minutes=15,
                         scheduled=NOW.replace(hour=8, minute=30))

@@ -264,7 +264,7 @@ async def replan(
         for t in tasks
     }
     overtime = [
-        (slot[1], running_end(slot[0], slot[1], now))
+        (slot[1], running_end(slot[0], slot[1], now, t.running_since))
         for t in tasks
         if t.running_since is not None and (slot := slots[t.id]) is not None
     ]
@@ -276,7 +276,9 @@ async def replan(
         attrs = task_attrs(task, label_defaults)
         slot = slots[task.id]
         if task.running_since is not None and slot is not None:
-            item = task_item(task, attrs, slot[0], max(slot[1], running_end(slot[0], slot[1], now)))
+            item = task_item(
+                task, attrs, slot[0], running_end(slot[0], slot[1], now, task.running_since),
+            )
             fixed_tasks[task.id] = item
         elif slot is not None and slot[0] <= now and preempted(slot, overtime):
             candidates.append((task, attrs, None))

@@ -65,6 +65,15 @@ test("a running task stays green past its slot until marked done", () => {
   assert.equal(exports.isTaskOverdue({ ...task, running_since: "2026-09-23T10:30:00Z" }, now), false);
 });
 
+test("a running task counts the minutes past its booked slot", () => {
+  const running = { ...task, scheduled_date: "2026-09-23T11:00:00Z", running_since: "2026-09-23T11:47:00Z" };
+  assert.equal(exports.runningOvertime(running, now), 30);
+  assert.equal(exports.runningOvertime({ ...running, estimation_corrected: 45 }, now), 15);
+  assert.equal(exports.runningOvertime({ ...running, scheduled_date: "2026-09-23T11:45:00Z" }, now), 0);
+  assert.equal(exports.runningOvertime({ ...running, running_since: null }, now), null);
+  assert.equal(exports.runningOvertime({ ...running, status: "closed" }, now), null);
+});
+
 test("a running task is still overdue once its deadline passes", () => {
   assert.equal(exports.isTaskOverdue({
     ...task, running_since: "2026-09-23T10:30:00Z", due_date: "2026-09-23T11:00:00Z",

@@ -21,11 +21,16 @@ START = datetime(2026, 10, 20, 14, tzinfo=TZ)
 END = START + timedelta(hours=1)
 
 
-def test_running_extension_steps_and_cap():
-    assert checkin.running_end(START, END, END - timedelta(minutes=5)) == END
-    assert checkin.running_end(START, END, END + timedelta(minutes=16)) == END + timedelta(minutes=30)
-    # Never past 2× the booked duration.
-    assert checkin.running_end(START, END, END + timedelta(hours=5)) == START + timedelta(hours=2)
+def test_running_extension_steps_from_the_answer_and_caps():
+    # "Still working" pressed 17 minutes after the booked end.
+    since = END + timedelta(minutes=17)
+    assert checkin.running_end(START, END, since, since) == since + timedelta(minutes=15)
+    assert checkin.running_end(START, END, since + timedelta(minutes=14), since) == since + timedelta(minutes=15)
+    assert checkin.running_end(START, END, since + timedelta(minutes=15), since) == since + timedelta(minutes=30)
+    # Never short of the booked end, never past 2× the booked duration.
+    early = END - timedelta(minutes=30)
+    assert checkin.running_end(START, END, early, early) == END
+    assert checkin.running_end(START, END, END + timedelta(hours=5), since) == START + timedelta(hours=2)
     assert not checkin.abandoned(START, END, START + timedelta(minutes=119))
     assert checkin.abandoned(START, END, START + timedelta(hours=2))
 
@@ -77,19 +82,35 @@ async def test_done_confirms_the_asked_slot_and_closes(monkeypatch, logged):
 
 
 @pytest.mark.asyncio
-async def test_still_working_starts_the_extension_silently(monkeypatch, logged):
-    cleared = []
+async def test_still_working_extends_the_event_right_away(monkeypatch, logged):
+    cleared, written = [], []
 
     async def fake_clear(task_id):
         cleared.append(task_id)
 
+    async def no_events(_session, _start, _end):
+        return []
+
+    async def fake_write(_session, task, *, start, end):
+        written.append((start, end))
+
+    async def no_clearing(*_args):
+        return None
+
     monkeypatch.setattr("app.services.notify.clear_task_notification", fake_clear)
     monkeypatch.setattr("app.events.publish_task", lambda _s, _t: None)
+    monkeypatch.setattr("app.services.plan.snapshot.calendar_items", no_events)
+    monkeypatch.setattr("app.services.calendar.update_task_event", fake_write)
+    monkeypatch.setattr(checkin, "_clear_way", no_clearing)
     task = _task()
+    # Answered 17 minutes after a slot that ended earlier.
+    task.scheduled_date = datetime.now(TZ) - timedelta(minutes=77)
     await checkin.handle_checkin_action(_session(), task, checkin.ACTION_CHECKIN_STILL_WORKING)
     assert [r["kind"] for r in logged] == ["still_working"]
-    assert task.running_since is not None
     assert cleared == [task.id]
+    [(start, end)] = written
+    assert start == task.scheduled_date
+    assert end == task.running_since + checkin.EXTENSION_STEP
 
 
 @pytest.mark.asyncio

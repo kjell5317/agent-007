@@ -59,6 +59,21 @@ export function taskRunningSince(task: Pick<Task, "status" | "running_since">): 
   return task.status === "open" ? task.running_since : null;
 }
 
+// Whole minutes a running task has gone past its booked slot; null when it
+// isn't running.
+export function runningOvertime(
+  task: Pick<Task, "status" | "running_since" | "scheduled_date" | "estimation" | "estimation_corrected">,
+  now = Date.now(),
+): number | null {
+  const scheduled = timeOrNull(task.scheduled_date);
+  if (!taskRunningSince(task) || scheduled == null) return null;
+  return Math.max(0, Math.floor((now - scheduled) / 60_000) - bookedMinutes(task));
+}
+
+function bookedMinutes(task: Pick<Task, "estimation" | "estimation_corrected">): number {
+  return Math.max(5, task.estimation_corrected || task.estimation || 30);
+}
+
 // The learned correction is only worth showing when it changes what the
 // calendar books.
 export function correctedEstimation(
@@ -87,8 +102,7 @@ export function isTaskOverdue(task: Task, now = Date.now()): boolean {
   // A running task's event keeps extending past its slot until marked done.
   if (task.running_since) return false;
   const scheduled = timeOrNull(task.scheduled_date);
-  const duration = Math.max(5, task.estimation_corrected || task.estimation || 30) * 60_000;
-  return scheduled != null && scheduled + duration < now;
+  return scheduled != null && scheduled + bookedMinutes(task) * 60_000 < now;
 }
 
 function timeOrNull(iso: string | null): number | null {
