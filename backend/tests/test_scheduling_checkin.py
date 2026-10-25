@@ -114,6 +114,37 @@ async def test_still_working_extends_the_event_right_away(monkeypatch, logged):
 
 
 @pytest.mark.asyncio
+async def test_closing_a_running_task_drops_its_event(monkeypatch):
+    from app.services.task import close
+
+    deleted = []
+
+    async def fake_delete(_session, task):
+        deleted.append(task.id)
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    task = _task()
+    task.running_since = END
+    task.kotx_task_id = None
+    anchor = SimpleNamespace(id=uuid.uuid4(), status="open", processed_at=None)
+    monkeypatch.setattr(close.tasks_store, "get", lambda _s, _id: task)
+    monkeypatch.setattr(close.raw_inputs_store, "latest_for_task", lambda _s, _id: anchor)
+    monkeypatch.setattr(close, "vacated_commute_window", lambda _t: None)
+    monkeypatch.setattr(close, "_log_close", no_op)
+    monkeypatch.setattr(close, "award_for_task", lambda *_a, **_kw: False)
+    monkeypatch.setattr(close, "publish_task", lambda *_a: None)
+    monkeypatch.setattr(close, "publish_input", lambda *_a: None)
+    monkeypatch.setattr(close, "delete_task_event", fake_delete)
+    monkeypatch.setattr(close, "clear_task_notification", no_op)
+    monkeypatch.setattr(close, "replan_vacated_window", no_op)
+    await close.close_task(_session(), task.id)
+    assert deleted == [task.id]
+    assert task.running_since is None
+
+
+@pytest.mark.asyncio
 async def test_not_done_deducts_and_replans(monkeypatch, logged):
     penalties, replanned = [], []
 

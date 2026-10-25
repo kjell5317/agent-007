@@ -386,12 +386,13 @@ export function TaskCard({
               {(task.estimation != null || overtime != null) && (
                 <span className="inline-flex items-center gap-1">
                   <Timer className="h-3 w-3" />
-                  {task.estimation != null && `${task.estimation} min`}
+                  {task.estimation}
                   {overtime != null && (
                     <span className="font-semibold tabular-nums" title="Still working past the booked slot">
-                      +{overtime} min
+                      + {overtime}
                     </span>
                   )}
+                  {" min"}
                 </span>
               )}
               {displayLocation && locationVisible && (

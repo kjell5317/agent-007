@@ -92,9 +92,9 @@ class Task(Base):
     # its calendar event grows in 15-minute steps until the task is closed.
     running_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Length the current slot was booked with when it differs from the
-    # estimate (a closed "Still working" task trimmed to its actual time).
-    # Null means the estimate itself. Calendar sync compares event lengths
-    # against this, so such a booking doesn't read as a user resize.
+    # estimate (the solver rounds slots up to its 15-minute grid). Null means
+    # the estimate itself. Calendar sync compares event lengths against this,
+    # so such a booking doesn't read as a user resize.
     booked_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # placed | deferred | unplaced — `scheduled_date` is null for the last two.
     schedule_state: Mapped[str] = mapped_column(

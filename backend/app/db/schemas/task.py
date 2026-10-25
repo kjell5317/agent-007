@@ -168,8 +168,8 @@ class TaskRead(TaskBase):
     placed_by: str = "planner"
     schedule_state: ScheduleState = "placed"
     running_since: datetime | None = None
-    # The duration the planner books: the estimate after the learned
-    # correction. Null while no correction is fitted.
+    # The slot length the planner booked when it differs from the estimate
+    # (rounded up to the solver's grid). Null means the estimate itself.
     estimation_corrected: int | None = None
     created_at: datetime
     updated_at: datetime

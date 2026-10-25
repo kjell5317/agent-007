@@ -74,27 +74,6 @@ function bookedMinutes(task: Pick<Task, "estimation" | "estimation_corrected">):
   return Math.max(5, task.estimation_corrected || task.estimation || 30);
 }
 
-// The learned correction is only worth showing when it changes what the
-// calendar books.
-export function correctedEstimation(
-  task: Pick<Task, "estimation" | "estimation_corrected">,
-): number | null {
-  const corrected = task.estimation_corrected;
-  return task.estimation != null && corrected != null && corrected !== task.estimation
-    ? corrected
-    : null;
-}
-
-export function fmtEstimation(
-  task: Pick<Task, "estimation" | "estimation_corrected">,
-): string | null {
-  if (task.estimation == null) return null;
-  const corrected = correctedEstimation(task);
-  return corrected != null
-    ? `${task.estimation} min · planned ${corrected} min`
-    : `${task.estimation} min`;
-}
-
 export function isTaskOverdue(task: Task, now = Date.now()): boolean {
   if (task.status !== "open") return false;
   const due = timeOrNull(task.due_date);

@@ -59,11 +59,9 @@ import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 import {
-  correctedEstimation,
   DEADLINE_KIND_HINT,
   DEADLINE_KIND_LABEL,
   EFFORT_LABEL,
-  fmtEstimation,
   fmtRecurrence,
   runningOvertime,
   taskRecurrence,
@@ -899,7 +897,6 @@ function TaskSummary({
     task.work_type && WORK_TYPE_LABEL[task.work_type],
     task.effort && `${EFFORT_LABEL[task.effort]} effort`,
   ].filter(Boolean).join(" · ");
-  const correctedMinutes = correctedEstimation(task);
   const overtime = runningOvertime(task, now);
 
   return (
@@ -1010,13 +1007,7 @@ function TaskSummary({
               type="button"
               onClick={() => onEditPicker("estimation")}
               disabled={busy || task.is_container}
-              title={
-                task.is_container
-                  ? "Duration is set by subtasks"
-                  : correctedMinutes != null
-                    ? `Set duration — the calendar books ${correctedMinutes} min, corrected from past tasks`
-                    : "Set duration"
-              }
+              title={task.is_container ? "Duration is set by subtasks" : "Set duration"}
               className={cn(
                 TASK_SUMMARY_BADGE_BUTTON_CLASS,
                 task.estimation != null ? TASK_SUMMARY_BLUE_BADGE_CLASS : TASK_SUMMARY_MUTED_BADGE_CLASS,
@@ -1024,11 +1015,18 @@ function TaskSummary({
             >
               <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
                 <Timer className="h-3 w-3" />
-                {fmtEstimation(task) ?? "No estimate"}
-                {overtime != null && (
-                  <span className="font-semibold tabular-nums" title="Still working past the booked slot">
-                    +{overtime} min
-                  </span>
+                {task.estimation == null && overtime == null ? (
+                  "No estimate"
+                ) : (
+                  <>
+                    {task.estimation}
+                    {overtime != null && (
+                      <span className="font-semibold tabular-nums" title="Still working past the booked slot">
+                        + {overtime}
+                      </span>
+                    )}
+                    {" min"}
+                  </>
                 )}
               </span>
             </button>
