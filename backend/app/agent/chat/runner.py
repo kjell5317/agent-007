@@ -6,8 +6,8 @@ round-trip. Those hits are exposed via citation tags. Every other source is a
 dedicated drill-down tool (`messages_search`, `calendar_search`, `drive_search`,
 `contacts_search`, `tasks_search`, `search_notes`, plus GitHub/Notion), so the
 model routes to the one source a question needs rather than fanning out blindly.
-A full agent loop lets it call any action tool (create/update/close tasks,
-events, notes) then answer; unlike the input flows there is no terminal tool.
+A full agent loop lets it search, then answer; it is read-only except for
+saving a note when asked. Unlike the input flows there is no terminal tool.
 
 Internal search paths return `SearchHit`s that render into one uniform context
 record (`type · sim · date · id · meta — content`), so results read identically
@@ -22,17 +22,14 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.agent.helpers.attributes import new_task_attributes
-from app.agent.helpers.dispatch import apply_task_action
 from app.agent.helpers.llm import (
     LLMMessage,
     ToolCall,
@@ -41,34 +38,23 @@ from app.agent.helpers.llm import (
     tool_result_message,
     user_message,
 )
-from app.agent.helpers.text import normalize_agent_due_date, now_iso
+from app.agent.helpers.text import now_iso
 from app.agent.helpers.web import research_web
 from app.agent.prompts import chat_system_prompt
 from app.agent.tools import (
+    CHAT_TOOLS,
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
-    SPLIT_TASK_CHAT_TOOL,
     WEB_SEARCH_CHAT_TOOL,
-    chat_tools,
-    run_create_event,
-    run_delete_event,
-    run_get_event_details,
-    run_update_event,
+    event_facts,
+    event_when,
 )
 from app import observability as obs
 from app.config import get_settings
 from app.db.engine import release_read_connection
-from app.db.clients import labels as labels_store
-from app.db.clients import tasks as tasks_store
-from app.db.models.raw_input import RawInput
 from app.db.clients.chat_answers import SimilarAnswer
 from app.db.schemas.search import ChatSearchScope, SearchHit
-from app.db.schemas.task import TaskCreate
-from app.services.learn.jobs import with_learned_estimate
 from app.services import github, notion_mcp
-from app.services.input.embedding import embed
-from app.services.plan import schedule_task
-from app.services.task.split import maybe_split_task, split_task
 from app.services.search.contacts import search_contacts
 from app.services.search.drive import get_drive_file, search_drive
 from app.services.search.retrieve import (
@@ -91,6 +77,12 @@ _CHIP_QUERY_MAX = 48
 # Cap on a cached prior answer injected into context — a long answer shouldn't
 # crowd out the turn's fresh retrieval.
 _PRIOR_ANSWER_MAX = 1200
+
+_BUDGET_SPENT_NOTE = (
+    "Search budget used up — no more tool calls. Answer now from the results "
+    "above. If they don't contain what was asked, say in one line that it isn't "
+    "recorded in the sources you checked, and name them."
+)
 
 _SCOPE_TOOLS = {
     "tasks": {"tasks_search"},
@@ -144,21 +136,24 @@ class Citations:
     def __init__(self) -> None:
         self._entries: list[tuple[str, SearchHit]] = []
         self._counts: dict[str, int] = {}
-        self._seen: set[tuple[str, str]] = set()
+        self._tags: dict[tuple[str, str], str] = {}
 
     def add(self, hits: list[SearchHit]) -> list[tuple[str, SearchHit]]:
         new: list[tuple[str, SearchHit]] = []
         for h in hits:
             key = (h.type, h.id)
-            if key in self._seen:
+            if key in self._tags:
                 continue
-            self._seen.add(key)
             prefix = _tag_prefix(h)
             self._counts[prefix] = self._counts.get(prefix, 0) + 1
             entry = (f"{prefix}{self._counts[prefix]}", h)
+            self._tags[key] = entry[0]
             self._entries.append(entry)
             new.append(entry)
         return new
+
+    def tag(self, h: SearchHit) -> str | None:
+        return self._tags.get((h.type, h.id))
 
 
 def _tag_prefix(h: SearchHit) -> str:
@@ -177,11 +172,10 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     """One hit as the uniform context record every source shares:
     `[tag] type · sim · date · id=<source_id> · <meta> — title — content`.
 
-    `id=` is the source_id a get/act tool consumes for THIS item (task_id,
-    event_id, file_id, message id, contact resourceName); a linked task shows
-    separately as `task=<id>` for the task widget. Notes omit `id=` — no tool
-    takes a note id, so it would only burn tokens; a note acts through its
-    `task=` link instead.
+    `id=` is the source_id of THIS item (task_id, event_id, file_id, message
+    id, contact resourceName); a linked task shows separately as `task=<id>`
+    for the task widget. Notes omit `id=` — nothing takes a note id, so it would
+    only burn tokens.
 
     Times are rendered in the user's `zone` — the underlying timestamps are
     UTC-aware, so an unconverted date/clock would read hours off (an 18:00
@@ -190,7 +184,8 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     seg: list[str] = [h.type]
     if "similarity" in meta:
         seg.append(f"sim={meta['similarity']:.2f}")
-    if h.ts:
+    # An event's date leads its time span below instead.
+    if h.ts and not meta.get("start"):
         ts = h.ts.astimezone(zone) if h.ts.tzinfo else h.ts
         seg.append(ts.date().isoformat())
     if h.type != "note":
@@ -204,11 +199,16 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
         seg.append(f"from {h.sender}")
     # Source-specific extras.
     if meta.get("start"):
-        seg.append(_clock(meta["start"], zone))
-    if h.source == "calendar" and meta.get("calendar_id"):
-        seg.append(f"calendar_id={meta['calendar_id']}")
+        seg.append(event_when(
+            datetime.fromisoformat(meta["start"]),
+            datetime.fromisoformat(meta["end"]) if meta.get("end") else None,
+            bool(meta.get("all_day")),
+            zone,
+        ))
     if meta.get("location"):
         seg.append(f"@ {meta['location']}")
+    if h.source == "calendar":
+        seg.extend(event_facts(meta))
     if meta.get("mime"):
         seg.append(str(meta["mime"]))
     for field in ("emails", "phones", "addresses"):
@@ -231,8 +231,9 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     # redundant short title. Drive/contact snippets and a snippet equal to the
     # location are already in the segments above, so they collapse to the title.
     detail = snippet
-    if detail and h.type != "input":
-        detail = detail[:1200 if h.source == "calendar" else 200]
+    # Message and event hits arrive already bounded by their search path.
+    if detail and h.type != "input" and h.source != "calendar":
+        detail = detail[:200]
     if (
         not snippet
         or h.type in ("drive", "contact")
@@ -245,16 +246,6 @@ def _context_line(tag: str, h: SearchHit, zone: ZoneInfo) -> str:
     else:
         body = f"{title} — {detail}"
     return f"{prefix} — {body}"
-
-
-def _clock(iso: str, zone: ZoneInfo) -> str:
-    try:
-        dt = datetime.fromisoformat(iso)
-    except (ValueError, TypeError):
-        return str(iso)
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(zone)
-    return dt.strftime("%H:%M")
 
 
 def _chip_query(query: str | None) -> str:
@@ -361,8 +352,7 @@ async def run_chat(
 
         # Optional integrations expose their read-only tools only when connected, so
         # the model never sees a tool that would just fail with "not connected".
-        tools = chat_tools(labels_store.agent_descriptions(session))
-        tools.append(SPLIT_TASK_CHAT_TOOL)
+        tools = [*CHAT_TOOLS]
         if settings.chat_web_search and settings.gemini_api_key:
             tools.append(WEB_SEARCH_CHAT_TOOL)
         if notion_mcp.is_connected(session):
@@ -383,8 +373,8 @@ async def run_chat(
 
         system_prompt = chat_system_prompt()
         provider, model = settings.llm_target("chat")
-        # Only clean, read-only turns are cacheable: `changed_state` trips if any
-        # tool created/updated something, `exhausted` if the tool loop ran out.
+        # Only clean, read-only turns are cacheable: `changed_state` trips if a
+        # note was saved, `exhausted` if the tool loop ran out.
         changed_state = False
         used_web_search = False
         exhausted = False
@@ -392,12 +382,14 @@ async def run_chat(
         tool_steps = 0
         continuations = 0
         while True:
+            budget_spent = tool_steps >= settings.search_chat_max_iterations
             resp = await stream_chat(
                 messages,
                 settings,
                 system_prompt=system_prompt,
                 tools=tools,
                 on_delta=on_delta,
+                force_tool="none" if budget_spent else None,
                 name="chat-turn",
                 provider=provider,
                 model=model,
@@ -420,6 +412,12 @@ async def run_chat(
                 if hit_output_limit:
                     exhausted = True
                     await emit("error", {"message": "The answer reached its length limit."})
+                elif budget_spent and not (resp.text or "").strip():
+                    await _emit_tool_limit(emit, answer_parts, settings.search_chat_max_iterations)
+                break
+            if budget_spent:
+                # The provider called a tool despite the ban.
+                await _emit_tool_limit(emit, answer_parts, settings.search_chat_max_iterations)
                 break
             tool_steps += 1
             messages.append(assistant_message(resp))
@@ -437,8 +435,8 @@ async def run_chat(
                 try:
                     result_text, trace = await _dispatch(session, cites, tc, settings, emit, scope=scope)
                 finally:
-                    # Successful tool writes commit before returning; read-only
-                    # tools can return their connection between calls as well.
+                    # A saved note commits before returning; read-only tools
+                    # can return their connection between calls as well.
                     release_read_connection(session)
                 if query_key is not None:
                     completed_queries[query_key] = result_text
@@ -450,15 +448,10 @@ async def run_chat(
                 await emit("tool_call", trace)
                 messages.append(tool_result_message(tc, result_text))
             if tool_steps >= settings.search_chat_max_iterations:
+                # Budget spent: one more call with tools off, so the user gets
+                # what was found (or a plain "not recorded") instead of an error.
                 exhausted = True
-                msg = (
-                    f"This question needed more than {settings.search_chat_max_iterations} "
-                    "tool steps to answer — try narrowing it down or asking something "
-                    "more specific."
-                )
-                await emit("error", {"message": msg})
-                answer_parts.append(msg)
-                break
+                messages.append(user_message(_BUDGET_SPENT_NOTE))
 
         answer = "".join(answer_parts)
         obs.set_trace_io(output=answer)
@@ -482,6 +475,15 @@ async def run_chat(
             session.rollback()
 
     await emit("done", {})
+
+
+async def _emit_tool_limit(emit: Emit, answer_parts: list[str], max_steps: int) -> None:
+    msg = (
+        f"This question needed more than {max_steps} tool steps to answer — try "
+        "narrowing it down or asking something more specific."
+    )
+    await emit("error", {"message": msg})
+    answer_parts.append(msg)
 
 
 def _last_user_index(history: list[ChatTurn]) -> int | None:
@@ -562,11 +564,17 @@ async def _emit_search(
     """Register hits, stream their citations, and format the shared uniform
     record. One path for every per-source search tool, so results read
     identically whatever source they came from."""
+    # Hits already cited this turn aren't repeated, but must not read as an
+    # empty source either — that sends the model off to search again.
+    repeated = [tag for h in hits if (tag := cites.tag(h))]
     new = cites.add(hits)
     if new:
         await emit("citations", {"items": [_sse_item(tag, h) for tag, h in new]})
     zone = ZoneInfo(get_settings().user_timezone)
-    body = "\n".join(_context_line(tag, h, zone) for tag, h in new) or "no matches"
+    lines = [_context_line(tag, h, zone) for tag, h in new]
+    if repeated:
+        lines.append("Also matched, already shown above: " + ", ".join(f"[{t}]" for t in repeated))
+    body = "\n".join(lines) or "no matches"
     return f"{purpose}:\n{body}", _trace(name, purpose=purpose[:80], summary=f"{len(new)} hits")
 
 
@@ -604,31 +612,6 @@ async def _dispatch(
             hits = await search_notes(session, q, **note_options)
             return await _emit_search(cites, emit, hits, name=name, purpose=_purpose("notes", q))
 
-        if name == "split_task":
-            try:
-                task_id = uuid.UUID(str(tin.get("task_id")))
-            except (ValueError, TypeError):
-                return "split_task: invalid task id.", _trace(
-                    name, purpose="split task", summary="invalid task id", status="failed"
-                )
-            task = tasks_store.get(session, task_id)
-            if task is None:
-                return "split_task: task not found.", _trace(
-                    name, purpose="split task", summary="task not found", status="failed"
-                )
-            already_split = bool(getattr(task, "is_container", False))
-            children = await split_task(session, task, force=True)
-            if not children:
-                return "split_task: this task cannot be split.", _trace(
-                    name, purpose="split task", summary="cannot split", status="failed"
-                )
-            out = "Subtasks: " + "; ".join(f"{child.title} (id {child.id})" for child in children)
-            return out, _trace(
-                name, purpose=f"split {_chip_query(task.title)}", summary=out,
-                changed_state=not already_split,
-                artifact_refs=[f"task:{c.id}" for c in children],
-            )
-
         if name == "web_search":
             out = await research_web(q, settings)
             return out, _trace(
@@ -657,14 +640,6 @@ async def _dispatch(
             )
             purpose = _purpose("calendar", _opt(tin, "query"), fallback="calendar")
             return await _emit_search(cites, emit, hits, name=name, purpose=purpose)
-
-        if name == "get_event_details":
-            out = await run_get_event_details(
-                session,
-                event_id=str(tin.get("event_id") or ""),
-                calendar_id=str(tin.get("calendar_id") or ""),
-            )
-            return out, _trace(name, purpose="read calendar event", summary=out)
 
         if name == "drive_search":
             drive_options = {"mime_label": scope.format} if scope and scope.kind == "files" and scope.format else {}
@@ -698,58 +673,6 @@ async def _dispatch(
             label = name_match.group(1) if name_match else (file_id or "drive file")
             return out, _trace(name, purpose=f"read {_chip_query(label)}", summary=out)
 
-        if name == "create_task":
-            return await _create_task(session, tin)
-
-        if name == "update_task":
-            return await _update_task(session, tin)
-
-        if name == "create_event":
-            out, event_id = await run_create_event(
-                session,
-                summary=str(tin.get("summary") or ""),
-                start=str(tin.get("start") or ""),
-                end=str(tin.get("end")) if tin.get("end") else None,
-                description=str(tin.get("description")) if tin.get("description") else None,
-                location=str(tin.get("location")) if tin.get("location") else None,
-            )
-            return out, _trace(
-                name,
-                purpose=f"create event {tin.get('summary') or ''}"[:80],
-                summary=out,
-                status="success" if event_id else "failed",
-                changed_state=bool(event_id),
-                artifact_refs=[f"event:{event_id}"] if event_id else [],
-            )
-
-        if name == "update_event":
-            # Consolidated edit/delete, mirroring update_task's lifecycle field.
-            deleting = bool(tin.get("delete"))
-            if deleting:
-                out, event_id = await run_delete_event(
-                    session, event_id=str(tin.get("event_id") or "")
-                )
-            else:
-                out, event_id = await run_update_event(
-                    session,
-                    event_id=str(tin.get("event_id") or ""),
-                    summary=str(tin.get("summary")) if tin.get("summary") is not None else None,
-                    start=str(tin.get("start")) if tin.get("start") else None,
-                    end=str(tin.get("end")) if tin.get("end") else None,
-                    description=(
-                        str(tin.get("description")) if tin.get("description") is not None else None
-                    ),
-                    location=str(tin.get("location")) if tin.get("location") is not None else None,
-                )
-            return out, _trace(
-                name,
-                purpose="delete event" if deleting else "update event",
-                summary=out,
-                status="success" if event_id else "failed",
-                changed_state=bool(event_id),
-                artifact_refs=[f"event:{event_id}"] if event_id else [],
-            )
-
         if name == "create_note":
             return await _create_note(session, tin)
 
@@ -777,100 +700,14 @@ async def _dispatch(
         return f"unknown tool: {name}", _trace(name, purpose=name, summary="unknown tool", status="failed")
     except Exception as exc:  # noqa: BLE001 — one bad tool must not kill the chat
         log.exception("chat tool %s failed", name)
+        # A failed statement aborts the transaction; without this every later
+        # tool in the turn fails too. Reads already roll back after each call,
+        # but a half-written note keeps pending rows that would skip that.
+        session.rollback()
         return (
             f"{name} failed: {exc}",
             _trace(name, purpose=name, summary=str(exc), status="failed"),
         )
-
-
-async def _create_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    due = normalize_agent_due_date(tin.get("due_date"))
-    from app.services.event_context import apply_event_context
-    explicit_due = bool(tin.get("due_date_is_explicit"))
-    event_fields, event_warning = apply_event_context(
-        session, {**tin, "due_date": due}, explicit_due=explicit_due,
-    )
-    due = event_fields.get("due_date")
-    label = str(tin.get("label")) if tin.get("label") else None
-    task = tasks_store.create(
-        session,
-        with_learned_estimate(session, TaskCreate(
-            title=str(tin["title"]),
-            description=str(tin.get("description")) if tin.get("description") else None,
-            estimation=tin.get("estimation") if tin.get("estimation") else None,
-            due_date=due,
-            location=str(tin.get("location")) if tin.get("location") else None,
-            link=str(tin.get("link")) if tin.get("link") else None,
-            label=label,
-            related_event_id=event_fields.get("related_event_id"),
-            related_event_calendar_id=event_fields.get("related_event_calendar_id"),
-            related_event_due_derived=bool(event_fields.get("related_event_due_derived")),
-            **new_task_attributes(
-                tin,
-                labels_store.defaults_by_name(session),
-                label=label,
-                explicit_due=explicit_due,
-                related_event=bool(event_fields.get("related_event_id")),
-            ),
-        )),
-    )
-    anchor_text = "\n".join(
-        part for part in (task.title, task.description or "") if part
-    )
-    session.add(RawInput(
-        source="chat",
-        content=anchor_text,
-        source_metadata={"subject": task.title, "chat_created": True},
-        status="open",
-        task_id=task.id,
-        processed_at=datetime.now(timezone.utc),
-        embedding=await embed(anchor_text),
-    ))
-    children = await maybe_split_task(session, task)
-    if not children:
-        await schedule_task(session, task)
-    session.commit()
-    return (
-        f"Created task '{task.title}' (id {task.id})."
-        + (f" Split into {len(children)} subtasks." if children else "")
-        + (f" {event_warning}" if event_warning else ""),
-        _trace(
-            "create_task",
-            purpose=f"create task {task.title}"[:80],
-            summary=f"created task {task.id}",
-            changed_state=True,
-            artifact_refs=[f"task:{task.id}"],
-        ),
-    )
-
-
-async def _update_task(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    raw_id = tin.get("task_id")
-    try:
-        task_id = uuid.UUID(str(raw_id))
-    except (ValueError, TypeError):
-        return "update_task: `task_id` is not a valid id.", _trace(
-            "update_task", purpose="update task", summary="invalid task_id", status="failed"
-        )
-    task = tasks_store.get(session, task_id)
-    if task is None:
-        return "update_task: no task with that id.", _trace(
-            "update_task", purpose="update task", summary="task not found", status="failed"
-        )
-    patch = {k: v for k, v in tin.items() if k != "task_id"}
-    frag = await apply_task_action(session, task, "update_task", patch)
-    session.commit()
-    outcome = str(frag.get("outcome") or "updated")
-    return (
-        f"{outcome} task {task_id}.",
-        _trace(
-            "update_task",
-            purpose=f"{outcome} task {task.title}"[:80],
-            summary=f"{outcome} {task_id}",
-            changed_state=outcome != "no_change",
-            artifact_refs=[f"task:{task_id}"],
-        ),
-    )
 
 
 async def _create_note(session: Session, tin: dict[str, Any]) -> tuple[str, dict[str, Any]]:

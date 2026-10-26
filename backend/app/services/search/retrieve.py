@@ -16,7 +16,9 @@ All paths return `SearchHit`s so the runner renders one uniform record.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -31,6 +33,7 @@ from app.db.clients import tasks as tasks_store
 from app.db.clients.search import INPUT, NOTE, TASK
 from app.db.models.raw_input import RawInput
 from app.db.schemas.search import SearchHit
+from app.services.calendar.cache import EVENT_DETAIL_CHARS, event_metadata
 from app.services.calendar.client import CalendarEvent
 from app.services.calendar.events import list_events_between
 from app.services.input.embedding import embed
@@ -327,18 +330,16 @@ def _note_hit(h) -> SearchHit:
 
 
 def _event_preview(value: str | None) -> str | None:
-    if not value or len(value) <= 1200:
+    if not value or len(value) <= EVENT_DETAIL_CHARS:
         return value
-    return value[:1180] + " [truncated]"
+    return value[:EVENT_DETAIL_CHARS] + " [truncated]"
 
 
 def _calendar_match_hit(m) -> SearchHit:
-    meta = _calendar_meta(m.starts_at, m.location) or {}
+    meta = _event_meta(m.starts_at, m.ends_at, {
+        **m.meta, "calendar_id": m.calendar_id, "location": m.location, "label_id": m.label_id,
+    })
     meta.update(_similarity_meta(m.similarity))
-    if m.calendar_id:
-        meta["calendar_id"] = m.calendar_id
-    if m.label_id:
-        meta["label_id"] = m.label_id
     return SearchHit(
         type="document",
         id=m.event_id,
@@ -364,11 +365,7 @@ def _calendar_event_hit(e: CalendarEvent) -> SearchHit:
         status="event",
         ts=e.start,
         score=0.0,
-        meta={
-            **(_calendar_meta(e.start, e.location) or {}),
-            "calendar_id": e.calendar_id,
-            **({"label_id": e.raw["eventLabelId"]} if e.raw.get("eventLabelId") else {}),
-        },
+        meta=_event_meta(e.start, e.end, event_metadata(e)),
     )
 
 
@@ -379,13 +376,22 @@ def _similarity_meta(similarity: float | None) -> dict[str, float]:
     return {"similarity": round(float(similarity), 2)} if similarity and similarity > 0 else {}
 
 
-def _calendar_meta(starts_at: datetime | None, location: str | None) -> dict | None:
-    meta: dict[str, str] = {}
+# Event facts the chat record renders, plus `label_id` for the UI's event badge.
+_EVENT_META_KEYS = (
+    "calendar_id", "label_id", "location", "all_day", "free",
+    "organizer", "attendees", "meeting_url", "rsvp",
+)
+
+
+def _event_meta(
+    starts_at: datetime | None, ends_at: datetime | None, details: Mapping[str, Any]
+) -> dict[str, Any]:
+    meta = {key: details[key] for key in _EVENT_META_KEYS if details.get(key)}
     if starts_at is not None:
         meta["start"] = starts_at.isoformat()
-    if location:
-        meta["location"] = location
-    return meta or None
+    if ends_at is not None:
+        meta["end"] = ends_at.isoformat()
+    return meta
 
 
 def _attach_input_source_urls(session: Session, hits: list[SearchHit]) -> None:

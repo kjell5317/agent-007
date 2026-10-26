@@ -1,9 +1,11 @@
 """Calendar lookup + creation/update tools for the new-input agent.
 
 `find_calendar_events` lets the agent check the user's primary calendar for an
-existing event before creating one; `create_event` adds an event the user
-should see (an invitation, appointment, talk) without turning it into a task.
-`update_event` patches a non-managed event already on the primary calendar.
+existing event before creating one — each result carries everything the agent
+needs about the event, so no follow-up read is required; `create_event` adds an
+event the user should see (an invitation, appointment, talk) without turning it
+into a task. `update_event` patches a non-managed event already on the primary
+calendar.
 
 All are non-terminal: the runner appends their results to the conversation
 and the agent continues to a terminal decision.
@@ -15,8 +17,9 @@ read as hard blockers to the planner, never as movable managed events.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import datetime, timedelta
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -25,10 +28,10 @@ from app.agent.helpers.text import parse_iso
 from app.config import get_settings
 from app.db.clients import documents as documents_store
 from app.db.clients.documents import CalendarMatch
+from app.services.calendar.cache import EVENT_DETAIL_CHARS, event_metadata
 from app.services.calendar.events import (
     PROP_KIND,
     create_event,
-    delete_event,
     get_event,
     is_commute_event,
     is_managed_event,
@@ -96,8 +99,7 @@ async def run_find_calendar_events(
     )
     if not events:
         return "find_calendar_events: no existing events in that window."
-    lines = [_event_line(e.id, e.start.astimezone(tz).isoformat(), e.summary, e.location,
-                         calendar_id=e.calendar_id, description=e.description)
+    lines = [_event_line(e.id, e.summary, e.start, e.end, event_metadata(e), e.description, tz)
              for e in events[:10]]
     omitted = f"\n({len(events) - 10} more events omitted)" if len(events) > 10 else ""
     return "Existing calendar events:\n" + "\n".join(lines) + omitted
@@ -116,12 +118,64 @@ def _parse_bound(value: str | None, tz: ZoneInfo) -> datetime | bool | None:
     return _aware(parsed, tz)
 
 
-def _event_line(event_id: str, when: str, summary: str, location: str | None,
-                *, calendar_id: str | None = None, description: str | None = None,
-                detail_limit: int = 1200) -> str:
+def event_when(
+    start: datetime | None, end: datetime | None, all_day: bool, tz: ZoneInfo
+) -> str:
+    if start is None:
+        return "(no time)"
+    if all_day:
+        # All-day bounds are midnight-UTC dates with an exclusive end.
+        first = start.astimezone(timezone.utc).date()
+        last = (end.astimezone(timezone.utc) - timedelta(days=1)).date() if end else first
+        span = first.isoformat() if last <= first else f"{first.isoformat()} to {last.isoformat()}"
+        return f"{span} all day"
+    local_start = start.astimezone(tz)
+    if end is None:
+        return local_start.isoformat()
+    local_end = end.astimezone(tz)
+    until = (
+        local_end.strftime("%H:%M") if local_end.date() == local_start.date()
+        else local_end.isoformat()
+    )
+    return f"{local_start.isoformat()} to {until}"
+
+
+def event_facts(meta: Mapping[str, Any]) -> list[str]:
+    """Who/how/whether facts about an event, from its `event_metadata`."""
+    facts: list[str] = []
+    # All-day events are free by default, so the flag only says something on timed ones.
+    if meta.get("free") and not meta.get("all_day"):
+        facts.append("shown as free")
+    if meta.get("rsvp"):
+        facts.append(f"user's rsvp: {meta['rsvp']}")
+    if meta.get("organizer"):
+        facts.append(f"organizer: {meta['organizer']}")
+    if meta.get("attendees"):
+        facts.append("attendees: " + ", ".join(meta["attendees"]))
+    if meta.get("meeting_url"):
+        facts.append(f"meeting: {meta['meeting_url']}")
+    return facts
+
+
+def _match_metadata(m: CalendarMatch) -> dict[str, Any]:
+    return {**m.meta, "calendar_id": m.calendar_id, "location": m.location, "label_id": m.label_id}
+
+
+def _event_line(
+    event_id: str,
+    summary: str,
+    start: datetime | None,
+    end: datetime | None,
+    meta: Mapping[str, Any],
+    description: str | None,
+    tz: ZoneInfo,
+    *,
+    detail_limit: int = EVENT_DETAIL_CHARS,
+) -> str:
+    location = meta.get("location")
     loc = f" @ {location}" if location else ""
-    calendar = f" | calendar_id={calendar_id}" if calendar_id else ""
-    # Include useful event detail in the lookup while bounding total prompt size.
+    calendar = f" | calendar_id={meta['calendar_id']}" if meta.get("calendar_id") else ""
+    facts = "".join(f" | {fact}" for fact in event_facts(meta))
     detail = (description or "").strip()
     # Cached content starts with summary and location. They are already
     # displayed in the event line, so don't spend context on them twice.
@@ -131,7 +185,8 @@ def _event_line(event_id: str, when: str, summary: str, location: str | None,
     details = f" | details={detail[:detail_limit]}" if detail else ""
     if len(detail) > detail_limit:
         details += " [truncated]"
-    return f"- id={event_id}{calendar} | {when} | {summary}{loc}{details}"
+    when = event_when(start, end, bool(meta.get("all_day")), tz)
+    return f"- id={event_id}{calendar} | {when} | {summary}{loc}{facts}{details}"
 
 
 def related_events_section(matches: Sequence[CalendarMatch], tz: ZoneInfo) -> list[str]:
@@ -147,54 +202,21 @@ def related_events_section(matches: Sequence[CalendarMatch], tz: ZoneInfo) -> li
         "clearly match.",
     ]
     for m in matches:
-        when = m.starts_at.astimezone(tz).isoformat() if m.starts_at else "(no time)"
-        lines.append(_event_line(m.event_id, when, m.summary, m.location,
-                                 calendar_id=m.calendar_id, description=m.description,
-                                 detail_limit=300))
+        lines.append(_event_line(m.event_id, m.summary, m.starts_at, m.ends_at,
+                                 _match_metadata(m), m.description, tz, detail_limit=300))
     return lines
 
 
-def _format_matches(query: str, matches, tz: ZoneInfo) -> str:
+def _format_matches(query: str, matches: Sequence[CalendarMatch], tz: ZoneInfo) -> str:
     if not matches:
         return f"find_calendar_events: no cached events matching '{query}'."
-    lines = []
-    for m in matches:
-        when = m.starts_at.astimezone(tz).isoformat() if m.starts_at else "(no time)"
-        lines.append(
-            _event_line(m.event_id, when, m.summary, m.location,
-                        calendar_id=m.calendar_id, description=m.description)
-            + f" | sim={m.similarity:.2f}"
-        )
+    lines = [
+        _event_line(m.event_id, m.summary, m.starts_at, m.ends_at,
+                    _match_metadata(m), m.description, tz)
+        + f" | sim={m.similarity:.2f}"
+        for m in matches
+    ]
     return f"Cached calendar events matching '{query}':\n" + "\n".join(lines)
-
-
-async def run_get_event_details(session: Session, *, event_id: str, calendar_id: str) -> str:
-    """Read an extended event detail when a search preview was truncated."""
-    document = documents_store.get_by_external_id(
-        session, provider="calendar", external_id=f"{calendar_id}:{event_id}"
-    )
-    if document is None:
-        try:
-            event = await get_event(session, calendar_id=calendar_id, event_id=event_id)
-        except Exception:
-            return "get_event_details: event is unavailable."
-        result = (
-            f"Event id={event.id} calendar_id={calendar_id} starts={event.start.isoformat()}\n"
-            f"{event.summary}\n{event.location or ''}\n{event.description or ''}"
-        )
-        return _limit_event_detail(result)
-    start = document.starts_at.isoformat() if document.starts_at else "unknown"
-    result = (
-        f"Event id={event_id} calendar_id={calendar_id} starts={start}\n"
-        f"{document.content or document.title}"
-    )
-    return _limit_event_detail(result)
-
-
-def _limit_event_detail(value: str) -> str:
-    if len(value) <= 4000:
-        return value
-    return value[:4000] + "\n[truncated: do not replace the description without its full text]"
 
 
 async def run_create_event(
@@ -311,37 +333,6 @@ async def run_update_event(
         ),
         updated.id,
     )
-
-
-async def run_delete_event(session: Session, *, event_id: str) -> tuple[str, str | None]:
-    """Delete a non-managed event; return (message_for_llm, deleted_event_id_or_None).
-    Task/commute events are planner-managed and refused, mirroring `run_update_event`."""
-    settings = get_settings()
-    calendar_id = (settings.google_calendar_id or "").strip()
-    if not calendar_id:
-        return "delete_event: no calendar configured — nothing deleted.", None
-
-    event_id = (event_id or "").strip()
-    if not event_id or any(ch.isspace() for ch in event_id) or "/" in event_id:
-        return "delete_event: `event_id` must be a valid calendar event id.", None
-
-    existing = await get_event(session, calendar_id=calendar_id, event_id=event_id)
-    if is_managed_event(existing):
-        kind = (
-            "task"
-            if is_task_event(existing)
-            else "commute"
-            if is_commute_event(existing)
-            else "managed"
-        )
-        return (
-            f"delete_event: {kind} calendar events are managed by the task planner; "
-            "use `update_task` to close a task instead.",
-            None,
-        )
-
-    await delete_event(session, calendar_id=calendar_id, event_id=event_id)
-    return f"delete_event: deleted '{existing.summary}'.", event_id
 
 
 def _parse_optional_datetime(value: str | None, tz: ZoneInfo) -> datetime | bool | None:

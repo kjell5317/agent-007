@@ -237,6 +237,15 @@ async def test_anthropic_sdk_request_omits_removed_sampling_parameters(monkeypat
         generator.client.close()
 
 
+def test_force_tool_none_forbids_tool_calls_per_provider():
+    assert llm._generation_kwargs("anthropic", 1024, force_tool="none")["tool_choice"] == {
+        "type": "none",
+    }
+    assert llm._generation_kwargs("google", 1024, force_tool="none")["tool_config"] == {
+        "function_calling_config": {"mode": "NONE"},
+    }
+
+
 def test_google_generation_uses_supported_gemini_38_settings():
     assert llm._generation_kwargs("google", 1024, thinking_level="low") == {
         "max_output_tokens": 1024,

@@ -34,7 +34,6 @@ from app.agent.tools.calendar_lookup import (
     related_events_section,
     run_create_event,
     run_find_calendar_events,
-    run_get_event_details,
     run_update_event,
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
@@ -185,12 +184,6 @@ async def run_new_input_agent(
                         time_max=str(tin.get("time_max")) if tin.get("time_max") else None,
                         query=str(tin.get("query")) if tin.get("query") else None,
                     )
-                elif tu.name == "get_event_details":
-                    out = await run_get_event_details(
-                        session,
-                        event_id=str(tin.get("event_id") or ""),
-                        calendar_id=str(tin.get("calendar_id") or ""),
-                    )
                 elif tu.name == "create_event":
                     out, event_id = await run_create_event(
                         session,
@@ -235,7 +228,7 @@ async def run_new_input_agent(
                         out,
                         status=(
                             "success"
-                            if tu.name in {"search_notes", "find_calendar_events", "get_event_details", "create_event"}
+                            if tu.name in {"search_notes", "find_calendar_events", "create_event"}
                             or (
                                 tu.name == "research_input_link"
                                 and trace.get("web_search", {}).get("status") == "success"

@@ -28,7 +28,7 @@ from app.agent.helpers.llm import (
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
 from app.agent.tools.calendar_lookup import (
-    related_events_section, run_find_calendar_events, run_get_event_details, run_update_event,
+    related_events_section, run_find_calendar_events, run_update_event,
 )
 from app.agent.helpers.attributes import (
     ATTRIBUTE_FIELDS, new_task_attributes, valid_attributes,
@@ -98,11 +98,8 @@ async def extract_task_fields(
         create_tool = _without_notes(create_tool)
     search_tool = next(t for t in tools if t["name"] == "search_notes")
     calendar_tool = next(t for t in tools if t["name"] == "find_calendar_events")
-    event_details_tool = next(t for t in tools if t["name"] == "get_event_details")
     event_update_tool = next(t for t in tools if t["name"] == "update_event")
-    extract_tools = [
-        search_tool, calendar_tool, event_details_tool, event_update_tool, create_tool
-    ]
+    extract_tools = [search_tool, calendar_tool, event_update_tool, create_tool]
     research_enabled = bool(
         source_url and research and getattr(settings, "task_web_search", False)
         and getattr(settings, "gemini_api_key", "")
@@ -165,8 +162,7 @@ async def extract_task_fields(
 
         # Run lookups and event edits before accepting a terminal task action.
         search_uses = [tu for tu in tool_uses if tu.name in {
-            "search_notes", "find_calendar_events", "get_event_details",
-            "update_event", "research_input_link",
+            "search_notes", "find_calendar_events", "update_event", "research_input_link",
         }]
         results = []
         for tu in search_uses:
@@ -196,12 +192,6 @@ async def extract_task_fields(
                     query=tin.get("query"),
                     time_min=tin.get("time_min"),
                     time_max=tin.get("time_max"),
-                )
-            elif tu.name == "get_event_details":
-                out = await run_get_event_details(
-                    session,
-                    event_id=str(tin.get("event_id") or ""),
-                    calendar_id=str(tin.get("calendar_id") or ""),
                 )
             else:
                 out, updated_id = await run_update_event(

@@ -105,7 +105,7 @@ async def test_extract_task_fields_forces_create_task_on_final_attempt(monkeypat
     assert calls[0]["force_tool"] is None
     assert calls[1]["force_tool"] == "create_task"
     assert calls[0]["tools"] == [
-        "search_notes", "find_calendar_events", "get_event_details", "update_event", "create_task"
+        "search_notes", "find_calendar_events", "update_event", "create_task"
     ]
     assert len(calls[1]["messages"]) == 3
     assert calls[1]["messages"][-1].role == "tool"
@@ -413,8 +413,7 @@ async def test_manual_extractor_can_select_existing_task(monkeypatch):
     )
 
     assert captured["tools"] == [
-        "search_notes", "find_calendar_events", "get_event_details", "update_event",
-        "create_task", "update_task"
+        "search_notes", "find_calendar_events", "update_event", "create_task", "update_task"
     ]
     assert captured["force_tool"] is None
     assert payload["existing_task_id"] == task_id

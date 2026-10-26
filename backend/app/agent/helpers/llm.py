@@ -150,6 +150,7 @@ async def stream_chat(
     tools: list[dict[str, Any]],
     on_delta: Callable[[str], Awaitable[None]],
     max_tokens: int = 1500,
+    force_tool: str | None = None,
     name: str = "llm-call",
     provider: str | None = None,
     model: str | None = None,
@@ -179,7 +180,7 @@ async def stream_chat(
         system_prompt=system_prompt,
         messages=messages,
         tools=tools,
-        generation_kwargs=_generation_kwargs(provider, max_tokens, thinking_level=thinking_level),
+        generation_kwargs=_generation_kwargs(provider, max_tokens, force_tool, thinking_level),
         provider=provider,
         model=model,
         name=name,
@@ -329,12 +330,16 @@ def _generation_kwargs(
 ) -> dict[str, Any]:
     """Per-provider generation kwargs. Anthropic takes `max_tokens`; Google's
     GenerateContentConfig takes `max_output_tokens` and `thinking_level`.
-    `force_tool` also differs in shape; extraction flows use Anthropic."""
+    `force_tool` also differs in shape; extraction flows use Anthropic.
+    `force_tool="none"` forbids tool calls while keeping the tool definitions,
+    which a conversation that already holds tool calls must still carry."""
     if provider in ("google", "gemini"):
         kwargs: dict[str, Any] = {"max_output_tokens": max_tokens}
         if thinking_level:
             kwargs["thinking_level"] = thinking_level
-        if force_tool:
+        if force_tool == "none":
+            kwargs["tool_config"] = {"function_calling_config": {"mode": "NONE"}}
+        elif force_tool:
             kwargs["tool_config"] = {
                 "function_calling_config": {
                     "mode": "ANY",
@@ -344,8 +349,10 @@ def _generation_kwargs(
         return kwargs
     # Current Anthropic SDKs no longer accept sampling parameters.
     kwargs = {"max_tokens": max_tokens}
-    if force_tool:
-        kwargs["tool_choice"] = {"type": "any"} if force_tool == "any" else _tool_choice(provider, force_tool)
+    if force_tool in ("any", "none"):
+        kwargs["tool_choice"] = {"type": force_tool}
+    elif force_tool:
+        kwargs["tool_choice"] = _tool_choice(provider, force_tool)
     return kwargs
 
 

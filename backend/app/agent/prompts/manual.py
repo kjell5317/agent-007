@@ -58,14 +58,13 @@ You also have non-terminal lookup tools:
   realistic lead time (book a trip weeks ahead, not the day before). Do not
   link follow-up work that happens after the event.
 - `find_calendar_events(query?, time_min?, time_max?)` finds events related to
-  the task. Use it when the task serves a trip or event that isn't listed —
-  query a short destination, event, or person name.
+  the task, each with its full details. Use it when the task serves a trip or
+  event that isn't listed — query a short destination, event, or person name.
 - Set `due_date_is_explicit` only when the input states a deadline. Keep event
   facts in its description and work instructions in the task description.
-- `get_event_details(event_id, calendar_id)` reads an extended description if
-  the event search result was truncated. Do not overwrite truncated details.
 - `update_event` may add new event details to an existing primary-calendar
-  event. Read the full description first and preserve it when adding facts.
+  event. Preserve the description `find_calendar_events` returned when adding
+  facts; never replace one it marks `[truncated]`.
 
 When a "Candidate tasks" section is present, use `update_task` with its
 existing_task_id if the input changes that task. Include at least one changed

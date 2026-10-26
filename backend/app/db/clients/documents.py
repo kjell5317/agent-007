@@ -8,8 +8,9 @@ the caller (the provider's cache service) and stored as-is.
 from __future__ import annotations
 
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import String, bindparam, delete as sa_delete, select, text
 from sqlalchemy.orm import Session
@@ -108,6 +109,9 @@ class CalendarMatch:
     url: str | None = None
     description: str | None = None
     label_id: str | None = None
+    ends_at: datetime | None = None
+    # The cached event's full metadata (organizer, attendees, all_day, …).
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 # Hybrid: fuse a pgvector nearest-neighbour ranking with a Postgres FTS ranking
@@ -163,6 +167,8 @@ _CALENDAR_HYBRID_SQL = text(
       d.content AS description,
       d.metadata->>'location' AS location,
       d.starts_at,
+      d.ends_at,
+      d.metadata AS meta,
       d.url AS url,
       1.0 - (d.embedding <=> CAST(:emb AS vector)) AS similarity
     FROM fused JOIN documents d ON d.id = fused.id
@@ -222,6 +228,8 @@ def search_calendar_semantic(
             url=r.url,
             description=r.description,
             label_id=r.label_id,
+            ends_at=r.ends_at,
+            meta=r.meta or {},
         )
         for r in rows
         if r.event_id

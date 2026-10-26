@@ -1,10 +1,10 @@
 """Chat runner loop, DB-free: mock retrieval + LLM, assert the emitted event
-sequence, citation tagging, tool dispatch, and the consolidated event tool."""
+sequence, citation tagging, and tool dispatch."""
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,6 +15,7 @@ from sqlalchemy.pool import QueuePool
 from app.agent.chat import runner as chat_runner
 from app.agent.chat.runner import ChatTurn, Citations, run_chat
 from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall
+from app.agent.tools import CHAT_TOOLS
 from app.config import get_settings
 from app.db.clients.chat_answers import SimilarAnswer
 from app.db.schemas.search import ChatSearchScope, SearchHit
@@ -396,7 +397,7 @@ _TZ = ZoneInfo("Europe/Berlin")
 
 def test_context_line_surfaces_action_ids():
     # The uniform record exposes the source_id as `id=` — the value get_drive_file
-    # / update_event consume — for every source, replacing the old per-type tags.
+    # consumes — for every source, replacing the old per-type tags.
     drive = chat_runner._context_line(
         "G1", _hit("drive", "real-file-id", "Pitch", source="drive", status="drive"), _TZ
     )
@@ -405,6 +406,78 @@ def test_context_line_surfaces_action_ids():
         "E1", _hit("document", "ev123", "Standup", source="calendar", status="event"), _TZ
     )
     assert "[E1]" in cal and "id=ev123" in cal
+
+
+def test_context_line_renders_event_span_and_people():
+    start = datetime(2026, 7, 14, 16, 0, tzinfo=ZoneInfo("UTC"))
+    hit = _hit(
+        "document", "ev1", "Design review",
+        source="calendar", status="event", ts=start,
+        meta={
+            "start": start.isoformat(),
+            "end": (start + timedelta(minutes=90)).isoformat(),
+            "calendar_id": "primary",
+            "organizer": "Anna",
+            "attendees": ["Bob", "carol@example.com"],
+            "meeting_url": "https://meet.example/x",
+        },
+    )
+    line = chat_runner._context_line("E1", hit, _TZ)
+    assert "2026-07-14T18:00:00+02:00 to 19:30" in line
+    assert "organizer: Anna" in line
+    assert "attendees: Bob, carol@example.com" in line
+    assert "meeting: https://meet.example/x" in line
+    assert "calendar_id=" not in line
+
+
+@pytest.mark.asyncio
+async def test_repeated_hits_are_reported_instead_of_no_matches(monkeypatch):
+    async def fake_search_messages(session, query, *, source=None, before=None, after=None):
+        return [_hit("input", "raw1", "CITI registration", source="gmail")]
+
+    monkeypatch.setattr(chat_runner, "search_messages", fake_search_messages)
+    cites = Citations()
+    call = ToolCall(id="1", name="messages_search", input={"query": "CITI"})
+
+    first, _ = await chat_runner._dispatch(object(), cites, call, get_settings(), _noop_emit)
+    again, trace = await chat_runner._dispatch(object(), cites, call, get_settings(), _noop_emit)
+
+    assert "[I1]" in first
+    assert "no matches" not in again
+    assert again.endswith("Also matched, already shown above: [I1]")
+    assert trace["result_summary"] == "0 hits"
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_rolls_back_the_session(monkeypatch):
+    class FakeSession:
+        rolled_back = 0
+
+        def rollback(self):
+            self.rolled_back += 1
+
+    async def broken_search_notes(session, query, **kw):
+        raise RuntimeError("could not determine data type of parameter $5")
+
+    monkeypatch.setattr(chat_runner, "search_notes", broken_search_notes)
+    session = FakeSession()
+
+    text, trace = await chat_runner._dispatch(
+        session, Citations(), ToolCall(id="1", name="search_notes", input={"query": "x"}),
+        get_settings(), _noop_emit,
+    )
+
+    assert session.rolled_back == 1
+    assert trace["status"] == "failed" and text.startswith("search_notes failed")
+
+
+def test_chat_tools_are_read_only_except_create_note():
+    names = {tool["name"] for tool in CHAT_TOOLS}
+    assert "create_note" in names
+    assert not names & {
+        "create_task", "update_task", "create_event", "update_event",
+        "split_task", "get_event_details",
+    }
 
 
 def test_message_search_result_keeps_long_body():
@@ -544,19 +617,96 @@ async def test_output_limit_continues_an_incomplete_widget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_error_answer_when_tool_loop_exhausts(monkeypatch):
+async def test_spent_budget_gets_a_final_answer_without_tools(monkeypatch, _stub_answer_cache):
     max_iter = get_settings().search_chat_max_iterations
-    calls = {"tool_turns": 0, "toolless": 0}
+    calls: list[dict] = []
+
+    async def fake_retrieve(session, query):
+        return []
+
+    async def fake_prior(session, query):
+        return [0.4] * 4, None
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        calls.append({"force_tool": kw.get("force_tool"), "last": messages[-1]})
+        if kw.get("force_tool") == "none":
+            await on_delta("No birthday is saved for Elli (checked contacts, notes).")
+            return _resp(text="No birthday is saved for Elli (checked contacts, notes).")
+        return _resp(tool_calls=(
+            ToolCall(id=str(len(calls)), name="contacts_search", input={"query": f"Elli {len(calls)}"}),
+        ))
+
+    async def fake_contacts(session, query, *, k, timeout):
+        return []
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "retrieve_prior_answer", fake_prior)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "search_contacts", fake_contacts)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="Wann hat Elli Geburtstag")], emit=emit)
+
+    assert [c["force_tool"] for c in calls] == [None] * max_iter + ["none"]
+    assert calls[-1]["last"].role == "user" and "budget used up" in calls[-1]["last"].text
+    assert not any(e == "error" for e, _ in events)
+    tokens = "".join(d["text"] for e, d in events if e == "token")
+    assert tokens == "No birthday is saved for Elli (checked contacts, notes)."
+    # A budget-capped answer is lower quality — don't cache it.
+    assert _stub_answer_cache["cache"] == []
+
+
+@pytest.mark.asyncio
+async def test_empty_final_answer_falls_back_to_the_limit_error(monkeypatch):
+    max_iter = get_settings().search_chat_max_iterations
+
+    async def fake_retrieve(session, query):
+        return []
+
+    async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
+        if kw.get("force_tool") == "none":
+            return _resp(text="")
+        return _resp(tool_calls=(ToolCall(id="1", name="get_drive_file", input={"file_id": "x"}),))
+
+    async def fake_get_drive_file(session, file_id, *, max_chars):
+        return "get_drive_file: couldn't read that file."
+
+    monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat_runner, "get_drive_file", fake_get_drive_file)
+    monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
+    monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
+
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    await run_chat(object(), [ChatTurn(role="user", content="read the deck")], emit=emit)
+
+    errors = [d["message"] for e, d in events if e == "error"]
+    assert len(errors) == 1 and str(max_iter) in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_error_answer_when_model_ignores_the_tool_ban(monkeypatch):
+    max_iter = get_settings().search_chat_max_iterations
+    calls = {"tool_turns": 0, "banned": 0}
 
     async def fake_retrieve(session, query, *, filters=None):
         return []
 
     async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
-        # A tool-less turn would mean a forced final answer — which we no longer do.
-        if not tools:
-            calls["toolless"] += 1
-            return _resp(text="")
-        calls["tool_turns"] += 1
+        if kw.get("force_tool") == "none":
+            calls["banned"] += 1
+        else:
+            calls["tool_turns"] += 1
         return _resp(
             tool_calls=(
                 ToolCall(id=str(calls["tool_turns"]), name="get_drive_file", input={"file_id": "x"}),
@@ -579,8 +729,8 @@ async def test_error_answer_when_tool_loop_exhausts(monkeypatch):
 
     await run_chat(object(), [ChatTurn(role="user", content="read the deck")], emit=emit)
 
-    assert calls["tool_turns"] == max_iter  # every iteration kept calling tools
-    assert calls["toolless"] == 0  # no forced final answer — the turn errors out
+    assert calls["tool_turns"] == max_iter
+    assert calls["banned"] == 1  # one final call with tools off, then give up
     assert events[-1][0] == "done"
     # No synthetic red "tool_limit" chip; an error answer is sent instead.
     assert not any(e == "tool_call" and d.get("name") == "tool_limit" for e, d in events)
@@ -723,33 +873,6 @@ async def test_github_tools_absent_when_disconnected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_event_delete_routes_to_delete(monkeypatch):
-    called = {"del": 0, "upd": 0}
-
-    async def fake_del(session, *, event_id):
-        called["del"] += 1
-        return "delete_event: deleted 'Standup'.", event_id
-
-    async def fake_upd(session, **kwargs):
-        called["upd"] += 1
-        return "update_event: updated.", "e1"
-
-    monkeypatch.setattr(chat_runner, "run_delete_event", fake_del)
-    monkeypatch.setattr(chat_runner, "run_update_event", fake_upd)
-
-    _, trace = await chat_runner._dispatch(
-        object(),
-        Citations(),
-        ToolCall(id="1", name="update_event", input={"event_id": "e1", "delete": True}),
-        get_settings(),
-        _noop_emit,
-    )
-    assert called == {"del": 1, "upd": 0}
-    assert trace["purpose"] == "delete event"
-    assert trace["changed_state"] is True
-
-
-@pytest.mark.asyncio
 async def test_per_source_search_emits_citations_and_uniform_record(monkeypatch):
     async def fake_search_messages(session, query, *, source=None, before=None, after=None):
         return [_hit("input", "raw1", "Grocery email", task_id="abc", source="gmail", sender="Anna")]
@@ -842,10 +965,10 @@ async def test_clean_readonly_turn_is_cached(monkeypatch, _stub_answer_cache):
 
 @pytest.mark.asyncio
 async def test_state_changing_turn_is_not_cached(monkeypatch, _stub_answer_cache):
-    # A turn that created a task is an action, not a reusable fact — don't cache.
+    # A turn that saved a note is an action, not a reusable fact — don't cache.
     scripted = [
-        _resp(tool_calls=(ToolCall(id="1", name="create_task", input={"title": "Buy milk"}),)),
-        _resp(text="Created it."),
+        _resp(tool_calls=(ToolCall(id="1", name="create_note", input={"content": "Gate code 4711"}),)),
+        _resp(text="Saved."),
     ]
 
     async def fake_stream(messages, settings, *, system_prompt, tools, on_delta, **kw):
@@ -860,19 +983,19 @@ async def test_state_changing_turn_is_not_cached(monkeypatch, _stub_answer_cache
     async def fake_prior(session, query):
         return [0.3] * 4, None
 
-    async def fake_create_task(session, tin):
-        return "Created task 'Buy milk'.", chat_runner._trace(
-            "create_task", purpose="create task", summary="created", changed_state=True
+    async def fake_create_note(session, tin):
+        return "Saved note to long-term memory.", chat_runner._trace(
+            "create_note", purpose="save note", summary="saved", changed_state=True
         )
 
     monkeypatch.setattr(chat_runner, "retrieve", fake_retrieve)
     monkeypatch.setattr(chat_runner, "retrieve_prior_answer", fake_prior)
     monkeypatch.setattr(chat_runner, "stream_chat", fake_stream)
-    monkeypatch.setattr(chat_runner, "_create_task", fake_create_task)
+    monkeypatch.setattr(chat_runner, "_create_note", fake_create_note)
     monkeypatch.setattr(chat_runner.notion_mcp, "is_connected", lambda _s: False)
     monkeypatch.setattr(chat_runner.github, "is_connected", lambda: False)
 
-    await run_chat(object(), [ChatTurn(role="user", content="add buy milk")], emit=_noop_emit)
+    await run_chat(object(), [ChatTurn(role="user", content="remember the gate code")], emit=_noop_emit)
 
     assert _stub_answer_cache["cache"] == []
 

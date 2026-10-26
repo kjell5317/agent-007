@@ -13,7 +13,7 @@ from app.agent.helpers.attributes import new_task_attributes, valid_attributes  
 from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall  # noqa: E402
 from app.agent.input import runner as input_runner  # noqa: E402
 from app.agent.manual import runner as manual_runner  # noqa: E402
-from app.agent.tools.schemas import chat_tools, new_input_tools, thread_followup_tools  # noqa: E402
+from app.agent.tools.schemas import new_input_tools, thread_followup_tools  # noqa: E402
 
 
 def _tool(tools: list[dict], name: str) -> dict:
@@ -62,9 +62,8 @@ def test_agent_deadline_kind_wins_over_the_default():
     assert attributes["deadline_kind"] == "hard"
 
 
-@pytest.mark.parametrize("builder", [new_input_tools, chat_tools])
-def test_task_tools_offer_optional_attribute_enums(builder):
-    tools = builder({"Uni": "coursework"})
+def test_task_tools_offer_optional_attribute_enums():
+    tools = new_input_tools({"Uni": "coursework"})
     for name in ("create_task", "update_task"):
         params = _tool(tools, name)["parameters"]
         assert params["properties"]["work_type"]["enum"] == ["physical", "cognitive", "social"]

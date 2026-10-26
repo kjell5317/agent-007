@@ -278,8 +278,10 @@ _NEW_INPUT_TOOLS = [
             "when you don't know the exact time; and/or pass a `time_min`/"
             "`time_max` window to list events in that range. Call before "
             "`create_event` to avoid duplicating an event that already exists, "
-            "and before `update_event` to get the `event_id`. Results include "
-            "event details (up to 1200 characters per event). Non-terminal — "
+            "and before `update_event` to get the `event_id`. Each result carries "
+            "the event's ids, start/end, location, show-as-free flag, organizer, "
+            "attendees, meeting link, the user's RSVP and its description (up to "
+            "4000 characters, marked when truncated). Non-terminal — "
             "you still need a terminal tool (`create_task`, `mark_not_task`, or "
             "a duplicate action) to finish."
         ),
@@ -303,18 +305,6 @@ _NEW_INPUT_TOOLS = [
                     "description": "ISO 8601 end of the search window (exclusive).",
                 },
             },
-        },
-    },
-    {
-        "name": "get_event_details",
-        "description": "Read up to 4000 characters of an event description when find_calendar_events truncates it.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string"},
-                "calendar_id": {"type": "string"},
-            },
-            "required": ["event_id", "calendar_id"],
         },
     },
     {
@@ -502,38 +492,15 @@ _THREAD_FOLLOWUP_TOOLS = [
 
 # --- Chat / "ask" mode --------------------------------------------------------
 #
-# The chat agent answers questions over the user's data and can act on it.
+# The chat agent answers questions over the user's data. It is read-only except
+# for `create_note`: tasks and calendar events are changed elsewhere in the app.
 # The top tasks + notes for the latest message are injected up front; every
 # other source is a dedicated search tool the agent calls when the question
 # needs it (one source per tool — no blended fan-out). Unlike the input flows
 # there is no terminal tool — the runner loops until the model stops calling
 # tools and returns a final answer.
 
-# Chat create_task: `label` optional (the user rarely names one; the agent may
-# pick a fitting one). `notes` is dropped — chat has a dedicated `create_note`.
-_CHAT_CREATE_TASK_PROPS = {k: v for k, v in _CREATE_TASK_PROPS.items() if k != "notes"}
-
-_CHAT_UPDATE_TASK_PROPS = {
-    "task_id": {
-        "type": "string",
-        "format": "uuid",
-        "description": "Id of the task to change — from the retrieved results.",
-    },
-    **{k: v for k, v in _UPDATE_TASK_PROPS.items() if k != "notes"},
-}
-
-_EVENT_TIME_PROPS = {
-    "summary": {"type": "string", "description": "Event title."},
-    "start": {
-        "type": "string",
-        "description": "ISO 8601 start. Use the user's local zone unless another is named.",
-    },
-    "end": {"type": "string", "description": "ISO 8601 end. Must be after start."},
-    "description": {"type": "string"},
-    "location": {"type": "string"},
-}
-
-_CHAT_TOOLS = [
+CHAT_TOOLS = [
     {
         "name": "tasks_search",
         "description": (
@@ -633,8 +600,9 @@ _CHAT_TOOLS = [
             "meaning ('team offsite' finds 'Q3 offsite planning'), and/or a "
             "`time_min`/`time_max` window to list what's scheduled in that range "
             "(use the window for 'what's on my calendar tomorrow'). Each hit "
-            "carries an event id and event details (up to 1200 characters) "
-            "for planning or `update_event`. For the user's to-do items "
+            "carries the event's start/end, location, show-as-free flag, "
+            "organizer, attendees, meeting link, the user's RSVP and its "
+            "description (up to 4000 characters). For the user's to-do items "
             "use `tasks_search`, not this."
         ),
         "parameters": {
@@ -653,18 +621,6 @@ _CHAT_TOOLS = [
                     "description": "ISO 8601 / YYYY-MM-DD end of the window (exclusive).",
                 },
             },
-        },
-    },
-    {
-        "name": "get_event_details",
-        "description": "Read up to 4000 characters of an event description when calendar_search truncates it.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string"},
-                "calendar_id": {"type": "string"},
-            },
-            "required": ["event_id", "calendar_id"],
         },
     },
     {
@@ -749,64 +705,6 @@ _CHAT_TOOLS = [
         },
     },
     {
-        "name": "create_task",
-        "description": "Create a new task for the user.",
-        "parameters": {
-            "type": "object",
-            "properties": _CHAT_CREATE_TASK_PROPS,
-            "required": ["title", "estimation", "due_date"],
-        },
-    },
-    {
-        "name": "update_task",
-        "description": (
-            "Edit a task and/or drive its lifecycle: set `status=closed` to close "
-            "(open/close a task) or `status=open` to reopen a closed one. Include "
-            "only the fields that change. When reopening a task whose due_date is "
-            "in the past, set a new future due_date."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": _CHAT_UPDATE_TASK_PROPS,
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "create_event",
-        "description": (
-            "Add an event to the user's primary calendar. Run `calendar_search` "
-            "first to avoid duplicating one."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": _EVENT_TIME_PROPS,
-            "required": ["summary", "start"],
-        },
-    },
-    {
-        "name": "update_event",
-        "description": (
-            "Change an existing non-managed calendar event: patch the given "
-            "fields, or set `delete=true` to remove it (the single edit/delete "
-            "tool, like `update_task`'s `status`). Task and commute events are "
-            "planner-managed — use `update_task` for those. Get the `event_id` "
-            "from `calendar_search`."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string"},
-                "delete": {
-                    "type": "boolean",
-                    "description": "Set true to delete the event; other fields are ignored.",
-                },
-                **{k: v for k, v in _EVENT_TIME_PROPS.items() if k != "summary"},
-                "summary": {"type": "string", "description": "Updated event title."},
-            },
-            "required": ["event_id"],
-        },
-    },
-    {
         "name": "create_note",
         "description": (
             "Save a durable, standalone fact to long-term memory (someone's "
@@ -846,21 +744,6 @@ WEB_SEARCH_CHAT_TOOL = {
         "type": "object",
         "properties": {"query": {"type": "string", "description": "Specific public-web question to verify."}},
         "required": ["query"],
-    },
-}
-
-SPLIT_TASK_CHAT_TOOL = {
-    "name": "split_task",
-    "description": (
-        "Break an existing broad task into linked, individually scheduled subtasks. "
-        "Use when its estimate is over 120 minutes, its title joins distinct "
-        "actions (and/und/et/y/& and similar words), or the user asks to split it. "
-        "The task must already exist; use its id from a task hit or create_task result."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {"task_id": {"type": "string", "description": "Task UUID to split."}},
-        "required": ["task_id"],
     },
 }
 
@@ -964,10 +847,6 @@ def new_input_tools(labels: Mapping[str, str]) -> list[dict]:
 
 def thread_followup_tools(labels: Mapping[str, str]) -> list[dict]:
     return _with_label_field(_THREAD_FOLLOWUP_TOOLS, labels, require_on_create=False)
-
-
-def chat_tools(labels: Mapping[str, str]) -> list[dict]:
-    return _with_label_field(_CHAT_TOOLS, labels, require_on_create=False)
 
 
 def _with_label_field(

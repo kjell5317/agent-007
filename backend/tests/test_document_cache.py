@@ -39,11 +39,43 @@ def test_calendar_content_drops_missing_parts():
 
 def test_calendar_metadata_and_external_id():
     ev = _event()
-    meta = cal_cache._metadata(ev)
+    meta = cal_cache.event_metadata(ev)
     assert meta["event_id"] == "e1"
     assert meta["calendar_id"] == "primary"
     assert meta["location"] == "Room 4.05"
     assert cal_cache._external_id(ev) == "primary:e1"
+
+
+def test_calendar_metadata_carries_people_meeting_link_and_rsvp():
+    ev = _event(raw={
+        "organizer": {"email": "anna@example.com", "displayName": "Anna"},
+        "attendees": [
+            {"email": "me@example.com", "self": True, "responseStatus": "tentative"},
+            {"email": "bob@example.com"},
+            {"email": "room@resource.example", "resource": True},
+        ],
+        "conferenceData": {"entryPoints": [
+            {"entryPointType": "phone", "uri": "tel:+1"},
+            {"entryPointType": "video", "uri": "https://meet.example/abc"},
+        ]},
+    })
+    meta = cal_cache.event_metadata(ev)
+    assert meta["organizer"] == "Anna"
+    assert meta["attendees"] == ["bob@example.com"]
+    assert meta["meeting_url"] == "https://meet.example/abc"
+    assert meta["rsvp"] == "tentative"
+
+
+def test_calendar_metadata_omits_own_organizer_accepted_rsvp_and_caps_guests():
+    guests = [{"email": f"g{i}@example.com"} for i in range(25)]
+    ev = _event(raw={
+        "organizer": {"email": "me@example.com", "self": True},
+        "attendees": [{"email": "me@example.com", "self": True, "responseStatus": "accepted"}, *guests],
+    })
+    meta = cal_cache.event_metadata(ev)
+    assert "organizer" not in meta and "rsvp" not in meta and "meeting_url" not in meta
+    assert len(meta["attendees"]) == 21
+    assert meta["attendees"][-1] == "+5 more"
 
 
 def test_calendar_updated_at_parses_google_timestamp():

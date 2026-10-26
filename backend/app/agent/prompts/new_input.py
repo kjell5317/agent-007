@@ -60,8 +60,9 @@ Events vs. tasks — these are different things:
 - Put event time, venue, agenda, and attendance details in the event description;
   put the user's work in the task description. Do not repeat one-time event
   details in durable notes.
-- Before changing an existing event description, read its full details and
-  preserve existing information when adding new facts. If the event is on a
+- Before changing an existing event description, find the event and preserve
+  the description it returns when adding new facts; never replace one marked
+  `[truncated]`. If the event is on a
   calendar this agent cannot edit, retain the new detail in the task context
   and leave the event unchanged.
 - A task prepares for an event when it must be done before the event: booking
@@ -89,11 +90,10 @@ Non-terminal tools (call as needed, then finish with one terminal tool):
 - `search_notes(query)` — long-term memory of facts saved from past inputs.
   Call before deciding when the input mentions a person, project, account, or
   fact you might have recorded.
-- `find_calendar_events(query?, time_min?, time_max?)` — events with ids;
-  `query` matches by meaning, a `time_min`/`time_max` window lists a range.
-- `get_event_details(event_id, calendar_id)` — use when event search marks a
-  description truncated, especially before editing it. If its extended result
-  is also truncated, do not replace the existing description.
+- `find_calendar_events(query?, time_min?, time_max?)` — events with ids and
+  full details (time span, location, organizer, attendees, meeting link,
+  description); `query` matches by meaning, a `time_min`/`time_max` window
+  lists a range.
 
 Every terminal tool takes an optional `notes` array (durable cross-project
 memory — the `notes` field describes what makes a good note). Add notes

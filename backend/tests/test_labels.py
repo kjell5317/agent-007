@@ -6,7 +6,7 @@ import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
-from app.agent.tools.schemas import chat_tools, new_input_tools  # noqa: E402
+from app.agent.tools.schemas import new_input_tools  # noqa: E402
 from app.db.clients import labels as labels_store  # noqa: E402
 from app.db.schemas.label import LabelUpdate  # noqa: E402
 from app.services.calendar.labels import parse_labels  # noqa: E402
@@ -69,13 +69,6 @@ def test_label_descriptions_carry_their_defaults():
     )
     assert labels_store._with_defaults("Study", None, "high") == "Study (defaults: high)"
     assert labels_store._with_defaults("Misc", None, None) == "Misc"
-
-
-def test_chat_create_task_label_is_optional():
-    create_task = next(t for t in chat_tools({"Uni": "coursework"}) if t["name"] == "create_task")
-
-    assert "label" in create_task["parameters"]["properties"]
-    assert "label" not in create_task["parameters"]["required"]
 
 
 def test_building_tools_does_not_mutate_the_shared_schemas():

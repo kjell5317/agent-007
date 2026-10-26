@@ -39,6 +39,13 @@ from app.services.input.embedding import embed
 
 log = logging.getLogger(__name__)
 
+# How much of an event's description the agents see per event. Longer ones are
+# marked truncated so an agent never patches an event from a clipped copy.
+EVENT_DETAIL_CHARS = 4000
+
+# A large invite's guest list is capped; the agent needs who, not a roster.
+_ATTENDEE_LIMIT = 20
+
 
 def _content(event: CalendarEvent) -> str:
     parts = [event.summary, event.location, event.description]
@@ -54,7 +61,10 @@ def _snippet(event: CalendarEvent) -> str | None:
     return snippet or None
 
 
-def _metadata(event: CalendarEvent) -> dict:
+def event_metadata(event: CalendarEvent) -> dict:
+    """The event's facts beyond title/time/description — cached as the
+    document's metadata and built the same way for live calendar reads, so
+    both lookup paths describe an event identically."""
     meta = {
         "event_id": event.id,
         "calendar_id": event.calendar_id,
@@ -62,8 +72,59 @@ def _metadata(event: CalendarEvent) -> dict:
         "all_day": event.all_day,
         "free": is_free_event(event),
         "label_id": event.raw.get("eventLabelId"),
+        "organizer": _organizer(event),
+        "attendees": _attendees(event) or None,
+        "meeting_url": _meeting_url(event),
+        "rsvp": _rsvp(event),
     }
     return {k: v for k, v in meta.items() if v is not None}
+
+
+def _organizer(event: CalendarEvent) -> str | None:
+    organizer = event.raw.get("organizer")
+    if not isinstance(organizer, dict) or organizer.get("self"):
+        return None
+    return organizer.get("displayName") or organizer.get("email")
+
+
+def _attendees(event: CalendarEvent) -> list[str]:
+    attendees = event.raw.get("attendees")
+    if not isinstance(attendees, list):
+        return []
+    # Rooms are listed as attendees too (`resource`); `self` is the user.
+    names = [
+        attendee.get("displayName") or attendee["email"]
+        for attendee in attendees
+        if isinstance(attendee, dict) and attendee.get("email")
+        and not attendee.get("self") and not attendee.get("resource")
+    ]
+    if len(names) > _ATTENDEE_LIMIT:
+        return [*names[:_ATTENDEE_LIMIT], f"+{len(names) - _ATTENDEE_LIMIT} more"]
+    return names
+
+
+def _meeting_url(event: CalendarEvent) -> str | None:
+    if event.raw.get("hangoutLink"):
+        return event.raw["hangoutLink"]
+    conference = event.raw.get("conferenceData") or {}
+    return next(
+        (
+            entry.get("uri")
+            for entry in conference.get("entryPoints") or []
+            if entry.get("entryPointType") == "video"
+        ),
+        None,
+    )
+
+
+def _rsvp(event: CalendarEvent) -> str | None:
+    """The user's response when it isn't a plain accept (declined, tentative,
+    needsAction); None for events without guests."""
+    for attendee in event.raw.get("attendees") or []:
+        if isinstance(attendee, dict) and attendee.get("self"):
+            status = attendee.get("responseStatus")
+            return status if status and status != "accepted" else None
+    return None
 
 
 def _updated_at(event: CalendarEvent) -> datetime:
@@ -117,7 +178,7 @@ async def cache_one_event(
         snippet=_snippet(event),
         content=content,
         url=event.html_link,
-        metadata={**_metadata(event), **attributes},
+        metadata={**event_metadata(event), **attributes},
         starts_at=event.start,
         ends_at=event.end,
         updated_at=_updated_at(event),

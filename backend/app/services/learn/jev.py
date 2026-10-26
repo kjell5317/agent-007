@@ -262,6 +262,8 @@ def refit(session: Session, now: datetime, settings: Settings | None = None) -> 
 
     settings = settings or get_settings()
     answered = _answered(session, now - WINDOW, QUESTIONS_VERSION)
+    if not answered:
+        return
     weights = refit_triage_model(session, answered, QUESTIONS_VERSION, settings)
     refit_thresholds(session, answered, QUESTIONS_VERSION, settings, weights)
 

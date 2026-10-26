@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -162,4 +163,14 @@ def test_refit_skips_the_model_without_enough_rows(monkeypatch):
         learn_jev.refit_triage_model(SimpleNamespace(commit=lambda: None), answered, "2", settings)
         is None
     )
+    assert published == []
+
+
+def test_refit_does_nothing_while_no_input_carries_jev_answers(monkeypatch):
+    published = []
+    monkeypatch.setattr(learn_jev.raw_inputs, "jev_decided_since", lambda session, since: [])
+    monkeypatch.setattr(learn_jev.tasks_store, "latest_status_for", lambda session, ids: {})
+    monkeypatch.setattr(learn_jev.models_store, "publish", lambda session, **kw: published.append(kw))
+
+    learn_jev.refit(None, datetime.now(timezone.utc), SimpleNamespace(jev_model="jev-1.14.0"))
     assert published == []

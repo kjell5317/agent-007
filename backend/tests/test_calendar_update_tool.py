@@ -77,6 +77,51 @@ async def test_find_calendar_events_returns_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_find_calendar_events_returns_full_event_details(monkeypatch):
+    monkeypatch.setattr(
+        calendar_lookup,
+        "get_settings",
+        lambda: SimpleNamespace(user_timezone="Europe/Berlin", google_calendar_id="primary"),
+    )
+    event = _event("evt_123", summary="Talk")
+    event.description = "Agenda " + "x" * 5000
+    event.raw = {
+        "organizer": {"email": "anna@example.com"},
+        "attendees": [{"email": "bob@example.com", "displayName": "Bob"}],
+        "hangoutLink": "https://meet.example/talk",
+    }
+
+    async def fake_list_events_between(*_args, **_kwargs):
+        return [event]
+
+    monkeypatch.setattr(calendar_lookup, "list_events_between", fake_list_events_between)
+
+    out = await calendar_lookup.run_find_calendar_events(
+        SimpleNamespace(),
+        time_min="2026-07-10T13:00:00+00:00",
+        time_max="2026-07-10T16:00:00+00:00",
+    )
+
+    assert "2026-07-10T16:00:00+02:00 to 17:00" in out
+    assert "calendar_id=primary" in out
+    assert "Talk @ Clinic" in out
+    assert "organizer: anna@example.com" in out
+    assert "attendees: Bob" in out
+    assert "meeting: https://meet.example/talk" in out
+    details = out.split("details=", 1)[1]
+    assert details == "Agenda " + "x" * (calendar_lookup.EVENT_DETAIL_CHARS - 7) + " [truncated]"
+
+
+def test_event_when_spans_multi_day_all_day_events():
+    start = datetime(2026, 12, 10, tzinfo=timezone.utc)
+    end = datetime(2026, 12, 15, tzinfo=timezone.utc)
+    tz = calendar_lookup.ZoneInfo("America/New_York")
+
+    assert calendar_lookup.event_when(start, end, True, tz) == "2026-12-10 to 2026-12-14 all day"
+    assert calendar_lookup.event_when(start, start + timedelta(days=1), True, tz) == "2026-12-10 all day"
+
+
+@pytest.mark.asyncio
 async def test_find_calendar_events_query_uses_semantic_cache(monkeypatch):
     monkeypatch.setattr(
         calendar_lookup,
