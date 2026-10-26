@@ -101,9 +101,7 @@ HAS_FACTS = Noul(
 _IS_TASK_INSTRUCTIONS = (
     "Does `input` leave the user personally with something to do? `input.directed_at_me` "
     "is true when it was addressed to the user (To: line, direct message or mention) "
-    "rather than to a list, a group or a channel. `not_task_precedents` are similar "
-    "earlier inputs the user did not treat as tasks; `sender_history` counts how earlier "
-    "inputs from this sender ended."
+    "rather than to a list, a group or a channel."
 )
 _TASK = (
     "The user personally has to do something because of `input`: a request or question "

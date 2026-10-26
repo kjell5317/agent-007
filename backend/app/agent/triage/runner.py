@@ -102,9 +102,7 @@ async def new_input(
         raw,
         now=now,
         task_candidates=pairs,
-        not_task_precedents=[h for h in candidates if h.status == "not_task"],
         related_events=related_events,
-        sender_history=history,
     )
     questions = {
         **triage_questions({cid: task.title for cid, (_, task) in zip(refs.candidates, pairs)}),

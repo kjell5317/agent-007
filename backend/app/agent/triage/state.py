@@ -1,7 +1,10 @@
-"""Jev state builders: one input plus the precedents it is judged against.
+"""Jev state builders: one input plus the tasks and events it may belong to.
 
 Kept small on purpose — Jev's accuracy drops as unrelated text piles into the
 state — and free of I/O so the shapes are testable from fixture objects.
+History (NOT_TASK precedents, how the sender's inputs ended) stays out: Jev
+handles counts and "a similar input wasn't a task" inferences poorly, and the
+triage model (`features.py`) weighs that history from the user's own data.
 Candidates and events get neutral ids (A–E, E1–E3) because option labels
 sway Jev's answers; `StateRefs` maps the ids back to rows.
 """
@@ -10,7 +13,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -99,22 +102,6 @@ def task_candidates_state(
     return rows, ids
 
 
-def not_task_precedents_state(hits: Sequence[Any]) -> list[dict[str, Any]]:
-    rows = []
-    for hit in hits:
-        row: dict[str, Any] = {
-            "subject": hit.subject or (hit.content_snippet or "")[:120],
-            "similarity": round(float(hit.similarity), 2),
-        }
-        if hit.sender:
-            row["from"] = hit.sender
-        reason = (hit.agent_trace or {}).get("reason")
-        if reason:
-            row["reason"] = str(reason)[:180]
-        rows.append(row)
-    return rows
-
-
 def events_state(events: Sequence[Any]) -> tuple[list[dict[str, Any]], dict[str, tuple[str, str]]]:
     rows: list[dict[str, Any]] = []
     ids: dict[str, tuple[str, str]] = {}
@@ -144,9 +131,7 @@ def new_input_state(
     *,
     now: datetime,
     task_candidates: Sequence[tuple[Any, Any]] = (),
-    not_task_precedents: Sequence[Any] = (),
     related_events: Sequence[Any] = (),
-    sender_history: Mapping[str, int] | None = None,
     user_title: str | None = None,
 ) -> tuple[dict[str, Any], StateRefs]:
     title = candidate_title(raw, user_title)
@@ -158,10 +143,6 @@ def new_input_state(
         state["candidate_title"] = title
     if candidates:
         state["candidates"] = candidates
-    if not_task_precedents:
-        state["not_task_precedents"] = not_task_precedents_state(not_task_precedents)
-    if sender_history:
-        state["sender_history"] = dict(sender_history)
     if events:
         state["upcoming_events"] = events
     if urls:

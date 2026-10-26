@@ -256,13 +256,6 @@ def test_new_input_state_maps_candidates_to_neutral_ids():
     task = SimpleNamespace(
         id=task_id, title="Send report", due_date=datetime(2026, 10, 30, tzinfo=timezone.utc)
     )
-    precedent = SimpleNamespace(
-        subject="Newsletter",
-        content_snippet="",
-        similarity=0.7,
-        sender="news@x.test",
-        agent_trace={"reason": "marketing"},
-    )
     event = SimpleNamespace(event_id="ev", calendar_id="cal", summary="Trip", starts_at=None)
     raw = SimpleNamespace(
         source="gmail",
@@ -279,9 +272,7 @@ def test_new_input_state_maps_candidates_to_neutral_ids():
         raw,
         now=NOW,
         task_candidates=[(hit, task)],
-        not_task_precedents=[precedent],
         related_events=[event],
-        sender_history={"not_task": 3},
     )
 
     assert refs.candidates == {"A": task_id}
@@ -296,7 +287,8 @@ def test_new_input_state_maps_candidates_to_neutral_ids():
         "from": "a@b.c",
         "received": "2026-10-01",
     }
-    assert state["not_task_precedents"][0]["reason"] == "marketing"
+    # History is the triage model's job, not Jev's.
+    assert "not_task_precedents" not in state and "sender_history" not in state
     assert state["input"]["directed_at_me"] is True
     assert state["input"]["body"].endswith(" […]")
     assert state["candidate_title"] == "Report"

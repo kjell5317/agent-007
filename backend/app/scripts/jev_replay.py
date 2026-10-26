@@ -177,13 +177,7 @@ def prepare(session: Session, raw: RawInput, labels: dict[str, str]) -> Prepared
     now = raw.received_at.astimezone(user_tz())
     pairs, precedents = candidates_from_trace(session, trace)
     history = sender_history_for(session, raw, now)
-    state, refs = new_input_state(
-        raw,
-        now=now,
-        task_candidates=pairs,
-        not_task_precedents=precedents,
-        sender_history=history,
-    )
+    state, refs = new_input_state(raw, now=now, task_candidates=pairs)
     triage = (
         {}
         if raw.source == "manual"

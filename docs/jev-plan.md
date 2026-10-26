@@ -49,11 +49,18 @@ The hand-off feature (agents doing tasks, email drafts) is a separate plan:
 - **The cosine auto-decide stays the first gate.** It is free and
   calibrated. Jev covers the zone below `input_dedup_threshold`, where the
   agent ran before.
-- **Precedents go in through the state.** Jev has no few-shot or
-  fine-tuning API (same weights for every account). Every state carries the
-  ranked candidates the orchestrator already retrieves (with their labels),
-  the NOT_TASK precedents with their reasons, and per-sender history (how
-  earlier inputs from the same address ended).
+- **Jev reads the input; history goes to the model.** Jev has no few-shot
+  or fine-tuning API (same weights for every account). Its state carries the
+  input and only what it must read to answer: the candidate tasks for the
+  matching questions (with their labels, which help the label choice),
+  upcoming events and links.
+  - **What stays out:** NOT_TASK precedents and the sender's history.
+  - **Why:** Jev handles counts and "a similar input wasn't a task"
+    inferences poorly, and in both places the history would be counted
+    twice.
+  - **Where they go:** the triage model gets them as features (precedent
+    similarity, sender task share) and learns their weight from the user's
+    data.
 - **The adaptation is ours: a triage model.** Jev answers narrow, literal
   yes/no questions. A logistic regression fitted on the user's labelled
   history combines them with sender history, direction and precedent
@@ -231,6 +238,8 @@ one.
   - the task question is asked in both orders and averaged;
   - six narrow signal nouls;
   - candidates carry their labels.
+- **State:** Jev's state no longer carries NOT_TASK precedents or sender
+  history; both moved into the triage model.
 - **Triage model:** fitted on the user's history.
 - **Replay report:**
   - outcome mix and the trivial baseline;
