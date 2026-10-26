@@ -33,7 +33,7 @@ dependencies = [
     # which anthropic-haystack (through 8.0.0) still instantiates.
     "anthropic>=0.74,<2",
     "google-genai>=2.25.0",
-    "mcp>=1.28.1,<2",
+    "mcp>=1.30.0,<2",
     "langfuse>=4,<5",
     "google-genai-haystack>=4.4.1",
     # CP-SAT solver for the task scheduler; pulls in pandas and pins protobuf<7.
