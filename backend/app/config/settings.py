@@ -74,6 +74,21 @@ class Settings(BaseSettings):
     # Auto- decison theshold
     input_dedup_threshold: float = 0.88
 
+    # Jev (TypeSafe System One) answers the closed triage decisions in front of
+    # the LLM agents (docs/jev-plan.md). `off` never calls it; `shadow` asks and
+    # logs the answers under `agent_trace["jev"]` while the LLM still decides;
+    # `on` acts on answers above the thresholds and leaves the rest to the LLM.
+    typesafe_api_key: str = ""
+    jev_base_url: str = "https://api.typesafe.ai"
+    # Pinned, never `jev-latest`: thresholds are fitted per version and the
+    # alias moves on release.
+    jev_model: str = "jev-1.14.0"
+    jev_mode: Literal["off", "shadow", "on"] = "off"
+    jev_timeout_seconds: float = 5.0
+    # Closing a task on Jev's word alone stays off until shadow data shows the
+    # "done" answer is safe: an email claiming "resolved" must not close real work.
+    jev_close_enabled: bool = False
+
     # Notes similarity recency boost. Long half-life → small bias toward
     # recent notes when re-ranking equally-similar hits.
     notes_similarity_half_life_days: float = 300

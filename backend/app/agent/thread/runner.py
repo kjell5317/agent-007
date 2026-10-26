@@ -73,7 +73,7 @@ Do not update or close the parent task. Emit one tool call and stop.
 
 async def run_thread_followup(
     session: Session, raw, task, *, require_change: bool = False,
-    subtasks: list[Any] | None = None,
+    subtasks: list[Any] | None = None, jev: dict | None = None,
 ) -> dict:
     settings = get_settings()
     is_reopen = (raw.source_metadata or {}).get("action") == "reopen_task"
@@ -86,6 +86,8 @@ async def run_thread_followup(
         "task_id": str(task.id),
         "current_task": _task_trace_snapshot(task),
     }
+    if jev:
+        trace["jev"] = jev
     if is_reopen and _upcoming_occurrence(task):
         # The series sets a repeat occurrence's due date; while it's still
         # ahead there is no new deadline to pick.

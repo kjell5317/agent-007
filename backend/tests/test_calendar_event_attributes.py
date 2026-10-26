@@ -226,8 +226,8 @@ async def test_classify_pending_events_writes_model_values_in_batches(monkeypatc
 
     calls = []
 
-    async def classify(message, count, settings):
-        calls.append(count)
+    async def classify(entries, settings):
+        calls.append(len(entries))
         return {1: {"work_type": "social", "effort": "low"}, 3: {"effort": "high"}}
 
     monkeypatch.setattr(documents_store, "calendar_unclassified", unclassified)
@@ -252,7 +252,7 @@ async def test_classify_pending_events_writes_model_values_in_batches(monkeypatc
 async def test_classify_pending_events_leaves_a_failed_batch_pending(monkeypatch):
     rows = _rows(2)
 
-    async def boom(message, count, settings):
+    async def boom(entries, settings):
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(documents_store, "calendar_unclassified", lambda s, **kw: rows)
@@ -266,7 +266,7 @@ async def test_classify_pending_events_leaves_a_failed_batch_pending(monkeypatch
 
 @pytest.mark.asyncio
 async def test_classify_pending_events_skips_the_model_when_nothing_is_pending(monkeypatch):
-    async def never(message, count, settings):
+    async def never(entries, settings):
         raise AssertionError("no model call without pending events")
 
     monkeypatch.setattr(documents_store, "calendar_unclassified", lambda s, **kw: [])

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.agent.helpers.llm import chat, user_message
+from app.agent.triage.hints import split_hint as jev_split_hint
 from app.config import get_settings
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
@@ -62,12 +63,14 @@ class SubtaskPlan:
     due_date: datetime | None = None
 
 
-def needs_split(task: Task) -> bool:
-    """Estimate is minutes; conjunctions are matched as words in the title."""
-    return bool(
-        (getattr(task, "estimation", None) or 0) > 120
-        or _CONJUNCTION.search(getattr(task, "title", "") or "")
-    )
+def needs_split(task: Task, *, split_hint: bool | None = None) -> bool:
+    """Estimate is minutes. Jev's `split_hint`, when given, replaces the
+    conjunction match on the title."""
+    if (getattr(task, "estimation", None) or 0) > 120:
+        return True
+    if split_hint is not None:
+        return split_hint
+    return bool(_CONJUNCTION.search(getattr(task, "title", "") or ""))
 
 
 async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
@@ -317,8 +320,17 @@ async def split_task(
     return children
 
 
-async def maybe_split_task(session: Session, task: Task) -> list[Task]:
-    if not needs_split(task) or getattr(task, "parent_task_id", None) or getattr(task, "is_container", False):
+async def maybe_split_task(
+    session: Session, task: Task, *, split_hint: bool | None = None
+) -> list[Task]:
+    if getattr(task, "parent_task_id", None) or getattr(task, "is_container", False):
+        return []
+    long_task = (getattr(task, "estimation", None) or 0) > 120
+    conjunction = _CONJUNCTION.search(getattr(task, "title", "") or "")
+    if split_hint is None and not long_task and conjunction:
+        # A conjunction is only a cue ("Tom and Jerry"); Jev confirms it when acting.
+        split_hint = await jev_split_hint(task)
+    if not needs_split(task, split_hint=split_hint):
         return []
     try:
         return await split_task(session, task)

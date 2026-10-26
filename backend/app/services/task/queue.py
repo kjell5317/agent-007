@@ -28,16 +28,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agent import extract_task_fields
+from app.agent.helpers import jev
+from app.config import get_settings
 from app.agent.retrieval import precedent_query_text, search_raw_inputs
 from app.db import SessionLocal
 from app.events import publish_input, publish_task
-from app.db.schemas.task import TaskCreate
 from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
+from app.services.task.build import task_create_from_fields
 from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context, mentions_event
-from app.agent.helpers.attributes import new_task_attributes
-from app.db.clients import labels as labels_store
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.input.embedding import candidate_query_text, embed
@@ -138,15 +138,35 @@ async def _process(
         is_override = raw.processed_at is not None
 
         needs_agent = not all(user_fields.get(k) for k in ("title", "estimation", "due_date"))
-        if getattr(raw, "source", None) == "manual" and not user_fields.get("related_event_id"):
-            needs_agent = needs_agent or mentions_event(
+        event_cue = (
+            getattr(raw, "source", None) == "manual"
+            and not user_fields.get("related_event_id")
+            and mentions_event(
                 " ".join(str(value or "") for value in (
                     user_fields.get("title"), user_fields.get("description"),
                     getattr(raw, "content", None)
                 ))
             )
+        )
+        needs_agent = needs_agent or event_cue
         agent_fields: dict = {}
         agent_trace: dict[str, Any] = {"branch": "manual"}
+        jev_answers: dict | None = None
+        harvest = False
+        # A fresh typed-in task without event cues: Jev fills the fields and a
+        # small writer call adds only the text it can't. Event cues keep the
+        # agent, which can look up and link the calendar event.
+        if (
+            needs_agent and not event_cue and not is_override and not context_input_ids
+            and getattr(raw, "source", None) == "manual" and jev.configured(get_settings())
+        ):
+            from app.agent.triage.runner import manual as jev_manual
+
+            outcome = await jev_manual(session, raw, user_fields)
+            jev_answers = outcome.trace.get("jev")
+            if outcome.fields is not None:
+                agent_fields, agent_trace, harvest = outcome.fields, outcome.trace, outcome.facts
+                needs_agent = False
         if needs_agent:
             try:
                 context_inputs = _load_context_inputs(session, raw_input_id, context_input_ids)
@@ -171,6 +191,8 @@ async def _process(
                     raise
                 log.exception("manual extraction failed · raw=%s; using input as title", raw_input_id)
                 agent_trace = {"branch": "manual", "extraction_fallback": True}
+            if jev_answers:
+                agent_trace["jev"] = jev_answers
 
         action = agent_trace.get("action")
         if action == "update_task":
@@ -224,25 +246,11 @@ async def _process(
         )
         if event_warning:
             agent_trace["event_warning"] = event_warning
-        new_task = TaskCreate(
-            title=merged["title"],
-            description=merged.get("description"),
-            estimation=merged.get("estimation"),
-            due_date=merged.get("due_date"),
-            location=merged.get("location"),
-            link=merged.get("link"),
-            label=merged.get("label"),
-            related_event_id=merged.get("related_event_id"),
-            related_event_calendar_id=merged.get("related_event_calendar_id"),
-            related_event_due_derived=bool(merged.get("related_event_due_derived")),
-            **new_task_attributes(
-                merged,
-                labels_store.defaults_by_name(session),
-                label=merged.get("label"),
-                explicit_due=user_fields.get("due_date") is not None
-                or bool(agent_fields.get("due_date_is_explicit")),
-                related_event=bool(merged.get("related_event_id")),
-            ),
+        new_task = task_create_from_fields(
+            session,
+            merged,
+            explicit_due=user_fields.get("due_date") is not None
+            or bool(agent_fields.get("due_date_is_explicit")),
         )
         # A duration the user typed is kept as-is.
         if user_fields.get("estimation") is None:
@@ -303,6 +311,13 @@ async def _process(
         session.commit()
         publish_input(session, raw_input_id)
         publish_task(session, task.id)
+        if harvest:
+            from app.agent.triage.runner import harvest_notes
+
+            try:
+                await harvest_notes(session, raw)
+            except Exception:  # noqa: BLE001 — memory is best-effort; the task stands
+                log.exception("manual notes harvest failed · raw=%s", raw_input_id)
 
 
 def _load_context_inputs(

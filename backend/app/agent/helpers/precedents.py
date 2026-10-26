@@ -6,7 +6,22 @@ import uuid
 from typing import Any
 
 from app.agent.helpers.text import task_field_lines
+from app.db.clients import tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
+
+
+def load_task_candidates(session: Any, hits: list[SimilarInput]) -> list[tuple[SimilarInput, Any]]:
+    """OPEN / CLOSED hits paired with their task — deduped by task, similarity
+    order kept, containers skipped (follow-ups act on their subtasks)."""
+    out: list[tuple[SimilarInput, Any]] = []
+    seen: set[uuid.UUID] = set()
+    for hit in hits:
+        if hit.task_id and hit.status in ("open", "closed") and hit.task_id not in seen:
+            task = tasks_store.get(session, hit.task_id)
+            if task is not None and not getattr(task, "is_container", False):
+                seen.add(hit.task_id)
+                out.append((hit, task))
+    return out
 
 
 def task_candidate_lines(

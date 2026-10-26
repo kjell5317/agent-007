@@ -77,6 +77,7 @@ def create(session: Session, payload: TaskCreate) -> Task:
         due_date=due_date,
         estimation=quarter_minutes(payload.estimation),
         agent_estimation=payload.agent_estimation,
+        estimation_source=payload.estimation_source,
         location=payload.location,
         label=payload.label,
         related_event_id=payload.related_event_id,
@@ -272,6 +273,20 @@ _LATEST_STATUS_SQL = text(
     ORDER BY task_id, received_at DESC
     """
 )
+
+
+def recent_titles(session: Session, label: str | None, *, limit: int = 3) -> list[str]:
+    """Latest top-level task titles under `label`, as edited — style examples
+    for the title writer."""
+    if not label:
+        return []
+    stmt = (
+        select(Task.title)
+        .where(Task.label == label, Task.parent_task_id.is_(None))
+        .order_by(Task.created_at.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt))
 
 
 def latest_status_for(

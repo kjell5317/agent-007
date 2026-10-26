@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.db.clients import documents as documents_store
 from app.db.clients import labels as labels_store
 from app.db.models.document import Document
-from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier
+from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier, numbered
 from app.services.calendar.client import CalendarEvent
 from app.services.calendar.events import is_free_event, is_managed_event
 from app.services.location import is_online_location
@@ -36,6 +36,7 @@ CLASSIFIER = BatchClassifier(
     tool_name="classify_events",
     description="Record the work type and effort of every listed calendar event.",
     items="events",
+    subject="calendar event",
     fields=("work_type", "effort"),
     system_prompt=(
         "Classify every numbered event from the user's calendar by what attending "
@@ -108,19 +109,21 @@ def cached_attributes(
     return {key: value for key, value in values.items() if value is not None}
 
 
-def batch_message(events: Sequence[Mapping[str, Any]]) -> str:
-    lines: list[str] = []
-    for number, event in enumerate(events, start=1):
-        lines.append(f"{number}. {event['title']}")
-        facts = [f"{key}: {event[key]}" for key in ("label", "location") if event.get(key)]
-        if event.get("minutes"):
-            facts.append(f"{event['minutes']} min")
-        if facts:
-            lines.append("   " + " · ".join(facts))
-        notes = " ".join((event.get("notes") or "").split())
-        if notes:
-            lines.append(f"   notes: {notes}")
+def entry_text(event: Mapping[str, Any]) -> str:
+    lines = [event["title"]]
+    facts = [f"{key}: {event[key]}" for key in ("label", "location") if event.get(key)]
+    if event.get("minutes"):
+        facts.append(f"{event['minutes']} min")
+    if facts:
+        lines.append("   " + " · ".join(facts))
+    notes = " ".join((event.get("notes") or "").split())
+    if notes:
+        lines.append(f"   notes: {notes}")
     return "\n".join(lines)
+
+
+def batch_message(events: Sequence[Mapping[str, Any]]) -> str:
+    return numbered([entry_text(event) for event in events])
 
 
 def _notes(title: str, snippet: str | None) -> str:
@@ -156,9 +159,9 @@ async def classify_pending_events(session: Session, *, until: datetime) -> int:
     classified = 0
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start:start + BATCH_SIZE]
-        message = batch_message([_snapshot(row, label_names) for row in batch])
+        entries = [entry_text(_snapshot(row, label_names)) for row in batch]
         try:
-            suggestions = await CLASSIFIER.classify(message, len(batch), settings)
+            suggestions = await CLASSIFIER.classify(entries, settings)
         except Exception:  # noqa: BLE001 — best effort; the batch stays pending
             log.exception("event classification failed · batch starting at %d", start)
             continue

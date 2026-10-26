@@ -204,6 +204,7 @@ def meta(task: Task, attrs: TaskAttrs) -> dict:
         # The duration model learns from the agent's raw estimate: training on
         # the corrected one would learn the correction away.
         "estimate": task.agent_estimation or estimate_minutes(task, get_settings()),
+        "estimator": task.estimation_source if task.agent_estimation else None,
         "label": attrs.label,
         "work_type": attrs.work_type,
         "effort": attrs.effort,

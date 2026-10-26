@@ -93,7 +93,7 @@ def duration_observations(log_rows, now: datetime) -> list[Observation]:
         )
         if not meta or not meta.get("estimate"):
             continue
-        group = group_key(meta.get("label"), meta.get("work_type"))
+        group = group_key(meta.get("label"), meta.get("work_type"), meta.get("estimator"))
         closed = next((r for r in slot_rows if r.kind == "closed"), None)
         stamp = max(r.created_at for r in slot_rows)
         weight = decay(stamp, now)

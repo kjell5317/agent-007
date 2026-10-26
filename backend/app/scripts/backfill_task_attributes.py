@@ -30,7 +30,7 @@ from app.db.clients import labels as labels_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.scheduling import TaskOverride
 from app.db.models.task import Task
-from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier
+from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier, numbered
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ CLASSIFIER = BatchClassifier(
     tool_name="classify_tasks",
     description="Record the work type, effort and deadline kind of every listed task.",
     items="tasks",
+    subject="task",
     fields=ATTRIBUTE_FIELDS,
     system_prompt=(
         "Classify every numbered task from the user's task list. Call classify_tasks "
@@ -53,28 +54,30 @@ CLASSIFIER = BatchClassifier(
 CLASSIFY_TOOL = CLASSIFIER.tool
 
 
-def batch_message(tasks: Sequence[Mapping[str, Any]]) -> str:
-    lines: list[str] = []
-    for number, task in enumerate(tasks, start=1):
-        lines.append(f"{number}. {task['title']}")
-        facts = []
-        if task.get("label"):
-            facts.append(f"label: {task['label']}")
-        if task.get("estimation"):
-            facts.append(f"estimate: {task['estimation']} min")
-        if task.get("due_date"):
-            due = f"due: {task['due_date'].isoformat(timespec='minutes')}"
-            if task.get("due_date_derived"):
-                due += " (derived)"
-            facts.append(due)
-        if task.get("related_event"):
-            facts.append("linked event")
-        if facts:
-            lines.append("   " + " · ".join(facts))
-        description = " ".join((task.get("description") or "").split())
-        if description:
-            lines.append(f"   description: {description[:300]}")
+def entry_text(task: Mapping[str, Any]) -> str:
+    lines = [task["title"]]
+    facts = []
+    if task.get("label"):
+        facts.append(f"label: {task['label']}")
+    if task.get("estimation"):
+        facts.append(f"estimate: {task['estimation']} min")
+    if task.get("due_date"):
+        due = f"due: {task['due_date'].isoformat(timespec='minutes')}"
+        if task.get("due_date_derived"):
+            due += " (derived)"
+        facts.append(due)
+    if task.get("related_event"):
+        facts.append("linked event")
+    if facts:
+        lines.append("   " + " · ".join(facts))
+    description = " ".join((task.get("description") or "").split())
+    if description:
+        lines.append(f"   description: {description[:300]}")
     return "\n".join(lines)
+
+
+def batch_message(tasks: Sequence[Mapping[str, Any]]) -> str:
+    return numbered([entry_text(task) for task in tasks])
 
 
 def parse_classification(tool_input: Any, count: int) -> dict[int, dict[str, str]]:
@@ -141,7 +144,7 @@ def _deadline_kind_overridden(session: Session) -> set[uuid.UUID]:
 async def classify(
     snapshots: Sequence[Mapping[str, Any]], settings: Settings
 ) -> dict[int, dict[str, str]]:
-    return await CLASSIFIER.classify(batch_message(snapshots), len(snapshots), settings)
+    return await CLASSIFIER.classify([entry_text(task) for task in snapshots], settings)
 
 
 async def backfill(

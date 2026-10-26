@@ -29,7 +29,6 @@ from app.agent.helpers.llm import (
     tool_result_message,
     user_message,
 )
-from app.agent.helpers.attributes import new_task_attributes
 from app.agent.helpers.dispatch import apply_task_action
 from app.agent.tools.calendar_lookup import (
     related_events_section,
@@ -48,6 +47,7 @@ from app.agent.helpers.text import (
 from app.agent.helpers.precedents import (
     candidate_title,
     candidate_trace_ref as _candidate_trace_ref,
+    load_task_candidates,
     not_task_candidate_lines as _not_task_candidate_lines,
     selected_candidate_ref as _selected_candidate_ref,
     task_candidate_lines as _task_candidate_lines,
@@ -55,9 +55,9 @@ from app.agent.helpers.precedents import (
 )
 from app.agent.tools import INPUT_LINK_RESEARCH_TOOL, new_input_tools
 from app.config import get_settings
-from app.db.schemas.task import TaskCreate
 from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
+from app.services.task.build import task_create_from_fields
 from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context
 from app.db.clients import labels as labels_store
@@ -73,24 +73,21 @@ async def run_new_input_agent(
     raw,
     candidates: list[SimilarInput],
     query_embedding: list[float] | None,
+    *,
+    related_events: Sequence[CalendarMatch] | None = None,
+    jev: dict | None = None,
 ) -> dict:
+    """`related_events` are passed when the caller already looked them up
+    (Jev triage); `jev` carries Jev's answers into the trace."""
     settings = get_settings()
 
-    # Split the ranked candidates: OPEN/CLOSED tasks are actionable (load their
-    # fields, dedup by task_id, keep similarity order), NOT_TASK items are
-    # precedent signals.
-    task_candidates: list[tuple[SimilarInput, Any]] = []
-    seen_tasks: set[uuid.UUID] = set()
-    for hit in candidates:
-        if hit.task_id and hit.status in ("open", "closed") and hit.task_id not in seen_tasks:
-            t = tasks.get(session, hit.task_id)
-            if t is not None and not getattr(t, "is_container", False):
-                seen_tasks.add(hit.task_id)
-                task_candidates.append((hit, t))
+    # OPEN/CLOSED tasks are actionable candidates; NOT_TASK items are precedent signals.
+    task_candidates = load_task_candidates(session, candidates)
     not_task_signals = [h for h in candidates if h.status == "not_task"]
-    related_events = await retrieval.related_calendar_events(
-        session, raw=raw, embedding=query_embedding
-    )
+    if related_events is None:
+        related_events = await retrieval.related_calendar_events(
+            session, raw=raw, embedding=query_embedding
+        )
 
     user_msg = _build_new_input_message(raw, task_candidates, not_task_signals, related_events)
     source_url = first_input_url(raw)
@@ -104,6 +101,8 @@ async def run_new_input_agent(
         "related_events": [retrieval.calendar_match_ref(m) for m in related_events],
         "iterations": [],
     }
+    if jev:
+        trace["jev"] = jev
     final_status = "not_task"
     final_task_id: uuid.UUID | None = None
 
@@ -285,7 +284,6 @@ async def run_new_input_agent(
                 {**payload, "due_date": due_date},
                 explicit_due=explicit_due,
             )
-            due_date = event_fields.get("due_date")
             if event_warning:
                 trace["event_warning"] = event_warning
             # The schema marks `label` required, but the LLM sometimes skips
@@ -295,28 +293,11 @@ async def run_new_input_agent(
                     "agent skipped label · raw=%s — leaving NULL, user must assign",
                     raw.id,
                 )
-            label = str(payload.get("label")) if payload.get("label") else None
             task = tasks.create(
                 session,
-                with_learned_estimate(session, TaskCreate(
-                    title=str(payload["title"]),
-                    description=str(payload.get("description")) if payload.get("description") else None,
-                    estimation=payload.get("estimation") if payload.get("estimation") else None,
-                    due_date=due_date,
-                    location=str(payload.get("location")) if payload.get("location") else None,
-                    link=str(payload.get("link")) if payload.get("link") else None,
-                    label=label,
-                    related_event_id=event_fields.get("related_event_id"),
-                    related_event_calendar_id=event_fields.get("related_event_calendar_id"),
-                    related_event_due_derived=bool(event_fields.get("related_event_due_derived")),
-                    **new_task_attributes(
-                        payload,
-                        labels_store.defaults_by_name(session),
-                        label=label,
-                        explicit_due=explicit_due,
-                        related_event=bool(event_fields.get("related_event_id")),
-                    ),
-                )),
+                with_learned_estimate(
+                    session, task_create_from_fields(session, event_fields, explicit_due=explicit_due)
+                ),
             )
             trace["outcome"] = "task_created"
             trace["task_id"] = str(task.id)

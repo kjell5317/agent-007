@@ -84,6 +84,19 @@ _NOTES_SCHEMA = {
 }
 
 
+# For inputs Jev triaged without an agent run: the notes harvest that would
+# otherwise ride on the terminal tool, as its own forced call.
+SAVE_NOTES_TOOL = {
+    "name": "save_notes",
+    "description": "Record the durable facts in this input as long-term memory.",
+    "parameters": {
+        "type": "object",
+        "properties": {"notes": _NOTES_SCHEMA},
+        "required": ["notes"],
+    },
+}
+
+
 WORK_TYPE_DOC = (
     "Kind of work. physical: body, errands, sport, chores; cognitive: focused "
     "thinking, writing, coding, studying; social: calls, meetings, messaging people."

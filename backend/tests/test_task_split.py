@@ -222,3 +222,47 @@ def test_roman_and_deterministic_piece_lengths(monkeypatch, duration, expected):
     assert all(c.description == "Details" and c.location == "Office" for c in children)
     assert parent.estimation == duration
     assert split.roman(14) == "XIV"
+
+
+def test_needs_split_lets_jev_replace_the_conjunction_cue():
+    task = SimpleNamespace(title="Watch Tom and Jerry", estimation=30)
+    assert split.needs_split(task)
+    assert not split.needs_split(task, split_hint=False)
+    assert split.needs_split(SimpleNamespace(title="Gym", estimation=30), split_hint=True)
+    # A long task splits whatever Jev says.
+    assert split.needs_split(SimpleNamespace(title="Thesis", estimation=240), split_hint=False)
+
+
+@pytest.mark.asyncio
+async def test_maybe_split_asks_jev_only_for_a_conjunction_cue(monkeypatch):
+    asked = []
+
+    async def hint(task):
+        asked.append(task.title)
+        return False
+
+    async def never_split(session, task, *, force=False):
+        raise AssertionError("Jev declined the split")
+
+    monkeypatch.setattr(split, "jev_split_hint", hint)
+    monkeypatch.setattr(split, "split_task", never_split)
+
+    cue = SimpleNamespace(title="Watch Tom and Jerry", estimation=30, parent_task_id=None, is_container=False)
+    plain = SimpleNamespace(title="Gym", estimation=30, parent_task_id=None, is_container=False)
+    assert await split.maybe_split_task(None, cue) == []
+    assert await split.maybe_split_task(None, plain) == []
+    assert asked == ["Watch Tom and Jerry"]
+
+
+@pytest.mark.asyncio
+async def test_maybe_split_keeps_the_conjunction_rule_without_jev(monkeypatch):
+    async def no_hint(task):
+        return None
+
+    async def fake_split(session, task, *, force=False):
+        return ["child"]
+
+    monkeypatch.setattr(split, "jev_split_hint", no_hint)
+    monkeypatch.setattr(split, "split_task", fake_split)
+    cue = SimpleNamespace(title="Wash and dry laundry", estimation=30, parent_task_id=None, is_container=False)
+    assert await split.maybe_split_task(None, cue) == ["child"]

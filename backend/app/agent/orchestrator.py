@@ -21,6 +21,11 @@ Flow:
         most-similar past items across all statuses (open/closed/not_task),
         each tagged with its status, so it can act on a matching task or judge
         the input against precedent.
+
+  With Jev configured (`jev_mode` shadow/on), Jev triage runs in front of the
+  thread-follow-up and new-input agents: confident answers finalize the input
+  without an agent run (`on` only), the rest reach the agent with Jev's answers
+  in its trace. See `app.agent.triage`.
 """
 
 from __future__ import annotations
@@ -32,10 +37,13 @@ from collections.abc import Iterable
 from sqlalchemy.orm import Session
 
 from app import observability as obs
+from app.agent import retrieval
+from app.agent.helpers import jev
 from app.agent.input.runner import run_new_input_agent
 from app.agent.kotx.runner import run_kotx_transition
 from app.agent.retrieval import precedent_query_text, search_raw_inputs
 from app.agent.thread.runner import run_thread_followup
+from app.agent.triage import runner as triage
 from app.config import get_settings
 from app.db.clients import raw_inputs, tasks
 from app.db.clients.raw_inputs import SimilarInput
@@ -139,7 +147,12 @@ async def _process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
                     return await run_thread_followup(
                         session, raw, container, subtasks=tasks.children(session, container.id)
                     )
-                return await run_thread_followup(session, raw, task)
+                if not jev.configured(get_settings()):
+                    return await run_thread_followup(session, raw, task)
+                outcome = await triage.followup(session, raw, task)
+                if outcome.trace is not None:
+                    return outcome.trace
+                return await run_thread_followup(session, raw, task, jev=outcome.jev)
 
     # --- 2. Pull the embedding the input service computed at insert time. ---
     # Missing embedding (no API key / empty text) → degrade to "no similarity
@@ -264,7 +277,18 @@ async def _process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
         key=lambda h: h.decayed_similarity,
         reverse=True,
     )[:CANDIDATE_K]
-    return await run_new_input_agent(session, raw, candidates, query_embedding)
+    if not jev.configured(settings):
+        return await run_new_input_agent(session, raw, candidates, query_embedding)
+    related_events = await retrieval.related_calendar_events(
+        session, raw=raw, embedding=query_embedding
+    )
+    outcome = await triage.new_input(session, raw, candidates, related_events)
+    if outcome.trace is not None:
+        return outcome.trace
+    return await run_new_input_agent(
+        session, raw, candidates, query_embedding,
+        related_events=related_events, jev=outcome.jev,
+    )
 
 
 async def _github_email_shortcut(session: Session, raw, meta: dict) -> dict | None:

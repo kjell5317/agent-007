@@ -37,6 +37,9 @@ class Task(Base):
     # The agent's own estimate, before the learned duration correction set
     # `estimation` at creation. Null for durations the user gave.
     agent_estimation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Who produced `agent_estimation`: "jev" for Jev's duration buckets, null
+    # for the LLM agent. The duration model learns each estimator's bias apart.
+    estimation_source: Mapped[str | None] = mapped_column(String(8), nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     # Label name, matching a row in `labels` (mirrored from the Google Calendar

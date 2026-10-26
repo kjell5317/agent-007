@@ -186,6 +186,50 @@ def count_since(session: Session, ts: datetime) -> int:
     return int(session.execute(stmt).scalar_one() or 0)
 
 
+_SENDER_HISTORY_SQL = text(
+    """
+    SELECT status, count(*) AS n
+    FROM raw_inputs
+    WHERE lower(source_metadata->>'from') LIKE :pattern
+      AND id <> :exclude_id
+      AND processed_at IS NOT NULL
+      AND received_at >= :since
+      AND received_at < :before
+    GROUP BY status
+    """
+)
+
+
+def sender_history(
+    session: Session, address: str, *, exclude_id: uuid.UUID, since: datetime, before: datetime
+) -> dict[str, int]:
+    """Final statuses of earlier inputs from the same sender address."""
+    address = address.strip().lower()
+    if not address:
+        return {}
+    pattern = "%" + address.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    rows = session.execute(
+        _SENDER_HISTORY_SQL,
+        {"pattern": pattern, "exclude_id": exclude_id, "since": since, "before": before},
+    ).all()
+    return {r.status: int(r.n) for r in rows}
+
+
+def jev_decided_since(session: Session, since: datetime) -> list[RawInput]:
+    """Processed inputs whose trace carries Jev answers (shadow or acting) —
+    the rows threshold refits learn from."""
+    stmt = (
+        select(RawInput)
+        .where(
+            RawInput.processed_at.is_not(None),
+            RawInput.received_at >= since,
+            text("(raw_inputs.agent_trace::jsonb) ? 'jev'"),
+        )
+        .order_by(RawInput.received_at)
+    )
+    return list(session.scalars(stmt))
+
+
 def set_embedding(
     session: Session, raw_input_id: uuid.UUID, embedding: list[float]
 ) -> None:

@@ -34,8 +34,9 @@ class Observation:
     weight: float = 1.0
 
 
-def group_key(label: str | None, work_type: str | None) -> str:
-    return f"{label or '-'}|{work_type or '-'}"
+def group_key(label: str | None, work_type: str | None, estimator: str | None = None) -> str:
+    key = f"{label or '-'}|{work_type or '-'}"
+    return f"{key}|{estimator}" if estimator else key
 
 
 def fit(observations: list[Observation], *, max_iter: int = 50) -> dict:

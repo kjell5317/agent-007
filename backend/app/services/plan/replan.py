@@ -786,6 +786,7 @@ async def _apply(
                     m.attrs, span[0], span[1], now=now, items=final_items, tz=grid.tz,
                 ),
                 "meta": {"estimate": task.agent_estimation or estimate_minutes(task, settings),
+                         "estimator": task.estimation_source if task.agent_estimation else None,
                          "label": m.attrs.label,
                          "work_type": m.attrs.work_type, "effort": m.attrs.effort},
             }
