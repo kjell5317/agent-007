@@ -114,7 +114,9 @@ class SolverTask:
 @dataclass(frozen=True)
 class RouteNode:
     """A fixed located item (or cluster of overlapping ones): arriving legs
-    target `key_in`, departing legs leave from `key_out`."""
+    target `key_in`, departing legs leave from `key_out`. `free` marks a
+    location blocker (show-as-free time at a place): a task at the same place
+    may sit inside it without a trip of its own."""
 
     key_in: str
     key_out: str
@@ -122,6 +124,7 @@ class RouteNode:
     end: int
     loc: int
     physical: bool = False
+    free: bool = False
 
 
 @dataclass
@@ -730,14 +733,17 @@ class _Builder:
             for rn in C.fixed:
                 if lo <= rn.start < hi:
                     node("item", rn.key_in, rn.key_out, rn.loc, start=rn.start, end=rn.end,
-                         physical=rn.physical)
+                         physical=rn.physical, free=rn.free)
+            blockers = [i for i, nd in enumerate(nodes) if nd.get("free")]
             for key, loc in C.task_locations.items():
                 tv = self.vars.get(key)
                 if tv is None or d not in tv.route_days or d not in tv.day_lits:
                     continue
                 anchor = C.task_anchors.get(key, f"task:{key}")
+                routed, inside = self._inside_blockers(d, tv, loc, [nodes[i] for i in blockers])
                 node("task", anchor, anchor, loc, start=tv.start, end=tv.start + tv.task.dur,
-                     present=tv.day_lits[d], physical=C.task_physical.get(key, False), task=key)
+                     present=routed, physical=C.task_physical.get(key, False), task=key,
+                     inside=inside)
             # Going home between two away items needs one stop per gap, so a
             # day with n places away can use at most n − 1 (capped).
             away = sum(1 for nd in nodes if nd["kind"] in ("item", "task", "S") and nd["loc"] != 0)
@@ -806,6 +812,27 @@ class _Builder:
             bike_prev = end_bike
             self.routes[d] = {"nodes": nodes, "arcs": arcs, "start": s_idx, "end": e_idx,
                               "stops": stops}
+
+    def _inside_blockers(self, d: int, tv: _TaskVars, loc: int, blockers: list[dict]):
+        """A located task on day `d` is either its own stop on the route or
+        sits inside a location blocker at its place — the user is there
+        anyway, so no trip of its own. Returns (routed literal, [(blocker,
+        inside literal)])."""
+        day = tv.day_lits[d]
+        same_place = [b for b in blockers if b["loc"] == loc and b["end"] - b["start"] >= tv.task.dur]
+        if not same_place:
+            return day, []
+        m = self.m
+        inside = []
+        for n, b in enumerate(same_place):
+            lit = self._bool(f"inside_{d}_{tv.task.key}_{n}")
+            m.add_implication(lit, day)
+            m.add(tv.start >= b["start"]).only_enforce_if(lit)
+            m.add(tv.start + tv.task.dur <= b["end"]).only_enforce_if(lit)
+            inside.append((b, lit))
+        routed = self._bool(f"routed_{d}_{tv.task.key}")
+        m.add(sum([routed, *(lit for _, lit in inside)]) == day)
+        return routed, inside
 
     @staticmethod
     def _route_arc_allowed(ni: dict, nj: dict) -> bool:
@@ -923,8 +950,15 @@ class _Builder:
                     tv = self.vars[nd["task"]]
                     hint = tv.task.hint
                     present = hint is not None and tv.allows(hint) and hint // SLOTS_PER_DAY == d
-                    fixes[nd["present"]] = int(present)
-                    if present:
+                    covering = next(
+                        (lit for b, lit in nd["inside"]
+                         if present and b["start"] <= hint and hint + tv.task.dur <= b["end"]),
+                        None,
+                    )
+                    for _, lit in nd["inside"]:
+                        fixes[lit] = int(lit is covering)
+                    fixes[nd["present"]] = int(present and covering is None)
+                    if present and covering is None:
                         visit.append((hint, i))
             free_stops = list(route["stops"])
             path = [route["start"]]

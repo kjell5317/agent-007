@@ -150,6 +150,14 @@ export const api = {
     }
     return request<{ hits: SearchHit[] }>(`/search/suggest?${params}`);
   },
+  // The Enter search: every source the filter kind allows, sorted by relevance.
+  search: (q: string, filters: {
+    kind?: string | null; source?: string; label?: string; format?: string;
+  } = {}) => {
+    const params = new URLSearchParams({ q });
+    for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
+    return request<{ hits: SearchHit[] }>(`/search?${params}`);
+  },
   suggestExternal: (q: string, limit = 6, kind?: "contact" | "drive" | "github", mimeLabel?: string) =>
     request<{ hits: SearchHit[] }>(
       `/search/suggest/external?${new URLSearchParams({ q, limit: String(limit), ...(kind ? { kind } : {}), ...(mimeLabel ? { mime_label: mimeLabel } : {}) })}`,

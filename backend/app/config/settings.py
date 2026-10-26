@@ -112,7 +112,8 @@ class Settings(BaseSettings):
     search_suggest_limit: int = 8
     # In-process TTL cache over suggest results. Short: the same query re-fires
     # on backspace/retype, so even a few seconds spares the DB per keystroke.
-    search_suggest_cache_ttl_seconds: float = 90.0
+    # Any published task/input change also clears it at once.
+    search_suggest_cache_ttl_seconds: float = 30.0
 
     # Chat / "ask" mode (stage 2+3). Each turn injects local task and note
     # hits into the LLM context; Drive is fetched through a tool. `history_messages` caps
@@ -234,9 +235,9 @@ class Settings(BaseSettings):
     # Local hour of the nightly refit + long solve.
     scheduler_nightly_hour: int = 3
 
-    # Commute planning. Disabled by default — the feature is parked while
-    # we sort out a TZ/routing reliability issue. Flip to true to re-enable
-    # weather refresh, commute events, and the location-driven replan path.
+    # Commute planning: weather refresh, commute legs in the solver, and the
+    # location-driven replan path. Routing also needs HOME_ADDRESS, a Maps key
+    # and a write calendar; set false to turn commute off entirely.
     commute_enabled: bool = True
 
     # Google Maps

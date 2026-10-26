@@ -136,6 +136,32 @@ def test_located_task_routes_via_its_location():
     assert arrival.end <= start
 
 
+def test_located_task_sits_inside_a_location_blocker_at_its_place():
+    # A show-as-free day at the library: the user is there anyway, so a task at
+    # the library fits inside without a trip of its own.
+    blocker = S.RouteNode("lib-day", "lib-day", at(0, 9), at(0, 17), LIB, free=True)
+    task = S.SolverTask(key="t", dur=12, earliest=at(0, 8), due=at(0, 22), hint=at(0, 10))
+    result = solve(
+        commute_input(fixed=[blocker], task_locations={"t": LIB}, task_anchors={"t": "ev-t"}),
+        tasks=[task],
+    )
+    assert at(0, 9) <= result.starts["t"] <= at(0, 17) - 12
+    assert legs(result) == [("home", "lib-day", "bicycling"), ("lib-day", "home", "bicycling")]
+
+
+def test_busy_event_at_the_same_place_still_needs_its_own_visit():
+    node = S.RouteNode("lec", "lec", at(0, 9), at(0, 17), LIB)
+    item = S.FixedItem(at(0, 9), at(0, 17), "event")
+    task = S.SolverTask(key="t", dur=12, earliest=at(0, 8), due=at(0, 22), hint=at(0, 18))
+    result = solve(
+        commute_input(fixed=[node], task_locations={"t": LIB}, task_anchors={"t": "ev-t"}),
+        tasks=[task], fixed=[item],
+    )
+    start = result.starts["t"]
+    # Busy time stays busy: only a show-as-free blocker can hold the task.
+    assert start >= at(0, 17) or start + 12 <= at(0, 9)
+
+
 def test_legs_never_overlap_an_online_meeting():
     node, item = lecture(0, 10, 12)
     online = S.FixedItem(at(0, 9), at(0, 10), "event")  # online right before the lecture
@@ -394,3 +420,35 @@ async def test_discover_caches_free_events_without_replanning_around_them(monkey
     assert refreshed == ["sfo", "sync"]
     assert planned == ["sync"]
     assert summary["updated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_event_forgets_its_trips_before_rescheduling(monkeypatch):
+    from app.services.calendar import discover as discover_mod
+
+    task = SimpleNamespace(id="t1", calendar_event_id="ev-1", scheduled_date=None)
+    calls = []
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def one_or_none(self):
+            return task
+
+    session = SimpleNamespace(query=lambda _model: Query(), flush=lambda: None)
+
+    async def forget(_session, anchors, _now):
+        calls.append(("forget", anchors))
+
+    async def schedule(_session, row, *, block=None, account_key=None):
+        calls.append(("schedule", row.calendar_event_id))
+        return object()
+
+    monkeypatch.setattr(discover_mod, "forget_trips_to", forget)
+    monkeypatch.setattr(discover_mod, "schedule_task", schedule)
+    monkeypatch.setattr(discover_mod, "scheduled_interval_for", lambda _row: None)
+
+    assert await discover_mod._reschedule_deleted_task_event(session, "ev-1", account_key=None) == "t1"
+    # Forgotten first, so the re-solve already starts from the corrected position.
+    assert calls == [("forget", {"ev-1"}), ("schedule", None)]

@@ -2,9 +2,10 @@
 
 `run_suggest` is the single entry point both the JSON endpoint and the SSE
 stream call, so a cache hit serves either shape for free. The cache is a tiny
-in-process TTL map keyed by the normalized query + limit — the same query
-re-fires constantly (backspace, retype), and the TTL is short enough that
-freshly created tasks show up within seconds.
+in-process TTL map keyed by the normalized query + filters — the same query
+re-fires constantly (backspace, retype). Every published task / input change
+clears it (`invalidate`, called from `app.events`), and the short TTL covers
+what isn't published (notes, the calendar cache).
 """
 
 from __future__ import annotations
@@ -23,6 +24,10 @@ from app.services.source_url import source_url_for_raw_input
 
 _CACHE_MAX = 512
 _cache: dict[str, tuple[float, list[SearchHit]]] = {}
+
+
+def invalidate() -> None:
+    _cache.clear()
 
 
 def run_suggest(
@@ -79,8 +84,8 @@ def run_suggest(
             exclude_calendar_id=settings.google_calendar_id,
         )
         result = [SearchHit.build(h) for h in hits]
-        result = _drop_documents_shadowed_by_tasks(result)
-        _attach_input_source_urls(session, result)
+        result = drop_documents_shadowed_by_tasks(result)
+        attach_input_source_urls(session, result)
     else:
         result = []
 
@@ -90,7 +95,7 @@ def run_suggest(
     return result
 
 
-def _drop_documents_shadowed_by_tasks(hits: list[SearchHit]) -> list[SearchHit]:
+def drop_documents_shadowed_by_tasks(hits: list[SearchHit]) -> list[SearchHit]:
     """A document linked to a task that also matched (a kotx brief whose task is
     already in the results) is the same destination twice — keep the task, drop
     the document. A brief whose task didn't match still surfaces on its own."""
@@ -98,7 +103,7 @@ def _drop_documents_shadowed_by_tasks(hits: list[SearchHit]) -> list[SearchHit]:
     return [h for h in hits if not (h.type == "document" and h.task_id in task_ids)]
 
 
-def _attach_input_source_urls(session: Session, hits: list[SearchHit]) -> None:
+def attach_input_source_urls(session: Session, hits: list[SearchHit]) -> None:
     """Give input hits a deep link to their source (gmail thread, Slack message,
     …) so a suggestion can jump to the original — the UNION query can't build
     those source-specific URLs, so resolve them here (few hits, so N+1 is fine)."""

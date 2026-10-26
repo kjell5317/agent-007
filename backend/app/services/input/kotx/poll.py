@@ -3,14 +3,20 @@
 The webhook is the primary transition feed; this poll catches deliveries
 missed while 007 was down. Cursor = the newest kotx raw_input we already
 have, minus an overlap — envelopes dedupe on external_id, so re-fetching
-is harmless.
+is harmless. With no kotx input yet (first contact), it takes every active
+run instead of a time window, so actionable runs that haven't changed in a
+while still become tasks.
+
+An unreachable kotx is a warning, not an error: the poll returns empty and
+picks up from the same cursor once kotx answers again.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,7 +30,6 @@ from app.services.kotx.cache import cache_kotx_task
 log = logging.getLogger(__name__)
 
 _OVERLAP = timedelta(hours=1)
-_BOOTSTRAP_LOOKBACK = timedelta(days=7)
 
 
 def _empty(setup_error: str) -> dict:
@@ -37,19 +42,23 @@ def _empty(setup_error: str) -> dict:
     }
 
 
-def _cursor(session: Session) -> datetime:
+def _cursor(session: Session) -> datetime | None:
     latest = session.execute(
         select(func.max(RawInput.received_at)).where(RawInput.source == "kotx")
     ).scalar_one()
-    if latest is None:
-        return datetime.now(timezone.utc) - _BOOTSTRAP_LOOKBACK
-    return latest - _OVERLAP
+    return latest - _OVERLAP if latest is not None else None
 
 
 async def poll(session: Session, account_key: str | None) -> dict:
-    payloads = await kotx_client.fetch_tasks(
-        updated_since=_cursor(session), scope="all"
-    )
+    cursor = _cursor(session)
+    try:
+        if cursor is None:
+            payloads = await kotx_client.fetch_tasks(scope="active")
+        else:
+            payloads = await kotx_client.fetch_tasks(updated_since=cursor, scope="all")
+    except httpx.HTTPError as exc:
+        log.warning("kotx poll · kotx unreachable: %s", exc)
+        return _empty(f"kotx unreachable: {exc}")
     if not payloads:
         return _empty("")
     log.debug("kotx poll · %d updated tasks", len(payloads))

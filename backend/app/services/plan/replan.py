@@ -4,8 +4,10 @@
 builds a `SolveInput`, solves it off the event loop, and applies
 the difference: only tasks whose slot changed are patched on the calendar,
 newly deferred ones lose their event, every placement is logged with its
-feature snapshot. Commute legs are derived afterwards for the touched days
-(phase 1 keeps commute out of the solver).
+feature snapshot. With routing configured, the commute legs come out of the
+same solve (`routing.py`). When the routing input can't be built (a Maps
+outage), the solve runs without commute, the legs of the last good solve stay
+as they are, and a retry solve follows a few minutes later.
 
 Triggers coalesce: a burst of requests runs at most one follow-up solve,
 because a request is satisfied by any solve that started after it.
@@ -107,6 +109,9 @@ class _Movable:
 # Rain probabilities the last applied solve planned with, by local hour —
 # the hourly weather refresh re-solves when they shift materially.
 _last_rain: dict[str, float] = {}
+
+ROUTING_RETRY_SECONDS = 600
+_routing_retry: asyncio.Task | None = None
 
 # --- Request coalescing ------------------------------------------------------------
 
@@ -353,7 +358,9 @@ async def replan(
                 weights=weights,
             )
         except Exception as exc:  # noqa: BLE001 — solve without commute rather than not at all
-            log.warning("replan · routing input failed, solving without commute err=%s", exc)
+            log.error("replan · routing input failed, solving without commute err=%s", exc)
+            if not dry_run:
+                _retry_routing_soon()
 
     inp = S.SolveInput(
         days=grid.dates,
@@ -742,7 +749,6 @@ async def _apply(
     final_items = list(fixed_items) + [
         task_item(movable[tid].task, movable[tid].attrs, *span) for tid, span in result.placed.items()
     ]
-    touched: list[tuple[datetime, datetime]] = []
     changed: list[uuid.UUID] = []
     # The solve ran on rows read seconds ago. A task split into a container or
     # closed meanwhile keeps no slot; one whose duration changed is left to the
@@ -797,9 +803,6 @@ async def _apply(
                 solver_run_id=result.run_id, features=feats,
             )
             session.commit()
-            touched.append(span)
-            if prior:
-                touched.append(prior)
             changed.append(task_id)
             due = m.attrs.due
             if span[1] > due > now and (prior is None or prior[1] <= due):
@@ -822,8 +825,6 @@ async def _apply(
             solver_run_id=result.run_id,
         )
         session.commit()
-        if prior:
-            touched.append(prior)
         changed.append(task_id)
         if state == "unplaced":
             result.newly_unplaced.add(task_id)
@@ -843,8 +844,6 @@ async def _apply(
     if routing_ctx is not None and result.routes is not None:
         await _write_routes(session, routing_ctx, result, movable, grid=grid, now=now,
                             final_items=final_items)
-    else:
-        await _replan_commutes(session, touched)
 
 
 async def _write_routes(session, ctx, result, movable, *, grid, now, final_items) -> None:
@@ -869,21 +868,29 @@ async def _write_routes(session, ctx, result, movable, *, grid, now, final_items
         log.error("replan · writing commute legs failed err=%s", exc, exc_info=True)
 
 
-async def _replan_commutes(session: Session, spans: list[tuple[datetime, datetime]]) -> None:
-    if not spans or not get_settings().commute_enabled:
+def _retry_routing_soon() -> None:
+    """One retry solve a few minutes after the routing input failed, so the
+    legs catch up without waiting for the next change. Repeated failures
+    share the pending retry."""
+    global _routing_retry
+    if _routing_retry is not None and not _routing_retry.done():
         return
-    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _routing_retry = loop.create_task(_retry_routing())
 
-    margin = commute_window_margin()
-    windows: list[list[datetime]] = []
-    for start, end in sorted(spans):
-        lo, hi = start - margin, end + margin
-        if windows and lo <= windows[-1][1]:
-            windows[-1][1] = max(windows[-1][1], hi)
-        else:
-            windows.append([lo, hi])
-    for lo, hi in windows:
-        await plan_commutes_window_best_effort(session, window_start=lo, window_end=hi, _depth=1)
+
+async def _retry_routing() -> None:
+    from app.db import SessionLocal
+
+    await asyncio.sleep(ROUTING_RETRY_SECONDS)
+    try:
+        with SessionLocal() as session:
+            await request_replan(session, reason="routing retry")
+    except Exception:  # noqa: BLE001 — the next trigger or the nightly solve retries
+        log.exception("replan · routing retry failed")
 
 
 def _trace(reason: str, result: ReplanResult, movable: dict, grid: Grid, *, dry_run: bool) -> None:

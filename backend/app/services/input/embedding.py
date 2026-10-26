@@ -17,8 +17,12 @@ import logging
 from functools import lru_cache
 from typing import Literal
 
+from haystack import Document
 from haystack.utils import Secret
-from haystack_integrations.components.embedders.google_genai import GoogleGenAITextEmbedder
+from haystack_integrations.components.embedders.google_genai import (
+    GoogleGenAIDocumentEmbedder,
+    GoogleGenAITextEmbedder,
+)
 
 from app.config import get_settings
 
@@ -114,3 +118,34 @@ async def embed(text: str, *, task_type: TaskType = "SEMANTIC_SIMILARITY") -> li
             f"{settings.embedding_dim}; check EMBEDDING_MODEL / EMBEDDING_DIM."
         )
     return vector
+
+
+@lru_cache(maxsize=4)
+def _batch_embedder(model: str, api_key: str, task_type: str, dim: int) -> GoogleGenAIDocumentEmbedder:
+    return GoogleGenAIDocumentEmbedder(
+        api_key=Secret.from_token(api_key),
+        model=model,
+        config={"task_type": task_type, "output_dimensionality": dim},
+        batch_size=100,
+        progress_bar=False,
+    )
+
+
+async def embed_many(
+    texts: list[str], *, task_type: TaskType = "SEMANTIC_SIMILARITY"
+) -> list[list[float] | None]:
+    """Embed several strings in batched calls, in the vector space of `embed`.
+    Empty strings (and every entry, when unconfigured) come back as None."""
+    settings = get_settings()
+    cleaned = [(t or "").strip()[:MAX_INPUT_CHARS] for t in texts]
+    wanted = [i for i, text in enumerate(cleaned) if text]
+    if not settings.gemini_api_key or not wanted:
+        return [None] * len(texts)
+    embedder = _batch_embedder(
+        settings.embedding_model, settings.gemini_api_key, task_type, settings.embedding_dim
+    )
+    result = await embedder.run_async(documents=[Document(content=cleaned[i]) for i in wanted])
+    out: list[list[float] | None] = [None] * len(texts)
+    for i, document in zip(wanted, result["documents"]):
+        out[i] = list(document.embedding) if document.embedding is not None else None
+    return out

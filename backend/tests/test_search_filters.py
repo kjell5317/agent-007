@@ -64,11 +64,11 @@ def test_corpus_restriction_none_for_plain_query():
     assert corpus_restriction(parse_query("rent")[1]) is None
 
 
-def test_source_spans_input_and_document_corpora():
-    # One unified `source:` axis matches an input's source and a document's
-    # provider alike, so it opens both corpora.
-    assert corpus_restriction(parse_query("x source:gmail")[1]) == frozenset({INPUT, DOCUMENT})
-    assert corpus_restriction(parse_query("x source:calendar")[1]) == frozenset({INPUT, DOCUMENT})
+def test_source_spans_input_document_and_note_corpora():
+    # One unified `source:` axis matches an input's source, a document's
+    # provider and a note's originating input alike, so it opens all three.
+    assert corpus_restriction(parse_query("x source:gmail")[1]) == frozenset({INPUT, DOCUMENT, "note"})
+    assert corpus_restriction(parse_query("x source:calendar")[1]) == frozenset({INPUT, DOCUMENT, "note"})
 
 
 def test_task_filters_narrow_to_tasks():

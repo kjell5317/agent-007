@@ -36,6 +36,12 @@ from app.services.source_url import source_url_for_raw_input
 
 
 def _emit(event: dict) -> None:
+    # Imported here: the search package imports the calendar services, which
+    # publish through this module.
+    from app.services.search.suggest import invalidate as invalidate_suggestions
+
+    # Whatever changed may now match a search differently.
+    invalidate_suggestions()
     bus.publish(json.dumps(event))
 
 

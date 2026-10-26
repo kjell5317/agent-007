@@ -188,10 +188,8 @@ def _slots(seconds: int | None) -> int | None:
 
 async def _route_nodes(grid: Grid, now: datetime, horizon_end: datetime, events: list[Item], index):
     """Located fixed events ahead, overlapping ones merged into one node (the
-    user is double-booked: entered once, left once)."""
-    # TODO: let a task at a location blocker's own place sit inside it, as
-    # the legacy scheduler does (`_inside_blocker`); the circuit orders every
-    # task node before or after the blocker's node.
+    user is double-booked: entered once, left once). A cluster with a location
+    blocker is `free`: a task at its place may sit inside it."""
     located = sorted(
         (e for e in events if e.location and now <= e.start < horizon_end),
         key=lambda e: e.start,
@@ -216,6 +214,7 @@ async def _route_nodes(grid: Grid, now: datetime, horizon_end: datetime, events:
             end=grid.ceil(last.end),
             loc=await index(first.location),
             physical=any(e.work_type == "physical" or e.effort == "high" for e in cluster),
+            free=any(e.kind == "blocker" for e in cluster),
         ))
     return nodes
 
@@ -400,15 +399,20 @@ async def write_legs(
     horizon_end: datetime,
     obstacles: list[tuple[str, str, datetime, datetime]],
 ) -> dict:
-    """Diff the solved legs against the not-yet-started commute events and
-    write them; started legs are history and stay untouched."""
+    """Fit transit legs to real connections, then diff the legs against the
+    not-yet-started commute events and write them; started legs are history
+    and stay untouched."""
     from app.services.calendar import is_commute_event
-    from app.services.commute import planner
+    from app.services.commute import planner, transit
 
     settings = get_settings()
     calendar_id = settings.google_calendar_id.strip()
     write_events = [ev for ev in ctx.calendar_events if ev.calendar_id == calendar_id]
     existing = [ev for ev in write_events if is_commute_event(ev) and ev.start > now]
+    legs = await transit.fit_legs(
+        legs, [(start, end) for _, _, start, end in obstacles], now=now,
+        buffer=timedelta(minutes=S.SLOT_MINUTES * ctx.commute.buffer),
+    )
     conflicts = planner._immovable_conflicts(legs, obstacles)
     written, failures, new_conflicts = await planner._write_legs(
         session, legs, calendar_id=calendar_id, existing=existing,

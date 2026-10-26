@@ -46,13 +46,9 @@ def world(monkeypatch):
         state.deletes.append(task.title)
         task.calendar_event_id = None
 
-    async def no_commutes(_session, _spans):
-        return None
-
     monkeypatch.setattr(replan, "calendar_items", calendar_items)
     monkeypatch.setattr("app.services.calendar.update_task_event", update_task_event)
     monkeypatch.setattr("app.services.calendar.delete_task_event", delete_task_event)
-    monkeypatch.setattr(replan, "_replan_commutes", no_commutes)
     monkeypatch.setattr(replan.tasks_store, "open_schedulable", lambda _s: state.tasks)
     monkeypatch.setattr(replan.tasks_store, "schedulable_estimations",
                         lambda _s: {t.id: t.estimation for t in state.tasks})
@@ -222,6 +218,7 @@ def routed(world, monkeypatch):
     monkeypatch.setattr(planner, "_notify_new_failures", nothing)
     monkeypatch.setattr(planner, "_notify_new_conflicts", nothing)
     monkeypatch.setattr(planner, "_sync_anchor_reminders", nothing)
+    monkeypatch.setattr("app.services.commute.transit.lookup", nothing)
     return world
 
 
@@ -282,6 +279,44 @@ async def test_location_blocker_routes_without_claiming_the_time(routed):
     assert bib.start <= start and end <= bib.end
     start, end = result.placed[lecture_prep.id]
     assert end <= bib.start or start >= bib.end
+
+
+@pytest.mark.asyncio
+async def test_task_at_the_blockers_place_sits_inside_it(routed):
+    bib = Item(NOW.replace(hour=10), NOW.replace(hour=19), "blocker", event_id="bib",
+               location="Library")
+    routed.events = [bib]
+    reading = make_task("reading", due=NOW.replace(hour=22), location="Library")
+    routed.tasks = [reading]
+
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+
+    start, end = result.placed[reading.id]
+    assert bib.start <= start and end <= bib.end
+    keys = {(leg.origin_anchor, leg.dest_anchor) for leg in routed.legs}
+    # No trip of its own: only there and back for the library block.
+    assert keys == {("home", "bib"), ("bib", "home")}
+
+
+@pytest.mark.asyncio
+async def test_failed_routing_input_retries_instead_of_the_old_planner(routed, monkeypatch):
+    from app.services.plan import routing
+
+    async def maps_down(*_args, **_kwargs):
+        raise RuntimeError("maps unavailable")
+
+    retries = []
+    monkeypatch.setattr(routing, "build", maps_down)
+    monkeypatch.setattr(replan, "_retry_routing_soon", lambda: retries.append(True))
+    routed.events = [Item(NOW.replace(hour=10), NOW.replace(hour=12), "event", event_id="lec",
+                          location="Uni")]
+    routed.tasks = [make_task("library", due=NOW.replace(hour=22), location="Library")]
+
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+
+    assert result.ok and result.placed
+    assert retries == [True]
+    assert routed.legs == []  # legs of the last good solve are left alone
 
 
 @pytest.mark.asyncio

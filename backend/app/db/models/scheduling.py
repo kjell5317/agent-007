@@ -22,6 +22,7 @@ ScheduleLogKind = (
     "abandoned",
     "deferred",
     "unplaced",
+    "rescheduled",
 )
 
 

@@ -29,13 +29,25 @@ log = logging.getLogger(__name__)
 
 _API = "https://api.github.com"
 _TIMEOUT = 10
+# The search UI waits on GitHub alongside every other source, so it gets a
+# tighter budget than the chat tools.
+_UI_TIMEOUT = 5
 _SEARCH_LIMIT = 15
 _ACCEPT = "application/vnd.github+json"
 _API_VERSION = "2022-11-28"
 
-# Contributing repos rarely change within a session; cache the lookup in-process.
-_REPOS_TTL = 600.0
+# Contributing repos rarely change; cache the lookup in-process for hours and
+# load it at startup (`warm_repo_cache`), so a search never pays the up-to-five
+# sequential `/user/repos` pages first.
+_REPOS_TTL = 6 * 3600.0
 _REPO_PAGES = 5  # up to 500 repos
+# With owner qualifiers the search is already narrowed to the user's owners,
+# so a small page suffices for the exact-repo post-filter.
+_SCOPED_PAGE = 30
+# Identical UI searches (re-pressed Enter, toggled filters) within a minute
+# reuse the last answer.
+_HITS_TTL = 60.0
+_HITS_MAX = 64
 # Above this many distinct owners, appending owner qualifiers would blow the
 # ~256-char search-query limit, so fall back to post-filtering only.
 _MAX_OWNER_QUALIFIERS = 12
@@ -51,6 +63,7 @@ _MY_WORK = (
 )
 
 _repos_cache: tuple[float, frozenset[str], tuple[str, ...]] | None = None
+_hits_cache: dict[tuple[str, int], tuple[float, list[SearchHit]]] = {}
 
 
 def is_connected() -> bool:
@@ -65,12 +78,27 @@ async def search_issues(query: str, *, limit: int = _SEARCH_LIMIT) -> str:
     return f"{len(items)} result(s) in your repositories for `{query}`:\n{listing}"
 
 
+async def warm_repo_cache() -> None:
+    """Load the contributing-repo list at startup (best effort)."""
+    if not is_connected():
+        return
+    try:
+        await _contributing_repos()
+    except (RuntimeError, httpx.HTTPError) as exc:
+        log.info("github repo cache not warmed · %s: %s", type(exc).__name__, exc)
+
+
 async def search_hits(query: str, *, limit: int = 10) -> list[SearchHit]:
     """Navigable issue and PR hits for the search UI."""
     if not is_connected() or not query.strip():
         return []
+    key = (query.strip().lower(), limit)
+    now = time.monotonic()
+    cached = _hits_cache.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
     try:
-        items, _ = await _fetch(query, limit, restrict=True)
+        items, _ = await _fetch(query, limit, restrict=True, timeout=_UI_TIMEOUT)
     except (RuntimeError, httpx.HTTPError) as exc:
         log.info("github search skipped · %s: %s", type(exc).__name__, exc)
         return []
@@ -90,6 +118,9 @@ async def search_hits(query: str, *, limit: int = 10) -> list[SearchHit]:
             url=item.get("html_url"), source="github", status=kind,
             ts=modified, score=0.0,
         ))
+    if len(_hits_cache) >= _HITS_MAX:
+        _hits_cache.clear()
+    _hits_cache[key] = (now + _HITS_TTL, hits)
     return hits
 
 
@@ -121,20 +152,25 @@ def _raise_for_github(resp: httpx.Response) -> None:
     resp.raise_for_status()
 
 
-async def _fetch(query: str, limit: int, *, restrict: bool) -> tuple[list[dict], int]:
+async def _fetch(
+    query: str, limit: int, *, restrict: bool, timeout: float = _TIMEOUT
+) -> tuple[list[dict], int]:
     repos: frozenset[str] = frozenset()
     q = query
     per_page = limit
     if restrict:
         repos, owners = await _contributing_repos()
         # Narrow the search to the user's owners up front (cheap), unless the
-        # query already carries its own repo/user/org scope.
+        # query already carries its own repo/user/org scope; then over-fetch
+        # a little and post-filter to the exact repo set.
         if owners and len(owners) <= _MAX_OWNER_QUALIFIERS and not _SCOPED_RE.search(query):
             q = f"{query} {' '.join(owners)}".strip()
-        per_page = 100  # over-fetch, then post-filter to the exact repo set
+            per_page = max(limit, _SCOPED_PAGE)
+        else:
+            per_page = 100
 
     params = {"q": q, "per_page": per_page, "advanced_search": "true"}
-    async with httpx.AsyncClient(timeout=_TIMEOUT, base_url=_API) as client:
+    async with httpx.AsyncClient(timeout=timeout, base_url=_API) as client:
         resp = await client.get("/search/issues", params=params, headers=_headers())
     _raise_for_github(resp)
     data = resp.json()

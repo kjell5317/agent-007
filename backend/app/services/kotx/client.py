@@ -3,7 +3,8 @@
 Used by the kotx ingestion source (transition polling + document fetches),
 the webhook handler, and task close (discard). All functions degrade
 gracefully when kotx is unconfigured: reads return empty/None, mutations
-return False.
+return False. A configured but unreachable kotx raises `httpx.HTTPError`
+fast (short connect timeout); callers decide whether that matters.
 """
 
 from __future__ import annotations
@@ -19,12 +20,17 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_TIMEOUT = 30.0
+# A stopped kotx host should fail in seconds, not hold up a poll or an
+# email's policy check for the full read timeout.
+TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 
 # /api/repos changes rarely; cache it in-process so the gmail policy check
-# doesn't hit kotx on every notification email.
+# doesn't hit kotx on every notification email. A failed fetch is retried only
+# after a pause, so a down kotx doesn't cost a timeout per email.
 _REPOS_TTL_S = 600.0
+_REPOS_RETRY_S = 60.0
 _repos_cache: tuple[float, list[dict]] | None = None
+_repos_failed_at: float | None = None
 
 
 def _base() -> tuple[str, dict[str, str]] | None:
@@ -41,7 +47,7 @@ async def _get(path: str, params: dict | None = None) -> httpx.Response | None:
     if cfg is None:
         return None
     base_url, headers = cfg
-    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers) as client:
         return await client.get(f"{base_url}/api/{path}", params=params)
 
 
@@ -60,10 +66,12 @@ async def fetch_tasks(
 
 
 async def fetch_repos() -> list[dict]:
-    global _repos_cache
+    global _repos_cache, _repos_failed_at
     now = time.monotonic()
     if _repos_cache is not None and now - _repos_cache[0] < _REPOS_TTL_S:
         return _repos_cache[1]
+    if _repos_failed_at is not None and now - _repos_failed_at < _REPOS_RETRY_S:
+        return _repos_cache[1] if _repos_cache is not None else []
     try:
         resp = await _get("repos")
         if resp is None:
@@ -71,10 +79,12 @@ async def fetch_repos() -> list[dict]:
         resp.raise_for_status()
         body = resp.json()
         repos = body if isinstance(body, list) else []
-    except Exception:  # noqa: BLE001 — policy checks must not break ingestion
-        log.exception("kotx fetch_repos failed")
+    except Exception as exc:  # noqa: BLE001 — policy checks must not break ingestion
+        log.warning("kotx fetch_repos failed: %s", exc)
+        _repos_failed_at = now
         return _repos_cache[1] if _repos_cache is not None else []
     _repos_cache = (now, repos)
+    _repos_failed_at = None
     return repos
 
 
@@ -125,7 +135,7 @@ async def _post_action(kotx_task_id: int, verb: str) -> bool:
     if cfg is None:
         return False
     base_url, headers = cfg
-    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers) as client:
         resp = await client.post(f"{base_url}/api/tasks/{kotx_task_id}/{verb}")
     if resp.status_code in (404, 409):
         log.info("kotx %s skipped · task=%s status=%s", verb, kotx_task_id, resp.status_code)

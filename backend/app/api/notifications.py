@@ -17,6 +17,7 @@ import logging
 import uuid
 from urllib.parse import urlsplit
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -218,7 +219,12 @@ async def handle_action(
             raise HTTPException(status.HTTP_409_CONFLICT, "task has no linked kotx run")
         # kotx's own transition webhook mirrors the resulting state back to us,
         # so there's nothing to publish here — the run section refreshes then.
-        ok = await getattr(kotx_client, kotx_fn_name)(task.kotx_task_id)
+        try:
+            ok = await getattr(kotx_client, kotx_fn_name)(task.kotx_task_id)
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "kotx is unreachable"
+            ) from exc
         # The prompt proposed this action; once it's kicked off, clear it so a
         # stale button doesn't linger until the next transition replaces it.
         await clear_task_notification(task.id)

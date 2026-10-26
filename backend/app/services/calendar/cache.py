@@ -26,16 +26,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.db.clients import documents as documents_store
-from app.services.calendar.attributes import LabelCatalog, cached_attributes, label_catalog
 from app.services.calendar.client import CalendarEvent
 from app.services.calendar.events import is_free_event, is_managed_event
 from app.services.input.embedding import embed
+
+if TYPE_CHECKING:
+    from app.services.calendar.attributes import LabelCatalog
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +158,10 @@ async def cache_one_event(
         session, provider="calendar", external_id=external_id
     )
     content_changed = existing is None or existing.content != content
+    # Imported here: calendar.attributes → the attribute classifier → the agent
+    # package, whose calendar tools import this module.
+    from app.services.calendar.attributes import cached_attributes, label_catalog
+
     label_defaults, label_names = labels or label_catalog(session)
     attributes = cached_attributes(
         event,
@@ -209,7 +216,10 @@ async def cache_calendar_events(
                 forgotten += 1
             continue
         try:
-            labels = labels or label_catalog(session)
+            if labels is None:
+                from app.services.calendar.attributes import label_catalog
+
+                labels = label_catalog(session)
             if await cache_one_event(session, event, labels=labels):
                 embedded += 1
             upserted += 1

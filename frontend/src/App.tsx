@@ -45,6 +45,9 @@ export function App() {
   const chat = useSearchChat();
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSubmitted, setSearchSubmitted] = useState(false);
+  // Enter was pressed for the current query and filters; an empty unfiltered
+  // result then starts the AI search on its own.
+  const [searchEntered, setSearchEntered] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFiltersState>(EMPTY_SEARCH_FILTERS);
   const inboxSource = view === "chat" && searchFilters.kind === "messages" ? searchFilters.source : "";
   const { tasks, inputs, inputsSource, loading, refresh, loadMoreInputs, hasMoreInputs } = useAppData(inboxSource);
@@ -89,12 +92,16 @@ export function App() {
     chat.newChat();
     setSearchQuery("");
     setSearchSubmitted(false);
+    setSearchEntered(false);
     setSearchFilters(EMPTY_SEARCH_FILTERS);
     setView("chat");
   }, [chat]);
 
   const changeSearchQuery = (next: string) => {
-    if (next !== searchQuery) setSearchSubmitted(false);
+    if (next !== searchQuery) {
+      setSearchSubmitted(false);
+      setSearchEntered(false);
+    }
     setSearchQuery(next);
     if (!next.trim() && (searchFilters.kind === "contacts" || searchFilters.kind === "events" || searchFilters.kind === "files")) {
       setSearchFilters(EMPTY_SEARCH_FILTERS);
@@ -111,6 +118,12 @@ export function App() {
     setSearchQuery("");
     setSearchFilters(EMPTY_SEARCH_FILTERS);
     setSearchSubmitted(false);
+    setSearchEntered(false);
+  };
+
+  const changeSearchFilters = (next: SearchFiltersState) => {
+    setSearchFilters(next);
+    setSearchEntered(false);
   };
 
   const leaveOverlay = useCallback(() => {
@@ -511,7 +524,10 @@ export function App() {
             submitted={searchSubmitted}
             streaming={chat.streaming}
             onClose={leaveOverlay}
-            onEnter={() => setSearchSubmitted(true)}
+            onEnter={(pressed) => {
+              setSearchSubmitted(true);
+              if (pressed) setSearchEntered(true);
+            }}
           />
         ) : undefined}
         onPointsOpen={() => setView("points")}
@@ -527,10 +543,10 @@ export function App() {
           loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
         ) : (
           <div>
-            {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={setSearchFilters} />}
+            {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={changeSearchFilters} />}
             <div className={searchQuery.trim() || chat.messages.length === 0 ? "pt-3" : undefined}>
             {searchQuery.trim() ? (
-              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} inputs={inputs} submitted={searchSubmitted} onAiSearch={runAiSearch} onOpenTask={openTask} onChanged={refresh} />
+              <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} inputs={inputs} submitted={searchSubmitted} autoAiSearch={searchEntered && searchFilters.kind === null} onAiSearch={runAiSearch} onOpenTask={openTask} onChanged={refresh} />
             ) : searchFilters.kind === "tasks" ? (
               loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters.label)
             ) : searchFilters.kind === "messages" ? (

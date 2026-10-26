@@ -6,17 +6,8 @@ import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
 import { searchDistance } from "@/lib/searchRanking";
 import { compareTasksByDue } from "@/lib/tasks";
-import type { Note, RawInput, SearchHit, Task } from "@/lib/types";
+import type { RawInput, SearchHit, Task } from "@/lib/types";
 import type { SearchFiltersState } from "@/components/search/SearchFilters";
-
-function noteHit(note: Note): SearchHit {
-  return {
-    type: "note", id: note.id, title: note.content.slice(0, 80),
-    snippet: note.content, url: null, task_id: null,
-    source: note.source, sender: note.source_from, status: null,
-    ts: note.updated_at, score: 0,
-  };
-}
 
 const PER_SOURCE = 10;
 
@@ -31,46 +22,44 @@ function filterHit(hit: SearchHit, filters: SearchFiltersState): boolean {
   return true;
 }
 
+function searchKey(query: string, filters: SearchFiltersState, submitted: boolean): string {
+  return JSON.stringify([query.trim(), filters, submitted]);
+}
+
 function searchRequests(query: string, filters: SearchFiltersState, submitted: boolean): Promise<{ hits: SearchHit[] }>[] {
+  const source = filters.kind === "messages" || filters.kind === "notes" ? filters.source : undefined;
+  const label = filters.kind === "tasks" ? filters.label : undefined;
+  // Enter: one request — the server gathers every source the filter allows
+  // (local, calendar, Drive, Contacts, GitHub) and sorts them by relevance.
+  if (submitted) {
+    return [api.search(query, {
+      kind: filters.kind, source, label, format: filters.kind === "files" ? filters.format || undefined : undefined,
+    })];
+  }
+  // While typing: the fast keyword suggest, one request per corpus.
   const requests: Promise<{ hits: SearchHit[] }>[] = [];
-  if (filters.kind === null || filters.kind === "tasks") {
-    requests.push(api.suggest(query, PER_SOURCE, ["task"], { label: filters.kind === "tasks" ? filters.label : undefined }));
-  }
-  if (filters.kind === null || filters.kind === "messages") {
-    requests.push(api.suggest(query, PER_SOURCE, ["input"], { source: filters.kind === "messages" ? filters.source : undefined }));
-  }
+  if (filters.kind === null || filters.kind === "tasks") requests.push(api.suggest(query, PER_SOURCE, ["task"], { label }));
+  if (filters.kind === null || filters.kind === "messages") requests.push(api.suggest(query, PER_SOURCE, ["input"], { source }));
   if (filters.kind === null || filters.kind === "events") {
     requests.push(api.suggest(query, PER_SOURCE, ["document"], { source: "calendar" }));
   }
   if (filters.kind === null || filters.kind === "files") {
     requests.push(api.suggest(query, PER_SOURCE, ["document"], { excludeSource: "calendar" }));
   }
-  if (filters.kind === null || filters.kind === "notes") {
-    requests.push(api.listNotes(PER_SOURCE, filters.kind === "notes" ? filters.source : "", query)
-      .then((notes) => ({ hits: notes.map(noteHit) })));
-  }
-  if (submitted) {
-    if (filters.kind === null || filters.kind === "files") {
-      requests.push(api.suggestExternal(query, PER_SOURCE, "drive", filters.kind === "files" ? filters.format || undefined : undefined));
-    }
-    if (filters.kind === null || filters.kind === "contacts") {
-      requests.push(api.suggestExternal(query, PER_SOURCE, "contact"));
-    }
-    if (filters.kind === null) {
-      requests.push(api.suggestExternal(query, PER_SOURCE, "github"));
-    }
-  }
+  if (filters.kind === null || filters.kind === "notes") requests.push(api.suggest(query, PER_SOURCE, ["note"], { source }));
   return requests;
 }
 
 export function SearchResults({
-  query, filters, tasks, inputs, submitted, onAiSearch, onOpenTask, onChanged,
+  query, filters, tasks, inputs, submitted, autoAiSearch, onAiSearch, onOpenTask, onChanged,
 }: {
   query: string;
   filters: SearchFiltersState;
   tasks: Task[];
   inputs: RawInput[];
   submitted: boolean;
+  // Start the AI search on its own once this search settles empty.
+  autoAiSearch: boolean;
   onAiSearch: (query: string) => void;
   onOpenTask: (id: string) => void;
   onChanged: () => Promise<void> | void;
@@ -81,6 +70,10 @@ export function SearchResults({
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [preview, setPreview] = useState<SearchHit | null>(null);
+  // Which search the shown hits belong to. The quick pre-submit results stay
+  // on screen while the submitted search (which adds Drive, Contacts, GitHub)
+  // runs, so "empty" only counts once that search has settled.
+  const [settledKey, setSettledKey] = useState("");
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const inputsRef = useRef(inputs);
@@ -90,6 +83,7 @@ export function SearchResults({
 
   useEffect(() => {
     let cancelled = false;
+    const key = searchKey(query, filters, submitted);
     setLoading(true);
     setFailed(false);
     const timer = window.setTimeout(async () => {
@@ -128,19 +122,32 @@ export function SearchResults({
         return true;
       });
       const now = Date.now();
-      unique.sort((a, b) => filters.kind === "tasks"
-        ? compareTasksByDue(taskMap.get(a.id)!, taskMap.get(b.id)!) || a.title.localeCompare(b.title)
-        : searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q) ||
-          b.score - a.score || a.title.localeCompare(b.title));
+      // After Enter the server's order is the relevance order. While typing,
+      // the keyword scores (match × recency) are comparable across corpora.
+      // The tasks and events filters are list views: by due date / by date.
+      if (filters.kind === "tasks") {
+        unique.sort((a, b) => compareTasksByDue(taskMap.get(a.id)!, taskMap.get(b.id)!) || a.title.localeCompare(b.title));
+      } else if (filters.kind === "events") {
+        unique.sort((a, b) => searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q));
+      } else if (!submitted) {
+        unique.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
+      }
       const hadFailure = results.some((result) => result.status === "rejected") || fetchedTasks.some((result) => result.status === "rejected") || fetchedInputs.some((result) => result.status === "rejected");
       setFailed(unique.length === 0 && hadFailure);
       setTaskDetails(taskMap);
       setInputDetails(inputMap);
       setHits(unique);
+      setSettledKey(key);
       setLoading(false);
     }, submitted ? 0 : 180);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [query, filters, submitted]);
+
+  useEffect(() => {
+    if (autoAiSearch && settledKey === searchKey(query, filters, submitted) && hits.length === 0 && !failed) {
+      onAiSearchRef.current(query.trim());
+    }
+  }, [autoAiSearch, settledKey, query, filters, submitted, hits.length, failed]);
 
   return (
     <div className="space-y-2">

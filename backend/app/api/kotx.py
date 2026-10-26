@@ -14,11 +14,11 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.config import get_settings
+from app.services.kotx.client import TIMEOUT
 
 router = APIRouter(prefix="/kotx", tags=["kotx"])
 
 _ALLOWED_PREFIXES = ("tasks", "containers", "runs")
-_TIMEOUT = 30.0
 # Hop-by-hop / framing headers we must not copy from the upstream response.
 _SKIP_RESPONSE_HEADERS = {"content-length", "content-encoding", "transfer-encoding", "connection"}
 
@@ -41,14 +41,18 @@ async def proxy(path: str, request: Request) -> Response:
         headers["content-type"] = ct
     body = await request.body()
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        upstream = await client.request(
-            request.method,
-            url,
-            params=request.query_params,
-            content=body or None,
-            headers=headers,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            upstream = await client.request(
+                request.method,
+                url,
+                params=request.query_params,
+                content=body or None,
+                headers=headers,
+            )
+    except httpx.HTTPError as exc:
+        # Same status as "not configured": the Runs UI shows kotx as unavailable.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "kotx is unreachable") from exc
 
     out_headers = {
         k: v for k, v in upstream.headers.items() if k.lower() not in _SKIP_RESPONSE_HEADERS

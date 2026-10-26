@@ -6,12 +6,12 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import get_settings
+from app.services.kotx import client as kotx_client
 
 KOTX_ISSUE_REPOS: dict[str, str] = {
     "CSEE": "CSEE",
     "SocialAI": "Social Ai",
 }
-_TIMEOUT = 30.0
 
 
 class KotxConfigError(RuntimeError):
@@ -66,7 +66,7 @@ async def create_issue_run(task) -> KotxIssueRun:
     }
     headers = {"Authorization": f"Bearer {token}"}
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=kotx_client.TIMEOUT, headers=headers) as client:
         try:
             response = await client.post(f"{base_url}/api/runs", json=payload)
         except httpx.HTTPError as exc:

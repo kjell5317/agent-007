@@ -15,15 +15,15 @@ export function ChatComposer({
   submitted: boolean;
   streaming: boolean;
   onClose: () => void;
-  onEnter: (query: string) => void;
+  // `pressed` separates a real Enter from the idle auto-submit below.
+  onEnter: (pressed: boolean) => void;
 }) {
   const onEnterRef = useRef(onEnter);
   onEnterRef.current = onEnter;
 
   useEffect(() => {
-    const query = value.trim();
-    if (!query || submitted || streaming) return;
-    const timer = window.setTimeout(() => onEnterRef.current(query), 1000);
+    if (!value.trim() || submitted || streaming) return;
+    const timer = window.setTimeout(() => onEnterRef.current(false), 1000);
     return () => window.clearTimeout(timer);
   }, [value, submitted, streaming]);
 
@@ -44,7 +44,8 @@ export function ChatComposer({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              if (value.trim() && !streaming && !submitted) onEnter(value.trim());
+              // Not gated on `submitted`: Enter after the idle auto-submit still counts.
+              if (value.trim() && !streaming) onEnter(true);
               event.currentTarget.blur();
             } else if (event.key === "Escape") {
               onClose();

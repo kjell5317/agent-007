@@ -1,16 +1,17 @@
-"""Cross-corpus suggest query for stage-1 search.
+"""Cross-corpus search queries: stage-1 suggest and stage-2 hybrid retrieval.
 
-One UNION over tasks / raw_inputs / documents (notes are excluded — they aren't
-navigable and only added scan cost), each row tagged with its type and ranked
-by `ts_rank × recency decay`. Two modes: a match mode driven by a prefix
-tsquery, and a recent mode (no free text) that just orders the filtered corpus
-by recency.
+Suggest is one UNION over tasks / raw_inputs / notes / documents, each row
+tagged with its type and ranked by `ts_rank × recency decay`. Two modes: a
+match mode driven by a prefix tsquery, and a recent mode (no free text) that
+just orders the filtered corpus by recency.
 
-Every branch matches against a stored, GIN-indexed `tsv` generated column
-(`tasks.tsv`, `raw_inputs.tsv`, `documents.tsv`), so a query is index-backed FTS
-rather than a per-row `to_tsvector` + `similarity()` scan. That drops trigram
-typo-matching in exchange for the speed; the `:*` prefix on the last token still
-covers as-you-type partial words.
+Every suggest branch matches against a stored, GIN-indexed `tsv` generated
+column (`tasks.tsv`, `raw_inputs.tsv`, `notes.tsv`, `documents.tsv`), so a query
+is index-backed FTS rather than a per-row `to_tsvector` + `similarity()` scan:
+typeahead stays fast and skips trigram typo-matching. The `:*` prefix on the
+last token still covers as-you-type partial words. Typo tolerance lives in the
+stage-2 hybrid search (`trigram=True`), which runs on Enter, where an embedding
+call and the external providers dominate the wait anyway.
 """
 
 from __future__ import annotations
@@ -25,8 +26,9 @@ from app.db.clients.raw_inputs import ORIGIN_SOURCE_SQL
 
 TASK = "task"
 INPUT = "input"
+NOTE = "note"
 DOCUMENT = "document"
-ALL_CORPORA = frozenset({TASK, INPUT, DOCUMENT})
+ALL_CORPORA = frozenset({TASK, INPUT, NOTE, DOCUMENT})
 
 
 @dataclass
@@ -98,10 +100,24 @@ _BRANCHES: dict[str, dict[str, str]] = {
             "r.source_metadata->>'from' AS sender, r.status AS status, NULL::timestamptz AS due_date, NULL::text AS label_id"
         ),
     },
+    NOTE: {
+        # A note's origin is the input it was harvested from (chat-authored
+        # notes have none); `source` carries that origin like an input's.
+        "from": "notes n LEFT JOIN raw_inputs nr ON nr.id = n.source_raw_input_id",
+        "fts": "n.tsv",
+        "ts": "n.updated_at",
+        "select": (
+            "'note' AS type, n.id::text AS id, left(coalesce(n.content,''), 80) AS title, "
+            "left(coalesce(n.content,''), 240) AS snippet, NULL::text AS url, "
+            "nr.task_id::text AS task_id, nr.source AS source, "
+            "nr.source_metadata->>'from' AS sender, NULL::text AS status, "
+            "NULL::timestamptz AS due_date, NULL::text AS label_id"
+        ),
+    },
     DOCUMENT: {
         # kotx docs are content-for-context but not distinct: link them to their
         # task (join on kotx_task_id, same as the stage-2 display) so a hit opens
-        # the task, and `_drop_documents_shadowed_by_tasks` can dedup it against a
+        # the task, and `drop_documents_shadowed_by_tasks` can dedup it against a
         # task row that also matched. Calendar rows have no such task (kt is NULL).
         "from": (
             "documents d LEFT JOIN tasks kt ON kt.kotx_task_id = "
@@ -173,6 +189,8 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
         where = "TRUE"
     select = f"{b['select']}, {b['ts']} AS ts, {score} AS score"
 
+    if corpus == NOTE:
+        where += " AND NOT n.needs_review"
     if corpus == INPUT:
         where += " AND r.source <> 'chat'"
         # Keep only the best-scoring (then newest) input per thread — DISTINCT ON
@@ -219,6 +237,8 @@ def _filters_sql(
         # (e.g. `source:gmail`, inputs-only) the input must still surface.
         if exclude_linked_inputs:
             parts.append("r.task_id IS NULL")
+    if corpus == NOTE and source is not None:
+        parts.append("coalesce(nr.source, 'chat') = :source")
     if corpus == DOCUMENT:
         if exclude_calendar_id:
             parts.append("(d.provider <> 'calendar' OR coalesce(d.metadata->>'calendar_id', '') <> :exclude_calendar_id)")
@@ -245,7 +265,7 @@ def suggest(
     exclude_calendar_id: str | None = None,
 ) -> list[SuggestHit]:
     match = bool(tsquery)
-    active = [c for c in (TASK, INPUT, DOCUMENT) if c in branches]
+    active = [c for c in (TASK, INPUT, NOTE, DOCUMENT) if c in branches]
     if not active:
         return []
 
@@ -346,13 +366,17 @@ def suggest(
 # The keyword side (FTS) matches each table's generated `tsv`: tasks =
 # title+description+label, raw_inputs = subject+from+channel+content, notes =
 # content, documents = title+snippet+content.
-NOTE = "note"
+#
+# Optionally (`trigram=True`, the Enter search) a third ranking adds typo
+# tolerance: pg_trgm word similarity against the GIN trigram indexes on task
+# titles, email subjects, note content and document titles.
 
 # Per-corpus id column, used both for the FTS/vector pools and the display fetch.
 _ID_COL = {TASK: "t.id", INPUT: "r.id", NOTE: "n.id", DOCUMENT: "d.id"}
 
-# Display branch for notes (not part of the stage-1 UNION — notes aren't
-# navigable there). Task link comes from the source input when it has one.
+# Note display for the chat agent: a plain `note` source/status tag. (The
+# search UI uses the stage-1 note branch instead, which shows the origin.)
+# Task link comes from the source input when it has one.
 _NOTE_DISPLAY = {
     "from": "notes n LEFT JOIN raw_inputs nr ON nr.id = n.source_raw_input_id",
     "ts": "n.updated_at",
@@ -468,6 +492,34 @@ _KW_BRANCH = {
         "  ORDER BY ts_rank_cd(d.tsv, q.tsq) DESC LIMIT :pool)"
     ),
 }
+# Trigram branches: `:raw_q <% col` is pg_trgm's word-similarity operator, which
+# the gin_trgm_ops indexes serve; its threshold is set per transaction.
+_TRGM_BRANCH = {
+    TASK: (
+        "(SELECT t.id::text AS id, 'task' AS type, word_similarity(:raw_q, t.title) AS sim\n"
+        f"   FROM tasks t WHERE :raw_q <% t.title{_F_TASK}\n"
+        "  ORDER BY sim DESC LIMIT :pool)"
+    ),
+    INPUT: (
+        "(SELECT r.id::text AS id, 'input' AS type,\n"
+        "        word_similarity(:raw_q, r.source_metadata->>'subject') AS sim\n"
+        "   FROM raw_inputs r\n"
+        "  WHERE :raw_q <% (r.source_metadata->>'subject') AND r.processed_at IS NOT NULL\n"
+        f"    AND r.status <> 'duplicate' AND r.source <> 'chat'{_F_INPUT}\n"
+        "  ORDER BY sim DESC LIMIT :pool)"
+    ),
+    NOTE: (
+        "(SELECT n.id::text AS id, 'note' AS type, word_similarity(:raw_q, n.content) AS sim\n"
+        f"   FROM notes n WHERE :raw_q <% n.content AND NOT n.needs_review{_F_NOTE}\n"
+        "  ORDER BY sim DESC LIMIT :pool)"
+    ),
+    DOCUMENT: (
+        "(SELECT d.id::text AS id, 'document' AS type, word_similarity(:raw_q, d.title) AS sim\n"
+        f"   FROM documents d WHERE :raw_q <% d.title AND d.provider <> 'calendar'{_F_DOC}\n"
+        "  ORDER BY sim DESC LIMIT :pool)"
+    ),
+}
+TRIGRAM_THRESHOLD = 0.4
 _EMPTY_CTE = "{name} AS (SELECT NULL::text AS id, NULL::text AS type, NULL::bigint AS rnk WHERE false)"
 
 
@@ -481,25 +533,33 @@ def _cte(name: str, members: list[str], order_by: str) -> str:
     )
 
 
-# Cache one compiled statement per corpora combination — the SQL and its bind
-# declarations are fixed once the corpora set is chosen.
-_HYBRID_SQL_CACHE: dict[frozenset[str], object] = {}
+# Cache one compiled statement per corpora combination (and trigram on/off) —
+# the SQL and its bind declarations are fixed once those are chosen.
+_HYBRID_SQL_CACHE: dict[tuple[frozenset[str], bool], object] = {}
 
 
-def _hybrid_sql(corpora: frozenset[str]):
-    cached = _HYBRID_SQL_CACHE.get(corpora)
+def _hybrid_sql(corpora: frozenset[str], trigram: bool = False):
+    cached = _HYBRID_SQL_CACHE.get((corpora, trigram))
     if cached is not None:
         return cached
     vec_members = [_VEC_BRANCH[c] for c in (INPUT, NOTE, DOCUMENT) if c in corpora]
     kw_members = [_KW_BRANCH[c] for c in (TASK, INPUT, NOTE, DOCUMENT) if c in corpora]
+    trgm_members = (
+        [_TRGM_BRANCH[c] for c in (TASK, INPUT, NOTE, DOCUMENT) if c in corpora] if trigram else []
+    )
     sql = (
         "WITH q AS (SELECT websearch_to_tsquery('english', :raw_q) AS tsq, "
         "websearch_to_tsquery('simple', :raw_q) AS simple_tsq),\n"
         + _cte("vec", vec_members, "dist") + ",\n"
         + _cte("kw", kw_members, "rank DESC") + ",\n"
-        "fused AS (SELECT coalesce(vec.id, kw.id) AS id, coalesce(vec.type, kw.type) AS type,\n"
-        "       coalesce(1.0 / (60 + vec.rnk), 0.0) + coalesce(1.0 / (60 + kw.rnk), 0.0) AS rrf\n"
-        "  FROM vec FULL OUTER JOIN kw ON vec.id = kw.id AND vec.type = kw.type)\n"
+        + _cte("trgm", trgm_members, "sim DESC") + ",\n"
+        "ids AS (SELECT id, type FROM vec UNION SELECT id, type FROM kw\n"
+        "        UNION SELECT id, type FROM trgm),\n"
+        "fused AS (SELECT ids.id, ids.type,\n"
+        "       coalesce(1.0 / (60 + vec.rnk), 0.0) + coalesce(1.0 / (60 + kw.rnk), 0.0)\n"
+        "       + coalesce(1.0 / (60 + trgm.rnk), 0.0) AS rrf\n"
+        "  FROM ids LEFT JOIN vec USING (id, type) LEFT JOIN kw USING (id, type)\n"
+        "  LEFT JOIN trgm USING (id, type))\n"
         "SELECT type, id, rrf FROM fused ORDER BY rrf DESC LIMIT :k"
     )
     # Declare only the string binds that actually appear, or SQLAlchemy rejects
@@ -518,25 +578,28 @@ def _hybrid_sql(corpora: frozenset[str]):
     if INPUT in corpora:
         binds.append(bindparam("f_status", type_=String()))
     clause = text(sql).bindparams(*binds)
-    _HYBRID_SQL_CACHE[corpora] = clause
+    _HYBRID_SQL_CACHE[(corpora, trigram)] = clause
     return clause
 
 
-def _display_branch(corpus: str) -> dict[str, str]:
+def _display_branch(corpus: str, *, note_origin: bool = False) -> dict[str, str]:
     if corpus == NOTE:
-        return _NOTE_DISPLAY
+        return _BRANCHES[NOTE] if note_origin else _NOTE_DISPLAY
     if corpus == DOCUMENT:
         return _DOC_DISPLAY
     return _BRANCHES[corpus]
 
 
 def _load_display(
-    session: Session, corpus: str, ids: list[str], *, emb: str | None = None
+    session: Session, corpus: str, ids: list[str], *, emb: str | None = None,
+    note_origin: bool = False,
 ) -> list[SuggestHit]:
     """Resolve display fields for the winning ids of one corpus, reusing the
     stage-1 select fragments so a hit reads identically to a suggest row. Notes
-    also carry their genuine cosine so the uniform record can show `sim=`."""
-    b = _display_branch(corpus)
+    also carry their genuine cosine so the uniform record can show `sim=`;
+    `note_origin` shows a note's originating source (the search UI) instead
+    of the plain `note` tag the chat agent reads."""
+    b = _display_branch(corpus, note_origin=note_origin)
     select_expr = (
         _INPUT_SELECT_TEMPLATE.format(content_chars=MESSAGE_CONTENT_CHARS + 1)
         if corpus == INPUT else b["select"]
@@ -572,6 +635,31 @@ def _load_display(
     ]
 
 
+_EMBEDDED_TABLES = {INPUT: "raw_inputs", NOTE: "notes", DOCUMENT: "documents"}
+
+
+def stored_similarities(
+    session: Session, embedding: list[float], refs: list[tuple[str, str]]
+) -> dict[tuple[str, str], float]:
+    """Cosine similarity between `embedding` and each referenced
+    `(type, id)` row's stored embedding, for the rows that have one."""
+    emb = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
+    out: dict[tuple[str, str], float] = {}
+    for corpus, table in _EMBEDDED_TABLES.items():
+        ids = [i for t, i in refs if t == corpus]
+        if not ids:
+            continue
+        rows = session.execute(
+            text(
+                f"SELECT id::text AS id, 1.0 - (embedding <=> CAST(:emb AS vector)) AS sim "
+                f"FROM {table} WHERE id = ANY(CAST(:ids AS uuid[])) AND embedding IS NOT NULL"
+            ).bindparams(bindparam("emb", type_=String())),
+            {"emb": emb, "ids": ids},
+        ).all()
+        out.update({(corpus, r.id): float(r.sim) for r in rows})
+    return out
+
+
 def hybrid_search(
     session: Session,
     *,
@@ -586,14 +674,16 @@ def hybrid_search(
     status: str | None = None,
     before: str | None = None,
     after: str | None = None,
+    trigram: bool = False,
+    note_origin: bool = False,
 ) -> list[SuggestHit]:
     """Top-k hits across the requested `corpora` (default all of tasks / inputs
     / notes / documents) by hybrid similarity + keyword (RRF over pgvector and
-    Postgres FTS). `embedding=None` (embeddings unconfigured) degrades to
-    keyword-only. Optional metadata filters (`source`/`label`/`status`/`before`/
-    `after`) narrow the pool like the stage-1 filter tokens; inputs under
-    `min_input_chars` are excluded. Hits carry the RRF score and come back in
-    fused-rank order."""
+    Postgres FTS, plus pg_trgm word similarity with `trigram`). `embedding=None`
+    (embeddings unconfigured) degrades to lexical-only. Optional metadata
+    filters (`source`/`label`/`status`/`before`/`after`) narrow the pool like
+    the stage-1 filter tokens; inputs under `min_input_chars` are excluded.
+    Hits carry the RRF score and come back in fused-rank order."""
     corpora = corpora or ALL_CORPORA
     emb_literal = (
         "[" + ",".join(repr(float(x)) for x in embedding) + "]" if embedding else None
@@ -617,7 +707,12 @@ def hybrid_search(
     if INPUT in corpora:
         params["f_status"] = status
         params["min_input_chars"] = min_input_chars
-    ranked = session.execute(_hybrid_sql(corpora), params).all()
+    if trigram:
+        session.execute(
+            text("SELECT set_config('pg_trgm.word_similarity_threshold', :t, true)"),
+            {"t": str(TRIGRAM_THRESHOLD)},
+        )
+    ranked = session.execute(_hybrid_sql(corpora, trigram), params).all()
     if not ranked:
         return []
 
@@ -629,7 +724,7 @@ def hybrid_search(
 
     hits: list[SuggestHit] = []
     for corpus, ids in ids_by_type.items():
-        for hit in _load_display(session, corpus, ids, emb=emb_literal):
+        for hit in _load_display(session, corpus, ids, emb=emb_literal, note_origin=note_origin):
             hit.score = rrf[(corpus, hit.id)]
             hits.append(hit)
     hits.sort(key=lambda h: order[(h.type, h.id)])

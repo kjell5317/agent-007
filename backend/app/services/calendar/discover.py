@@ -200,9 +200,6 @@ async def discover_updated_events(
                     session, item["id"], account_key=account_key,
                 )
                 if rescheduled is not None:
-                    # TODO: a started leg to the deleted task event still
-                    # replays as travelled; forgetting it needs a re-solve
-                    # after the reschedule above (see `forget_trips_to`).
                     summary["deleted"] += 1
                     publish_task(session, rescheduled)
                     continue
@@ -781,6 +778,12 @@ async def _reschedule_deleted_task_event(
     # patching (and 404ing on) the event the user just deleted.
     row.calendar_event_id = None
     session.flush()
+    # A leg already under way to the deleted event didn't really end there:
+    # forget it before the re-solve, so routing starts from where the user is.
+    try:
+        await forget_trips_to(session, {event_id}, datetime.now(timezone.utc))
+    except Exception:  # noqa: BLE001 — the reschedule matters more than the position fix
+        log.exception("discover · forgetting trips to deleted task event=%s failed", event_id)
 
     log.info("discover · task event=%s deleted; rescheduling task=%s blocking old slot",
              event_id, row.id)

@@ -2,7 +2,8 @@
 
 The signature is the only auth on `/commute/flip` (it's exempt from the
 login check), so links are signed with the notification action secret and
-expire a day after the leg ends — long enough to correct a past leg. Links
+expire an hour after the leg ends — a finished leg is folded into the stored
+position and deleted soon after, so a later flip has nothing to act on. Links
 are deterministic: the planner diffs descriptions to decide whether to
 patch, so a nonce or timestamp would rewrite every leg on every replan.
 """

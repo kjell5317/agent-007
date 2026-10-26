@@ -37,8 +37,9 @@ _STATUS_ALIASES = {
 # UNION to it; `before`/`after` are cross-corpus and don't restrict.
 _TASK = "task"
 _INPUT = "input"
+_NOTE = "note"
 _DOCUMENT = "document"
-ALL_CORPORA = frozenset({_TASK, _INPUT, _DOCUMENT})
+ALL_CORPORA = frozenset({_TASK, _INPUT, _NOTE, _DOCUMENT})
 
 # `is:<status>` routes to whatever carries that status. open/closed/not_task are
 # task lifecycle; `processing` is an in-flight input; `event` is a calendar
@@ -117,12 +118,12 @@ def build_tsquery(text: str) -> str:
 def corpus_restriction(filters: Filters) -> frozenset[str] | None:
     """Which corpora a set of filters limits results to, or None for all.
 
-    `source:` spans both origin-bearing corpora (inputs + documents); `label:`
-    is a task concept; `is:` routes by which corpus carries that status
-    (see `_STATUS_CORPORA`)."""
+    `source:` spans the origin-bearing corpora (inputs, documents, and notes
+    through the input they came from); `label:` is a task concept; `is:`
+    routes by which corpus carries that status (see `_STATUS_CORPORA`)."""
     restrict: set[str] = set()
     if filters.source:
-        restrict.update((_INPUT, _DOCUMENT))
+        restrict.update((_INPUT, _DOCUMENT, _NOTE))
     if filters.label:
         restrict.add(_TASK)
     if filters.status:

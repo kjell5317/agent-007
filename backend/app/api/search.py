@@ -1,5 +1,8 @@
-"""Search endpoints (stage 1 — suggest-as-you-type).
+"""Search endpoints.
 
+  * GET /search         — the Enter search: one relevance-sorted list over
+    every source the filter kind allows (local, calendar, Drive, Contacts,
+    GitHub).
   * GET /search/suggest — cross-corpus ranked suggestions as JSON (cached).
   * GET /search/stream  — the same hits over SSE, one `hit` event per row then
     a `done` event, so the client can render results as they arrive.
@@ -39,7 +42,7 @@ from app.db.schemas.search import (
 )
 from app.services.link_preview import get_link_preview
 from app.services.github import search_hits as search_github_hits
-from app.services.search import run_suggest
+from app.services.search import run_search, run_suggest
 from app.services.search.contacts import search_contacts
 from app.services.search.drive import available_drive_formats, search_drive
 from app.services.search.filters import ALL_CORPORA
@@ -95,6 +98,21 @@ def _parse_types(types: str | None) -> frozenset[str] | None:
         return None
     requested = {t.strip().lower() for t in types.split(",") if t.strip()}
     return frozenset(requested & ALL_CORPORA) or None
+
+
+@router.get("", response_model=SuggestResponse)
+async def search(
+    q: str = Query(..., min_length=1, max_length=256),
+    kind: str | None = Query(None, pattern="^(tasks|messages|events|files|contacts|notes)$"),
+    limit: int = Query(40, ge=1, le=60),
+    source: str | None = Query(None, max_length=64),
+    label: str | None = Query(None, max_length=128),
+    format: str | None = Query(None, max_length=32),
+    session: Session = Depends(get_session),
+) -> SuggestResponse:
+    return SuggestResponse(hits=await run_search(
+        session, q, kind=kind, limit=limit, source=source, label=label, drive_format=format,
+    ))
 
 
 @router.get("/suggest", response_model=SuggestResponse)

@@ -1017,6 +1017,11 @@ async def test_discover_reschedules_deleted_task_event_blocking_old_slot(monkeyp
 
     monkeypatch.setattr(discover, "schedule_task", fake_schedule_task)
 
+    async def no_trips(*_args):
+        return None
+
+    monkeypatch.setattr(discover, "forget_trips_to", no_trips)
+
     result = await discover._reschedule_deleted_task_event(session, "event-1", account_key=None)
     session.commit()
     session.refresh(task)

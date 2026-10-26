@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
@@ -163,7 +164,7 @@ def test_non_github_email_is_untouched():
 
 @pytest.mark.asyncio
 async def test_kotx_poll_fetches_all_scope(monkeypatch):
-    latest = kotx_poll.datetime(2026, 7, 3, 10, 0, tzinfo=kotx_poll.timezone.utc)
+    latest = datetime(2026, 7, 3, 10, 0, tzinfo=timezone.utc)
     calls = {}
 
     class FakeResult:
@@ -187,6 +188,90 @@ async def test_kotx_poll_fetches_all_scope(monkeypatch):
     assert summary["fetched"] == 0
     assert calls["scope"] == "all"
     assert calls["updated_since"] == latest - kotx_poll._OVERLAP
+
+
+class _NoKotxInputs:
+    def execute(self, stmt):
+        return SimpleNamespace(scalar_one=lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_kotx_poll_takes_every_active_run_on_first_contact(monkeypatch):
+    calls = {}
+
+    async def fake_fetch_tasks(*, updated_since=None, scope="active"):
+        calls.update(updated_since=updated_since, scope=scope)
+        return []
+
+    monkeypatch.setattr(kotx_poll.kotx_client, "fetch_tasks", fake_fetch_tasks)
+    await kotx_poll.poll(_NoKotxInputs(), account_key=None)
+
+    # No time window: actionable runs untouched for weeks still become tasks.
+    assert calls == {"updated_since": None, "scope": "active"}
+
+
+@pytest.mark.asyncio
+async def test_kotx_poll_treats_an_unreachable_kotx_as_empty(monkeypatch):
+    async def down(**_kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(kotx_poll.kotx_client, "fetch_tasks", down)
+    summary = await kotx_poll.poll(_NoKotxInputs(), account_key=None)
+
+    assert summary["fetched"] == 0
+    assert "kotx unreachable" in summary["errors"][0]["setup"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_repos_backs_off_after_a_failure(monkeypatch):
+    calls = []
+
+    async def down(path, params=None):
+        calls.append(path)
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(kotx_client, "_get", down)
+    monkeypatch.setattr(kotx_client, "_repos_cache", None)
+    monkeypatch.setattr(kotx_client, "_repos_failed_at", None)
+
+    assert await kotx_client.fetch_repos() == []
+    assert await kotx_client.fetch_repos() == []
+    # The second lookup within the retry pause doesn't hit the dead host again.
+    assert calls == ["repos"]
+
+
+@pytest.mark.asyncio
+async def test_kotx_proxy_reports_an_unreachable_kotx_as_unavailable(monkeypatch):
+    from app.api import kotx as kotx_api
+
+    monkeypatch.setattr(kotx_api, "get_settings", lambda: SimpleNamespace(
+        kotx_base_url="https://kotx.test", kotx_api_token="t",
+    ))
+
+    class DeadClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def request(self, *_args, **_kwargs):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(kotx_api.httpx, "AsyncClient", DeadClient)
+
+    async def no_body():
+        return b""
+
+    request = SimpleNamespace(
+        headers={}, query_params={}, method="GET", body=no_body,
+    )
+    with pytest.raises(kotx_api.HTTPException) as exc:
+        await kotx_api.proxy("tasks", request)
+    assert exc.value.status_code == 503
 
 
 # --- kotx runner state machine ----------------------------------------------------
@@ -1071,6 +1156,7 @@ async def test_notify_action_dispatches_to_kotx_and_clears(monkeypatch, action, 
     monkeypatch.setattr(notif.kotx_client, fn_name, fake_fn)
     monkeypatch.setattr(notif, "clear_task_notification", fake_clear)
 
+    monkeypatch.setattr(notif, "_check_secret", lambda request, payload: None)
     payload = notif.ActionPayload(action=action, tag=f"task-{task.id}")
     result = await notif.handle_action(payload, request=SimpleNamespace(), session=object())
 
@@ -1085,11 +1171,28 @@ async def test_notify_action_merge_requires_linked_kotx_run(monkeypatch):
     task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=None)
     monkeypatch.setattr(notif.tasks_store, "get", lambda s, tid: task)
 
+    monkeypatch.setattr(notif, "_check_secret", lambda request, payload: None)
     payload = notif.ActionPayload(action=notif.ACTION_KOTX_MERGE, tag=f"task-{task.id}")
     with pytest.raises(notif.HTTPException) as exc:
         await notif.handle_action(payload, request=SimpleNamespace(), session=object())
 
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_notify_action_reports_an_unreachable_kotx(monkeypatch):
+    task = SimpleNamespace(id=uuid.uuid4(), kotx_task_id=7)
+    monkeypatch.setattr(notif.tasks_store, "get", lambda s, tid: task)
+    monkeypatch.setattr(notif, "_check_secret", lambda request, payload: None)
+
+    async def down(_kotx_task_id):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(notif.kotx_client, "start_task", down)
+    payload = notif.ActionPayload(action=notif.ACTION_KOTX_START, tag=f"task-{task.id}")
+    with pytest.raises(notif.HTTPException) as exc:
+        await notif.handle_action(payload, request=SimpleNamespace(), session=object())
+    assert exc.value.status_code == 503
 
 
 # --- notification button/message composition ------------------------------------

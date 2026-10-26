@@ -1,9 +1,10 @@
 """Staged hybrid search (docs/search-plan.md).
 
-Stage 1 lives here: `parse_query` splits filter tokens from free text,
-`build_tsquery` turns the free text into a prefix-matching tsquery, and
-`run_suggest` runs the cross-corpus UNION query behind a short TTL cache.
-The DB-facing UNION SQL is in `app.db.clients.search`.
+Stage 1: `parse_query` splits filter tokens from free text, `build_tsquery`
+turns the free text into a prefix-matching tsquery, and `run_suggest` runs the
+cross-corpus UNION query behind a short TTL cache. Stage 2: `run_search` is
+the hybrid (semantic + keyword + trigram) search behind Enter. The DB-facing
+SQL is in `app.db.clients.search`.
 """
 
 from app.services.search.filters import Filters, build_tsquery, corpus_restriction, parse_query
@@ -16,6 +17,7 @@ from app.services.search.retrieve import (
     search_notes,
     search_tasks,
 )
+from app.services.search.search import run_search
 from app.services.search.suggest import run_suggest
 
 __all__ = [
@@ -30,5 +32,6 @@ __all__ = [
     "search_messages",
     "search_notes",
     "search_tasks",
+    "run_search",
     "run_suggest",
 ]

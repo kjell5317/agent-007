@@ -52,6 +52,7 @@ def _install(
     monkeypatch.setattr(github, "get_settings", lambda: SimpleNamespace(github_token=token))
     monkeypatch.setattr(github.httpx, "AsyncClient", lambda *a, **kw: fake)
     monkeypatch.setattr(github, "_repos_cache", None)  # avoid cross-test leakage
+    monkeypatch.setattr(github, "_hits_cache", {})
     return fake
 
 
@@ -193,3 +194,40 @@ async def test_forbidden_maps_to_scope_hint(monkeypatch):
     _install(monkeypatch, search=_response(403, {}), repos=_response(403, {}))
     with pytest.raises(RuntimeError, match="Issues / Pull requests"):
         await github.search_issues("x")
+
+
+@pytest.mark.asyncio
+async def test_owner_scoped_search_fetches_a_small_page(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        search=_response(200, {"total_count": 1, "items": [_issue()]}),
+        repos=_response(200, [_repo("acme/widgets", "Organization")]),
+    )
+    await github.search_hits("fix", limit=10)
+    search_call = next(c for c in fake.calls if c["url"] == "/search/issues")
+    assert search_call["params"]["per_page"] == github._SCOPED_PAGE
+
+
+@pytest.mark.asyncio
+async def test_repeated_ui_search_reuses_the_answer(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        search=_response(200, {"total_count": 1, "items": [_issue()]}),
+        repos=_response(200, [_repo("acme/widgets")]),
+    )
+    first = await github.search_hits("Fix", limit=10)
+    second = await github.search_hits("fix ", limit=10)
+    assert first == second
+    assert sum(1 for c in fake.calls if c["url"] == "/search/issues") == 1
+
+
+@pytest.mark.asyncio
+async def test_warm_repo_cache_loads_the_repo_list_once(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        search=_response(200, {"total_count": 1, "items": [_issue()]}),
+        repos=_response(200, [_repo("acme/widgets")]),
+    )
+    await github.warm_repo_cache()
+    await github.search_hits("fix", limit=10)
+    assert [c["url"] for c in fake.calls] == ["/user/repos", "/search/issues"]

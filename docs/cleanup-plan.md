@@ -196,11 +196,11 @@ Before deleting legacy tests:
 
 - **Repeat occurrences.** No solver test covers the earliest-start rule
   (`replan.py:490-495`). Port the intent of `test_recurrence.py:169,309`.
-- **Located task inside a location blocker.** Legacy `_inside_blocker`
-  places such a task; the solver can't yet (`routing.py:192-194` TODO).
-  Legacy tests: `test_trip_block.py:2058,2095`. **Decision needed:**
-  implement it in the solver routing model, or accept the gap and delete
-  the tests.
+- **Located task inside a location blocker.** Done 2026-10-26. The solver
+  lets a task at a show-as-free blocker's own place sit inside it, with no
+  trip of its own (`solver._inside_blockers`). The new tests are in
+  `test_scheduling_commute.py` and `test_scheduling_replan.py`, so
+  `test_trip_block.py:2058,2095` can go with the legacy planner.
 
 ### B2 — Fix the one legacy call path that's still live under the solver
 
@@ -271,14 +271,13 @@ Elsewhere:
 - `services/calendar/discover.py:708`: the engine check becomes
   unconditional.
 
-### B4 — Delete the legacy commute planner (behaviour change)
+### B4 — Delete the legacy commute planner
 
-Under the solver, `replan._replan_commutes` (871-885) falls back to the old
-`derive_legs` planner when routing is disabled or `routing.build` fails.
-Prod logs since the last deploy show no fallback (no "routing input failed"
-warning), but they only reach back to that restart. Recommendation: on
-routing failure, solve without commute legs, warn, and send `notify_error`
-once. Then delete:
+The solver no longer falls back to it (done 2026-10-26). When the routing
+input fails, the solve runs without commute, the last good legs stay, and a
+retry solve follows 10 minutes later (`replan._retry_routing_soon`). The
+legacy commute planner is now only reachable through the legacy engine.
+Delete it together with B3:
 
 - `commute/reschedule.py` (whole file). Its promised "batch summary
   notification" never existed.

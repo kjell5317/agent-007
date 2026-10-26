@@ -5,7 +5,6 @@ follow-up, extract-fields) reads and writes long-term memory through these."""
 from __future__ import annotations
 
 from app.agent.retrieval import search_notes
-from app.db.clients import notes as notes_store
 from app.db.models.raw_input import RawInput
 from app.services.note.moderate import moderate_note
 
