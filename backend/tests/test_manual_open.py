@@ -222,7 +222,7 @@ async def test_thread_followup_trace_records_current_task_context(monkeypatch):
             ),
         )
 
-    async def fake_apply_task_action(_session, _task, _name, _input):
+    async def fake_apply_task_action(_session, _task, _name, _input, **_kwargs):
         return {"outcome": "reopened", "status_change": "open"}
 
     async def fake_save_notes(*_args):
@@ -317,7 +317,8 @@ async def test_reopen_only_applies_due_date_and_open_status(monkeypatch):
             }),),
         )
 
-    async def fake_apply(_session, _task, _name, action_input):
+    async def fake_apply(_session, _task, _name, action_input, *, user_requested=False):
+        assert user_requested
         applied.append(action_input)
         return {"outcome": "reopened", "status_change": "open"}
 

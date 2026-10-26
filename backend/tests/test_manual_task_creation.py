@@ -609,7 +609,8 @@ async def test_promoted_path_updates_candidate_task(monkeypatch):
             "branch": "manual", "action": "update_task", "iterations": [],
         }
 
-    async def fake_apply(_session, _task, name, fields):
+    async def fake_apply(_session, _task, name, fields, *, user_requested=False):
+        assert user_requested, "a typed-in input's close must not send an auto-close notification"
         applied.append((name, fields))
         return {"outcome": "updated"}
 

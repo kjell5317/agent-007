@@ -21,7 +21,7 @@ import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { isTaskOverdue, runningOvertime, taskRecurrence } from "@/lib/tasks";
+import { runningOvertime, taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -88,8 +88,6 @@ export function TaskCard({
   const cardBorderClass =
     task.is_container ? null : task.schedule_status === "pending"
       ? "border-emerald-500/70"
-      : task.schedule_status === "unscheduled" || isTaskOverdue(task, now)
-      ? "border-red-500/70"
       : task.kotx_task_id != null
         ? "border-primary/50"
         : unseen

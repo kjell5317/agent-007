@@ -59,7 +59,7 @@ async def test_thread_followup_shows_all_subtasks_and_closes_selected_ones(monke
 
     async def fake_action(_session, task, name, payload):
         assert name == "update_task"
-        assert payload == {"status": "closed"}
+        assert payload == {"status": "closed", "reason": None}
         closed.append(task.id)
         return {"outcome": "closed"}
 

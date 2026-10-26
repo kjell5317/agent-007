@@ -183,7 +183,7 @@ async def test_web_research_updates_description_without_other_task_changes(monke
             }),),
         )
 
-    async def fake_apply(_session, _task, name, fields):
+    async def fake_apply(_session, _task, name, fields, **_kwargs):
         calls["action"] = (name, fields)
         return {"outcome": "updated"}
 

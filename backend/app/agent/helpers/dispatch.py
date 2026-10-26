@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.agent.helpers.attributes import ATTRIBUTE_FIELDS, valid_attributes
 from app.agent.helpers.text import normalize_agent_due_date
 from app.db.models.task import Task
+from app.services.notify import notify_task_auto_closed
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
@@ -30,10 +31,14 @@ _NON_PATCH_FIELDS = frozenset(
 
 
 async def apply_task_action(
-    session: Session, task: Task, tool_name: str, tu_input: dict[str, Any]
+    session: Session, task: Task, tool_name: str, tu_input: dict[str, Any],
+    *, user_requested: bool = False,
 ) -> dict[str, Any]:
     """Apply `update_task` (fields and/or a `status` lifecycle change) or
     `no_change` to `task`.
+
+    A close the user didn't ask for is the agent's own call, so it notifies
+    with a Reopen button — a false close must not go unnoticed.
 
     Returns a trace fragment for the caller to merge into its own trace.
     Unknown tool names yield an `unknown_tool:` outcome rather than raising.
@@ -79,6 +84,9 @@ async def apply_task_action(
                 await close_task_svc(session, task.id)
             except LookupError:
                 pass
+            else:
+                if not user_requested:
+                    await notify_task_auto_closed(task, reason=tu_input.get("reason"))
             outcome = "closed"
 
         return {

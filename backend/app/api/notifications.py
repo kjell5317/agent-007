@@ -37,6 +37,7 @@ from app.services.notify import (
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
     ACTION_NIGHT,
+    ACTION_REOPEN_TASK,
     ACTION_RESCHEDULE_TASK,
     clear_task_notification,
 )
@@ -45,6 +46,7 @@ from app.services.plan.checkin import CHECKIN_ACTIONS, handle_checkin_action
 from app.services.points import adjust_points
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.dismiss import dismiss_task
+from app.services.task.reopen import reopen_task
 from app.services.task.reschedule import reschedule_task
 
 log = logging.getLogger(__name__)
@@ -204,6 +206,15 @@ async def handle_action(
     if payload.action == ACTION_DISMISS_TASK:
         log.info("notify action · dismiss task=%s", task.id)
         await dismiss_task(session, task.id, source="notification")
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    if payload.action == ACTION_REOPEN_TASK:
+        log.info("notify action · reopen task=%s", task.id)
+        # Undo, not the UI's agent reopen: the close was moments ago, so the
+        # task's due date still stands. A stale tap on a task reopened
+        # elsewhere must not re-plan it.
+        if tasks_store.latest_status_for(session, [task.id]).get(task.id, "open") == "closed":
+            await reopen_task(session, task.id)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     if payload.action == ACTION_RESCHEDULE_TASK:

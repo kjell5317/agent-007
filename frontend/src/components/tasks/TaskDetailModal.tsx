@@ -103,7 +103,7 @@ const TASK_SUMMARY_OPEN_BADGE_CLASS =
 const TASK_SUMMARY_URGENT_BADGE_CLASS =
   "bg-orange-500 text-white dark:bg-orange-500/25 dark:text-orange-100";
 const TASK_SUMMARY_OVERDUE_BADGE_CLASS =
-  "bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100";
+  "bg-red-600 text-white dark:bg-red-500/45 dark:text-red-50";
 const TASK_SUMMARY_BLUE_BADGE_CLASS =
   "bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200";
 const WORK_TYPE_BADGE_CLASS: Record<WorkType, string> = {

@@ -35,6 +35,7 @@ _TIMEOUT = 5.0
 ACTION_CLOSE_TASK = "CLOSE_TASK"
 ACTION_DISMISS_TASK = "DISMISS_TASK"
 ACTION_RESCHEDULE_TASK = "RESCHEDULE_TASK"
+ACTION_REOPEN_TASK = "REOPEN_TASK"
 
 # Fired by the HA morning/evening routines — not tied to a task. DAY answers
 # with how long the user has been awake (now − last night's sleep end); NIGHT
@@ -223,6 +224,19 @@ async def notify_task_deferred(task, *, primary_action: dict[str, str] | None = 
         tag=task_tag(task.id),
         actions=actions,
         sticky=True,
+    )
+
+
+async def notify_task_auto_closed(task, *, reason: str | None = None) -> None:
+    """The agent closed a task on its own reading of an input. Sent after the
+    close cleared the task's earlier notification, so it takes over the tag;
+    Reopen undoes a false close."""
+    await notify(
+        title=f"Auto-closed: {_short_title(task)}",
+        message=_clip(reason, 200) if reason and reason.strip() else "Closed automatically",
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=[{"action": ACTION_REOPEN_TASK, "title": "Reopen"}],
     )
 
 

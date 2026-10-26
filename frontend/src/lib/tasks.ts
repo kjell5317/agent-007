@@ -74,16 +74,6 @@ function bookedMinutes(task: Pick<Task, "estimation" | "estimation_corrected">):
   return Math.max(5, task.estimation_corrected || task.estimation || 30);
 }
 
-export function isTaskOverdue(task: Task, now = Date.now()): boolean {
-  if (task.status !== "open") return false;
-  const due = timeOrNull(task.due_date);
-  if (due != null && due < now) return true;
-  // A running task's event keeps extending past its slot until marked done.
-  if (task.running_since) return false;
-  const scheduled = timeOrNull(task.scheduled_date);
-  return scheduled != null && scheduled + bookedMinutes(task) * 60_000 < now;
-}
-
 function timeOrNull(iso: string | null): number | null {
   if (!iso) return null;
   const time = new Date(iso).getTime();

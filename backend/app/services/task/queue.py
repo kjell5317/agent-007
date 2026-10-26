@@ -210,7 +210,9 @@ async def _process(
                 "reason": agent_trace.get("reason"),
                 "confidence": agent_trace.get("confidence"),
             }
-            result = await apply_task_action(session, task, action, action_fields)
+            result = await apply_task_action(
+                session, task, action, action_fields, user_requested=True
+            )
             raw.status = "duplicate"
             raw.task_id = target_id
             raw.processed_at = raw.processed_at or datetime.now(timezone.utc)

@@ -23,7 +23,7 @@ const badgeVariants = cva(
         no_change:
           "border-transparent bg-indigo-100 text-indigo-800 dark:bg-indigo-500/20 dark:text-indigo-200",
         overdue:
-          "border-transparent bg-red-500 text-white dark:bg-red-500/25 dark:text-red-100",
+          "border-transparent bg-red-600 text-white dark:bg-red-500/45 dark:text-red-50",
         urgent:
           "border-transparent bg-orange-500 text-white dark:bg-orange-500/25 dark:text-orange-100",
         muted: "border-transparent bg-muted text-muted-foreground",

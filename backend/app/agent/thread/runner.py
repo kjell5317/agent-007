@@ -202,7 +202,10 @@ async def run_thread_followup(
                     or any(str(child_id) not in selected for child_id in selected_ids)):
                 raise ValueError("Choose one or more subtasks from the current task")
             for child_id in selected_ids:
-                await apply_task_action(session, selected[str(child_id)], "update_task", {"status": "closed"})
+                await apply_task_action(
+                    session, selected[str(child_id)], "update_task",
+                    {"status": "closed", "reason": action_input.get("reason")},
+                )
             trace["closed_subtask_ids"] = [str(child_id) for child_id in selected_ids]
             artifact_refs = [f"task:{child_id}" for child_id in selected_ids]
             frag = {"outcome": "closed", "status_change": "closed", "reason": action_input.get("reason")}
@@ -214,7 +217,9 @@ async def run_thread_followup(
                     raise ValueError("Choose a subtask from the current task")
                 trace["existing_task_id"] = selected_id
                 artifact_refs = [f"task:{target.id}"]
-            frag = await apply_task_action(session, target, tu.name, action_input)
+            frag = await apply_task_action(
+                session, target, tu.name, action_input, user_requested=require_change
+            )
         trace.update(frag)
         saved = await save_notes(session, raw.id, action_input.get("notes"))
         if saved:
