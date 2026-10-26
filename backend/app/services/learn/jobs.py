@@ -19,7 +19,7 @@ from app.db.clients import learned_models as models_store
 from app.db.clients import schedule_log as log_store
 from app.db.schemas.task import TaskCreate
 from app.services.learn import data, duration, preference
-from app.services.learn.jev import refit_thresholds as refit_jev_thresholds
+from app.services.learn.jev import refit as refit_jev
 from app.services.plan import features as F
 from app.timezones import user_tz
 
@@ -191,9 +191,9 @@ async def nightly(session: Session) -> None:
         log.warning("learn · capacity refit failed err=%s", exc)
         session.rollback()
     try:
-        refit_jev_thresholds(session, now)
+        refit_jev(session, now)
     except Exception as exc:  # noqa: BLE001 — keep the previous thresholds
-        log.warning("learn · jev threshold refit failed err=%s", exc)
+        log.warning("learn · jev refit failed err=%s", exc)
         session.rollback()
     stats = scheduling_stats(session, now=now)
     from app import observability

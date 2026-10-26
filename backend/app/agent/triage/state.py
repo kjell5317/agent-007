@@ -89,6 +89,8 @@ def task_candidates_state(
         }
         if getattr(task, "due_date", None):
             row["due"] = task.due_date.date().isoformat()
+        if getattr(task, "label", None):
+            row["label"] = task.label
         if hit.sender:
             row["from"] = hit.sender
         if hit.received_at:

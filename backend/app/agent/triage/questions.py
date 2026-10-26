@@ -1,9 +1,14 @@
 """The Jev question catalog for triage, task fields and scheduling attributes.
 
 Choices always carry an explicit way out ("none"): without one Jev drifts to
-the first option, and the first option also wins close calls — so it is the
-side whose mistake is cheaper (a task over a dropped input, "no match" over a
-wrong merge).
+the first option. The first option also wins close calls, so it is the side
+whose mistake is cheaper ("no match" over a wrong merge) — except for the
+task decision, which is asked in both orders and averaged, because a lean
+either way costs: the first replay showed "task first" flooding Slack with
+tasks.
+
+Learned thresholds and the triage model belong to one wording: bump
+`QUESTIONS_VERSION` whenever a triage question changes.
 """
 
 from __future__ import annotations
@@ -73,6 +78,8 @@ MONTHS = (
 )
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
+QUESTIONS_VERSION = "2"
+
 _DEADLINE = "the deadline by which the user must do what the input asks"
 _ABSENT = "The input does not state this, or the deadline is not this kind of date."
 
@@ -91,27 +98,73 @@ HAS_FACTS = Noul(
 )
 
 
+_IS_TASK_INSTRUCTIONS = (
+    "Does `input` leave the user personally with something to do? `input.directed_at_me` "
+    "is true when it was addressed to the user (To: line, direct message or mention) "
+    "rather than to a list, a group or a channel. `not_task_precedents` are similar "
+    "earlier inputs the user did not treat as tasks; `sender_history` counts how earlier "
+    "inputs from this sender ended."
+)
+_TASK = (
+    "The user personally has to do something because of `input`: a request or question "
+    "put to them, a deadline they must meet, something to send, submit, pay, fix, review, "
+    "decide, book or register."
+)
+_NOT_TASK = (
+    "Nothing the user personally has to do: information or an announcement, marketing or "
+    "a newsletter, an automated notification, small talk or thanks, or a request aimed at "
+    "someone else or at a whole group."
+)
+
+# Narrow, literal yes/no reads. Each is a feature of the triage model
+# (`agent/triage/features.py`); none decides anything on its own.
+SIGNAL_QUESTIONS: dict[str, Noul] = {
+    "addressed_to_user": Noul(
+        instructions=(
+            "`input` is addressed to the user personally: `input.directed_at_me` is true, "
+            "or the user is named, @-mentioned or written to directly. Not merely sent to a "
+            "list, a group or a channel the user is in."
+        ),
+    ),
+    "asks_for_action": Noul(
+        instructions=(
+            "`input` asks its reader to do something specific: answer a question, send, "
+            "submit, pay, fix, review, decide, book or register."
+        ),
+    ),
+    "automated": Noul(
+        instructions=(
+            "`input` is automated or bulk mail: a newsletter, marketing, a notification, a "
+            "receipt, a digest, or a system or CI alert."
+        ),
+    ),
+    "fyi_only": Noul(
+        instructions="`input` only shares information or an announcement; it asks nothing of anyone.",
+    ),
+    "acknowledgement": Noul(
+        instructions=(
+            "`input` only thanks, acknowledges, agrees or confirms; it adds no new request."
+        ),
+    ),
+    "others_act": Noul(
+        instructions="`input` asks someone other than the user to do the work.",
+    ),
+}
+
+
 def triage_questions(candidates: Mapping[str, str]) -> dict[str, Question]:
     """Is it a task, does it match a listed task, should it reach the LLM.
     `candidates` maps candidate id → task title."""
     questions: dict[str, Question] = {
         "is_task": Choice(
-            instructions=(
-                "Does `input` give the user (the recipient) something concrete to do? "
-                "`not_task_precedents` are similar earlier inputs the user did not treat "
-                "as tasks; `sender_history` counts how earlier inputs from this sender ended."
-            ),
-            criteria={
-                "task": (
-                    "The user must act: reply with an answer, submit, pay, fix, prepare, "
-                    "decide, book, register, review or deliver something."
-                ),
-                "not_task": (
-                    "Nothing for the user to do: informational, conversational, marketing, "
-                    "a newsletter, an automated notification, or addressed to someone else."
-                ),
-            },
+            instructions=_IS_TASK_INSTRUCTIONS,
+            criteria={"task": _TASK, "not_task": _NOT_TASK},
         ),
+        "is_task_swapped": Choice(
+            instructions=_IS_TASK_INSTRUCTIONS,
+            criteria={"not_task": _NOT_TASK, "task": _TASK},
+        ),
+        **SIGNAL_QUESTIONS,
         "has_event": HAS_EVENT,
         "has_facts": HAS_FACTS,
     }

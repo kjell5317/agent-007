@@ -34,8 +34,10 @@ from app.agent.tools.notes_lookup import save_notes
 from app.agent.triage import policy
 from app.agent.triage.dates import due_from_urgency
 from app.agent.triage.fields import FieldDraft, draft_fields
+from app.agent.triage.features import p_task_choice, triage_features
 from app.agent.triage.questions import (
     HAS_FACTS,
+    QUESTIONS_VERSION,
     field_questions,
     followup_questions,
     triage_questions,
@@ -49,7 +51,7 @@ from app.db.clients.documents import CalendarMatch
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.event_context import apply_event_context
 from app.services.input.embedding import candidate_query_text, embed
-from app.services.learn.jev import thresholds_for
+from app.services.learn.jev import predict, thresholds_for, triage_model_for
 from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
 from app.services.task.build import task_create_from_fields
@@ -95,13 +97,14 @@ async def new_input(
     settings = get_settings()
     now = datetime.now(user_tz())
     pairs = load_task_candidates(session, candidates)
+    history = sender_history_for(session, raw, now)
     state, refs = new_input_state(
         raw,
         now=now,
         task_candidates=pairs,
         not_task_precedents=[h for h in candidates if h.status == "not_task"],
         related_events=related_events,
-        sender_history=sender_history_for(session, raw, now),
+        sender_history=history,
     )
     questions = {
         **triage_questions({cid: task.title for cid, (_, task) in zip(refs.candidates, pairs)}),
@@ -117,9 +120,25 @@ async def new_input(
     except jev.JevUnavailable as exc:
         return Outcome(jev={"error": str(exc)})
 
-    th = thresholds_for(session, raw.source, settings)
-    decision = policy.decide_new_input(result.answers, th, close_enabled=settings.jev_close_enabled)
-    jev_trace = _jev_trace(result, decision, refs.candidates)
+    features = triage_features(
+        result.answers,
+        source=raw.source,
+        meta=raw.source_metadata or {},
+        sender_history=history,
+        candidates=candidates,
+    )
+    weights = triage_model_for(session, QUESTIONS_VERSION, settings)
+    p_task = predict(weights, features) if weights else p_task_choice(result.answers)
+    th = thresholds_for(session, raw.source, QUESTIONS_VERSION, settings)
+    decision = policy.decide_new_input(
+        result.answers, p_task, th, close_enabled=settings.jev_close_enabled
+    )
+    jev_trace = {
+        **_jev_trace(result, decision, refs.candidates),
+        "features": features,
+        "p_task": round(p_task, 4),
+        "p_task_source": "model" if weights else "choice",
+    }
     if not jev.acting(settings) or decision.kind == "llm":
         return Outcome(jev=jev_trace)
 
@@ -212,7 +231,7 @@ async def followup(session: Session, raw: Any, task: Any) -> Outcome:
     except jev.JevUnavailable as exc:
         return Outcome(jev={"error": str(exc)})
 
-    th = thresholds_for(session, raw.source, settings)
+    th = thresholds_for(session, raw.source, QUESTIONS_VERSION, settings)
     decision = policy.decide_followup(result.answers, th, close_enabled=settings.jev_close_enabled)
     jev_trace = _jev_trace(result, decision, {})
     if not jev.acting(settings) or decision.kind == "llm":
@@ -273,11 +292,12 @@ async def manual(session: Session, raw: Any, user_fields: dict[str, Any]) -> Man
     except jev.JevUnavailable as exc:
         return ManualOutcome(None, {"jev": {"error": str(exc)}})
 
-    th = thresholds_for(session, "manual", settings)
+    th = thresholds_for(session, "manual", QUESTIONS_VERSION, settings)
     draft = draft_fields(answers, refs, now=now, th=th)
     facts = policy.yes(answers.get("has_facts")) >= th.flag
     jev_trace = {
         **result.trace(),
+        "questions": QUESTIONS_VERSION,
         "answers": {k: {"value": a.value, "p": round(a.p, 4)} for k, a in answers.items()},
     }
     if not jev.acting(settings):
@@ -425,7 +445,12 @@ def sender_history_for(session: Session, raw: Any, now: datetime) -> dict[str, i
 def _jev_trace(
     result: jev.JevResult, decision: policy.Decision, candidates: dict[str, uuid.UUID]
 ) -> dict[str, Any]:
-    out = {**result.trace(), "decision": decision.kind, "why": decision.reason}
+    out = {
+        **result.trace(),
+        "questions": QUESTIONS_VERSION,
+        "decision": decision.kind,
+        "why": decision.reason,
+    }
     if decision.target:
         out["target"] = decision.target
     if candidates:

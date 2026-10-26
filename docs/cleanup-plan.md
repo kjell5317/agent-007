@@ -1,12 +1,16 @@
 # Cleanup plan — after Jev takes over, and the legacy scheduler
 
 Two independent cleanups. Part A removes LLM code that Jev triage makes
-redundant, once Jev has proven itself in production. Part B deletes the
-rule-based scheduler the CP-SAT solver replaced. Both are mostly deletion; the
-few behaviour changes are called out.
+redundant once Jev has proven itself in production, then moves every
+remaining LLM call to Gemini Flash and deletes the Anthropic path. Part B
+deletes the rule-based scheduler the CP-SAT solver replaced. Both are mostly
+deletion; the few behaviour changes are called out.
 
 State on 2026-10-25:
 - Jev is implemented but off (`JEV_MODE=off`, no key).
+- The agents run on Anthropic (`CLAUDE_MODEL=claude-haiku-4-5` in prod);
+  chat, the subtask planner and link research already run on
+  `gemini-3.8-flash`.
 - Prod runs `SCHEDULER_ENGINE=solver`, but the code default is still
   `shadow`, which keeps the legacy planner authoritative wherever the env
   var is missing (dev, tests, a fresh deploy).
@@ -63,13 +67,92 @@ These are small behaviour changes that let the later deletions happen:
 | Cosine `auto_not_task` | `orchestrator.py`, `input_dedup_threshold` for the not-task side | **Decide on replay data first.** Compare Jev with the cosine gate on the `auto_not_task` rows. If Jev agrees ≥ 99 %, let Jev decide those too (the precedent is already in its state) and keep only `auto_duplicate`. That removes a second, uncalibrated drop path |
 | `confidence` on the agent tools | `agent/tools/schemas.py` `_CONFIDENCE_SCHEMA`, its uses, `trace["confidence"]` writes | Jev's probability is the calibrated number; the LLM's self-reported confidence isn't used for anything. Keep `reason`: it is the NOT_TASK precedent text Jev reads |
 | Classification guidance in the agent prompt | `agent/prompts/new_input.py` | The agent now only sees hard cases (events, uncertain inputs, edits). Shorten the "is it a task" section to what those need. Do this as a prompt edit plus replay, not a blind cut |
-| ML proposal rows Jev replaced | `docs/scheduling-plan.md` "ML in the agent's decisions" | Mark the task-gate and label-kNN rows superseded by `docs/jev-plan.md` |
+| ML proposal rows Jev replaced | `docs/scheduling-plan.md` "ML in the agent's decisions" | Mark the task-gate row implemented (the Jev triage model) and the label-kNN row superseded, both pointing to `docs/jev-plan.md` |
 | Unused override readers | `db/clients/overrides.py:80` `list_for_field`, `:97` `task_ids_with_user_override` | No callers (verified). They were prep for the ML proposal that Jev replaced |
 
-### A3 — Consider, not cleanup
+### A3 — Run every remaining LLM call on Gemini Flash
 
-- **A stronger fallback model.** After A1 the agent's volume falls to the
-  hard cases. A stronger model costs little there.
+After A1–A2, the LLM does two kinds of work:
+
+- **Writing text:** the triage writer, the notes harvest, note moderation
+  and subtask plans.
+- **Hard cases:** calendar events, edits to existing tasks, and inputs Jev
+  isn't sure about.
+
+Chat already runs on `gemini-3.8-flash` with tools, forced tool calls and
+thought signatures, so the Google path through `agent/helpers/llm.py` is
+proven. One provider removes the Anthropic SDK, its key, and the
+two-provider branches in the adapter.
+
+LLM call sites today:
+
+| Call site | Provider in prod today |
+|---|---|
+| New-input agent (`agent/input/runner.py`), thread follow-up (`agent/thread/runner.py`), manual extractor (`agent/manual/runner.py`, also kotx briefs until A1) | default → Anthropic `claude-haiku-4-5` |
+| Triage writer (`agent/triage/write.py`), notes harvest (`agent/triage/runner.py`) | default → Anthropic |
+| Note moderation (`services/note/moderate.py`) | default → Anthropic |
+| Subtask planner (`services/task/split.py`) | Flash (whenever `GEMINI_API_KEY` is set) |
+| Attribute classifier fallback | Flash (deleted in A2) |
+| Chat (`agent/chat/runner.py`) | Flash (`chat_llm_*`) |
+| Link research (`agent/helpers/web.py`) | Flash with Search grounding; replaced by the hand-off research executor (`docs/handoff-plan.md`, W-steps) |
+
+Steps:
+
+1. **Prepare the Google path for the agent loops** (code, before the
+   switch):
+   - **Thinking level:** `chat()` gets a default thinking level for Google —
+     a new setting `llm_thinking_level` (default `low`), used whenever the
+     caller passes none. The agents never pass one, so on Gemini they would
+     run the model's default thinking.
+   - **Output cap:** raise `MAX_TOKENS` on the Google path. Thinking tokens
+     count against `max_output_tokens`; that's why the attribute classifier
+     already needs 4096. Agent turns capped at 1024 would truncate.
+   - **Tool schemas:** test each flow's tools on Gemini (new-input, thread,
+     manual, writer, notes, moderation, split). Gemini accepts a subset of
+     JSON Schema; `format: uuid`, `minLength` and `minItems` are the keys to
+     check.
+   - **How:** a unit test per flow that converts the tools with
+     `_convert_tools_to_google_genai_format`, plus one live call per flow on
+     a recent input.
+2. **Switch by env** (reversible): set `LLM_PROVIDER=google` and
+   `LLM_MODEL=gemini-3.8-flash`, and remove `CLAUDE_MODEL`. Rollback means
+   restoring the old values.
+3. **Gate** (2 weeks), measured on agent-decided inputs only (`new_input`,
+   `thread_followup` and `manual` branches) and compared with the last Jev
+   weeks on Haiku:
+   - the same corrections as the exit criteria: dismissals, promotions,
+     label and estimation overrides;
+   - `no_tool_call` and `max_iterations` outcomes;
+   - writer failures (`jev triage · writer failed` in the logs);
+   - title quality, now written by Flash: spot-check 20.
+4. **Delete Anthropic** once the gate holds:
+   - **Adapter** (`agent/helpers/llm.py`): the `AnthropicChatGenerator`
+     import, `_anthropic_generator`, `CACHE_CONTROL` and the cache marker in
+     `_to_haystack_messages`, and the Anthropic branches of
+     `_build_generator`, `_generation_kwargs` and `_tool_choice`. Gemini's
+     own context caching covers the repeated system/tool prefix; no explicit
+     marker is needed.
+   - **Routing that becomes constant:**
+     - `provider="google" if … else None` in `services/task/split.py` and
+       `services/attribute_classifier.py`;
+     - `provider="google"` in `agent/helpers/web.py`;
+     - `Settings.llm_target` and the `chat_llm_provider` / `chat_llm_model`
+       pair. Chat keeps `chat_thinking_level` if it should think
+       differently from the background flows.
+   - **Settings:** remove `anthropic_api_key`, `claude_model` and
+     `DEFAULT_ANTHROPIC_MODEL`. `llm_provider` goes or becomes google-only.
+     The `llm_model` default becomes `gemini-3.8-flash`.
+   - **Dependencies:** `anthropic-haystack` and `anthropic` in
+     `pyproject.toml`, plus the `MessageParam` pin comment; then
+     `uv lock`.
+   - **Config:** the LLM section of `.env.example`; `ANTHROPIC_API_KEY` and
+     `CLAUDE_MODEL` in the prod env.
+   - **Comments:** the `observability.py` module docstring (it names
+     `AnthropicChatGenerator`), the settings comment about the "cached
+     Anthropic path", and the `_generation_kwargs` docstring.
+
+### A4 — Consider, not cleanup
+
 - **Default `jev_mode` to `on`.** Keep the setting itself: `off` is the
   kill switch.
 
@@ -82,6 +165,9 @@ These are small behaviour changes that let the later deletions happen:
 - `test_task_split.py` conjunction tests.
 - `test_manual_task_creation.py` event-cue tests.
 - `test_kotx_consolidation.py` extract-fields stubs.
+- The Anthropic cases in `test_llm_adapter.py` and `test_llm_tracing.py`
+  (A3). Fake responses elsewhere that only label themselves
+  `provider="anthropic"` can stay or be relabelled.
 
 ---
 

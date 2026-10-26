@@ -118,8 +118,9 @@ def wired(monkeypatch):
     monkeypatch.setattr(runner, "get_settings", lambda: state["settings"])
     monkeypatch.setattr(runner.jev, "ask", ask)
     monkeypatch.setattr(
-        runner, "thresholds_for", lambda session, source, settings=None: Thresholds()
+        runner, "thresholds_for", lambda session, source, version, settings=None: Thresholds()
     )
+    monkeypatch.setattr(runner, "triage_model_for", lambda session, version, settings=None: None)
     monkeypatch.setattr(runner.raw_inputs, "finalize", finalize)
     monkeypatch.setattr(runner.raw_inputs, "sender_history", lambda *a, **k: {})
     monkeypatch.setattr(runner.tasks_store, "create", create)
@@ -375,3 +376,32 @@ async def test_write_fields_makes_no_call_when_nothing_is_missing(monkeypatch):
 
     monkeypatch.setattr(write, "chat", never)
     assert await write.write_fields(_raw(), set(), ACTING) == {}
+
+
+@pytest.mark.asyncio
+async def test_fitted_model_decides_over_the_raw_choice(wired, monkeypatch):
+    # Jev's choice says "task", but the user's model learned automated mail isn't.
+    wired["answers"] = _answers(automated=_noul(0.99))
+    monkeypatch.setattr(
+        runner, "triage_model_for", lambda session, version, settings=None: {"automated": -2.0}
+    )
+    outcome = await runner.new_input(FakeSession(), _raw(), [], [])
+
+    assert outcome.trace["outcome"] == "not_task"
+    jev_trace = outcome.trace["jev"]
+    assert jev_trace["p_task_source"] == "model"
+    assert jev_trace["questions"] == runner.QUESTIONS_VERSION
+    assert "automated" in jev_trace["features"] and jev_trace["p_task"] < 0.01
+
+
+@pytest.mark.asyncio
+async def test_without_a_model_both_choice_orders_are_averaged(wired):
+    wired["answers"] = _answers(
+        is_task=Answer("task", 0.99, {"task": 0.99, "not_task": 0.01}),
+        is_task_swapped=Answer("not_task", 0.6, {"task": 0.4, "not_task": 0.6}),
+    )
+    outcome = await runner.new_input(FakeSession(), _raw(), [], [])
+    # Averaged p(task) = 0.695: neither confident enough to drop nor to create.
+    assert outcome.trace is None
+    assert outcome.jev["p_task"] == pytest.approx(0.695)
+    assert outcome.jev["p_task_source"] == "choice"

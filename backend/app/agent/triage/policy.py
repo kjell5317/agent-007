@@ -30,8 +30,10 @@ def yes(answer: Answer | None) -> float:
 
 
 def decide_new_input(
-    answers: Mapping[str, Answer], th: Thresholds, *, close_enabled: bool = False
+    answers: Mapping[str, Answer], p_task: float, th: Thresholds, *, close_enabled: bool = False
 ) -> Decision:
+    """`p_task` is the triage model's p(the input belongs to a task), or the
+    both-orders Jev choice while no model is fitted."""
     facts = yes(answers.get("has_facts")) >= th.flag
     if yes(answers.get("has_event")) >= th.flag:
         return Decision("llm", "describes a calendar event", facts=facts)
@@ -53,17 +55,14 @@ def decide_new_input(
             )
         return Decision("llm", f"matched task needs {action.value}", target.value, action.p, facts)
 
-    is_task = answers["is_task"]
-    if is_task.value == "not_task" and is_task.p >= th.drop:
-        return Decision("not_task", "not a task", p=is_task.p, facts=facts)
-    if is_task.value == "task" and is_task.p >= th.create:
+    if 1.0 - p_task >= th.drop:
+        return Decision("not_task", "not a task", p=1.0 - p_task, facts=facts)
+    if p_task >= th.create:
         label = answers.get("label")
         if label is None or label.value == "none" or label.p < th.field:
-            return Decision("llm", "task, but no confident label", p=is_task.p, facts=facts)
-        return Decision("create", "a task for the user", p=is_task.p, facts=facts)
-    return Decision(
-        "llm", f"unsure whether this is a task (p={is_task.p:.2f})", p=is_task.p, facts=facts
-    )
+            return Decision("llm", "task, but no confident label", p=p_task, facts=facts)
+        return Decision("create", "a task for the user", p=p_task, facts=facts)
+    return Decision("llm", f"unsure whether this is a task (p={p_task:.2f})", p=p_task, facts=facts)
 
 
 def decide_followup(

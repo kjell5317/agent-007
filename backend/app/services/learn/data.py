@@ -83,7 +83,7 @@ def preference_rows(log_rows, now: datetime) -> list[Row]:
 
 def duration_observations(log_rows, now: datetime) -> list[Observation]:
     out: list[Observation] = []
-    for (_, slot_start), slot_rows in _by_slot(log_rows).items():
+    for (task_id, slot_start), slot_rows in _by_slot(log_rows).items():
         kinds = {r.kind for r in slot_rows}
         if kinds & {"abandoned", "no_response", "not_done"}:
             continue
@@ -101,18 +101,18 @@ def duration_observations(log_rows, now: datetime) -> list[Observation]:
             if closed is None:
                 continue
             actual = (closed.created_at - slot_start).total_seconds() / 60
-            out.append(Observation(meta["estimate"], actual, group, False, weight))
+            out.append(Observation(meta["estimate"], actual, group, False, weight, task_id))
         elif "done_confirmed" in kinds:
             done = next(r for r in slot_rows if r.kind == "done_confirmed")
             if done.slot_end is None:
                 continue
             bound = (done.slot_end - slot_start).total_seconds() / 60
-            out.append(Observation(meta["estimate"], bound, group, True, weight))
+            out.append(Observation(meta["estimate"], bound, group, True, weight, task_id))
         elif closed is not None and closed.slot_end is not None and _closed_in_slot(
             closed, slot_start, closed.slot_end
         ):
             bound = max(5.0, (closed.created_at - slot_start).total_seconds() / 60)
-            out.append(Observation(meta["estimate"], bound, group, True, weight))
+            out.append(Observation(meta["estimate"], bound, group, True, weight, task_id))
     return out
 
 

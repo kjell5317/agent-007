@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -32,6 +33,7 @@ class Observation:
     group: str
     upper_bound: bool = False
     weight: float = 1.0
+    task_id: Any = None
 
 
 def group_key(label: str | None, work_type: str | None, estimator: str | None = None) -> str:

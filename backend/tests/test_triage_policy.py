@@ -40,7 +40,6 @@ def _noul(p_yes: float) -> Answer:
 
 def _answers(**overrides) -> dict[str, Answer]:
     answers = {
-        "is_task": _a("task"),
         "has_event": _noul(0.05),
         "has_facts": _noul(0.05),
         "label": _a("Uni", 0.9),
@@ -72,55 +71,55 @@ def _answers(**overrides) -> dict[str, Answer]:
 
 
 def test_confident_not_task_is_dropped():
-    decision = policy.decide_new_input(_answers(is_task=_a("not_task", 0.99)), TH)
+    decision = policy.decide_new_input(_answers(), 0.01, TH)
     assert decision.kind == "not_task"
     assert not decision.facts
 
 
 def test_not_task_below_the_drop_threshold_goes_to_the_llm():
-    assert policy.decide_new_input(_answers(is_task=_a("not_task", 0.9)), TH).kind == "llm"
+    assert policy.decide_new_input(_answers(), 0.1, TH).kind == "llm"
 
 
 def test_event_always_goes_to_the_llm():
-    answers = _answers(is_task=_a("not_task", 0.999), has_event=_noul(0.6))
-    assert policy.decide_new_input(answers, TH).kind == "llm"
+    answers = _answers(has_event=_noul(0.6))
+    assert policy.decide_new_input(answers, 0.001, TH).kind == "llm"
 
 
 def test_facts_ride_along_without_blocking_the_decision():
-    decision = policy.decide_new_input(_answers(is_task=_a("not_task"), has_facts=_noul(0.8)), TH)
+    decision = policy.decide_new_input(_answers(has_facts=_noul(0.8)), 0.01, TH)
     assert decision.kind == "not_task" and decision.facts
 
 
 def test_matched_candidate_with_nothing_new_is_no_change():
     answers = _answers(target=_a("B", 0.95), target_action=_a("nothing_new", 0.95))
-    decision = policy.decide_new_input(answers, TH)
+    decision = policy.decide_new_input(answers, 0.99, TH)
     assert (decision.kind, decision.target) == ("no_change", "B")
 
 
 def test_matched_candidate_with_changes_goes_to_the_llm():
     answers = _answers(target=_a("A", 0.95), target_action=_a("changes", 0.95))
-    assert policy.decide_new_input(answers, TH).kind == "llm"
+    assert policy.decide_new_input(answers, 0.99, TH).kind == "llm"
 
 
 def test_close_needs_the_flag():
     answers = _answers(target=_a("A", 0.99), target_action=_a("done", 0.99))
-    assert policy.decide_new_input(answers, TH).kind == "llm"
-    assert policy.decide_new_input(answers, TH, close_enabled=True).kind == "close"
+    assert policy.decide_new_input(answers, 0.99, TH).kind == "llm"
+    assert policy.decide_new_input(answers, 0.99, TH, close_enabled=True).kind == "close"
 
 
 def test_unsure_none_target_goes_to_the_llm():
     answers = _answers(target=_a("none", 0.6), target_action=_a("nothing_new"))
-    assert policy.decide_new_input(answers, TH).kind == "llm"
+    assert policy.decide_new_input(answers, 0.99, TH).kind == "llm"
 
 
 def test_confident_none_target_falls_through_to_create():
     answers = _answers(target=_a("none", 0.95), target_action=_a("nothing_new"))
-    assert policy.decide_new_input(answers, TH).kind == "create"
+    assert policy.decide_new_input(answers, 0.99, TH).kind == "create"
 
 
 def test_create_needs_a_confident_label():
-    assert policy.decide_new_input(_answers(label=_a("none", 0.9)), TH).kind == "llm"
-    assert policy.decide_new_input(_answers(label=_a("Uni", 0.4)), TH).kind == "llm"
+    assert policy.decide_new_input(_answers(label=_a("none", 0.9)), 0.99, TH).kind == "llm"
+    assert policy.decide_new_input(_answers(label=_a("Uni", 0.4)), 0.99, TH).kind == "llm"
 
 
 def test_followup_decisions():

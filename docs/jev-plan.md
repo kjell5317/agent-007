@@ -1,8 +1,10 @@
 # Jev triage — implementation plan
 
-**Status (2026-10-25): implemented, off by default.** Nothing calls Jev until
-`TYPESAFE_API_KEY` is set and `JEV_MODE` is `shadow` or `on`. Rollout steps
-are at the end.
+**Status (2026-10-26): implemented, off by default, triage questions v2.**
+Nothing calls Jev until `TYPESAFE_API_KEY` is set and `JEV_MODE` is `shadow`
+or `on`. The first replay (questions v1) failed the gate; v2 redesigns the
+task decision and adds a triage model fitted on the user's history — see
+"Replay results" and "Rollout".
 
 Jev (TypeSafe AI, `POST https://api.typesafe.ai/v1/systemone`) is a hosted
 classifier. It takes a `state` (text or JSON) plus named questions — `choice`
@@ -21,8 +23,8 @@ when text is actually needed.
   stated deadlines, which Jev reads as parts and code assembles.
 - Titles stay good: the LLM writes them unless the source already has a
   clean one. Descriptions only when Jev says one is needed.
-- Manual creation in about a second. Today the P50 is 11.4 s.
-- Thresholds learned from the user's own corrections.
+- Manual creation in about a second. Today the P50 is 4.2 s.
+- A triage model and thresholds learned from the user's own history.
 
 The hand-off feature (agents doing tasks, email drafts) is a separate plan:
 `docs/handoff-plan.md`. It adds questions to the same Jev call.
@@ -35,7 +37,8 @@ The hand-off feature (agents doing tasks, email drafts) is a separate plan:
 - All time: 4,128 inputs. Gmail and Slack are 86 % `not_task` (3,275 of
   3,793). There are 87 manual overrides and 7 `is_task` corrections in
   `task_overrides`.
-- Manual creation: P50 11.4 s from POST to the processed row.
+- Manual creation: P50 4.2 s from POST to the processed row (last 120 days,
+  rows over 10 minutes excluded).
 
 ## Decisions and assumptions
 
@@ -48,20 +51,28 @@ The hand-off feature (agents doing tasks, email drafts) is a separate plan:
   agent ran before.
 - **Precedents go in through the state.** Jev has no few-shot or
   fine-tuning API (same weights for every account). Every state carries the
-  ranked candidates the orchestrator already retrieves, the NOT_TASK
-  precedents with their reasons, and per-sender history (how earlier inputs
-  from the same address ended). The learning happens on our side: thresholds
-  refit nightly from final statuses (Step 9).
+  ranked candidates the orchestrator already retrieves (with their labels),
+  the NOT_TASK precedents with their reasons, and per-sender history (how
+  earlier inputs from the same address ended).
+- **The adaptation is ours: a triage model.** Jev answers narrow, literal
+  yes/no questions. A logistic regression fitted on the user's labelled
+  history combines them with sender history, direction and precedent
+  similarity into p(task). This is the downstream classical model TypeSafe
+  recommends for domain fitting. The policy acts on that probability.
 - **Thresholds are option probabilities, not Jev's `confidence`.** The
   scale of `confidence` depends on the number of options; a probability
   means the same on every question.
-- **The first option wins close calls** (documented jaggedness). Every
-  choice puts its cheaper mistake first: `task` before `not_task`, `none`
-  before any candidate, `none` before any date part.
+- **The first option wins close calls** (documented jaggedness). The task
+  decision is therefore asked in both orders and averaged. The v1 lean
+  towards "task" flooded Slack with false tasks. Other choices put the
+  cheaper mistake first: `none` before any candidate, `none` before any
+  date part.
 - **Explanations are not needed.** A Jev decision stores
   `reason = "jev: not a task"` and `confidence = p` in the trace.
-- **The model is pinned** (`jev-1.14.0`, never `jev-latest`). Learned
-  thresholds are keyed by version; a new version starts from the defaults.
+- **The model is pinned** (`jev-1.14.0`, never `jev-latest`). The triage
+  model and the thresholds are keyed by Jev version **and**
+  `QUESTIONS_VERSION`, so new wording or a new Jev version starts from
+  scratch.
 - **Every answer is logged** under `agent_trace["jev"]` (model, latency,
   tokens, each answer's option and probability, the decision and why).
 
@@ -73,14 +84,15 @@ The hand-off feature (agents doing tasks, email drafts) is a separate plan:
 | `agent/triage/state.py` | Pure state builders, subject cleaning, neutral ids (candidates A–E, events E1–E3, links U1–U4) |
 | `agent/triage/questions.py` | The question catalog |
 | `agent/triage/dates.py` | Urgency buckets → due date; stated deadline parts → due date |
+| `agent/triage/features.py` | Pure triage-model features from Jev's answers and history |
 | `agent/triage/policy.py` | Pure decisions: `decide_new_input`, `decide_followup` |
 | `agent/triage/fields.py` | Answers → `FieldDraft` (task fields + what the writer must add) |
 | `agent/triage/write.py` | The writer: one forced-tool LLM call with only the missing fields |
 | `agent/triage/runner.py` | I/O: `new_input`, `followup`, `manual`, `harvest_notes` |
 | `agent/triage/hints.py` | `split_hint` for the split gate |
-| `services/learn/jev.py` | `Thresholds`, `thresholds_for`, nightly `refit_thresholds` |
+| `services/learn/jev.py` | Triage model (`fit_logistic`, `predict`, `triage_model_for`), `Thresholds`, `thresholds_for`, nightly `refit` |
 | `services/task/build.py` | `task_create_from_fields`, shared by both agents, the queue and triage |
-| `scripts/jev_replay.py` | Offline evaluation against history |
+| `scripts/jev_replay.py` | Offline evaluation against history; `--publish` bootstraps the model and thresholds |
 | `migrations/versions/0043_estimation_source.py` | `tasks.estimation_source` |
 
 ## Question catalog
@@ -89,7 +101,8 @@ One call per input; all questions share one state.
 
 | Id | Type | Used for |
 |---|---|---|
-| `is_task` | choice: task / not_task | triage |
+| `is_task`, `is_task_swapped` | choice: task / not_task, in both orders | averaged → triage model feature (and p(task) while no model is fitted) |
+| `addressed_to_user`, `asks_for_action`, `automated`, `fyi_only`, `acknowledgement`, `others_act` | noul | triage model features; none decides on its own |
 | `target` | choice: none / A–E | match a candidate task (only with candidates) |
 | `target_action` | choice: nothing_new / done / changes / revives | matched task or thread follow-up |
 | `has_event` | noul | any yes ≥ 0.3 → agent (it creates calendar events) |
@@ -112,11 +125,16 @@ One call per input; all questions share one state.
 
 | Decision | Condition (defaults; refit per source) | Action |
 |---|---|---|
-| `not_task` | p(not_task) ≥ 0.97, no event | finalize `not_task` |
+| `not_task` | 1 − p(task) ≥ 0.97, no event | finalize `not_task` |
 | `no_change` | candidate p ≥ 0.9 and nothing_new p ≥ 0.9 | `apply_task_action(no_change)`, finalize `duplicate` |
 | `close` | done p ≥ 0.97, **only with `JEV_CLOSE_ENABLED`** | `apply_task_action(update_task, closed)` |
 | `create` | p(task) ≥ 0.9, `none` p ≥ 0.9 if candidates, label p ≥ 0.6 | fields → writer (only if needed) → task → split/schedule |
 | `llm` | everything else, any event | the agent runs, with `jev` in its trace |
+
+p(task) is the triage model's probability. While no model is fitted for the
+current Jev and question version, it is the both-orders `is_task` average.
+The trace stores the features, `p_task` and `p_task_source` (`model` /
+`choice`).
 
 `has_facts` doesn't block a decision; it adds the notes-only call.
 
@@ -156,39 +174,98 @@ agent's guess. `tasks.estimation_source = "jev"` puts it in its own
 duration group (`label|work_type|jev`), so each estimator's bias is learned
 separately.
 
-## Threshold learning
+## Learning
 
-`services/learn/jev.py`, run from `jobs.nightly`:
+`services/learn/jev.refit`, run from `jobs.nightly`, over every input from
+the last 180 days whose trace carries Jev answers for the current question
+version. The label is whether the input ended up linked to a task the user
+didn't dismiss: a dismissal flips the task to `not_task`, a promotion links
+one.
 
-- **Rows:** every input with `agent_trace["jev"]` from the last 180 days,
-  graded against its final status. A dismissal flips the task's status to
-  `not_task`; a promotion links a task.
-- **Per decision and source:** `drop`, `create`, `target` and `no_change`.
-  The threshold is the lowest probability whose answers at or above it reach
-  the precision target: drop 0.98, create 0.90, target 0.95, no_change 0.95.
-- **Not enough data:** with fewer than 50 rows the default stays. Sources
-  pool into `all` before falling back to defaults.
-- **Never good enough:** a decision whose answers never reach the target is
-  disabled (1.01).
-- **Storage:** published as `learned_models` kind `jev_thresholds`, keyed by
-  `jev_model`.
+- **Triage model** (`jev_triage_model`):
+  - **What:** MAP logistic regression (Gaussian prior, σ = 2) over the
+    stored features.
+  - **Features:** log-odds of the averaged task choice and each signal noul;
+    `directed_at_me` (±1, 0 if unknown); Slack; the sender's smoothed task
+    share and how often they were seen; the highest similarity to a NOT_TASK
+    precedent and to a task candidate.
+  - **Minimum data:** at least 200 rows and 20 positives; otherwise the
+    previous model stays.
+- **Thresholds** (`jev_thresholds`):
+  - **Which:** per decision and source — `drop`, `create`, `target` and
+    `no_change` — each the lowest probability whose answers at or above it
+    reach the precision target (drop 0.98, create 0.90, target 0.95,
+    no_change 0.95).
+  - **Model change:** drop and create are recomputed from the stored
+    features with the freshly fitted model, so thresholds follow it.
+  - **Not enough data:** with fewer than 50 rows, the previous value stays —
+    a replay-bootstrapped one or the default. Sources also pool into `all`.
+  - **Never good enough:** a decision that never reaches its target is
+    disabled (1.01).
+- **Keying:** both are stored per Jev model and `QUESTIONS_VERSION`.
+
+## Replay results
+
+**v1 (2026-10-25, 533 inputs):** failed the gate.
+
+| | Gmail | Slack |
+|---|---|---|
+| Always "not a task" (trivial baseline) | ~87 % | ~95 % |
+| Jev (`is_task`, task first) | 77.6 % | 65.7 % |
+| Agent (upper bound: the final outcome is its decision unless corrected) | 93.8 % | 95.0 % |
+
+- **Task bias:** Jev called many non-tasks tasks (create precision 9–24 %).
+  The causes are the first-option lean plus wording that made any question
+  a task.
+- **Drop precision:** 100 % on Slack, but at most 95 % on Gmail. Some of the
+  Gmail misses were follow-ups to existing tasks, not new tasks.
+- **Labels (51 %):** mostly a grading artifact. 107 of the 297 recent
+  tasks carry labels that no longer exist in the catalog, and `Reise` has no
+  description.
+- **Estimates:** graded only against the agent-shaped final value, which
+  says nothing about correctness.
+
+**v2 changes:**
+
+- **Questions:**
+  - the task question is asked in both orders and averaged;
+  - six narrow signal nouls;
+  - candidates carry their labels.
+- **Triage model:** fitted on the user's history.
+- **Replay report:**
+  - outcome mix and the trivial baseline;
+  - misses split into new tasks and follow-ups;
+  - out-of-fold model scores next to the raw choice;
+  - labels graded only against the current catalog;
+  - estimates graded against the user's corrections and observed
+    durations;
+  - the subject in the CSV, for reading disagreements.
 
 ## Rollout
 
-1. **Replay** (prod, read-only):
-   `TYPESAFE_API_KEY=… python -m app.scripts.jev_replay --days 120 --limit 500`.
+1. **Replay** (prod, read-only), with a larger sample since the model
+   needs data:
+   `docker exec -e TYPESAFE_API_KEY agent-007-app-1 python -m app.scripts.jev_replay --days 180 --limit 2000 --csv /tmp/jev.csv`.
    - **What it does:** rebuilds each input's state from the candidates
-     stored in its trace (no leakage from later inputs).
-   - **What it prints:** Jev vs agent accuracy per source, how many real
-     tasks Jev would drop, precision/coverage per threshold, label accuracy
-     and estimate error.
-   - **Gate:** stop if Jev doesn't beat Haiku.
-2. **Shadow**: set `JEV_MODE=shadow` in prod for about a week. Every input
+     stored in its trace (no leakage from later inputs) and fits the triage
+     model out-of-fold.
+   - **What it prints:** the report above.
+   - **Read the disagreements:** go through 20 rows of the CSV, because the
+     ground truth is partly the agent's own decision.
+   - **Gate:** the out-of-fold model must reach the drop target (98 %) at a
+     useful coverage, and create precision must beat the agent. Otherwise
+     iterate the questions (bump `QUESTIONS_VERSION`) and re-run; a run
+     costs well under a dollar.
+2. **Bootstrap**: once the gate holds, re-run with `--publish` and without
+   the read-only `PGOPTIONS`. That stores the model and the out-of-fold
+   thresholds; the nightly refit replaces them only once live traces have
+   enough rows.
+3. **Shadow**: set `JEV_MODE=shadow` in prod for about a week. Every input
    gets Jev's answers in its trace, and the agents still decide. The
    nightly refit now has rows from all of them.
-3. **On**: set `JEV_MODE=on`. `not_task`, `no_change` and `create` act
+4. **On**: set `JEV_MODE=on`. `not_task`, `no_change` and `create` act
    above the thresholds. Manual entries take the fast path.
-4. **Close**: turn on `JEV_CLOSE_ENABLED=true` only after the replay and
+5. **Close**: turn on `JEV_CLOSE_ENABLED=true` only after the replay and
    shadow rows show `done` answers at ≥ 0.97 are reliable.
 
 Migration `0043_estimation_source` runs with the normal deploy
@@ -212,8 +289,11 @@ Migration `0043_estimation_source` runs with the normal deploy
 
 ## Relation to the ML proposal in `scheduling-plan.md`
 
-Jev replaces the proposal's logistic-regression task gate and kNN label
-hints. Two follow-ups stay:
+The triage model *is* the proposal's logistic-regression task gate. It uses
+Jev's reads, sender history and precedent similarity as features instead of
+the raw embedding. Jev's label question replaces the kNN label hints;
+candidate labels in the state carry the neighbour signal. Two follow-ups
+stay:
 
 - kNN duration (median observed duration of similar closed tasks) instead
   of the Jev bucket when ≥ 10 neighbours have observations.
