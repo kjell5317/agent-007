@@ -1,4 +1,4 @@
-"""Chat / ask-mode agent (docs/search-plan.md stage 3).
+"""Chat / ask-mode agent.
 
 Retrieval-first and fast: every user turn injects the top local hits (tasks +
 notes) into context up front — the model answers from them without a tool

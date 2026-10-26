@@ -17,7 +17,7 @@
 
 	# SSE stream: flush each event immediately rather than buffering.
 	handle /events {
-		reverse_proxy app:8001 {
+		reverse_proxy app:8000 {
 			flush_interval -1
 		}
 	}
@@ -25,6 +25,6 @@
 	# Everything else (including index.html) goes to the app — FastAPI serves
 	# the SPA shell at / and the API routes at /tasks, /inputs, /sources, etc.
 	handle {
-		reverse_proxy app:8001
+		reverse_proxy app:8000
 	}
 }

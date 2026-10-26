@@ -16,7 +16,7 @@ if [[ ! -d .venv ]]; then
   exit 1
 fi
 
-# `.env.dev` is the dev-only overlay (OAuth redirect URIs at :5173, etc.).
+# `.env.dev` is the dev-only overlay (BASE_URL at the :5173 Vite server, etc.).
 # Pydantic loads it after `.env`, so its keys win. Seed it from `.env` the
 # first time so the override file exists and is easy to find.
 if [[ ! -f .env.dev ]]; then

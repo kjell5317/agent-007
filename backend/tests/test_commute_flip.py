@@ -35,8 +35,7 @@ def _settings(**overrides):
     base = {
         "notify_action_secret": "s3cret",
         "home_assistant_action_secret": "",
-        "notification_action_url": "",
-        "task_default_url": "https://007.example.org",
+        "public_url": "https://007.example.org",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -75,10 +74,7 @@ def test_failed_legs_get_no_link():
     assert flip_url("home", "ev1", DEPART, ARRIVE, FAILED_MODE) is None
 
 
-def test_no_link_without_base_url_or_secret(monkeypatch):
-    monkeypatch.setattr(flip_link, "get_settings", lambda: _settings(task_default_url=""))
-    assert flip_url("home", "ev1", DEPART, ARRIVE, "transit") is None
-
+def test_no_link_without_secret(monkeypatch):
     monkeypatch.setattr(flip_link, "get_settings", lambda: _settings(notify_action_secret=""))
     assert flip_url("home", "ev1", DEPART, ARRIVE, "transit") is None
 
@@ -94,26 +90,9 @@ def test_falls_back_to_home_assistant_secret(monkeypatch):
     assert verify_flip(_params(url), DEPART).mode == "bicycling"
 
 
-@pytest.mark.parametrize(
-    ("action_url", "expected"),
-    [
-        ("https://api.example.org/notifications/actions", "https://api.example.org/commute/flip"),
-        ("https://x.example.org/app/notifications/actions/", "https://x.example.org/app/commute/flip"),
-        ("https://hooks.example.org/ntfy", "https://hooks.example.org/commute/flip"),
-    ],
-)
-def test_endpoint_follows_notification_action_url(monkeypatch, action_url, expected):
-    monkeypatch.setattr(
-        flip_link, "get_settings", lambda: _settings(notification_action_url=action_url),
-    )
-    url = flip_url("home", "ev1", DEPART, ARRIVE, "transit")
-
-    assert url.split("?")[0] == expected
-
-
 def test_endpoint_keeps_public_url_path(monkeypatch):
     monkeypatch.setattr(
-        flip_link, "get_settings", lambda: _settings(task_default_url="https://x.example.org/app/"),
+        flip_link, "get_settings", lambda: _settings(public_url="https://x.example.org/app"),
     )
 
     assert flip_url("home", "ev1", DEPART, ARRIVE, "transit").split("?")[0] == (

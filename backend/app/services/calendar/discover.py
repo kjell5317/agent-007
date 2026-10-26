@@ -35,7 +35,7 @@ from app.db.clients import oauth_tokens, tasks as tasks_store
 from app.db.models.task import Task
 from app.events import publish_task
 from app.services.calendar.attributes import classify_pending_events
-from app.services.calendar.cache import cache_calendar_events
+from app.services.calendar.cache import cache_calendar_events, refresh_recurring
 from app.services.calendar.client import (
     CalendarEvent,
     CalendarSyncTokenExpired,
@@ -49,7 +49,6 @@ from app.services.calendar.events import (
     _task_description,
     commute_leg_key,
     is_commute_event,
-    is_declined_event,
     is_free_event,
     is_location_blocker,
     is_managed_event,
@@ -71,7 +70,6 @@ from app.services.notify import task_url
 from app.services.plan.checkin import booked_slot
 from app.services.plan.schedule import (
     _duration_minutes,
-    scheduler_engine,
     reschedule_event,
     schedule_task,
     scheduled_interval_for,
@@ -145,6 +143,7 @@ async def discover_updated_events(
     deleted_spans: list[tuple[datetime, datetime]] = []
     deleted_events: set[str] = set()
     cancelled_docs: list[tuple[str, str]] = []
+    rebaselined: list[str] = []
     for cid in ids:
         raw_items, new_token, new_baseline = await _sync_calendar(
             client,
@@ -166,6 +165,8 @@ async def discover_updated_events(
             del sync_tokens[cid]
             log.info("discover · sync overflowed for %s; dropping token to re-baseline", cid)
         baselines[cid] = new_baseline.isoformat()
+        if new_baseline == now:
+            rebaselined.append(cid)
 
         live = _live_events(raw_items, cid)
         active = _busy(live)
@@ -261,6 +262,10 @@ async def discover_updated_events(
                     kind, overlapping.summary, overlapping.start.isoformat(),
                 )
             # A task hit directly and through its own leg is re-planned once.
+            # TODO: one solve per target is a leftover of the per-task legacy
+            # planner — collect the targets of the whole pass and run one
+            # coalesced solve. `event_buffer_minutes` stays either way: it is
+            # also the related-event deadline offset (event_context.py).
             targets = dict.fromkeys(
                 target
                 for overlapping in conflicts
@@ -296,6 +301,16 @@ async def discover_updated_events(
     except Exception:  # noqa: BLE001 — caching is best-effort
         log.exception("discover · calendar document cache failed")
         session.rollback()
+    # Daily, with the baseline: recurring instances that moved into the cache
+    # horizon since their series last changed.
+    if rebaselined:
+        try:
+            added = await refresh_recurring(session, client, rebaselined, now=now)
+            session.commit()
+            summary["cached"] = summary.get("cached", 0) + added
+        except Exception:  # noqa: BLE001 — caching is best-effort
+            log.exception("discover · recurring instance refresh failed")
+            session.rollback()
 
     # Only after a pass that cached something: rows the model keeps leaving
     # out would otherwise cost an LLM call every poll.
@@ -313,7 +328,7 @@ async def discover_updated_events(
     await _record_user_moves(session, user_moves, account_key=account_key)
 
     await _plan_legs_for_changed_events(
-        session, changed_physical, deleted_spans=deleted_spans, account_key=account_key,
+        session, changed_physical, deleted=bool(deleted_spans), account_key=account_key,
     )
     return summary
 
@@ -485,77 +500,24 @@ async def _plan_legs_for_changed_events(
     session: Session,
     events: list[CalendarEvent],
     *,
-    deleted_spans: list[tuple[datetime, datetime]] | None = None,
+    deleted: bool = False,
     account_key: str | None,
 ) -> None:
-    """Derive commute legs around every changed physical event.
+    """A fresh solve when a change the app didn't make itself can move legs.
 
-    This is the leg-creation path for brand-new events (which overlap
-    nothing, so the reschedule path never fires for them). Recurring series
-    arrive as bounded single instances — the sync window caps expansion at
-    `WINDOW_DAYS`, and the daily re-baseline re-surfaces the instances
-    sliding into view — so a new endless series only ever gets legs for the
-    next week's occurrences, one pair per instance, never the whole series.
-    Idempotent: unchanged legs diff to no-op patches.
-
-    `deleted_spans` are the slots of removed events; a leg that was dodging
-    one may sit up to the dodge cap away, so those spans are widened by the
-    commute margin to catch both the stale leg and its relaxed placement."""
-    if not get_settings().commute_enabled:
+    Any timed event counts, declined ones included: located ones are routing
+    anchors, online / location-less ones are spans legs must not sit on. A
+    brand-new event overlaps nothing, so this — not the reschedule path —
+    gives it legs. The solver writes task events and legs itself; those come
+    back through the sync and don't count (a user's own task edits re-solve
+    via the move capture). All-day events don't shape legs."""
+    if not deleted and not any(
+        not ev.all_day and not is_managed_event(ev) for ev in events
+    ):
         return
-    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
+    from app.services.plan.commute import replan_commutes
 
-    from app.services.plan.commute import solver_routes
-
-    if solver_routes():
-        # The solver writes task events and legs itself; only foreign changes
-        # call for a new solve (a user's own task edits re-solve via the
-        # move capture).
-        events = [ev for ev in events if not is_managed_event(ev)]
-    spans: list[tuple[datetime, datetime]] = []
-    active_events = [ev for ev in events if not is_declined_event(ev)]
-    span = _replan_span(active_events)
-    if span is not None:
-        spans.append(span)
-    declined_spans = _declined_replan_spans(events)
-    if deleted_spans or declined_spans:
-        margin = commute_window_margin()
-        spans.extend((start - margin, end + margin) for start, end in declined_spans)
-        spans.extend((start - margin, end + margin) for start, end in deleted_spans or [])
-    if not spans:
-        return
-
-    await plan_commutes_window_best_effort(
-        session,
-        window_start=min(start for start, _ in spans),
-        window_end=max(end for _, end in spans),
-        account_key=account_key,
-    )
-
-
-def _declined_replan_spans(events: list[CalendarEvent]) -> list[tuple[datetime, datetime]]:
-    return [
-        (ev.start, ev.end)
-        for ev in events
-        if not ev.all_day and not is_commute_event(ev) and is_declined_event(ev)
-    ]
-
-
-def _replan_span(events: list[CalendarEvent]) -> tuple[datetime, datetime] | None:
-    """Time range legs may need re-deriving around, or None.
-
-    Any changed timed event counts: located ones are routing anchors, and
-    online / location-less ones are avoid spans legs must dodge — a new
-    meeting dropped onto a leg has to push it around. Only the planner's
-    own commute legs and all-day events don't shape legs."""
-    spans = [
-        (ev.start, ev.end)
-        for ev in events
-        if not ev.all_day and not is_commute_event(ev)
-    ]
-    if not spans:
-        return None
-    return min(s for s, _ in spans), max(e for _, e in spans)
+    await replan_commutes(session, account_key=account_key)
 
 
 async def _sync_calendar(
@@ -702,13 +664,12 @@ async def _record_user_moves(
         )
     session.commit()
     refit_soon()
-    if scheduler_engine() == "solver":
-        from app.services.plan.replan import request_replan
+    from app.services.plan.replan import request_replan
 
-        try:
-            await request_replan(session, reason="user_move", account_key=account_key)
-        except Exception:  # noqa: BLE001
-            log.exception("discover · replan after user move failed")
+    try:
+        await request_replan(session, reason="user_move", account_key=account_key)
+    except Exception:  # noqa: BLE001
+        log.exception("discover · replan after user move failed")
 
 
 def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:

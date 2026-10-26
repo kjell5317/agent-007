@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         # `.env.dev` overrides `.env` when present — pydantic loads the
         # tuple left-to-right, so later files win. Production deploys ship
         # only `.env`; `scripts/dev.sh` ships a `.env.dev` with local
-        # overrides (e.g. OAuth redirect URIs pointing at :5173). Missing
+        # overrides (e.g. BASE_URL pointing at the :5173 Vite server). Missing
         # files are silently skipped.
         env_file=(".env", ".env.dev"),
         env_file_encoding="utf-8",
@@ -20,9 +20,12 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "dev"
-    app_host: str = "127.0.0.1"
-    app_port: int = 8001
     log_level: str = "INFO"
+    # The public origin: OAuth redirect URIs, notification links and action
+    # callbacks all hang off it. It defaults to the domain Caddy serves, so
+    # prod sets only APP_DOMAIN; dev points BASE_URL at the Vite server.
+    app_domain: str = "localhost"
+    base_url: str = ""
 
     database_url: str
 
@@ -172,16 +175,9 @@ class Settings(BaseSettings):
     # Google OAuth
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
-    # Gmail & Calendar
-    google_oauth_redirect_uri: str = "http://localhost:8001/oauth/google/callback"
     # Addresses that reach me besides the connected account (aliases, inboxes
     # forwarded into it): mail addressed To: any of them is directed at me.
     my_email_addresses: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    # Health sleep — a separate grant on the same client, health-only scopes
-    # (the Health API rejects tokens that also carry Gmail/Calendar scopes).
-    google_oauth_health_redirect_uri: str = "http://localhost:8001/oauth/google_health/callback"
-    # Login
-    google_oauth_login_redirect_uri: str = "http://localhost:8001/auth/callback"
     auth_allowed_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator("auth_allowed_emails", "my_email_addresses", mode="before")
@@ -219,11 +215,7 @@ class Settings(BaseSettings):
             return [c.strip() for c in v.split(",") if c.strip()]
         return v
 
-    # Task placement engine (see docs/scheduling-plan.md). `legacy` is the
-    # rule-driven greedy planner; `shadow` keeps it authoritative and runs the
-    # CP-SAT solver alongside without writing, logging both to Langfuse;
-    # `solver` makes the solver authoritative.
-    scheduler_engine: Literal["legacy", "shadow", "solver"] = "shadow"
+    # CP-SAT solver that places tasks (and, with commute on, the legs).
     # Same look-ahead as the commute planner (`commute_lookahead_days`).
     scheduler_horizon_days: int = 7
     scheduler_time_limit_seconds: float = 10.0
@@ -248,13 +240,11 @@ class Settings(BaseSettings):
     # timetable changes are eventually picked up. Bike/walking never expire.
     commute_transit_ttl_days: int = 30
     commute_lookahead_days: int = 7
-    commute_home_layover_minutes: int = 60
-    # Solver mode: `commute_bike_max_minutes` and `commute_rain_threshold_pct`
-    # stop being rules and become the reference points of the learned ride-
-    # length and rain priors. Cap on optional "go home" stops per day in the
-    # route model (a day gets one per gap between away items, up to this),
-    # and the days a located task may be routed on (its current day plus the
-    # best others).
+    # `commute_bike_max_minutes` and `commute_rain_threshold_pct` aren't rules:
+    # they're the reference points of the learned ride-length and rain priors.
+    # Cap on optional "go home" stops per day in the route model (a day gets
+    # one per gap between away items, up to this), and the days a located task
+    # may be routed on (its current day plus the best others).
     commute_home_stops: int = 4
     commute_candidate_days: int = 3
     # Minimum gap between a commute leg and the event/task it serves.
@@ -267,7 +257,6 @@ class Settings(BaseSettings):
     ntfy_base_url: str = "https://ntfy.sh"
     ntfy_topic: str = ""
     ntfy_token: str = ""
-    notification_action_url: str = ""
     notify_action_secret: str = ""
 
     # Home Assistant
@@ -278,20 +267,13 @@ class Settings(BaseSettings):
     # Shared secret HA must send on action-callback POSTs. Empty disables the check.
     home_assistant_action_secret: str = ""
 
-    # Fallback clickAction for notifications when a task has no `link`.
-    task_default_url: str = "https://007.kjellhanken.de"
-
     # Slack
     slack_apps: dict[str, dict[str, str]] = Field(default_factory=dict)
-    slack_oauth_redirect_uri: str = "http://localhost:8001/oauth/slack/callback"
     slack_bootstrap_days: int = 1
 
     # Notion MCP OAuth
     mcp_notion_url: str = "https://mcp.notion.com/mcp"
-    notion_oauth_redirect_uri: str = "http://localhost:8001/oauth/notion/callback"
     mcp_oauth_client_name: str = "Task Agent"
-    mcp_oauth_client_uri: str = ""
-    mcp_oauth_logo_uri: str = ""
 
     # GitHub — read-only issue/PR search for the chat agent. A fine-grained PAT
     # with read-only Issues + Pull requests + Metadata (see .env.example). Empty
@@ -313,6 +295,10 @@ class Settings(BaseSettings):
     # Shared secret for the incoming kotx state webhook (X-Kotx-Signature,
     # HMAC-SHA256 over the raw body). Empty disables the endpoint.
     kotx_webhook_secret: str = ""
+
+    @property
+    def public_url(self) -> str:
+        return (self.base_url.strip() or f"https://{self.app_domain.strip()}").rstrip("/")
 
     @property
     def effective_llm_provider(self) -> str:

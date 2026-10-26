@@ -15,7 +15,7 @@ import hmac
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode
 
 from app.config import get_settings
 from app.services.ntfy import action_secret
@@ -47,8 +47,7 @@ def flip_url(
         return None
     settings = get_settings()
     secret = action_secret(settings)
-    endpoint = _flip_endpoint(settings)
-    if not secret or endpoint is None:
+    if not secret:
         return None
     params = {
         "origin": origin_anchor,
@@ -58,7 +57,7 @@ def flip_url(
         "expires": str(_epoch(arrive + LINK_LIFETIME)),
     }
     params["sig"] = _signature(params, secret)
-    return f"{endpoint}?{urlencode(params)}"
+    return f"{settings.public_url}{FLIP_PATH}?{urlencode(params)}"
 
 
 def verify_flip(params: Mapping[str, str], now: datetime) -> FlipRequest:
@@ -87,23 +86,6 @@ def verify_flip(params: Mapping[str, str], now: datetime) -> FlipRequest:
 def _signature(fields: Mapping[str, str], secret: str) -> str:
     message = "\n".join([_SIGNATURE_SCOPE, *(fields[key] for key in _SIGNED_FIELDS)])
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-
-
-def _flip_endpoint(settings) -> str | None:
-    """`/commute/flip` on the backend, derived like the ntfy action callback:
-    the explicit action URL's base when set, else the app's public URL."""
-    action = settings.notification_action_url.strip()
-    if action:
-        parts = urlsplit(action)
-        path = parts.path.rstrip("/")
-        suffix = "/notifications/actions"
-        base = path[: -len(suffix)] if path.endswith(suffix) else ""
-        return urlunsplit((parts.scheme, parts.netloc, base + FLIP_PATH, "", ""))
-    public = settings.task_default_url.strip()
-    if not public:
-        return None
-    parts = urlsplit(public)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + FLIP_PATH, "", ""))
 
 
 def _epoch(dt: datetime) -> int:

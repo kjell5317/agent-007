@@ -18,10 +18,9 @@ def _settings():
         ntfy_base_url="https://ntfy.sh",
         ntfy_topic="long-private-topic",
         ntfy_token="",
-        notification_action_url="",
         notify_action_secret="callback-secret",
         home_assistant_action_secret="",
-        task_default_url="https://007.example.org",
+        public_url="https://007.example.org",
     )
 
 

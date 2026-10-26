@@ -7,7 +7,7 @@ import hmac
 import json
 import time
 from typing import Any
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote
 
 import httpx
 
@@ -47,13 +47,7 @@ def sequence_id(tag: str) -> str:
 
 
 def action_url(settings: Settings) -> str:
-    if settings.notification_action_url.strip():
-        return settings.notification_action_url.strip()
-    parts = urlsplit(settings.task_default_url)
-    return urlunsplit((
-        parts.scheme, parts.netloc,
-        parts.path.rstrip("/") + "/notifications/actions", "", "",
-    ))
+    return f"{settings.public_url}/notifications/actions"
 
 
 def message_payload(

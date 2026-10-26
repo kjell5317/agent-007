@@ -26,13 +26,9 @@ from app.events import publish_task
 from app.services.calendar.discover import discover_updated_events
 from app.services.calendar.labels import sync as sync_labels
 from app.services.input.poll import poll_sources
-from app.services.plan import (
-    cleanup_stray_commute_legs,
-    refresh_commutes_for_weather,
-    schedule_task,
-)
+from app.services.plan import cleanup_stray_commute_legs, refresh_commutes_for_weather
 from app.services.plan.checkin import checkin_overdue_slots_once
-from app.services.plan.schedule import announce_placement, scheduler_engine
+from app.services.plan.schedule import announce_placement
 from app.services.task.recur import plan_recurring_tasks
 
 log = logging.getLogger(__name__)
@@ -42,7 +38,7 @@ AUTO_POLL_INTERVAL_S = 300
 # what changed since the last poll), so it can run tight without hammering the
 # Google API — and a near-real-time reschedule around external edits is worth it.
 DISCOVER_INTERVAL_S = 60
-OVERDUE_TASK_INTERVAL_S = 300
+CHECKIN_SWEEP_INTERVAL_S = 300
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 NIGHTLY_CHECK_INTERVAL_S = 600
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
@@ -54,12 +50,11 @@ RECURRING_TASKS_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # populates it on a fresh deploy, before anyone opens that page).
 LABEL_SYNC_INTERVAL_S = int(timedelta(hours=6).total_seconds())
 LABEL_SYNC_STARTUP_DELAY_S = 20
-# A task the planner could not place stays overdue — without a backoff the
-# 5-minute loop would re-run the whole (expensive) displacement search
-# forever. One retry per hour is plenty; any calendar edit or task update
-# triggers its own reschedule anyway.
+# Tasks the solver could not place stay unplaced — without a backoff the
+# 5-minute loop would re-run a full solve for them forever. One retry per hour
+# is plenty; any calendar edit or task update triggers its own solve anyway.
 NO_SLOT_RETRY = timedelta(hours=1)
-_no_slot_until: dict[Any, datetime] = {}
+_no_slot_until: datetime | None = None
 
 
 async def _auto_poll() -> None:
@@ -133,71 +128,46 @@ async def _calendar_discover() -> None:
 
 
 async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[str, int]:
-    """Try to place open due-dated tasks that currently have no slot (their
-    stale slot was cleared after a failed schedule). Failures stay silent —
-    the original "could not schedule" notification stands until either a
-    retry succeeds or the user intervenes. `respect_backoff=False` is for
-    discover-triggered sweeps: the calendar actually changed, so waiting
+    """One solve for the open due-dated tasks that currently have no slot
+    (their stale slot was cleared after a failed placement). Failures stay
+    silent — the original "could not schedule" notification stands until
+    either a retry succeeds or the user intervenes. `respect_backoff=False` is
+    for discover-triggered sweeps: the calendar actually changed, so waiting
     out the hourly backoff would sit on fresh room."""
+    from app.services.plan.replan import request_replan
+
+    global _no_slot_until
     now = datetime.now(timezone.utc)
-    attempted = 0
-    scheduled = 0
     with SessionLocal() as session:
         # Deferred tasks wait on purpose; every solve reconsiders them.
         pending = [
             task for task in tasks_store.open_unscheduled_due(session)
             if task.schedule_state != "deferred"
         ]
-        if scheduler_engine() == "solver":
-            return await _retry_with_solver(session, pending, now, respect_backoff=respect_backoff)
+        if not pending:
+            return {"attempted": 0, "scheduled": 0}
+        if respect_backoff and _no_slot_until is not None and now < _no_slot_until:
+            return {"attempted": 0, "scheduled": 0}
+        result = await request_replan(session, reason="retry_unplaced")
+        scheduled = 0
         for task in pending:
-            backoff = _no_slot_until.get(task.id)
-            if respect_backoff and backoff is not None and now < backoff:
-                continue
-            attempted += 1
-            result = await schedule_task(session, task, notify=False)
-            if result is None:
-                _no_slot_until[task.id] = now + NO_SLOT_RETRY
-                continue
-            _no_slot_until.pop(task.id, None)
-            scheduled += 1
-            await announce_placement(session, task, start=result[0], end=result[1])
-            publish_task(session, task.id)
-    return {"attempted": attempted, "scheduled": scheduled}
-
-
-async def _retry_with_solver(session, pending, now, *, respect_backoff: bool) -> dict[str, int]:
-    """One solve covers every unplaced task; the backoff is per sweep."""
-    from app.services.plan.replan import request_replan
-
-    if not pending:
-        return {"attempted": 0, "scheduled": 0}
-    backoff = _no_slot_until.get("solver")
-    if respect_backoff and backoff is not None and now < backoff:
-        return {"attempted": 0, "scheduled": 0}
-    result = await request_replan(session, reason="retry_unplaced")
-    scheduled = 0
-    for task in pending:
-        session.refresh(task)
-        span = result.placed.get(task.id)
-        if task.schedule_state == "placed" and span is not None:
-            scheduled += 1
-            await announce_placement(session, task, start=span[0], end=span[1])
-            publish_task(session, task.id)
-    if scheduled < len(pending):
-        _no_slot_until["solver"] = now + NO_SLOT_RETRY
-    else:
-        _no_slot_until.pop("solver", None)
+            session.refresh(task)
+            span = result.placed.get(task.id)
+            if task.schedule_state == "placed" and span is not None:
+                scheduled += 1
+                await announce_placement(session, task, start=span[0], end=span[1])
+                publish_task(session, task.id)
+        _no_slot_until = now + NO_SLOT_RETRY if scheduled < len(pending) else None
     return {"attempted": len(pending), "scheduled": scheduled}
 
 
-async def _overdue_scheduled_tasks() -> None:
-    log.info("overdue-scheduled-tasks loop started · interval=%ds", OVERDUE_TASK_INTERVAL_S)
+async def _checkin_sweep() -> None:
+    log.info("checkin-sweep loop started · interval=%ds", CHECKIN_SWEEP_INTERVAL_S)
     while True:
         try:
-            await asyncio.sleep(OVERDUE_TASK_INTERVAL_S)
+            await asyncio.sleep(CHECKIN_SWEEP_INTERVAL_S)
             if not state.auto_poll_enabled:
-                log.debug("overdue-scheduled-tasks skipped (disabled)")
+                log.debug("checkin-sweep skipped (disabled)")
                 continue
             summary = await checkin_overdue_slots_once()
             retry = await retry_unscheduled_tasks_once()
@@ -212,14 +182,14 @@ async def _overdue_scheduled_tasks() -> None:
                 retry["scheduled"],
             )
         except asyncio.CancelledError:
-            log.info("overdue-scheduled-tasks loop cancelled")
+            log.info("checkin-sweep loop cancelled")
             raise
         except Exception:  # noqa: BLE001 — best-effort background loop
-            log.exception("overdue-scheduled-tasks iteration failed")
+            log.exception("checkin-sweep iteration failed")
 
 
 async def _weather_commute_refresh() -> None:
-    """Refresh existing commute events when hourly weather changes mode choice."""
+    """Re-solve when the hourly forecast moved enough to change mode choices."""
     log.info("weather-commute-refresh loop started · interval=%ds", WEATHER_INTERVAL_S)
     while True:
         try:
@@ -228,15 +198,8 @@ async def _weather_commute_refresh() -> None:
                 log.debug("weather-commute-refresh skipped (disabled)")
                 continue
             with SessionLocal() as session:
-                summary = await refresh_commutes_for_weather(session)
-            log.info(
-                "weather-commute-refresh done · planned=%d rescheduled_tasks=%d errors=%d",
-                summary["planned"],
-                summary["rescheduled_tasks"],
-                len(summary["errors"]),
-            )
-            if summary["errors"]:
-                log.warning("weather-commute-refresh errors · %s", summary["errors"])
+                legs = await refresh_commutes_for_weather(session)
+            log.info("weather-commute-refresh done · %s", "no re-solve" if legs is None else f"legs={legs}")
         except asyncio.CancelledError:
             log.info("weather-commute-refresh loop cancelled")
             raise
@@ -287,7 +250,7 @@ async def nightly_scheduler_once() -> None:
     """Refit the learned models, then give the solver its long run: 60 s
     instead of the per-trigger 10 s, so the gap left during the day closes."""
     from app.services.learn.jobs import nightly
-    from app.services.plan.replan import _shadow_run, request_replan
+    from app.services.plan.replan import request_replan
 
     from app.services.calendar.attributes import classify_pending_events
     from app.timezones import user_tz
@@ -306,12 +269,9 @@ async def nightly_scheduler_once() -> None:
         except Exception:  # noqa: BLE001
             log.exception("nightly-scheduler · event classification failed")
             session.rollback()
-        if settings.scheduler_engine == "solver":
-            await request_replan(
-                session, reason="nightly", time_limit=settings.scheduler_nightly_time_limit_seconds,
-            )
-    if settings.scheduler_engine == "shadow":
-        await _shadow_run("nightly", time_limit=settings.scheduler_nightly_time_limit_seconds)
+        await request_replan(
+            session, reason="nightly", time_limit=settings.scheduler_nightly_time_limit_seconds,
+        )
 
 
 async def _nightly_scheduler() -> None:
@@ -362,7 +322,7 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("auto-poll", _auto_poll),
     ("label-sync", _label_sync),
     ("calendar-discover", _calendar_discover),
-    ("overdue-scheduled-tasks", _overdue_scheduled_tasks),
+    ("checkin-sweep", _checkin_sweep),
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-cleanup", _commute_cleanup),
     ("recurring-tasks", _recurring_tasks),

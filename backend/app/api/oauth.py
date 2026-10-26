@@ -51,16 +51,7 @@ def _prune_state() -> None:
 
 
 def _redirect_uri(provider: str) -> str:
-    s = get_settings()
-    if provider == "google":
-        return s.google_oauth_redirect_uri
-    if provider == "google_health":
-        return s.google_oauth_health_redirect_uri
-    if provider == "slack":
-        return s.slack_oauth_redirect_uri
-    if provider == "notion":
-        return s.notion_oauth_redirect_uri
-    raise HTTPException(status.HTTP_400_BAD_REQUEST, f"No redirect URI configured for {provider!r}")
+    return f"{get_settings().public_url}/oauth/{provider}/callback"
 
 
 def _build_provider(provider: str, app_name: str | None) -> OAuthProvider:

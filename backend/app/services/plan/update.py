@@ -4,16 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
-from app.services.location import resolve_location_alias
-
 log = logging.getLogger(__name__)
-
-PLAN_TRIGGER_FIELDS: frozenset[str] = frozenset({"estimation", "due_date", "location"})
 
 
 async def update_task_to_calendar(
@@ -22,70 +16,13 @@ async def update_task_to_calendar(
     *,
     changed_fields: Iterable[str] | None = None,
 ) -> None:
-    """Patch or reschedule a task after a plan-relevant edit."""
-    from app.services.plan.schedule import scheduler_engine
-
-    changed = set(changed_fields or ())
-    if scheduler_engine() == "solver":
-        await _update_with_solver(session, task, changed)
-        return
-    if not changed & PLAN_TRIGGER_FIELDS:
-        return
-
-    if "location" in changed:
-        # A location edit changes the trip block around the task, so the slot
-        # must be re-planned. When the location was removed, the placement
-        # no longer replans commutes itself — sweep the vacated window so
-        # the orphaned legs are dropped and the old neighbours reconnect.
-        from app.services.plan.schedule import schedule_task, scheduled_interval_for
-
-        prior = scheduled_interval_for(task)
-        await schedule_task(session, task)
-        if not resolve_location_alias(task.location) and prior is not None:
-            await _replan_window(session, prior.start, prior.end)
-        return
-
-    current = await _current_event(session, task)
-    if current is None:
-        from app.services.plan.schedule import schedule_task
-
-        await schedule_task(session, task)
-        return
-
-    should_reschedule = await _patch_requires_reschedule(session, task, current, changed)
-    if should_reschedule:
-        from app.services.plan.schedule import schedule_task
-
-        await schedule_task(session, task)
-        return
-
-    from app.services.calendar import update_task_event
-
-    end = current.end
-    if "estimation" in changed:
-        end = current.start + timedelta(
-            minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
-        )
-    await update_task_event(
-        session,
-        task,
-        start=current.start,
-        end=end,
-        changed_fields=changed or None,
-    )
-
-    # An in-place resize of a located task leaves its legs anchored to the
-    # old span — re-derive them around the new one.
-    if "estimation" in changed and resolve_location_alias(task.location):
-        await _replan_window(session, current.start, end)
-
-
-async def _update_with_solver(session: Session, task, changed: set[str]) -> None:
     """Any plan-relevant edit is a new solve; the solver decides whether the
     slot moves. Non-time event fields are patched first."""
     from app.services.calendar import update_task_event
+    from app.services.plan.commute import replan_commutes
     from app.services.plan.schedule import schedule_task, scheduled_interval_for
 
+    changed = set(changed_fields or ())
     prior = scheduled_interval_for(task)
     # The solve leaves a slot whose start holds untouched, so a new length is
     # written here — else the next calendar sync reads the stale end as a resize.
@@ -99,82 +36,4 @@ async def _update_with_solver(session: Session, task, changed: set[str]) -> None
         )
     await schedule_task(session, task)
     if "location" in changed and prior is not None:
-        await _replan_window(session, prior.start, prior.end)
-
-
-async def _replan_window(session: Session, start, end) -> None:
-    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
-
-    margin = commute_window_margin()
-    await plan_commutes_window_best_effort(
-        session,
-        window_start=start - margin,
-        window_end=end + margin,
-    )
-
-
-async def _patch_requires_reschedule(session: Session, task, current, changed: set[str]) -> bool:
-    if current.end > task.due_date:
-        return True
-    if "estimation" not in changed and "due_date" not in changed:
-        return False
-
-    duration = timedelta(
-        minutes=max(5, int(task.estimation or get_settings().google_calendar_default_event_minutes))
-    )
-    candidate_start = current.start
-    candidate_end = candidate_start + duration
-    if candidate_end > task.due_date:
-        return True
-
-    return await _overlaps_other_event(session, task, candidate_start, candidate_end)
-
-
-async def _overlaps_other_event(session: Session, task, start, end) -> bool:
-    from app.services.calendar import commute_leg_key, list_events_between
-
-    settings = get_settings()
-    ids = _busy_calendar_ids(settings)
-    if not ids:
-        return False
-    gap = timedelta(minutes=settings.event_buffer_minutes)
-    events = await list_events_between(
-        session, calendar_ids=ids, time_min=start - gap, time_max=end + gap,
-    )
-    for ev in events:
-        if ev.all_day or ev.id == task.calendar_event_id:
-            continue
-        # The task's own legs sit at the inner commute gap by design and get
-        # re-derived around the new span — only foreign events count.
-        leg_key = commute_leg_key(ev)
-        if leg_key is not None and task.calendar_event_id in leg_key:
-            continue
-        if ev.start < end + gap and start - gap < ev.end:
-            return True
-    return False
-
-
-async def _current_event(session: Session, task):
-    if not task.calendar_event_id:
-        return None
-    from app.services.calendar import get_event
-
-    calendar_id = (get_settings().google_calendar_id or "").strip()
-    if not calendar_id:
-        return None
-    try:
-        return await get_event(session, calendar_id=calendar_id, event_id=task.calendar_event_id)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("plan.update · current event lookup failed task=%s err=%s", task.id, exc)
-        return None
-
-
-def _busy_calendar_ids(settings) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for cid in [settings.google_calendar_id, *settings.google_busy_calendar_ids]:
-        clean = (cid or "").strip()
-        if clean and clean not in seen:
-            seen.add(clean)
-            out.append(clean)
-    return out
+        await replan_commutes(session)

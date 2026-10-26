@@ -298,7 +298,6 @@ async def _process(
         except Exception:
             log.exception("task scheduling failed · task=%s", task.id)
         manual_trace["scheduling"] = (
-            "not_needed" if getattr(task, "due_date", merged.get("due_date")) is None else
             "scheduled" if getattr(task, "scheduled_date", None) is not None and getattr(task, "calendar_event_id", None) else
             "failed"
         )

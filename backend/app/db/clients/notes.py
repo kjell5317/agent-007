@@ -190,11 +190,6 @@ def search_similar(
     ]
 
 
-def list_recent(session: Session, *, limit: int = 20) -> list[Note]:
-    stmt = select(Note).order_by(Note.updated_at.desc()).limit(limit)
-    return list(session.execute(stmt).scalars())
-
-
 @dataclass
 class NoteListItem:
     id: uuid.UUID

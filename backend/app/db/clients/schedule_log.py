@@ -103,14 +103,3 @@ def since(
     if kinds is not None:
         stmt = stmt.where(ScheduleLog.kind.in_(list(kinds)))
     return list(session.scalars(stmt.order_by(ScheduleLog.created_at)))
-
-
-def all_for_tasks(session: Session, task_ids: Iterable[uuid.UUID]) -> list[ScheduleLog]:
-    ids = list(task_ids)
-    if not ids:
-        return []
-    return list(session.scalars(
-        select(ScheduleLog)
-        .where(ScheduleLog.task_id.in_(ids))
-        .order_by(ScheduleLog.created_at)
-    ))

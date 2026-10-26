@@ -28,11 +28,9 @@ services:
     env_file:
       - .env
     environment:
-      # Override the .env defaults so the app talks to compose services
+      # Override the .env value so the app talks to the compose postgres
       # instead of localhost.
       DATABASE_URL: postgresql+psycopg://taskagent:taskagent@postgres:5432/taskagent
-      APP_HOST: 0.0.0.0
-      APP_PORT: "8001"
     # chat_context.md is personal and git-ignored, so it isn't baked into the
     # published image. Mount it from the host at runtime (copy from the
     # config/*.example template first).

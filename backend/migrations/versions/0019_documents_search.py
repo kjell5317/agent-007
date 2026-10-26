@@ -1,6 +1,6 @@
 """documents: external-reference search index + FTS/trigram search indexes
 
-Foundation for staged hybrid search (docs/search-plan.md). Adds:
+Foundation for staged hybrid search. Adds:
 
   * `documents` — general external-reference index (calendar, notion, drive,
     kotx, …). Empty until a provider sync job populates it; stage-1 suggest

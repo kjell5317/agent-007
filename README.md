@@ -90,7 +90,8 @@ cd frontend && npm run dev      # frontend, separate terminal
 
 The backend serves on `http://127.0.0.1:8001`; the Vite dev server proxies to
 it. `scripts/dev.sh` seeds a `.env.dev` overlay (loaded after `.env`) for
-dev-only overrides like OAuth redirect URIs.
+dev-only overrides like `BASE_URL=http://localhost:5173`, which moves the OAuth
+callbacks to the Vite server.
 
 ## Configuration
 
@@ -100,6 +101,7 @@ essentials:
 
 | Variable | Purpose |
 | --- | --- |
+| `APP_DOMAIN` | Domain Caddy serves; `https://<APP_DOMAIN>` is the public URL that OAuth callbacks and notification links derive from (`BASE_URL` overrides it) |
 | `LLM_PROVIDER` / `LLM_MODEL` | Haystack LLM backend selection; `anthropic` is currently supported |
 | `ANTHROPIC_API_KEY` | Anthropic API access when `LLM_PROVIDER=anthropic` |
 | `GEMINI_API_KEY` | Gemini embeddings for de-duplication and note retrieval |

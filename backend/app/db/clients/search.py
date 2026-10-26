@@ -249,6 +249,22 @@ def _filters_sql(
     return "".join(f" AND {p}" for p in parts)
 
 
+# A recurring instance's id is its series id plus `_<start>`. Instances are
+# keyed by title, not series id: an organizer re-creating a meeting starts a
+# new series of the same meeting. One-off events key on the event id without
+# the `<calendar id>:` prefix, so an invite in two calendars shows once.
+_SERIES_KEY = (
+    "CASE WHEN s.external_id ~ '_[0-9]{{8}}(T[0-9]{{6}}Z)?$' THEN 'series:' || lower(s.title) "
+    "ELSE regexp_replace(s.external_id, '^[^:]*:', '') END"
+)
+_ONE_PER_SERIES = (
+    f"SELECT DISTINCT ON ({_SERIES_KEY}) hits.* FROM ({{union}}) hits "
+    "JOIN documents s ON s.id = hits.id::uuid "
+    f"ORDER BY {_SERIES_KEY}, (hits.ts < now()) ASC, "
+    "abs(extract(epoch from (hits.ts - now()))) ASC NULLS LAST, hits.score DESC"
+)
+
+
 def suggest(
     session: Session,
     *,
@@ -293,17 +309,19 @@ def suggest(
     # Type the free-standing `:before`/`:after` params: they appear as
     # `:x IS NULL` with no column to infer from, so Postgres rejects the bare
     # (possibly NULL) parameter without a declared type.
-    # Calendar-only suggestions are displayed by distance from today. Apply
-    # that order before LIMIT so a distant recurrence cannot crowd out the
-    # next occurrence; prefer a future event when distances tie.
-    order = (
-        "abs(extract(epoch from (ts - now()))) ASC NULLS LAST, "
-        "(ts < now()) ASC, score DESC"
-        if active == [DOCUMENT] and source == "calendar"
-        else "score DESC, ts DESC NULLS LAST"
-    )
+    # Calendar-only suggestions are displayed by distance from today, one per
+    # recurring series: its next instance, or its last once it has ended.
+    if active == [DOCUMENT] and source == "calendar":
+        hits = _ONE_PER_SERIES.format(union=union)
+        order = (
+            "abs(extract(epoch from (ts - now()))) ASC NULLS LAST, "
+            "(ts < now()) ASC, score DESC"
+        )
+    else:
+        hits = union
+        order = "score DESC, ts DESC NULLS LAST"
     sql = text(
-        f"SELECT * FROM ({union}) hits ORDER BY {order} LIMIT :limit"
+        f"SELECT * FROM ({hits}) hits ORDER BY {order} LIMIT :limit"
     ).bindparams(
         bindparam("before", type_=String()),
         bindparam("after", type_=String()),

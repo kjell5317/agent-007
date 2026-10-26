@@ -151,11 +151,8 @@ def _registration_payload(redirect_uri: str) -> dict[str, Any]:
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
+        "client_uri": settings.public_url,
     }
-    if settings.mcp_oauth_client_uri:
-        payload["client_uri"] = settings.mcp_oauth_client_uri
-    if settings.mcp_oauth_logo_uri:
-        payload["logo_uri"] = settings.mcp_oauth_logo_uri
     return payload
 
 

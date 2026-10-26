@@ -108,11 +108,11 @@ async def apply_flip(session: Session, request: FlipRequest) -> str:
     refit_soon()
     if past:
         await _rewrite_past_leg(session, event, record, request.mode)
-        await _replan(session, record)
+        await _replan(session)
         if request.mode == "bicycling":
             return f"Noted: you rode. The bike is at {_place(record.destination)}."
         return "Noted: you took transit."
-    await _replan(session, record)
+    await _replan(session)
     try:
         current = leg_record(await _find_leg(session, request))
     except LookupError:
@@ -199,12 +199,7 @@ async def _rewrite_past_leg(session: Session, event, record, mode: str) -> None:
     )
 
 
-async def _replan(session: Session, record) -> None:
-    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
+async def _replan(session: Session) -> None:
+    from app.services.plan.commute import replan_commutes
 
-    margin = commute_window_margin()
-    await plan_commutes_window_best_effort(
-        session,
-        window_start=max(record.depart, datetime.now(timezone.utc)) - margin,
-        window_end=record.arrive + margin,
-    )
+    await replan_commutes(session)

@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 
 PENALTY_POINTS = 10
 KOTX_TASK_DONE_FACTOR = 0.1
+# TODO: the name is from the legacy planner's overdue reschedule; check-ins
+# still write it and it is a unique-index dedupe key, so a rename needs a
+# migration of the stored rows.
 SCHEDULED_OVERDUE_ACTION = "scheduled_overdue_reschedule"
 
 

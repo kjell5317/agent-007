@@ -7,31 +7,27 @@ here instead of touching calendar or commute directly.
 
 Public surface:
 
-  * `schedule_task(session, task, ...)` — plan + create/update the mirror.
+  * `schedule_task(session, task, ...)` — place a task with a solve, which
+    writes its calendar mirror and the commute legs.
   * `reschedule_event(session, event_id, ...)` — discover dispatcher: task
-    event → schedule_task; commute event → recompute commute plan.
+    event → schedule_task; commute event → a fresh solve.
   * `update_task_to_calendar(session, task, *, changed_fields=None)`
-  * `refresh_commutes_for_weather(session)` — hourly weather-driven refresh.
-  * `plan_task_slot(session, task)` — pick a `PlannedSlot` (task span plus
-    the commute trip block reserved around it) for one task.
+  * `refresh_commutes_for_weather(session)` — hourly weather-driven re-solve.
 
 The one explicit exception to "only plan touches calendar": when a task
-update changes no plan-relevant field (estimation / due_date / location),
-the task service may call `calendar.update_task_event` directly so a
-plain rename doesn't run the planner. The corresponding exception for
-delete: `close` / `dismiss` go straight to
-`calendar.delete_task_event` since no planning is involved.
+update changes no plan-relevant field, the task service may call
+`calendar.update_task_event` directly so a plain rename doesn't run the
+solver. The corresponding exception for delete: `close` / `dismiss` go
+straight to `calendar.delete_task_event` since no planning is involved.
 """
 
 from app.services.plan.commute import (
     cleanup_stray_commute_legs,
-    plan_commutes_window,
     refresh_commutes_for_weather,
+    replan_commutes,
 )
 from app.services.plan.schedule import (
     Interval,
-    PlannedSlot,
-    plan_task_slot,
     reschedule_event,
     schedule_task,
     scheduled_interval_for,
@@ -40,11 +36,9 @@ from app.services.plan.update import update_task_to_calendar
 
 __all__ = [
     "Interval",
-    "PlannedSlot",
     "cleanup_stray_commute_legs",
-    "plan_commutes_window",
     "refresh_commutes_for_weather",
-    "plan_task_slot",
+    "replan_commutes",
     "reschedule_event",
     "schedule_task",
     "scheduled_interval_for",

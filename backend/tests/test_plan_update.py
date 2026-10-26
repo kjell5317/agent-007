@@ -1,4 +1,4 @@
-"""`update_task_to_calendar` under the solver engine, with the calendar faked."""
+"""`update_task_to_calendar` with the calendar faked."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ def calendar(monkeypatch):
 
     monkeypatch.setattr("app.services.calendar.update_task_event", update_task_event)
     monkeypatch.setattr("app.services.plan.schedule.schedule_task", schedule_task)
-    monkeypatch.setattr("app.services.plan.schedule.scheduler_engine", lambda: "solver")
     return state
 
 

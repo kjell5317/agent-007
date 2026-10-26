@@ -71,7 +71,7 @@ async def login(request: Request) -> RedirectResponse:
 
     provider = get_provider("google")()
     url = provider.authorize_url(
-        state=state, redirect_uri=settings.google_oauth_login_redirect_uri,
+        state=state, redirect_uri=f"{settings.public_url}/auth/callback",
     )
     return RedirectResponse(url)
 
@@ -90,7 +90,7 @@ async def callback(
     settings = get_settings()
     provider = get_provider("google")()
     bundle = await provider.exchange_code(
-        code=code, redirect_uri=settings.google_oauth_login_redirect_uri,
+        code=code, redirect_uri=f"{settings.public_url}/auth/callback",
     )
     email = (await provider.identify(bundle.access_token)).lower()
 

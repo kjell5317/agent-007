@@ -1,22 +1,16 @@
-"""Commute planning over a calendar window.
+"""Writes the solved commute legs to the calendar.
 
-Builds the anchor timeline (physical events + scheduled located tasks —
-both are just calendar events with a location), derives the desired legs
-via `app.services.commute.legs`, and diffs them against the managed
-commute events on the write calendar. Legs are identified by
-`(origin_anchor, dest_anchor)`, so a moved anchor's legs are patched in
-place rather than deleted and recreated.
-
-Callers must hold the plan-service scheduling lock (see
-`app.services.plan.commute`, which wraps every entry point) — the diff
-reads a live calendar snapshot, and the follow-up task reschedules write
-through the same planner state.
+The legs come out of the solve (`app.services.plan.routing`); this module
+diffs them against the managed commute events on the write calendar. Legs
+are identified by `(origin_anchor, dest_anchor)`, so a moved anchor's legs
+are patched in place rather than deleted and recreated. It also moves the
+pre-event reminder onto the arriving leg, alerts on unroutable or
+conflicting legs, and sweeps legs outside the live window.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from html import escape
 from urllib.parse import urlencode
@@ -24,7 +18,6 @@ from urllib.parse import urlencode
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db.clients import commute_log
 from app.services.calendar import (
     SILENT_REMINDERS,
     CalendarEvent,
@@ -33,7 +26,6 @@ from app.services.calendar import (
     create_event,
     delete_event,
     is_commute_event,
-    is_declined_event,
     is_task_event,
     list_events_between,
     patch_event,
@@ -41,304 +33,11 @@ from app.services.calendar import (
     private_properties,
     reminders_differ,
 )
-from app.services.commute.legs import (
-    FAILED_MODE,
-    HOME,
-    Anchor,
-    Durations,
-    PlannedLeg,
-    derive_legs,
-    required_routes,
-)
+from app.services.commute.legs import FAILED_MODE, HOME, PlannedLeg
 from app.services.commute.flip_link import flip_url
-from app.services.commute.resolver import resolve_duration
-from app.services.commute.weather import geocode, precipitation_probabilities_between
-from app.services.location import (
-    is_online_location,
-    resolve_location_alias,
-    resolve_routable_location,
-)
 from app.timezones import to_user_tz
 
 log = logging.getLogger(__name__)
-
-# A pin covers its whole trip, so it has to outlive its own leg's departure:
-# once the transit ride out has left, the ride home must stay on transit.
-# Pins only apply to leg keys still derived, i.e. trips still on the timeline.
-_PIN_LOOKBACK = timedelta(days=1)
-
-
-async def refresh_weather_sensitive_commutes(
-    session: Session,
-    *,
-    account_key: str | None = None,
-    _depth: int = 0,
-) -> dict:
-    """Re-derive commute legs for the next day when the forecast would flip
-    modes: rain flips bike trips to transit, and a cleared forecast flips
-    rain-forced transit trips back to bike (re-derivation decides from
-    scratch, so threshold- or route-forced transit stays transit)."""
-    settings = get_settings()
-    summary = _empty_summary()
-    write_calendar_id = (settings.google_calendar_id or "").strip()
-    if not write_calendar_id:
-        summary["errors"].append({"setup": "google_calendar_id not configured"})
-        return summary
-    if not settings.home_address:
-        summary["errors"].append({"setup": "home_address not configured"})
-        return summary
-    if not settings.google_maps_api_key:
-        # Without the key `geocode` returns None before any HTTP call, which
-        # would be misreported below as an un-geocodable address.
-        summary["errors"].append({"setup": "google_maps_api_key not configured"})
-        return summary
-
-    now = datetime.now(timezone.utc)
-    window_end = now + timedelta(days=1)
-    home_latlon = await geocode(session, settings.home_address)
-    if home_latlon is None:
-        summary["errors"].append({"setup": "home address could not be geocoded"})
-        return summary
-
-    hourly_rain = await precipitation_probabilities_between(
-        home_latlon[0],
-        home_latlon[1],
-        now,
-        window_end,
-    )
-    rain_pct = max(hourly_rain.values()) if hourly_rain else None
-    rainy = rain_pct is not None and rain_pct >= settings.commute_rain_threshold_pct
-
-    events = await list_events_between(
-        session,
-        calendar_ids=[write_calendar_id],
-        time_min=now,
-        time_max=window_end,
-        account_key=account_key,
-    )
-    # Rain can only flip bike legs; a dry forecast can only flip transit
-    # legs back. No candidate legs → nothing the weather could change.
-    flippable = "bicycling" if rainy else "transit"
-    if not any(is_commute_event(ev) and _commute_mode(ev) == flippable for ev in events):
-        log.info(
-            "commute weather refresh skipped · rain=%s threshold=%s flippable=%s",
-            rain_pct,
-            settings.commute_rain_threshold_pct,
-            flippable,
-        )
-        return summary
-
-    return await plan_window_commutes(
-        session,
-        window_start=now,
-        window_end=window_end,
-        hourly_rain=hourly_rain,
-        account_key=account_key,
-        _depth=_depth,
-    )
-
-
-async def plan_window_commutes(
-    session: Session,
-    *,
-    window_start: datetime,
-    window_end: datetime,
-    hourly_rain: dict[str, int] | None = None,
-    account_key: str | None = None,
-    _depth: int = 0,
-) -> dict:
-    settings = get_settings()
-    summary = _empty_summary()
-    write_calendar_id = (settings.google_calendar_id or "").strip()
-    if not write_calendar_id:
-        summary["errors"].append({"setup": "google_calendar_id not configured"})
-        return summary
-    home = (settings.home_address or "").strip()
-    if not home:
-        summary["errors"].append({"setup": "home_address not configured"})
-        return summary
-    if not settings.google_maps_api_key:
-        summary["errors"].append({"setup": "google_maps_api_key not configured"})
-        return summary
-
-    # Legs only exist inside [now, now + lookahead]: past legs can't be
-    # ridden, and legs further out than the horizon are never written — a
-    # task placed weeks ahead (due date minus lead) gets its legs once the
-    # daily re-baseline slides it into the window. This also keeps stale
-    # caller windows (e.g. re-placing a long-overdue task whose prior slot
-    # is months back) from fanning out over historical events.
-    now = datetime.now(timezone.utc)
-    horizon = now + timedelta(days=settings.commute_lookahead_days)
-    window_start = max(window_start, now)
-    if window_end > horizon:
-        log.info(
-            "commute · window capped at lookahead horizon %s (requested until %s)",
-            horizon.isoformat(),
-            window_end.isoformat(),
-        )
-        window_end = horizon
-    if window_end <= window_start:
-        return summary
-
-    window_start = to_user_tz(window_start)
-    window_end = to_user_tz(window_end)
-    margin = _context_margin(settings)
-    events = await list_events_between(
-        session,
-        calendar_ids=_read_calendar_ids(settings, write_calendar_id),
-        time_min=window_start - margin,
-        time_max=window_end + margin,
-        account_key=account_key,
-    )
-    anchors, existing_commutes, online = _partition(events, write_calendar_id)
-    anchors = await _resolve_routable_anchors(anchors)
-    summary["skipped_online"] = len(online)
-
-    # An anchor straddling the window edge gets ALL its legs written (see
-    # `_legs_to_write`) — but if the anchor extends past the fetched range,
-    # its existing legs out there are invisible to the diff, which would
-    # duplicate instead of patch them. Refetch with the full extent.
-    touching = [a for a in anchors if _overlaps(a.start, a.end, window_start, window_end)]
-    if touching:
-        need_lo = min(min(a.start for a in touching) - margin, window_start - margin)
-        need_hi = max(max(a.end for a in touching) + margin, window_end + margin)
-        if need_lo < window_start - margin or need_hi > window_end + margin:
-            log.info(
-                "commute · widening fetch to %s..%s for edge anchors",
-                need_lo.isoformat(),
-                need_hi.isoformat(),
-            )
-            events = await list_events_between(
-                session,
-                calendar_ids=_read_calendar_ids(settings, write_calendar_id),
-                time_min=need_lo,
-                time_max=need_hi,
-                account_key=account_key,
-            )
-            anchors, existing_commutes, online = _partition(events, write_calendar_id)
-            anchors = await _resolve_routable_anchors(anchors)
-            summary["skipped_online"] = len(online)
-
-    online_spans = [(to_user_tz(ev.start), to_user_tz(ev.end)) for ev in online]
-
-    if hourly_rain is None:
-        hourly_rain = await _home_rain(session, home, window_start, window_end + margin)
-
-    durations = await _resolve_routes(
-        session,
-        anchors,
-        home,
-        hourly_rain,
-        settings,
-        summary,
-    )
-    if durations is None:
-        # Transient Maps failure — anything derived now would turn every leg
-        # into a bogus "no route" placeholder. Leave the calendar untouched;
-        # the next scheduled pass retries.
-        return summary
-    # The chain rules (bike stays home / one mode per trip) can force transit
-    # onto pairs the optimistic first pass didn't fetch — and each re-derive
-    # may surface further pairs. Fetch just those and loop; two extra rounds
-    # cover any chain in practice. A transit pin on a dry, short trip lands
-    # here too: its transit pairs were never fetched.
-    pins = commute_log.active_pins(session, now - _PIN_LOOKBACK)
-    legs: list[PlannedLeg] = []
-    skipped_unroutable = 0
-    for _ in range(3):
-        missing_transit: set[tuple[str, str]] = set()
-        legs, skipped_unroutable = derive_legs(
-            anchors,
-            home,
-            durations,
-            hourly_rain,
-            settings,
-            avoid=online_spans,
-            missing_transit=missing_transit,
-            pins=pins,
-        )
-        if not missing_transit:
-            break
-        if not await _resolve_missing_transit(
-            session,
-            missing_transit,
-            anchors,
-            home,
-            durations,
-            summary,
-        ):
-            return summary
-    summary["skipped_unroutable"] = skipped_unroutable
-
-    to_write = _legs_to_write(legs, anchors, window_start, window_end)
-
-    # A task anchor whose legs collide with another anchor has a slot with
-    # no room for its trip (typically placed before trip-block planning
-    # existed). Re-place the task instead of writing overlapping legs — its
-    # own replan then derives clean ones.
-    task_event_ids = {ev.id for ev in events if is_task_event(ev)}
-    needs_replacement = _reschedule_candidates(to_write, anchors, task_event_ids)
-    if needs_replacement:
-        to_write = [leg for leg in to_write if not (set(leg.key) & needs_replacement)]
-
-    # Whatever still collides after task re-placement involves only fixed
-    # events — nothing can move, so the leg is written anyway, the conflict
-    # stays visible on the calendar, and the user gets one alert (tracked
-    # via a marker on the leg so replans don't re-alert).
-    summaries = {ev.id: ev.summary for ev in events}
-    obstacles = [(a.id, summaries.get(a.id) or a.location, a.start, a.end) for a in anchors] + [
-        (ev.id, ev.summary, to_user_tz(ev.start), to_user_tz(ev.end)) for ev in online
-    ]
-    conflicts = _immovable_conflicts(to_write, obstacles)
-    for key, (blocker_id, blocker_label) in conflicts.items():
-        log.warning(
-            "commute · leg %s -> %s overlaps immovable %r (id=%s); leaving the conflict visible",
-            key[0],
-            key[1],
-            blocker_label,
-            blocker_id,
-        )
-
-    summary["planned"], new_failures, new_conflicts = await _write_legs(
-        session,
-        to_write,
-        calendar_id=write_calendar_id,
-        existing=existing_commutes,
-        window=(window_start, window_end),
-        account_key=account_key,
-        conflicts=conflicts,
-    )
-    await _notify_new_failures(new_failures)
-    await _notify_new_conflicts(new_conflicts)
-
-    # Arrival truth comes from the full derived set — an anchor at the window
-    # edge may keep a leg that was written by an earlier replan.
-    await _sync_anchor_reminders(
-        session,
-        events=events,
-        legs=legs,
-        window=(window_start, window_end),
-        calendar_id=write_calendar_id,
-        settings=settings,
-        account_key=account_key,
-    )
-
-    from app.services.commute.reschedule import reschedule_overlapping_tasks
-
-    summary["rescheduled_tasks"] = await reschedule_overlapping_tasks(
-        session,
-        to_write,
-        account_key=account_key,
-        _depth=_depth,
-    )
-    summary["rescheduled_tasks"] += await _reschedule_task_anchors(
-        session,
-        needs_replacement,
-        account_key=account_key,
-        _depth=_depth,
-    )
-    return summary
-
 
 # Marks a foreign (user-created) event whose reminders we silenced because an
 # arriving leg carries the notification — so we know to restore the calendar
@@ -427,186 +126,6 @@ async def _sync_anchor_reminders(
             log.warning("commute · reminder sync failed event=%s err=%s", ev.id, exc)
 
 
-def _legs_to_write(
-    legs: list[PlannedLeg],
-    anchors: list[Anchor],
-    window_start: datetime,
-    window_end: datetime,
-) -> list[PlannedLeg]:
-    """Legs the replan may write or delete.
-
-    Legs of any anchor inside the window are included even though they sit
-    just *outside* it (an arrival ends `buffer` before its anchor starts) —
-    filtering by leg-span alone dropped every leg of a bare created/edited
-    event span. Legs merely poking into the window from edge anchors are
-    still written; the fetch margin only exists so those anchors see their
-    real neighbours."""
-    in_window = {
-        anchor.id
-        for anchor in anchors
-        if _overlaps(anchor.start, anchor.end, window_start, window_end)
-    }
-    return [
-        leg
-        for leg in legs
-        if _overlaps(leg.depart, leg.arrive, window_start, window_end) or in_window & set(leg.key)
-    ]
-
-
-def _reschedule_candidates(
-    legs: list[PlannedLeg],
-    anchors: list[Anchor],
-    task_event_ids: set[str],
-) -> set[str]:
-    """Task anchors whose derived legs overlap a *different* anchor. Fixed
-    events can't move, so a fixed↔fixed collision is left alone (and
-    logged by the write path as an overlapping leg)."""
-    out: set[str] = set()
-    for leg in legs:
-        for anchor in anchors:
-            if anchor.id in leg.key:
-                continue
-            if leg.depart < anchor.end and anchor.start < leg.arrive:
-                out.update(anchor_id for anchor_id in leg.key if anchor_id in task_event_ids)
-                break
-    return out
-
-
-async def _reschedule_task_anchors(
-    session: Session,
-    event_ids: set[str],
-    *,
-    account_key: str | None,
-    _depth: int,
-) -> int:
-    if not event_ids:
-        return 0
-    from sqlalchemy import select
-
-    from app.db.models.task import Task
-    from app.services.plan.schedule import schedule_task
-
-    stmt = select(Task).where(Task.calendar_event_id.in_(list(event_ids)))
-    moved = 0
-    for task in session.execute(stmt).scalars():
-        log.info("commute · task=%s slot has no room for its trip; re-placing", task.id)
-        result = await schedule_task(session, task, account_key=account_key, _depth=_depth)
-        if result is not None:
-            moved += 1
-    return moved
-
-
-async def _resolve_routes(
-    session: Session,
-    anchors: list[Anchor],
-    home: str,
-    hourly_rain: dict[str, int] | None,
-    settings,
-    summary: dict,
-) -> Durations | None:
-    """Route durations for every anchor pair, or None when a transient Maps
-    failure aborted resolution. `resolve_duration` answers definitive
-    no-route lookups with None values; it only *raises* on transient
-    failures (quota, network) — and those would hit every remaining pair
-    identically, so bail on the first instead of burning a quota-priced
-    call per pair."""
-    max_rain = max(hourly_rain.values()) if hourly_rain else None
-    rain_possible = max_rain is not None and max_rain >= settings.commute_rain_threshold_pct
-    durations: Durations = {}
-    resolved = 0
-    for (origin, destination), reference in required_routes(anchors, home).items():
-        try:
-            bike = await resolve_duration(
-                session,
-                origin=origin,
-                destination=destination,
-                mode="bicycling",
-                departure=reference,
-            )
-            durations[(origin, destination, "bicycling")] = bike
-            resolved += 1
-            if bike is None or bike > settings.commute_bike_max_minutes * 60 or rain_possible:
-                durations[(origin, destination, "transit")] = await resolve_duration(
-                    session,
-                    origin=origin,
-                    destination=destination,
-                    mode="transit",
-                    departure=reference,
-                )
-                resolved += 1
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "commute · route resolution aborted at %s -> %s err=%s",
-                origin,
-                destination,
-                exc,
-            )
-            summary["errors"].append(
-                {
-                    "route": f"{origin} -> {destination}",
-                    "error": str(exc),
-                    "transient": True,
-                }
-            )
-            return None
-    if resolved:
-        log.info("commute · resolved %d route durations for %d anchors", resolved, len(anchors))
-    return durations
-
-
-async def _resolve_missing_transit(
-    session: Session,
-    pairs: set[tuple[str, str]],
-    anchors: list[Anchor],
-    home: str,
-    durations: Durations,
-    summary: dict,
-) -> bool:
-    """Second-pass transit lookups for pairs the chain rule forced onto
-    transit after the optimistic first resolution — fetched lazily so the
-    common all-bike day costs no extra Distance Matrix elements."""
-    references = required_routes(anchors, home)
-    for origin, destination in pairs:
-        try:
-            durations[(origin, destination, "transit")] = await resolve_duration(
-                session,
-                origin=origin,
-                destination=destination,
-                mode="transit",
-                departure=references.get((origin, destination)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "commute · transit resolution aborted at %s -> %s err=%s",
-                origin,
-                destination,
-                exc,
-            )
-            summary["errors"].append(
-                {
-                    "route": f"{origin} -> {destination}",
-                    "error": str(exc),
-                    "transient": True,
-                }
-            )
-            return False
-    return True
-
-
-async def _home_rain(
-    session: Session,
-    home: str,
-    start: datetime,
-    end: datetime,
-) -> dict[str, int] | None:
-    # One forecast at home stands in for every leg endpoint — city-scale
-    # commutes don't cross weather systems.
-    latlon = await geocode(session, home)
-    if latlon is None:
-        return None
-    return await precipitation_probabilities_between(latlon[0], latlon[1], start, end) or None
-
-
 # How far back the past-leg sweep looks. Wide enough to also catch strays
 # that pre-window-clamp replans wrote next to years-old events.
 _PAST_LEG_LOOKBACK = timedelta(days=1825)
@@ -667,14 +186,6 @@ async def delete_stray_commute_legs(
             except Exception as exc:  # noqa: BLE001
                 log.warning("commute · stray leg delete failed event=%s err=%s", ev.id, exc)
     return deleted
-
-
-async def _resolve_routable_anchors(anchors: list[Anchor]) -> list[Anchor]:
-    out: list[Anchor] = []
-    for anchor in anchors:
-        location = await resolve_routable_location(anchor.location)
-        out.append(replace(anchor, location=location) if location else anchor)
-    return out
 
 
 async def _notify_new_failures(legs: list[PlannedLeg]) -> None:
@@ -855,66 +366,6 @@ async def _write_legs(
     return written, new_failures, new_conflicts
 
 
-def _partition(
-    events: list[CalendarEvent],
-    write_calendar_id: str,
-) -> tuple[list[Anchor], list[CalendarEvent], list[CalendarEvent]]:
-    """Split events into routable anchors, managed commute legs, and online
-    or location-less events — not routed to, but legs shouldn't sit on top
-    of them either. Location-less tasks are none of these: they can move,
-    so a leg landing on one re-places the task instead of dodging it."""
-    anchors: list[Anchor] = []
-    commutes: list[CalendarEvent] = []
-    online: list[CalendarEvent] = []
-    for ev in events:
-        if ev.all_day:
-            continue
-        if is_commute_event(ev):
-            if ev.calendar_id == write_calendar_id:
-                commutes.append(ev)
-            continue
-        if is_declined_event(ev):
-            continue
-        if is_online_location(ev.location):
-            if not is_task_event(ev):
-                online.append(ev)
-            continue
-        anchors.append(
-            Anchor(
-                id=ev.id,
-                start=to_user_tz(ev.start),
-                end=to_user_tz(ev.end),
-                location=resolve_location_alias(ev.location),
-            )
-        )
-    anchors.sort(key=lambda a: a.start)
-    return anchors, commutes, online
-
-
-def _read_calendar_ids(settings, write_calendar_id: str) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for cid in [write_calendar_id, *settings.google_busy_calendar_ids]:
-        clean = (cid or "").strip()
-        if clean and clean not in seen:
-            seen.add(clean)
-            out.append(clean)
-    return out
-
-
-def _context_margin(settings) -> timedelta:
-    # Wide enough that an edge anchor's real neighbour — the one that decides
-    # direct-leg vs via-home — is inside the fetched range even for long legs.
-    return timedelta(
-        minutes=max(
-            120,
-            2 * settings.commute_bike_max_minutes
-            + settings.commute_home_layover_minutes
-            + 2 * settings.commute_event_buffer_minutes,
-        )
-    )
-
-
 def _needs_patch(
     ev: CalendarEvent,
     leg: PlannedLeg,
@@ -1002,11 +453,3 @@ def _overlaps(start_a: datetime, end_a: datetime, start_b: datetime, end_b: date
     return start_a < end_b and start_b < end_a
 
 
-def _empty_summary() -> dict:
-    return {
-        "planned": 0,
-        "skipped_online": 0,
-        "skipped_unroutable": 0,
-        "rescheduled_tasks": 0,
-        "errors": [],
-    }

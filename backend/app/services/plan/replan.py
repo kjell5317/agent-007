@@ -166,7 +166,7 @@ _batch: contextvars.ContextVar[list | None] = contextvars.ContextVar("replan_bat
 
 @contextlib.asynccontextmanager
 async def batch(session: Session):
-    """Collect solver-mode `schedule_task` calls and run one solve for all of
+    """Collect `schedule_task` calls and run one solve for all of
     them on exit — for loops that create several tasks at once (splits,
     repeat instances)."""
     token = _batch.set([])
@@ -185,40 +185,6 @@ def batched() -> list | None:
     return _batch.get()
 
 
-# --- Shadow mode -----------------------------------------------------------------------
-
-_shadow_task: asyncio.Task | None = None
-_shadow_again = False
-
-
-def shadow_soon(reason: str) -> None:
-    """Dry-run the solver in the background after a legacy placement."""
-    global _shadow_task, _shadow_again
-    if _shadow_task is not None and not _shadow_task.done():
-        _shadow_again = True
-        return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    _shadow_task = loop.create_task(_shadow_run(reason))
-
-
-async def _shadow_run(reason: str, time_limit: float | None = None) -> None:
-    global _shadow_again
-    from app.db import SessionLocal
-
-    while True:
-        _shadow_again = False
-        try:
-            with SessionLocal() as session:
-                await replan(session, reason=f"shadow:{reason}", dry_run=True, time_limit=time_limit)
-        except Exception:  # noqa: BLE001 — shadow runs must never disturb the legacy planner
-            log.exception("replan · shadow run failed")
-        if not _shadow_again:
-            return
-
-
 # --- The solve --------------------------------------------------------------------------
 
 
@@ -231,7 +197,6 @@ async def replan(
     pulled_in: set[uuid.UUID] | None = None,
     account_key: str | None = None,
     time_limit: float | None = None,
-    dry_run: bool = False,
 ) -> ReplanResult:
     from app.services.learn import jobs
 
@@ -297,7 +262,7 @@ async def replan(
             candidates.append((task, attrs, slot[0] if slot else None))
     locked, yielding = _hand_placed_locks(
         session, candidates, tasks, events, list(fixed_tasks.values()),
-        now=now, horizon_end=horizon_end, blocked=set(blocks), dry_run=dry_run,
+        now=now, horizon_end=horizon_end, blocked=set(blocks),
     )
     for task, attrs, current in candidates:
         if task.id in locked:
@@ -359,8 +324,7 @@ async def replan(
             )
         except Exception as exc:  # noqa: BLE001 — solve without commute rather than not at all
             log.error("replan · routing input failed, solving without commute err=%s", exc)
-            if not dry_run:
-                _retry_routing_soon()
+            _retry_routing_soon()
 
     inp = S.SolveInput(
         days=grid.dates,
@@ -396,10 +360,9 @@ async def replan(
             result.moved.add(m.task.id)
     result.routes = solved.routes
 
-    _trace(reason, result, movable, grid, dry_run=dry_run)
-    if dry_run or not solved.ok:
-        if not solved.ok:
-            log.error("replan · no solution status=%s; keeping the current schedule", solved.status)
+    _trace(reason, result, movable, grid)
+    if not solved.ok:
+        log.error("replan · no solution status=%s; keeping the current schedule", solved.status)
         return result
     await _apply(
         session, result, movable, grid=grid, now=now, fixed_items=fixed_items,
@@ -421,7 +384,6 @@ def _hand_placed_locks(
     now: datetime,
     horizon_end: datetime,
     blocked: set[uuid.UUID],
-    dry_run: bool,
 ) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
     """`(locked, yielding)` hand-placed tasks. Locked ones stay exactly where
     they are: nothing new was issued and no deadline or duration changed
@@ -457,11 +419,10 @@ def _hand_placed_locks(
                 [t for t in current_tasks if created[t[0]] <= placed_at],
                 [e for e in events if e.created is None or e.created <= placed_at],
             )
-            if not dry_run:
-                task.placed_context = stored
-                # Commit, not flush: the solve awaits for seconds, and a row
-                # lock held across that freezes the loop on any sync write to it.
-                session.commit()
+            task.placed_context = stored
+            # Commit, not flush: the solve awaits for seconds, and a row
+            # lock held across that freezes the loop on any sync write to it.
+            session.commit()
         holds = lock_holds(stored, snapshot, tasks_created=tasks_created, events_created=events_created)
         overlapped = any(start < slot[1] and slot[0] < end for start, end in taken)
         if slot[1] <= horizon_end and (not holds or overlapped):
@@ -893,10 +854,9 @@ async def _retry_routing() -> None:
         log.exception("replan · routing retry failed")
 
 
-def _trace(reason: str, result: ReplanResult, movable: dict, grid: Grid, *, dry_run: bool) -> None:
+def _trace(reason: str, result: ReplanResult, movable: dict, grid: Grid) -> None:
     from app import observability
 
-    engine = get_settings().scheduler_engine
     placements = []
     for task_id, m in movable.items():
         span = result.placed.get(task_id)
@@ -925,10 +885,10 @@ def _trace(reason: str, result: ReplanResult, movable: dict, grid: Grid, *, dry_
         summary["legs"] = len(result.routes)
         summary["legs_by_bike"] = sum(leg.mode == "bicycling" for leg in result.routes)
         summary["legs_shortened"] = sum(leg.shortfall > 0 for leg in result.routes)
-    log.info("replan · %s dry_run=%s %s", reason, dry_run, summary)
-    with observability.root_span("scheduler.solve", tags=["scheduler", engine]) as span:
+    log.info("replan · %s %s", reason, summary)
+    with observability.root_span("scheduler.solve", tags=["scheduler", "solver"]) as span:
         span.update(
-            input={"reason": reason, "dry_run": dry_run, "horizon_days": grid.days},
+            input={"reason": reason, "horizon_days": grid.days},
             output={**summary, "placements": placements},
             metadata={"run_id": str(result.run_id)},
         )

@@ -30,6 +30,10 @@ class Task(Base):
     # before the due date, or its stale slot was cleared). `open_unscheduled_due`
     # + the retry cron sweep keep re-planning these. New rows default to now()
     # so a fresh task holds a provisional slot until the planner assigns a real one.
+    # TODO: the provisional now() is a legacy-planner leftover the solver
+    # ignores (checkin.py works around it). Drop the server default and derive
+    # TaskRead.schedule_status (and the frontend's) from `schedule_state` — a
+    # migration plus a frontend change.
     scheduled_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, server_default=func.now()
     )
@@ -81,10 +85,10 @@ class Task(Base):
     # matched back through this id (see app.agent.kotx).
     kotx_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
 
-    # Scheduling attributes (see docs/scheduling-plan.md). `work_type` /
-    # `effort` / `deadline_kind` feed the slot-preference model; the `placed_*`
-    # fields record who chose the current slot and what surrounded it then, so
-    # the solver can keep a hand-placed slot until its surroundings change.
+    # Scheduling attributes. `work_type` / `effort` / `deadline_kind` feed the
+    # slot-preference model; the `placed_*` fields record who chose the current
+    # slot and what surrounded it then, so the solver can keep a hand-placed
+    # slot until its surroundings change.
     work_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     effort: Mapped[str | None] = mapped_column(String(8), nullable=True)
     deadline_kind: Mapped[str] = mapped_column(String(8), default="firm", server_default="firm")

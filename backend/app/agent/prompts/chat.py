@@ -1,4 +1,4 @@
-"""System prompt for chat / "ask" mode (docs/search-plan.md stage 3).
+"""System prompt for chat / "ask" mode.
 
 The base prompt is committed. Personal, non-version-controlled routing hints
 (which of the user's projects/people live in which source) are loaded at runtime

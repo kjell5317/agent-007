@@ -13,7 +13,6 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.db.schemas.task import TaskRecurrence  # noqa: E402
 from app.services import recurrence  # noqa: E402
-from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.task import recur  # noqa: E402
 from app.timezones import to_user_tz, user_tz  # noqa: E402
 
@@ -165,43 +164,6 @@ def test_subtasks_cannot_repeat(monkeypatch):
         recur.set_recurrence(SimpleNamespace(), uuid.uuid4(), "day", 1)
 
 
-@pytest.mark.asyncio
-async def test_planner_keeps_a_repeat_instance_inside_its_period(monkeypatch):
-    due = datetime.now(timezone.utc) + timedelta(days=3)
-    task = SimpleNamespace(
-        id=uuid.uuid4(), title="Stretch", due_date=due, scheduled_date=None,
-        calendar_event_id=None, estimation=30,
-        recurrence_unit="day", recurrence_interval=1,
-    )
-    windows = []
-    slot_start = to_user_tz(due).replace(hour=12, minute=0, second=0, microsecond=0)
-
-    def fake_find_free_slot(busy, duration, window_start, window_end, gaps, *, extended_window=False):
-        windows.append((window_start, window_end))
-        return slot_start, slot_start + timedelta(minutes=30)
-
-    monkeypatch.setattr(
-        schedule_service,
-        "get_settings",
-        lambda: SimpleNamespace(
-            commute_event_buffer_minutes=0, event_buffer_minutes=0,
-            google_calendar_default_event_minutes=30, google_calendar_id="",
-            google_busy_calendar_ids=[], slot_min_lead_minutes=0,
-            commute_enabled=False, google_maps_api_key="",
-        ),
-    )
-    monkeypatch.setattr(schedule_service, "_find_free_slot", fake_find_free_slot)
-    monkeypatch.setattr(
-        schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy
-    )
-
-    await schedule_service.plan_task_slot(SimpleNamespace(), task)
-
-    window_start, window_end = windows[0]
-    assert window_start == to_user_tz(due) - timedelta(days=1)
-    assert window_end == to_user_tz(due)
-
-
 def test_a_split_occurrence_can_take_a_repeat_rule(monkeypatch):
     due = datetime(2026, 10, 20, 23, 45, tzinfo=timezone.utc)
     container = SimpleNamespace(
@@ -305,40 +267,3 @@ async def test_reopen_drops_surplus_occurrences_before_replanning(monkeypatch):
     assert calls == [("drop", surplus), ("schedule", task.id)]
 
 
-@pytest.mark.asyncio
-async def test_planner_keeps_subtasks_of_a_split_occurrence_inside_its_period(monkeypatch):
-    parent_due = datetime.now(timezone.utc) + timedelta(days=3)
-    parent = SimpleNamespace(
-        id=uuid.uuid4(), due_date=parent_due, recurrence_unit="day", recurrence_interval=1,
-    )
-    subtask = SimpleNamespace(
-        id=uuid.uuid4(), title="Stretch I", due_date=parent_due - timedelta(minutes=45),
-        scheduled_date=None, calendar_event_id=None, estimation=30,
-        parent_task_id=parent.id, recurrence_unit=None,
-    )
-    windows = []
-    slot_start = to_user_tz(subtask.due_date).replace(hour=12, minute=0, second=0, microsecond=0)
-
-    def fake_find_free_slot(busy, duration, window_start, window_end, gaps, *, extended_window=False):
-        windows.append(window_start)
-        return slot_start, slot_start + timedelta(minutes=30)
-
-    monkeypatch.setattr(
-        schedule_service,
-        "get_settings",
-        lambda: SimpleNamespace(
-            commute_event_buffer_minutes=0, event_buffer_minutes=0,
-            google_calendar_default_event_minutes=30, google_calendar_id="",
-            google_busy_calendar_ids=[], slot_min_lead_minutes=0,
-            commute_enabled=False, google_maps_api_key="",
-        ),
-    )
-    monkeypatch.setattr(schedule_service.tasks_store, "get", lambda session, task_id: parent)
-    monkeypatch.setattr(schedule_service, "_find_free_slot", fake_find_free_slot)
-    monkeypatch.setattr(
-        schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy
-    )
-
-    await schedule_service.plan_task_slot(SimpleNamespace(), subtask)
-
-    assert windows[0] == to_user_tz(parent_due) - timedelta(days=1)

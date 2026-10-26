@@ -9,22 +9,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
-ScheduleLogKind = (
-    "placed",
-    "moved_by_user",
-    "resized_by_user",
-    "checkin_sent",
-    "still_working",
-    "not_done",
-    "done_confirmed",
-    "closed",
-    "no_response",
-    "abandoned",
-    "deferred",
-    "unplaced",
-    "rescheduled",
-)
-
 
 class ScheduleLog(Base):
     """One scheduling-relevant event. `features` is a snapshot taken at that

@@ -7,8 +7,8 @@ The Jev integration is in the repo and off: `JEV_MODE=off`, no
 runs with Jev off"). Two replays against production history showed Jev is
 only good enough for one decision — dropping obvious non-tasks — and that
 decision saves too little to justify the vendor, the model and the nightly
-refit right now. This document keeps what was built, what was measured, and
-what to do if the idea comes back.
+refit right now. This document keeps what was built, what was measured,
+what to do if the idea comes back, and what to clean up once Jev runs.
 
 Jev (TypeSafe AI, `POST https://api.typesafe.ai/v1/systemone`) is a hosted
 classifier:
@@ -324,12 +324,173 @@ One call per input.
   customer data; ZDR only on enterprise plans).
 - **Outage or rate limit:** `JevUnavailable` → the agent path, as before.
 
-## Relation to the ML proposal in `scheduling-plan.md`
+## The ML proposal Jev grew out of
 
-The triage model is the proposal's logistic-regression task gate, with
-Jev's reads added to the history features. The v2 weights suggest the
-history features alone may carry most of it, which brings the original
-proposal (no Jev) back into play. Untested follow-ups from the proposal:
+Before Jev, the scheduling plan proposed learning the agent's closed
+decisions from the user's corrections (`task_overrides`, check-ins,
+calendar resizes). The scheduling plan is gone; this is what's left of the
+proposal:
 
-- kNN duration from similar closed tasks;
-- kNN implicit deadline (median `due − received` of neighbours).
+| Decision | Proposal | Status |
+|---|---|---|
+| Task vs not task | Logistic regression on the input embedding plus source features; auto-drop below p < 0.03, otherwise a hint in the prompt | Built as the triage model above, with Jev's reads added. Parked with Jev. The v2 weights suggest the history features alone carry most of it — the history-only ablation in "Next experiment" tests exactly that |
+| Label | Recency-weighted kNN over task embeddings, as a prompt hint | Not built. The agent's labels are rarely corrected (4 UI corrections, ever) |
+| Duration | LLM estimate × learned correction, plus a kNN residual from similar closed tasks | The learned correction is live (`services/learn/jobs.refit_duration`, `duration_params`). The kNN residual is untested |
+| Deadline, explicit | Stays LLM extraction | — |
+| Deadline, implicit | Median of (final due − received) over kNN neighbours per label and source; replaces the guess when ≥ 10 neighbours agree | Untested |
+| Work type / effort | kNN like the label | Not built |
+
+A model ships only if it beats the agent on held-out recent data (accuracy
+for task and label, MAE in log-minutes for duration, MAE in hours for
+deadlines). The live metric is the override rate per field. Fitting lives in
+`app/services/learn/`, parameters in `learned_models`, and predictions reach
+the agent as prompt context — no new agent tool.
+
+## Cleanup once Jev is in production
+
+Moved here from the old cleanup plan: everything below assumes Jev is on
+and has proven itself, so none of it applies while Jev is parked. Part B of
+that plan (the legacy scheduler) is done.
+
+State on 2026-10-26: Jev off (`JEV_MODE=off`, no key). The agents run on
+Anthropic (`CLAUDE_MODEL=claude-haiku-4-5` in prod); chat, the subtask
+planner and link research already run on `gemini-3.8-flash`.
+
+### Exit criteria (all must hold before any step)
+
+1. `JEV_MODE=on` in prod for at least 4 weeks.
+2. `jev_thresholds` is fitted for gmail and slack (≥ 50 rows each), not
+   running on defaults.
+3. The corrections on Jev-decided inputs are no higher than they were on
+   agent-decided ones, over the same 4 weeks:
+   - dismissals of Jev-created tasks;
+   - promotions of Jev `not_task` inputs;
+   - `task_overrides` on label and estimation.
+4. At most one dropped real task (a promotion of a `jev_not_task` input)
+   per month.
+
+The replay script (`python -m app.scripts.jev_replay`) and the `jev_*`
+branches in `agent_trace` give all four numbers.
+
+### 1 — Widen Jev, then retire the regex cues it replaces
+
+Small behaviour changes that let the later deletions happen:
+
+- **Manual event cue.** Ask `has_event` in the manual call and route on it,
+  then delete the `mentions_event` regex check in `queue._process`. The
+  regex itself in `services/event_context.py` stays only if another caller
+  remains.
+- **Promotions.** Also run the manual fast path for promoted Gmail/Slack
+  inputs (`POST /tasks/open/{id}`) that have no candidates and no context
+  inputs. `extract_task_fields` then only handles candidate updates, event
+  cues and multi-message threads.
+- **kotx briefs.** `agent/kotx/runner.py` runs `extract_task_fields` only
+  for estimation and due date. Replace it with the Jev field call (no
+  writer — the title comes from the GitHub subject). One LLM call fewer per
+  kotx task.
+- **Split cue.** Remove `_CONJUNCTION` from `services/task/split.py`.
+  `needs_split` keeps the over-120-minute rule; a conjunction no longer
+  matters without Jev's `split` answer.
+
+### 2 — Delete what Jev made redundant
+
+| What | Where | Why it can go |
+|---|---|---|
+| Flash batch path of the attribute classifier | `services/attribute_classifier.py`: `numbered`, `tool`, `parse`, `MAX_TOKENS`, the `chat` branch | A Jev outage leaves events/tasks pending; `classify_pending_events` and the backfill retry them next run. Also drop `tool_name`, `description`, `items` and `system_prompt` from `BatchClassifier` and its two definitions, plus the `CLASSIFIER.parse` / `.tool` tests |
+| Cosine `auto_not_task` | `orchestrator.py`, `input_dedup_threshold` for the not-task side | **Decide on replay data first.** Compare Jev with the cosine gate on the `auto_not_task` rows. If Jev agrees ≥ 99 %, let Jev decide those too and keep only `auto_duplicate`. That removes a second, uncalibrated drop path |
+| `confidence` on the agent tools | `agent/tools/schemas.py` `_CONFIDENCE_SCHEMA`, its uses, `trace["confidence"]` writes | Jev's probability is the calibrated number; the LLM's self-reported confidence isn't used for anything. Keep `reason` |
+| Classification guidance in the agent prompt | `agent/prompts/new_input.py` | The agent then only sees hard cases (events, uncertain inputs, edits). Shorten the "is it a task" section to what those need — as a prompt edit plus replay, not a blind cut |
+| Unused override readers | `db/clients/overrides.py` `list_for_field`, `task_ids_with_user_override` | No callers. They were prep for the label/deadline kNN above; delete them if those stay unbuilt |
+
+### 3 — Run every remaining LLM call on Gemini Flash
+
+After steps 1–2 the LLM does two kinds of work:
+
+- **Writing text:** the triage writer, the notes harvest, note moderation
+  and subtask plans.
+- **Hard cases:** calendar events, edits to existing tasks, and inputs Jev
+  isn't sure about.
+
+Chat already runs on `gemini-3.8-flash` with tools, forced tool calls and
+thought signatures, so the Google path through `agent/helpers/llm.py` is
+proven. One provider removes the Anthropic SDK, its key, and the
+two-provider branches in the adapter.
+
+| Call site | Provider in prod today |
+|---|---|
+| New-input agent (`agent/input/runner.py`), thread follow-up (`agent/thread/runner.py`), manual extractor (`agent/manual/runner.py`, also kotx briefs until step 1) | default → Anthropic `claude-haiku-4-5` |
+| Triage writer (`agent/triage/write.py`), notes harvest (`agent/triage/runner.py`) | default → Anthropic |
+| Note moderation (`services/note/moderate.py`) | default → Anthropic |
+| Subtask planner (`services/task/split.py`) | Flash (whenever `GEMINI_API_KEY` is set) |
+| Attribute classifier fallback | Flash (deleted in step 2) |
+| Chat (`agent/chat/runner.py`) | Flash (`chat_llm_*`) |
+| Link research (`agent/helpers/web.py`) | Flash with Search grounding; replaced by the hand-off research executor (`docs/handoff-plan.md`, W-steps) |
+
+Steps:
+
+1. **Prepare the Google path for the agent loops** (code, before the
+   switch):
+   - **Thinking level:** `chat()` gets a default thinking level for Google —
+     a new setting `llm_thinking_level` (default `low`), used whenever the
+     caller passes none. The agents never pass one, so on Gemini they would
+     run the model's default thinking.
+   - **Output cap:** raise `MAX_TOKENS` on the Google path. Thinking tokens
+     count against `max_output_tokens`; that's why the attribute classifier
+     already needs 4096. Agent turns capped at 1024 would truncate.
+   - **Tool schemas:** test each flow's tools on Gemini (new-input, thread,
+     manual, writer, notes, moderation, split). Gemini accepts a subset of
+     JSON Schema; `format: uuid`, `minLength` and `minItems` are the keys to
+     check.
+   - **How:** a unit test per flow that converts the tools with
+     `_convert_tools_to_google_genai_format`, plus one live call per flow on
+     a recent input.
+2. **Switch by env** (reversible): set `LLM_PROVIDER=google` and
+   `LLM_MODEL=gemini-3.8-flash`, and remove `CLAUDE_MODEL`. Rollback means
+   restoring the old values.
+3. **Gate** (2 weeks), measured on agent-decided inputs only (`new_input`,
+   `thread_followup` and `manual` branches) and compared with the last Jev
+   weeks on Haiku:
+   - the same corrections as the exit criteria;
+   - `no_tool_call` and `max_iterations` outcomes;
+   - writer failures (`jev triage · writer failed` in the logs);
+   - title quality, now written by Flash: spot-check 20.
+4. **Delete Anthropic** once the gate holds:
+   - **Adapter** (`agent/helpers/llm.py`): the `AnthropicChatGenerator`
+     import, `_anthropic_generator`, `CACHE_CONTROL` and the cache marker in
+     `_to_haystack_messages`, and the Anthropic branches of
+     `_build_generator`, `_generation_kwargs` and `_tool_choice`. Gemini's
+     own context caching covers the repeated system/tool prefix.
+   - **Routing that becomes constant:** `provider="google" if … else None`
+     in `services/task/split.py` and `services/attribute_classifier.py`;
+     `provider="google"` in `agent/helpers/web.py`; `Settings.llm_target`
+     and the `chat_llm_provider` / `chat_llm_model` pair. Chat keeps
+     `chat_thinking_level` if it should think differently from the
+     background flows.
+   - **Settings:** remove `anthropic_api_key`, `claude_model` and
+     `DEFAULT_ANTHROPIC_MODEL`. `llm_provider` goes or becomes google-only.
+     The `llm_model` default becomes `gemini-3.8-flash`.
+   - **Dependencies:** `anthropic-haystack` and `anthropic` in
+     `pyproject.toml`, plus the `MessageParam` pin comment; then `uv lock`.
+   - **Config:** the LLM section of `.env.example`; `ANTHROPIC_API_KEY` and
+     `CLAUDE_MODEL` in the prod env.
+   - **Comments:** the `observability.py` module docstring (it names
+     `AnthropicChatGenerator`), the settings comment about the "cached
+     Anthropic path", and the `_generation_kwargs` docstring.
+
+### 4 — Consider
+
+- **Default `jev_mode` to `on`.** Keep the setting itself: `off` is the
+  kill switch.
+
+### Tests to update
+
+- `test_attribute_classifier_jev.py`: the fallback test becomes "outage
+  leaves the batch pending".
+- The parse/tool tests in `test_calendar_event_attributes.py` and
+  `test_backfill_task_attributes.py`.
+- `test_task_split.py` conjunction tests.
+- `test_manual_task_creation.py` event-cue tests.
+- `test_kotx_consolidation.py` extract-fields stubs.
+- The Anthropic cases in `test_llm_adapter.py` and `test_llm_tracing.py`
+  (step 3). Fake responses elsewhere that only label themselves
+  `provider="anthropic"` can stay or be relabelled.

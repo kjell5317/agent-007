@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -308,52 +307,6 @@ def test_overdue_open_survives_limit_with_many_closed():
     assert titles == ["open-overdue"]
 
 
-def test_overdue_due_open_survives_limit_and_filters_closed_future():
-    session = _sqlite_session()
-    raw_inputs = Table(
-        "raw_inputs",
-        MetaData(),
-        Column("id", UUID(as_uuid=True), primary_key=True),
-        Column("task_id", UUID(as_uuid=True)),
-        Column("status", String(32)),
-        Column("received_at", DateTime(timezone=True)),
-        Column("source", String(64)),
-    )
-    raw_inputs.create(session.get_bind())
-    base = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    cutoff = base + timedelta(hours=4)
-
-    def add(title: str, *, status: str, due: datetime):
-        task = Task(
-            title=title,
-            due_date=due,
-            scheduled_date=base,
-            created_at=base,
-        )
-        session.add(task)
-        session.flush()
-        session.execute(
-            raw_inputs.insert(),
-            {
-                "id": uuid.uuid4(),
-                "task_id": task.id,
-                "status": status,
-                "received_at": base,
-                "source": "gmail",
-            },
-        )
-
-    for i in range(10):
-        add(f"closed-{i}", status="closed", due=base + timedelta(minutes=i))
-    add("open-overdue", status="open", due=base + timedelta(hours=1))
-    add("open-future", status="open", due=base + timedelta(days=1))
-    session.commit()
-
-    rows = tasks_store.overdue_due_open(session, cutoff=cutoff, limit=3)
-
-    assert [t.title for t in rows] == ["open-overdue"]
-
-
 def test_discover_ignores_edits_to_a_closed_tasks_event(monkeypatch):
     session = _sqlite_session()
     booked = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
@@ -465,87 +418,21 @@ async def test_add_task_event_persists_scheduled_date_after_calendar_create(monk
 
 
 @pytest.mark.asyncio
-async def test_plan_task_slot_tries_extended_window_automatically(monkeypatch):
-    task = SimpleNamespace(
-        id=uuid.uuid4(),
-        title="Write report",
-        due_date=datetime.now(timezone.utc) + timedelta(days=2),
-        scheduled_date=None,
-        calendar_event_id=None,
-        estimation=30,
-    )
-    # A realistic in-window local slot (noon tomorrow) — the day-window
-    # invariant in _finalize rejects physically-impossible times.
-    from app.timezones import user_tz
-
-    extended_start = (datetime.now(user_tz()) + timedelta(days=1)).replace(
-        hour=12, minute=0, second=0, microsecond=0
-    )
-    extended_slot = (extended_start, extended_start + timedelta(minutes=30))
-    searches: list[bool] = []
-    repairs: list[bool] = []
-
-    def fake_find_free_slot(*_args, extended_window: bool = False):
-        searches.append(extended_window)
-        return extended_slot if extended_window else None
-
-    async def fake_repair_by_displacing_task(*_args, extended_window: bool, **_kwargs):
-        repairs.append(extended_window)
-        raise ValueError("no normal slot")
-
-    monkeypatch.setattr(
-        schedule_service,
-        "get_settings",
-        lambda: SimpleNamespace(
-            commute_event_buffer_minutes=0,
-            event_buffer_minutes=0,
-            google_calendar_default_event_minutes=30,
-            google_calendar_id="",
-            google_busy_calendar_ids=[],
-            slot_min_lead_minutes=0,
-            commute_enabled=False,
-            google_maps_api_key="",
-        ),
-    )
-    monkeypatch.setattr(schedule_service, "_find_free_slot", fake_find_free_slot)
-    monkeypatch.setattr(
-        schedule_service,
-        "_repair_by_displacing_task",
-        fake_repair_by_displacing_task,
-    )
-    monkeypatch.setattr(
-        schedule_service, "_db_scheduled_busy", lambda session, task, ws, we, busy: busy
-    )
-
-    result = await schedule_service.plan_task_slot(SimpleNamespace(), task)
-
-    assert (result.start, result.end) == extended_slot
-    assert (result.block_start, result.block_end) == extended_slot
-    assert searches == [False, True]
-    assert repairs == [False]
-
-
-@pytest.mark.asyncio
-async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
+async def test_notification_reschedule_goes_through_the_reschedule_service(monkeypatch):
+    # Same path as the UI button: the "rescheduled" log row, the refit and
+    # pulling a deferred task in all live in `reschedule_task`.
     task_id = uuid.uuid4()
-    scheduled = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
-    task = SimpleNamespace(
-        id=task_id,
-        title="Write report",
-        due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
-        scheduled_date=scheduled,
-        calendar_event_id="event-1",
-        estimation=45,
-    )
-    calls: list[Interval | None] = []
+    task = SimpleNamespace(id=task_id, title="Write report")
+    calls = []
+    published = []
 
-    async def fake_schedule_task(_session, _task, **kwargs):
-        calls.append(kwargs.get("block"))
-        return (scheduled + timedelta(hours=2), scheduled + timedelta(hours=2, minutes=45))
+    async def fake_reschedule(_session, task_arg):
+        calls.append(task_arg)
+        return (datetime(2026, 7, 1, 12, tzinfo=timezone.utc), datetime(2026, 7, 1, 13, tzinfo=timezone.utc))
 
     monkeypatch.setattr(notifications.tasks_store, "get", lambda _session, _task_id: task)
-    monkeypatch.setattr(notifications, "schedule_task", fake_schedule_task)
-    monkeypatch.setattr(notifications, "publish_task", lambda _session, _task_id: None)
+    monkeypatch.setattr(notifications, "reschedule_task", fake_reschedule)
+    monkeypatch.setattr(notifications, "publish_task", lambda _session, tid: published.append(tid))
     monkeypatch.setattr(
         notifications,
         "get_settings",
@@ -561,8 +448,8 @@ async def test_notification_reschedule_blocks_previous_slot(monkeypatch):
     result = await notifications.handle_action(payload, request, session=SimpleNamespace())
 
     assert result["ok"] is True
-    assert len(calls) == 1
-    assert calls[0] == Interval(scheduled, scheduled + timedelta(minutes=45), "event-1")
+    assert calls == [task]
+    assert published == [task_id]
 
 
 def test_schedule_day_action_captures_utc_timestamp_and_queues_worker(monkeypatch):
@@ -824,7 +711,7 @@ async def test_task_notifications_deep_link_and_actions(monkeypatch):
     monkeypatch.setattr(
         notify_service,
         "get_settings",
-        lambda: SimpleNamespace(task_default_url="https://example.test/app"),
+        lambda: SimpleNamespace(public_url="https://example.test/app"),
     )
     monkeypatch.setattr(notify_service, "notify", fake_notify)
 
@@ -1044,58 +931,12 @@ async def test_closed_task_is_not_scheduled(monkeypatch):
         lambda _session, ids: {task_id: "closed" for task_id in ids},
     )
 
-    async def unexpected_schedule(*_args, **_kwargs):
-        pytest.fail("closed task reached the calendar planner")
+    async def unexpected_solve(*_args, **_kwargs):
+        pytest.fail("closed task reached the solver")
 
-    monkeypatch.setattr(schedule_service, "_schedule_task_locked", unexpected_schedule)
+    monkeypatch.setattr(schedule_service, "schedule_tasks", unexpected_solve)
 
     assert await schedule_service.schedule_task(SimpleNamespace(), task) is None
-
-
-@pytest.mark.asyncio
-async def test_schedule_task_serializes_across_tasks(monkeypatch):
-    # Two different tasks scheduled concurrently must not overlap. The global
-    # lock forces the second plan to run only after the first has been written,
-    # so it sees the first task's slot. Without the lock both would plan against
-    # the same empty snapshot and collide.
-    placed: list[tuple[datetime, datetime]] = []
-    base = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
-
-    async def fake_plan(_session, _task, **_kwargs):
-        await asyncio.sleep(0)  # yield — invites a concurrent call to interleave
-        start = placed[-1][1] if placed else base
-        end = start + timedelta(minutes=60)
-        return schedule_service.PlannedSlot(start, end, start, end)
-
-    async def fake_add(_session, task, *, start, end):
-        await asyncio.sleep(0)
-        placed.append((start, end))
-        task.calendar_event_id = f"ev-{task.id}"
-
-    monkeypatch.setattr(schedule_service, "plan_task_slot", fake_plan)
-    monkeypatch.setattr("app.services.calendar.add_task_event", fake_add)
-    monkeypatch.setattr(schedule_service.tasks_store, "latest_status_for", lambda *_args: {})
-    monkeypatch.setattr("app.events.publish_task", lambda session, task_id: None)
-
-    def make_task():
-        return SimpleNamespace(
-            id=uuid.uuid4(),
-            title="t",
-            due_date=base + timedelta(days=1),
-            scheduled_date=None,
-            calendar_event_id=None,
-            location=None,
-            estimation=60,
-        )
-
-    res_a, res_b = await asyncio.gather(
-        schedule_service.schedule_task(SimpleNamespace(), make_task(), notify=False),
-        schedule_service.schedule_task(SimpleNamespace(), make_task(), notify=False),
-    )
-
-    (start_a, end_a), (start_b, _end_b) = sorted([res_a, res_b])
-    assert end_a <= start_b  # back-to-back, no overlap
-    assert len(placed) == 2
 
 
 def test_created_manually_follows_the_parent(monkeypatch):
@@ -1145,7 +986,7 @@ async def test_announce_placement_keeps_manual_tasks_quiet(monkeypatch, manual, 
 
 def test_task_event_body_carries_deadline_and_modal_link(monkeypatch):
     monkeypatch.setattr(
-        notify_service, "get_settings", lambda: SimpleNamespace(task_default_url="https://example.test/app"),
+        notify_service, "get_settings", lambda: SimpleNamespace(public_url="https://example.test/app"),
     )
     task = SimpleNamespace(
         id=uuid.uuid4(), description="Body", link="https://example.com/pr/1",

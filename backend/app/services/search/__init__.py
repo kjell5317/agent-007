@@ -1,4 +1,4 @@
-"""Staged hybrid search (docs/search-plan.md).
+"""Staged hybrid search.
 
 Stage 1: `parse_query` splits filter tokens from free text, `build_tsquery`
 turns the free text into a prefix-matching tsquery, and `run_suggest` runs the

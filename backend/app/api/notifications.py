@@ -42,10 +42,10 @@ from app.services.notify import (
 )
 from app.services.ntfy import action_secret, verify_action
 from app.services.plan.checkin import CHECKIN_ACTIONS, handle_checkin_action
-from app.services.plan.schedule import schedule_task, scheduled_interval_for
 from app.services.points import adjust_points
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.dismiss import dismiss_task
+from app.services.task.reschedule import reschedule_task
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ async def handle_action(
 
     if payload.action == ACTION_RESCHEDULE_TASK:
         log.info("notify action · reschedule task=%s", task.id)
-        result = await schedule_task(session, task, block=scheduled_interval_for(task))
+        result = await reschedule_task(session, task)
         if result is not None:
             publish_task(session, task.id)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}

@@ -187,6 +187,32 @@ def test_long_gap_goes_home_short_gap_waits():
         assert (("a", "home") in {(o, d) for o, d, _ in legs(result)}) is home_stop
 
 
+def test_home_task_never_sits_inside_an_away_stretch():
+    # The task can only run in the gap between two lectures at Uni: the user
+    # has to be home for it, so the route goes home and back around it.
+    a, item_a = lecture(0, 9, 10, key="a")
+    b, item_b = lecture(0, 14, 15, key="b")
+    task = S.SolverTask(key="t", dur=12, earliest=at(0, 10), due=at(0, 14), hint=at(0, 11))
+    result = solve(
+        commute_input(fixed=[a, b], task_locations={"t": HOME}, task_anchors={"t": "ev-t"}),
+        tasks=[task], fixed=[item_a, item_b],
+    )
+    start = result.starts["t"]
+    arrival = next(leg for leg in result.routes if leg.dest_key == "ev-t")
+    departure = next(leg for leg in result.routes if leg.origin_key == "ev-t")
+    assert (arrival.origin_key, departure.dest_key) == ("a", "b")
+    assert arrival.end <= start and start + 12 <= departure.start
+
+
+def test_bike_comes_home_overnight_when_leaving_it_does_not_pay():
+    node, item = lecture(0, 10, 12)
+    node2, item2 = lecture(1, 10, 12, key="lec2")
+    result = solve(commute_input(fixed=[node, node2]), fixed=[item, item2])
+    assert legs(result, 0) == [("home", "lec", "bicycling"), ("lec", "home", "bicycling")]
+    assert legs(result, 1) == [("home", "lec2", "bicycling"), ("lec2", "home", "bicycling")]
+    assert [leg.bike_after for leg in result.routes if leg.day == 0][-1] == HOME
+
+
 def test_state_from_legs():
     now = datetime(2026, 10, 20, 15, tzinfo=timezone.utc)
     def leg(o, d, mode, depart, minutes=20, dest="Uni, Somewhere"):
@@ -325,7 +351,11 @@ async def test_discover_forgets_trips_to_a_deleted_event(monkeypatch):
     async def noop(*_args, **_kwargs):
         return None
 
+    async def no_refresh(*_args, **_kwargs):
+        return 0
+
     monkeypatch.setattr(discover_mod, "cache_calendar_events", no_cache)
+    monkeypatch.setattr(discover_mod, "refresh_recurring", no_refresh)
     monkeypatch.setattr(discover_mod, "_refresh_related_task_deadlines", noop)
 
     class FakeClient:
@@ -407,8 +437,15 @@ async def test_discover_caches_free_events_without_replanning_around_them(monkey
     async def plan_legs(_session, events, **_kwargs):
         planned.extend(ev.id for ev in events)
 
+    rebaselined = []
+
+    async def refresh_recurring(_session, _client, calendar_ids, *, now):
+        rebaselined.extend(calendar_ids)
+        return 0
+
     monkeypatch.setattr(discover_mod, "authorized_client", fake_authorized_client)
     monkeypatch.setattr(discover_mod, "cache_calendar_events", cache)
+    monkeypatch.setattr(discover_mod, "refresh_recurring", refresh_recurring)
     monkeypatch.setattr(discover_mod, "_refresh_related_task_deadlines", refresh)
     monkeypatch.setattr(discover_mod, "_plan_legs_for_changed_events", plan_legs)
 
@@ -420,6 +457,8 @@ async def test_discover_caches_free_events_without_replanning_around_them(monkey
     assert refreshed == ["sfo", "sync"]
     assert planned == ["sync"]
     assert summary["updated"] == 1
+    # Only the calendar that re-baselined (no sync token) refreshes its series.
+    assert rebaselined == ["write"]
 
 
 @pytest.mark.asyncio

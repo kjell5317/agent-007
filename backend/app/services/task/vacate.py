@@ -22,11 +22,6 @@ def vacated_commute_window(task) -> Interval | None:
 async def replan_vacated_window(session: Session, vacated: Interval | None) -> None:
     if vacated is None:
         return
-    from app.services.plan.commute import commute_window_margin, plan_commutes_window_best_effort
+    from app.services.plan.commute import replan_commutes
 
-    margin = commute_window_margin()
-    await plan_commutes_window_best_effort(
-        session,
-        window_start=vacated.start - margin,
-        window_end=vacated.end + margin,
-    )
+    await replan_commutes(session)

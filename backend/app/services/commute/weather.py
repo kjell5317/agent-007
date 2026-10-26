@@ -1,13 +1,9 @@
-"""Open-Meteo precipitation probability lookup.
+"""Open-Meteo hourly forecast for the solver's ride-weather terms, plus the
+geocoding of the home address it is read at.
 
-Free, no key required, ~6h cache resolution is plenty for "should I bike?".
-We geocode the origin/destination through Google's Distance Matrix already, so
-here we just take a precomputed `(lat, lon)` and read the forecast for the
-relevant hour.
-
-When the network call fails we return `None` — callers treat that as
-"no rain signal", which keeps bike trips on by default rather than spending
-extra API quota on a transit query.
+Free, no key required. When the network call fails the forecast is empty —
+callers treat that as "no weather signal", which keeps bike trips on by
+default.
 """
 
 from __future__ import annotations
@@ -23,82 +19,6 @@ log = logging.getLogger(__name__)
 
 _BASE = "https://api.open-meteo.com/v1/forecast"
 _TIMEOUT = 8.0
-
-
-async def precipitation_probability_at(
-    lat: float, lon: float, when: datetime
-) -> int | None:
-    """Probability of precipitation (%) at the given hour."""
-    iso_hour = to_user_tz(when).strftime("%Y-%m-%dT%H:00")
-    params = {
-        "latitude": f"{lat:.5f}",
-        "longitude": f"{lon:.5f}",
-        "hourly": "precipitation_probability",
-        "timezone": "auto",
-        "start_hour": iso_hour,
-        "end_hour": iso_hour,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_BASE, params=params)
-            resp.raise_for_status()
-            payload = resp.json()
-    except Exception as exc:  # noqa: BLE001 — best-effort weather check
-        log.info("open-meteo lookup failed (%s) — assuming no rain signal", exc)
-        return None
-
-    series = payload.get("hourly", {}).get("precipitation_probability") or []
-    if not series:
-        return None
-    value = series[0]
-    return int(value) if value is not None else None
-
-
-async def max_precipitation_probability_between(
-    lat: float,
-    lon: float,
-    start: datetime,
-    end: datetime,
-) -> int | None:
-    """Maximum precipitation probability (%) in `[start, end]`."""
-    hourly = await precipitation_probabilities_between(lat, lon, start, end)
-    return max(hourly.values()) if hourly else None
-
-
-async def precipitation_probabilities_between(
-    lat: float,
-    lon: float,
-    start: datetime,
-    end: datetime,
-) -> dict[str, int]:
-    """Hourly precipitation probabilities keyed as local `YYYY-MM-DDTHH:00`."""
-    start_hour = to_user_tz(start).strftime("%Y-%m-%dT%H:00")
-    end_hour = to_user_tz(end).strftime("%Y-%m-%dT%H:00")
-    params = {
-        "latitude": f"{lat:.5f}",
-        "longitude": f"{lon:.5f}",
-        "hourly": "precipitation_probability",
-        "timezone": "auto",
-        "start_hour": start_hour,
-        "end_hour": end_hour,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_BASE, params=params)
-            resp.raise_for_status()
-            payload = resp.json()
-    except Exception as exc:  # noqa: BLE001
-        log.info("open-meteo range lookup failed (%s) — no weather signal", exc)
-        return {}
-
-    hourly = payload.get("hourly", {})
-    times = hourly.get("time") or []
-    series = hourly.get("precipitation_probability") or []
-    out: dict[str, int] = {}
-    for when, value in zip(times, series, strict=False):
-        if value is not None:
-            out[str(when)] = int(value)
-    return out
 
 
 async def geocode(session, address: str) -> tuple[float, float] | None:
@@ -149,8 +69,6 @@ async def geocode(session, address: str) -> tuple[float, float] | None:
     session.commit()
     return lat, lon
 
-
-# --- Hourly forecast for the solver ------------------------------------------
 
 FORECAST_CACHE_SECONDS = 3600
 # Long-run share of rainy hours, what a forecast decays to with lead time.

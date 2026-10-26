@@ -322,7 +322,11 @@ async def _run_discovery_with_events(
     async def fake_set_next_event_datetime(value: str):
         captured["value"] = value
 
+    async def no_refresh(*_args, **_kwargs):
+        return 0
+
     monkeypatch.setattr(discover_mod, "authorized_client", fake_authorized_client)
+    monkeypatch.setattr(discover_mod, "refresh_recurring", no_refresh)
     monkeypatch.setattr(discover_mod, "next_event_datetime_configured", lambda: True)
     if patch_setter:
         monkeypatch.setattr(discover_mod, "set_next_event_datetime", fake_set_next_event_datetime)

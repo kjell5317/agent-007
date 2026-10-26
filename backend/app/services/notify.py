@@ -148,7 +148,7 @@ def task_tag(task_id: UUID | str) -> str:
 
 def task_url(task_id: UUID | str) -> str:
     """Frontend deep link for opening a task detail modal."""
-    base = get_settings().task_default_url
+    base = get_settings().public_url
     parts = urlsplit(base)
     path = parts.path or "/"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, f"task/{task_id}"))
@@ -314,7 +314,7 @@ async def notify_kotx_review_ready(task, *, assignee: str = "unassigned") -> Non
 
 
 async def notify_no_slot(task) -> None:
-    """No slot before the deadline after normal and extended windows fail.
+    """The solve found no slot before the deadline.
 
     Escalated and undismissable: the user must resolve it (Done/Dismiss) or it
     clears itself once the task lands a slot (see `clear_task_notification`).
@@ -351,24 +351,6 @@ async def notify_deadline_missed(task, *, start: datetime, end: datetime) -> Non
     )
 
 
-async def notify_unroutable_location(task, location: str) -> None:
-    """The task has a physical-looking location Google Maps can't route to —
-    30-minute placeholder commutes were reserved instead of real ones. Uses
-    its own tag so the regular "Scheduled" notification doesn't overwrite
-    it."""
-    await notify(
-        title=f"⚠️ Can't route: {_short_title(task)}",
-        message=(
-            f"Google Maps found no route to \"{location[:120]}\".\n"
-            "Reserved 30 min per leg as a placeholder — check the location."
-        ),
-        url=task_url(task.id),
-        tag=f"route-{task.id}",
-        channel="Scheduling warnings",
-        color="#f59e0b",
-    )
-
-
 async def notify_unroutable_leg(
     *,
     origin: str,
@@ -376,17 +358,15 @@ async def notify_unroutable_leg(
     depart: datetime,
     tag: str,
 ) -> None:
-    """A calendar-derived commute leg has no route — a 30-minute ⚠️
-    placeholder event was written instead. Counterpart of
-    `notify_unroutable_location` for legs whose anchors are plain calendar
-    events rather than tasks."""
+    """A commute leg has no route — a 30-minute ⚠️ placeholder event was
+    written instead."""
     await notify(
         title="⚠️ Commute has no route",
         message=(
             f"{origin[:100]} → {destination[:100]}\n"
             f"Departs {_fmt_when(depart)}. Reserved 30 min per leg — check the event address."
         ),
-        url=get_settings().task_default_url,
+        url=get_settings().public_url,
         tag=tag,
         channel="Scheduling warnings",
         color="#f59e0b",
@@ -408,7 +388,7 @@ async def notify_leg_conflict(
             f"Leg to {destination[:100]} departing {_fmt_when(depart)} "
             f"collides with {_clip(blocker, 100)}. Nothing movable — resolve by hand."
         ),
-        url=get_settings().task_default_url,
+        url=get_settings().public_url,
         tag=tag,
         channel="Scheduling warnings",
         color="#f59e0b",
@@ -420,7 +400,7 @@ async def notify_calendar_event_updated(event) -> None:
     await notify(
         title="Calendar event updated",
         message=f"{_clip(event.summary, 120)}\n{_fmt_when(event.start)}",
-        url=event.html_link or get_settings().task_default_url,
+        url=event.html_link or get_settings().public_url,
         tag=f"event-update-{event.id}",
         channel="Calendar",
     )
@@ -450,7 +430,7 @@ async def notify_error(title: str, exc: BaseException, *, context: str | None = 
     await notify(
         title=title,
         message="\n".join(body_lines)[:512],
-        url=get_settings().task_default_url,
+        url=get_settings().public_url,
     )
 
 

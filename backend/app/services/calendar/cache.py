@@ -20,20 +20,25 @@ are kept (no time-based eviction). Embeddings are only recomputed when an
 event's text actually changed, so re-syncs and time-only edits don't burn
 embedding calls. Each upsert also re-derives the event's work type and effort
 (see `services.calendar.attributes`).
+
+Recurring series sync as single instances — an open-ended one as decades of
+them. Only the next `RECURRING_HORIZON` of a series is cached;
+`refresh_recurring` (daily) adds the instances that move into it. One-off
+events are cached however far ahead they are.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.db.clients import documents as documents_store
-from app.services.calendar.client import CalendarEvent
+from app.services.calendar.client import CalendarEvent, GoogleCalendarClient, normalize
 from app.services.calendar.events import is_free_event, is_managed_event
 from app.services.input.embedding import embed
 
@@ -48,6 +53,8 @@ EVENT_DETAIL_CHARS = 4000
 
 # A large invite's guest list is capped; the agent needs who, not a roster.
 _ATTENDEE_LIMIT = 20
+
+RECURRING_HORIZON = timedelta(days=365)
 
 
 def _content(event: CalendarEvent) -> str:
@@ -144,14 +151,23 @@ def _external_id(event: CalendarEvent) -> str:
     return f"{event.calendar_id}:{event.id}"
 
 
+def beyond_horizon(event: CalendarEvent, now: datetime) -> bool:
+    return bool(event.raw.get("recurringEventId")) and event.start > now + RECURRING_HORIZON
+
+
 async def cache_one_event(
-    session: Session, event: CalendarEvent, *, labels: LabelCatalog | None = None
+    session: Session,
+    event: CalendarEvent,
+    *,
+    labels: LabelCatalog | None = None,
+    embeddings: dict[str, list[float]] | None = None,
 ) -> bool:
     """Upsert one event; return True if a fresh embedding was computed.
 
     Callers filter out commute legs (both entry points do) — this focuses on
     the upsert + embedding-dedup so it stays reusable. `labels` saves a batch
-    caller the per-event label lookups."""
+    caller the per-event label lookups; `embeddings` (content → vector) lets
+    the instances of one series share a single embedding call."""
     external_id = _external_id(event)
     content = _content(event)
     existing = documents_store.get_by_external_id(
@@ -170,12 +186,18 @@ async def cache_one_event(
         label_defaults=label_defaults,
         label_names=label_names,
     )
+    reused = embeddings.get(content) if embeddings is not None else None
     if existing is not None and not content_changed and existing.embedding is not None:
         embedding = existing.embedding
+        embedded = False
+    elif reused is not None:
+        embedding = reused
         embedded = False
     else:
         embedding = await embed(content)
         embedded = embedding is not None
+    if embeddings is not None and embedding is not None:
+        embeddings[content] = embedding
 
     documents_store.upsert(
         session,
@@ -206,10 +228,12 @@ async def cache_calendar_events(
     discovery pass that called it)."""
     upserted = embedded = forgotten = 0
     labels: LabelCatalog | None = None
+    embeddings: dict[str, list[float]] = {}
+    now = datetime.now(timezone.utc)
     for event in active:
-        if is_managed_event(event):
-            # Never cache our own task/commute mirrors, and evict any cached
-            # before this rule existed (the daily baseline re-surfaces them).
+        if is_managed_event(event) or beyond_horizon(event, now):
+            # Never cache our own task/commute mirrors or far-off instances,
+            # and evict any cached before (or moved out since).
             if documents_store.delete(
                 session, provider="calendar", external_id=_external_id(event)
             ):
@@ -220,7 +244,7 @@ async def cache_calendar_events(
                 from app.services.calendar.attributes import label_catalog
 
                 labels = label_catalog(session)
-            if await cache_one_event(session, event, labels=labels):
+            if await cache_one_event(session, event, labels=labels, embeddings=embeddings):
                 embedded += 1
             upserted += 1
         except Exception:  # noqa: BLE001 — best-effort cache; never break discovery
@@ -233,6 +257,35 @@ async def cache_calendar_events(
     return {"upserted": upserted, "embedded": embedded, "forgotten": forgotten}
 
 
+async def refresh_recurring(
+    session: Session,
+    client: GoogleCalendarClient,
+    calendar_ids: Iterable[str],
+    *,
+    now: datetime,
+) -> int:
+    """Cache the recurring instances that moved into the horizon since their
+    series last synced. Returns how many were added."""
+    cached = documents_store.calendar_external_ids(
+        session, starts_after=now, starts_before=now + RECURRING_HORIZON
+    )
+    fresh: list[CalendarEvent] = []
+    for calendar_id in calendar_ids:
+        items = await client.list_events(
+            calendar_id, time_min=now, time_max=now + RECURRING_HORIZON
+        )
+        for item in items:
+            if item.get("status") == "cancelled" or not item.get("recurringEventId"):
+                continue
+            event = normalize(item, calendar_id)
+            if _external_id(event) not in cached:
+                fresh.append(event)
+    if not fresh:
+        return 0
+    summary = await cache_calendar_events(session, active=fresh)
+    return summary["upserted"]
+
+
 async def write_through_event(event: CalendarEvent) -> None:
     """Synchronously cache an event the app just created or patched.
 
@@ -241,7 +294,7 @@ async def write_through_event(event: CalendarEvent) -> None:
     Our own managed events (task mirrors + commute legs) are never cached — a
     task isn't duplicated as a calendar event — and any stale cache row is
     evicted (e.g. a task mirror cached before this rule, now being patched)."""
-    if is_managed_event(event):
+    if is_managed_event(event) or beyond_horizon(event, datetime.now(timezone.utc)):
         forget_event(event.calendar_id, event.id)
         return
     session = SessionLocal()

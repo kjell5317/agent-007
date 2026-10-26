@@ -16,17 +16,11 @@ from app.services.plan import update_task_to_calendar
 from app.services.task.split import reflow_children
 
 log = logging.getLogger(__name__)
-PLAN_TRIGGER_FIELDS = frozenset({"estimation", "due_date", "location"})
-# Fields only the solver's preference model looks at.
-SOLVER_TRIGGER_FIELDS = frozenset({"deadline_kind", "work_type", "effort", "label"})
-
-
-def plan_trigger_fields() -> frozenset[str]:
-    from app.services.plan.schedule import scheduler_engine
-
-    if scheduler_engine() == "solver":
-        return PLAN_TRIGGER_FIELDS | SOLVER_TRIGGER_FIELDS
-    return PLAN_TRIGGER_FIELDS
+# Edits that can move a slot: its length, deadline and place, and what the
+# solver's preference model reads.
+PLAN_TRIGGER_FIELDS = frozenset({
+    "estimation", "due_date", "location", "deadline_kind", "work_type", "effort", "label",
+})
 
 
 def affected_tasks(session: Session, row: Task, changed: set[str]) -> list[tuple[uuid.UUID, set[str]]]:
@@ -47,7 +41,7 @@ async def sync_external(session: Session, updates: list[tuple[uuid.UUID, set[str
         if row is None or row.is_container or statuses.get(task_id) == "closed":
             continue
         try:
-            if changed & plan_trigger_fields():
+            if changed & PLAN_TRIGGER_FIELDS:
                 await update_task_to_calendar(session, row, changed_fields=changed)
             else:
                 await update_task_event(session, row, changed_fields=changed)

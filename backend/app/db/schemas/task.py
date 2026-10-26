@@ -193,6 +193,8 @@ class TaskRead(TaskBase):
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
         `tasks.latest_status_for` / `tasks.is_manual_for`)."""
+        # TODO: read `schedule_state` instead (see the TODO on
+        # Task.scheduled_date).
         # An open task is "scheduled" only with BOTH a real slot
         # (`scheduled_date`) and a live calendar mirror. Missing either reads
         # as unscheduled (red): no slot yet, or a stale mirror id left behind

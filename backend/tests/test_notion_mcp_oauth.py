@@ -99,6 +99,7 @@ async def test_protected_resource_discovery_uses_www_authenticate_hint():
 async def test_authorize_registers_dynamic_client_and_uses_pkce(monkeypatch):
     monkeypatch.setenv("MCP_NOTION_URL", "https://mcp.notion.com/mcp")
     monkeypatch.setenv("MCP_OAUTH_CLIENT_NAME", "Agent 007")
+    monkeypatch.setenv("BASE_URL", "https://007.example.org")
     get_settings.cache_clear()
     fake_client = FakeAsyncClient()
     fake_client.get_responses = [
@@ -174,6 +175,7 @@ async def test_authorize_registers_dynamic_client_and_uses_pkce(monkeypatch):
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
+            "client_uri": "https://007.example.org",
         },
         None,
     )
@@ -318,14 +320,14 @@ async def test_oauth_callback_passes_transient_context_and_stores_bundle(monkeyp
     monkeypatch.setattr(
         oauth_api,
         "get_settings",
-        lambda: SimpleNamespace(notion_oauth_redirect_uri="http://localhost/callback"),
+        lambda: SimpleNamespace(public_url="http://localhost"),
     )
 
     result = await oauth_api.callback(
         "notion", code="code-123", state="valid", session=session
     )
 
-    assert captured["exchange"] == ("code-123", "http://localhost/callback", context)
+    assert captured["exchange"] == ("code-123", "http://localhost/oauth/notion/callback", context)
     assert captured["identify"] == ("access-123", context)
     assert captured["upsert"][1:3] == (
         "notion",
@@ -352,7 +354,7 @@ async def test_oauth_authorize_returns_400_and_drops_state_on_registration_failu
     monkeypatch.setattr(
         oauth_api,
         "get_settings",
-        lambda: SimpleNamespace(notion_oauth_redirect_uri="http://localhost/callback"),
+        lambda: SimpleNamespace(public_url="http://localhost"),
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -378,7 +380,7 @@ async def test_oauth_authorize_saves_provider_context(monkeypatch):
     monkeypatch.setattr(
         oauth_api,
         "get_settings",
-        lambda: SimpleNamespace(notion_oauth_redirect_uri="http://localhost/callback"),
+        lambda: SimpleNamespace(public_url="http://localhost"),
     )
 
     response = await oauth_api.authorize("notion", app=None)

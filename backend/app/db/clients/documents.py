@@ -79,6 +79,18 @@ def calendar_metadata(session: Session, external_ids: Collection[str]) -> dict[s
     return {external_id: meta or {} for external_id, meta in rows}
 
 
+def calendar_external_ids(
+    session: Session, *, starts_after: datetime, starts_before: datetime
+) -> set[str]:
+    return set(session.execute(
+        select(Document.external_id).where(
+            Document.provider == "calendar",
+            Document.starts_at >= starts_after,
+            Document.starts_at < starts_before,
+        )
+    ).scalars())
+
+
 def calendar_unclassified(session: Session, *, since: datetime, until: datetime) -> list[Document]:
     """Timed, busy calendar events starting in `[since, until)` that carry no
     work type and no rule decision, soonest first."""

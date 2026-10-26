@@ -39,7 +39,7 @@ def flips(monkeypatch):
     async def rewrite(_session, _event, record, mode):
         state.rewritten.append((record.dest_anchor, mode))
 
-    async def replan(_session, _record):
+    async def replan(_session):
         state.replans += 1
 
     monkeypatch.setattr(flip, "_find_leg", find)

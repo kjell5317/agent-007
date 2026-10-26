@@ -155,11 +155,29 @@ async def test_far_deadline_is_deferred_when_the_week_is_full(world):
 
 
 @pytest.mark.asyncio
-async def test_dry_run_writes_nothing(world):
-    world.tasks = [make_task("fresh", due=NOW + timedelta(days=2))]
-    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5, dry_run=True)
-    assert result.ok and result.placed
-    assert world.writes == [] and world.logs == []
+async def test_a_repeat_instance_stays_inside_its_period(world):
+    # A daily instance due Thursday night belongs to Thursday, even with the
+    # whole week free before it.
+    due = (NOW + timedelta(days=3)).replace(hour=23, minute=45)
+    stretch = make_task("stretch", due=due, minutes=30, recurrence_unit="day", recurrence_interval=1)
+    world.tasks = [stretch]
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    start, _ = result.placed[stretch.id]
+    assert start >= due - timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_subtasks_of_a_split_repeat_instance_stay_inside_its_period(world, monkeypatch):
+    due = (NOW + timedelta(days=3)).replace(hour=23, minute=45)
+    occurrence = make_task("stretch", due=due, recurrence_unit="day", recurrence_interval=1)
+    part = make_task("stretch I", due=due - timedelta(minutes=45), minutes=30,
+                     parent_task_id=occurrence.id)
+    world.tasks = [part]
+    monkeypatch.setattr(replan.tasks_store, "get",
+                        lambda _s, task_id: occurrence if task_id == occurrence.id else None)
+    result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    start, _ = result.placed[part.id]
+    assert start >= due - timedelta(days=1)
 
 
 @pytest.fixture
