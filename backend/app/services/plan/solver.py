@@ -74,6 +74,8 @@ MODE_CHANGE_COST = 2 * SCALE
 PIN_COST = 20 * SCALE
 UNROUTABLE_SLOTS = 30 // SLOT_MINUTES
 MODE_CHANGE_WINDOW = 2 * SLOTS_PER_HOUR
+# A day's legs may run this far into the neighbouring days.
+ROUTE_MARGIN = 12 * SLOTS_PER_HOUR
 
 
 @dataclass(frozen=True)
@@ -303,10 +305,13 @@ class _Builder:
     # -- model ----------------------------------------------------------------
 
     def build(self) -> None:
+        # Spans reach as far as legs can: clamped at the horizon, a busy
+        # event running past it would leave a free gap for a leg to hide in.
+        lo, hi = -ROUTE_MARGIN, self.H + ROUTE_MARGIN
         fixed_spans = _merge([
-            (max(0, f.start), min(self.H, f.end))
+            (max(lo, f.start), min(hi, f.end))
             for f in self.inp.fixed
-            if f.end > 0 and f.start < self.H and f.end > f.start
+            if f.end > lo and f.start < hi and f.end > f.start
         ])
         self.intervals = [
             self.m.new_fixed_size_interval_var(s, e - s, f"fixed{n}")
@@ -719,7 +724,7 @@ class _Builder:
         bike_prev = None
         for d in range(len(self.inp.days)):
             lo, hi = d * SLOTS_PER_DAY, (d + 1) * SLOTS_PER_DAY
-            t_lo, t_hi = lo - 12 * SLOTS_PER_HOUR, hi + 12 * SLOTS_PER_HOUR
+            t_lo, t_hi = lo - ROUTE_MARGIN, hi + ROUTE_MARGIN
             nodes: list[dict] = []
 
             def node(kind, key_in, key_out, loc, **kw):

@@ -122,8 +122,12 @@ def test_non_transit_navigation_url_omits_departure_time(mode):
 @pytest.mark.asyncio
 async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
     from app.services.commute.planner import delete_stray_commute_legs
+    from app.services.plan.timeline import Grid
 
     now = datetime.now(timezone.utc)
+    tz = user_tz()
+    grid = Grid(now.astimezone(tz).date(), 7, tz)
+    horizon_end = grid.at(grid.horizon)
     def leg(event_id, start, end):
         props = {"managed_by": "plan_service", "kind": "commute", "origin_anchor": "home",
                  "dest_anchor": f"anchor-{event_id}", "mode": "bicycling"}
@@ -131,12 +135,15 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
 
     past_leg = leg("past", now - timedelta(days=2), now - timedelta(days=2) + timedelta(minutes=30))
     live_leg = leg("live", now + timedelta(days=1), now + timedelta(days=1, minutes=30))
+    # Just past the solve's horizon (local midnight), before `now + 7 days`:
+    # the leg writer never lists it, so only the sweep can remove it.
+    edge_leg = leg("edge", horizon_end + timedelta(minutes=5), horizon_end + timedelta(minutes=40))
     stray_leg = leg("stray", now + timedelta(days=21), now + timedelta(days=21, minutes=30))
     far_task = _calendar_event("far-task", now + timedelta(days=21), now + timedelta(days=22))
 
     async def fake_list(session, *, calendar_ids, time_min, time_max, account_key=None):
         return [
-            ev for ev in (past_leg, live_leg, stray_leg, far_task)
+            ev for ev in (past_leg, live_leg, edge_leg, stray_leg, far_task)
             if ev.start < time_max and ev.end > time_min
         ]
 
@@ -154,13 +161,13 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
     monkeypatch.setattr(
         commute_planner,
         "get_settings",
-        lambda: SimpleNamespace(google_calendar_id="primary", commute_lookahead_days=7),
+        lambda: SimpleNamespace(google_calendar_id="primary", scheduler_horizon_days=7),
     )
 
     deleted = await delete_stray_commute_legs(SimpleNamespace(commit=lambda: None))
 
-    assert deleted == 2
-    assert sorted(deleted_ids) == ["past", "stray"]
+    assert deleted == 3
+    assert sorted(deleted_ids) == ["edge", "past", "stray"]
     # The finished ride is folded into the stored position before it goes.
     assert [leg.depart for leg in folded] == [past_leg.start]
 
@@ -273,3 +280,44 @@ def test_immovable_conflicts_cover_online_events():
         ("ev-blob", "(untitled)", _day_at(16, 30), _day_at(18, 30)),
     ]
     assert _immovable_conflicts([leg], obstacles) == {leg.key: ("ev-blob", "(untitled)")}
+
+
+@pytest.mark.asyncio
+async def test_legs_departing_past_the_horizon_are_not_written(monkeypatch):
+    # The writer only lists legs up to the horizon end, so one written past
+    # it is never seen by the next diff and gets created again every replan.
+    from app.services.plan import routing
+
+    horizon_end = _day_at(0, day_offset=7)
+    inside = PlannedLeg(
+        origin_anchor="ev-1", dest_anchor="home", origin=GYM, destination="Home",
+        mode="bicycling", depart=horizon_end - timedelta(minutes=10),
+        arrive=horizon_end + timedelta(minutes=20),
+    )
+    beyond = PlannedLeg(
+        origin_anchor="ev-2", dest_anchor="home", origin=OFFICE, destination="Home",
+        mode="bicycling", depart=horizon_end + timedelta(minutes=5),
+        arrive=horizon_end + timedelta(minutes=40),
+    )
+    written = []
+
+    async def fake_write(_session, legs, **_kw):
+        written.extend(legs)
+        return len(legs), [], []
+
+    async def nothing(*_args, **_kw):
+        return None
+
+    monkeypatch.setattr(routing, "get_settings", lambda: SimpleNamespace(google_calendar_id="primary"))
+    monkeypatch.setattr(commute_planner, "_write_legs", fake_write)
+    monkeypatch.setattr(commute_planner, "_notify_new_failures", nothing)
+    monkeypatch.setattr(commute_planner, "_notify_new_conflicts", nothing)
+    monkeypatch.setattr(commute_planner, "_sync_anchor_reminders", nothing)
+    ctx = SimpleNamespace(calendar_events=[], commute=SimpleNamespace(buffer=1))
+
+    await routing.write_legs(
+        None, ctx, [inside, beyond], now=_day_at(8, day_offset=0), horizon_end=horizon_end,
+        obstacles=[],
+    )
+
+    assert written == [inside]

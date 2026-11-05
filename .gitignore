@@ -32,3 +32,6 @@ backend/app/static/
 
 # TypeScript incremental build caches
 frontend/*.tsbuildinfo
+
+# Firebase session for the webclicker container (see webclicker/login.py)
+webclicker/state.json

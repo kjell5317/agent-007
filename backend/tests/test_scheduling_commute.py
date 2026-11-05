@@ -171,6 +171,18 @@ def test_legs_never_overlap_an_online_meeting():
     assert arrival.shortfall == 0
 
 
+def test_ride_home_never_escapes_a_busy_span_past_the_horizon():
+    # A multi-day busy event (a trip) running past the horizon: the ride home
+    # from the last day's lecture is a conflict, not a leg parked just past
+    # the horizon end where the span used to be clamped off.
+    node, item = lecture(1, 20, 22)
+    trip = S.FixedItem(at(1, 22), at(5, 0), "event")
+    result = solve(commute_input(fixed=[node]), fixed=[item, trip])
+    back = next(leg for leg in result.routes if leg.origin_key == "lec")
+    assert back.start < at(2, 0)
+    assert back.shortfall > 0
+
+
 def test_leg_shortened_only_between_fixed_items():
     a, item_a = lecture(0, 10, 11, key="a", loc=UNI)
     b, item_b = lecture(0, 11, 12, key="b", loc=LIB)

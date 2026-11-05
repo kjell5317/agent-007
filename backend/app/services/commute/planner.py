@@ -140,17 +140,24 @@ async def delete_stray_commute_legs(
     *,
     account_key: str | None = None,
 ) -> int:
-    """Delete managed commute events outside `[now, now + lookahead]` — a
+    """Delete managed commute events outside `[now, solve horizon end)` — a
     ride in the past is dead weight once it's folded into the stored bike /
     user position (`app.services.commute.state`), and legs written beyond
-    the horizon (strays from before the horizon cap) get re-derived once
-    their anchor slides into the window."""
+    the horizon (strays the leg writer can't see to diff) get re-derived
+    once their anchor slides into the window."""
+    from app.services.plan.timeline import Grid
+    from app.timezones import user_tz
+
     settings = get_settings()
     write_calendar_id = (settings.google_calendar_id or "").strip()
     if not write_calendar_id:
         return 0
     now = datetime.now(timezone.utc)
-    horizon = now + timedelta(days=settings.commute_lookahead_days)
+    tz = user_tz()
+    # The replan's grid: a rolling `now + days` would keep strays parked
+    # between local midnight and now's time of day alive.
+    grid = Grid(now.astimezone(tz).date(), settings.scheduler_horizon_days, tz)
+    horizon = grid.at(grid.horizon)
     deleted = 0
     for time_min, time_max in (
         (now - _PAST_LEG_LOOKBACK, now),

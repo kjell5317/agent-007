@@ -37,6 +37,7 @@ backend/app/static
 
 # Infra / docs the container doesn't need
 terraform
+webclicker
 docker-compose.yml
 Caddyfile
 README.md

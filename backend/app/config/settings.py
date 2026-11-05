@@ -215,8 +215,8 @@ class Settings(BaseSettings):
             return [c.strip() for c in v.split(",") if c.strip()]
         return v
 
-    # CP-SAT solver that places tasks (and, with commute on, the legs).
-    # Same look-ahead as the commute planner (`commute_lookahead_days`).
+    # CP-SAT solver that places tasks (and, with commute on, the legs). Also
+    # bounds where commute legs may live: the stray sweep deletes any beyond.
     scheduler_horizon_days: int = 7
     scheduler_time_limit_seconds: float = 10.0
     scheduler_nightly_time_limit_seconds: float = 60.0
@@ -239,7 +239,6 @@ class Settings(BaseSettings):
     # Cached transit/driving durations older than this are re-fetched so
     # timetable changes are eventually picked up. Bike/walking never expire.
     commute_transit_ttl_days: int = 30
-    commute_lookahead_days: int = 7
     # `commute_bike_max_minutes` and `commute_rain_threshold_pct` aren't rules:
     # they're the reference points of the learned ride-length and rain priors.
     # Cap on optional "go home" stops per day in the route model (a day gets

@@ -57,6 +57,16 @@ services:
       - app
     restart: unless-stopped
 
+  # Headless webclicker answerer. Google won't sign in a headless browser, so
+  # create webclicker/state.json once with `uv run webclicker/login.py` on a
+  # machine with Chrome (copy it to the VM alongside this file).
+  webclicker:
+    build: ./webclicker
+    init: true
+    volumes:
+      - ./webclicker/state.json:/state.json:ro
+    restart: unless-stopped
+
 volumes:
   pgdata:
   caddy_data:

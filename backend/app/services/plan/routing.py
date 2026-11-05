@@ -413,6 +413,10 @@ async def write_legs(
         legs, [(start, end) for _, _, start, end in obstacles], now=now,
         buffer=timedelta(minutes=S.SLOT_MINUTES * ctx.commute.buffer),
     )
+    # `existing` is listed up to the horizon end, so a leg departing past it
+    # would be invisible to the next diff and get created again on every
+    # replan. It's planned once the horizon rolls over it.
+    legs = [leg for leg in legs if leg.depart < horizon_end]
     conflicts = planner._immovable_conflicts(legs, obstacles)
     written, failures, new_conflicts = await planner._write_legs(
         session, legs, calendar_id=calendar_id, existing=existing,
