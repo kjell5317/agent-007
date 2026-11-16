@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,112 @@ async def test_split_step_requires_parent_evidence(monkeypatch):
     monkeypatch.setattr(split, "chat", fake_chat)
     with pytest.raises(ValueError, match="source evidence"):
         await split.propose_subtasks(task)
+
+
+def _planner_task(title="Write proposal and email it", description=None, estimation=60):
+    return SimpleNamespace(
+        title=title, description=description, estimation=estimation,
+        due_date=datetime(2026, 10, 2, tzinfo=timezone.utc),
+        related_event_calendar_id=None, related_event_id=None,
+    )
+
+
+def _planner_returns(monkeypatch, subtasks):
+    async def fake_chat(*_args, **_kwargs):
+        return SimpleNamespace(tool_calls=[SimpleNamespace(
+            name="propose_subtasks", input={"subtasks": subtasks},
+        )])
+    monkeypatch.setattr(split, "chat", fake_chat)
+
+
+@pytest.mark.asyncio
+async def test_planner_leaves_gemini_room_to_think_and_names_truncation(monkeypatch):
+    seen = {}
+
+    async def truncated_chat(*_args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(tool_calls=[], stop_reason="length")
+
+    monkeypatch.setattr(split, "get_settings", lambda: SimpleNamespace(
+        gemini_api_key="key", chat_llm_model="gemini-test", chat_thinking_level="low",
+    ))
+    monkeypatch.setattr(split, "chat", truncated_chat)
+    with pytest.raises(ValueError, match="token limit"):
+        await split.propose_subtasks(_planner_task(estimation=180))
+
+    assert seen["provider"] == "google"
+    assert seen["thinking_level"] == "low"
+    assert seen["max_tokens"] >= 4096
+
+
+@pytest.mark.asyncio
+async def test_after_previous_links_only_to_the_step_before(monkeypatch):
+    _planner_returns(monkeypatch, [
+        {"title": "Write proposal", "estimation": 30, "source_excerpt": "Write proposal", "after_previous": True},
+        {"title": "Email it", "estimation": 10, "source_excerpt": "email it", "after_previous": True},
+    ])
+    plans = await split.propose_subtasks(_planner_task())
+    assert [p.after_previous for p in plans] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_excerpt_matches_through_markdown_emphasis(monkeypatch):
+    task = _planner_task(
+        title="Fix PR review issues",
+        description=(
+            "1. **Same-second events ordering**: In `rules.ts:274–278`, ties\n"
+            "   reorder `/factory stop`.\n2. **Code blocks**: exclude fenced stops."
+        ),
+        estimation=120,
+    )
+    _planner_returns(monkeypatch, [
+        {"title": "Fix ordering", "estimation": 60,
+         "source_excerpt": "Same-second events ordering: In rules.ts:274–278, ties reorder /factory stop."},
+        {"title": "Skip code blocks", "estimation": 60, "source_excerpt": "Code blocks: exclude fenced stops."},
+    ])
+    plans = await split.propose_subtasks(task)
+    assert [p.title for p in plans] == ["Fix ordering", "Skip code blocks"]
+
+
+@pytest.mark.asyncio
+async def test_split_task_chains_children_marked_after_previous(monkeypatch):
+    parent = SimpleNamespace(
+        id=uuid.uuid4(), title="Ship it", description=None, link=None, location=None,
+        label=None, estimation=180, due_date=datetime(2026, 10, 10, 12, tzinfo=timezone.utc),
+        parent_task_id=None, is_container=False, calendar_event_id=None,
+        work_type=None, effort=None, deadline_kind=None,
+    )
+
+    async def plans(_task):
+        return [
+            split.SubtaskPlan("Build", None, 60),
+            split.SubtaskPlan("Docs", None, 30),
+            split.SubtaskPlan("Release", None, 30, after_previous=True),
+        ]
+
+    def fake_create(_session, payload):
+        return SimpleNamespace(id=uuid.uuid4(), **payload.model_dump())
+
+    @contextlib.asynccontextmanager
+    async def no_batch(_session):
+        yield
+
+    async def no_schedule(*_args):
+        return None
+
+    monkeypatch.setattr(split, "propose_subtasks", plans)
+    monkeypatch.setattr(split.tasks_store, "children", lambda *_args: [])
+    monkeypatch.setattr(split.tasks_store, "create", fake_create)
+    monkeypatch.setattr(split, "publish_task", lambda *_args: None)
+    monkeypatch.setattr(split, "replan_batch", no_batch)
+    monkeypatch.setattr(split, "schedule_task", no_schedule)
+    session = SimpleNamespace(add=lambda *_args: None, commit=lambda: None)
+
+    build, docs, release = await split.split_task(session, parent)
+
+    assert build.depends_on_task_id is None
+    assert docs.depends_on_task_id is None
+    assert release.depends_on_task_id == docs.id
 
 
 def test_deadlines_follow_order_and_later_durations():

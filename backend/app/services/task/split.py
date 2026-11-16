@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 _CONJUNCTION = re.compile(
     r"(?iu)(?<!\w)(?:and|und|et|y|e|en|och|og|ja|i|a|ve|és|și|si|&|\+)(?!\w)|[と及和与＆]"
 )
+# Gemini's thinking spends the output budget too; at the 1024 default it
+# truncates the plan before the tool call is complete.
+_MAX_TOKENS = 4096
+# Models quote Markdown descriptions without their emphasis and code markers.
+_MARKUP = re.compile(r"[*_`~]+")
 _PLAN_TOOL = {
     "name": "propose_subtasks",
     "description": "Propose 2 to 6 grounded subtasks, or none when the task cannot be split faithfully.",
@@ -42,7 +47,7 @@ _PLAN_TOOL = {
                         "description": {"type": "string"},
                         "source_excerpt": {"type": "string", "description": "Exact excerpt from the task title or description that grounds this step."},
                         "estimation": {"type": "integer"},
-                        "depends_on": {"type": "integer", "description": "Zero-based earlier subtask index, or omit."},
+                        "after_previous": {"type": "boolean", "description": "True when this step can start only after the step listed before it is done."},
                         "due_date": {"type": "string", "description": "ISO deadline only when the source explicitly gives one for this step."},
                     },
                     "required": ["title", "estimation", "source_excerpt"],
@@ -59,8 +64,12 @@ class SubtaskPlan:
     title: str
     description: str | None
     estimation: int
-    depends_on: int | None = None
+    after_previous: bool = False
     due_date: datetime | None = None
+
+
+def _evidence_text(text: str) -> str:
+    return " ".join(_MARKUP.sub("", text).split()).casefold()
 
 
 def needs_split(task: Task, *, split_hint: bool | None = None) -> bool:
@@ -75,6 +84,7 @@ def needs_split(task: Task, *, split_hint: bool | None = None) -> bool:
 
 async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
     settings = get_settings()
+    gemini = bool(settings.gemini_api_key)
     short_task = task.estimation is None or task.estimation <= 120
     response = await chat(
         [user_message(
@@ -101,41 +111,41 @@ async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
                 "detail or outcome from the title or description. Cover the stated "
                 "work without adding speculative deliverables or stakeholders. "
             )
-            + "Use the overall deadline. If one step must "
-            "finish before another, set depends_on to the earlier step's "
-            "zero-based index. Leave it out for parallel steps. Set a step's "
+            + "List the steps in the order they will be done. Use the overall "
+            "deadline. Set after_previous when a step can start only after the "
+            "step listed before it is done; leave it false for steps that can "
+            "run in parallel. Set a step's "
             "due_date only if the source explicitly gives that step a separate "
             "deadline. Do not invent event dates. Call propose_subtasks."
         ),
         tools=[_PLAN_TOOL],
         force_tool="propose_subtasks",
-        provider="google" if settings.gemini_api_key else None,
-        model=settings.chat_llm_model if settings.gemini_api_key else None,
+        provider="google" if gemini else None,
+        model=settings.chat_llm_model if gemini else None,
+        thinking_level=settings.chat_thinking_level if gemini else None,
+        max_tokens=_MAX_TOKENS,
         name="split-task-plan",
     )
     call = next((c for c in response.tool_calls if c.name == "propose_subtasks"), None)
     if call is None:
+        if response.stop_reason in ("length", "max_tokens"):
+            raise ValueError("Subtask planner hit its output token limit")
         raise ValueError("Subtask planner returned no plan")
     raw = call.input.get("subtasks")
     if not isinstance(raw, list) or (len(raw) != 0 and not 2 <= len(raw) <= 6):
         raise ValueError("Subtask planner must return 0 or 2–6 steps")
     plans: list[SubtaskPlan] = []
-    source_text = f"{task.title}\n{task.description or ''}".casefold()
+    source_text = _evidence_text(f"{task.title}\n{task.description or ''}")
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ValueError("Invalid subtask plan")
         title = str(item.get("title") or "").strip()[:512]
-        excerpt = str(item.get("source_excerpt") or "").strip()
+        evidence = _evidence_text(str(item.get("source_excerpt") or ""))
         estimate = int(item.get("estimation") or 0)
-        dependency = item.get("depends_on")
         if not title or not 5 <= estimate <= 120:
             raise ValueError("Subtask title or estimate is invalid")
-        if not excerpt or excerpt.casefold() not in source_text:
+        if not evidence or evidence not in source_text:
             raise ValueError("Subtask lacks source evidence")
-        if dependency is not None:
-            dependency = int(dependency)
-            if not 0 <= dependency < index:
-                raise ValueError("A subtask may depend only on an earlier step")
         due = None
         if item.get("due_date"):
             due = datetime.fromisoformat(str(item["due_date"]).replace("Z", "+00:00"))
@@ -145,7 +155,7 @@ async def propose_subtasks(task: Task) -> list[SubtaskPlan]:
             title=title,
             description=str(item.get("description") or "").strip() or None,
             estimation=estimate,
-            depends_on=dependency,
+            after_previous=index > 0 and item.get("after_previous") is True,
             due_date=due,
         ))
     return plans
@@ -289,7 +299,7 @@ async def split_task(
             link=task.link,
             label=task.label,
             parent_task_id=task.id,
-            depends_on_task_id=children[plan.depends_on].id if plan.depends_on is not None else None,
+            depends_on_task_id=children[-1].id if plan.after_previous else None,
             due_date_derived=plan.due_date is None,
             subtask_order=index,
             **inherited_attributes(task),
