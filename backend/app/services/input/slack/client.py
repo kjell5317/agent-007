@@ -26,9 +26,26 @@ _BASE = "https://slack.com/api"
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 _MAX_ATTEMPTS = 3
 
+# The token itself is dead: only a fresh OAuth grant helps. A deactivated
+# user surfaces as `token_revoked`, since Slack revokes their tokens.
+AUTH_DEAD_ERRORS = frozenset(
+    {"token_revoked", "account_inactive", "invalid_auth", "not_authed", "token_expired"}
+)
+
 
 class SlackAPIError(Exception):
     """Raised when a Slack API response has `ok: false`."""
+
+
+class SlackAuthError(SlackAPIError):
+    """The token can no longer authenticate; the account needs re-authorization."""
+
+
+def _raise_for(payload: dict) -> None:
+    error = payload.get("error", "unknown")
+    if error in AUTH_DEAD_ERRORS:
+        raise SlackAuthError(error)
+    raise SlackAPIError(error)
 
 
 class SlackClient:
@@ -63,7 +80,7 @@ class SlackClient:
             while True:
                 payload = await self._get(client, "users.conversations", params)
                 if not payload.get("ok"):
-                    raise SlackAPIError(payload.get("error", "unknown"))
+                    _raise_for(payload)
                 for c in payload.get("channels", []):
                     yield c
                 cursor = (payload.get("response_metadata") or {}).get("next_cursor")
@@ -84,7 +101,7 @@ class SlackClient:
                 if not payload.get("ok"):
                     # Common errors here: not_in_channel (user isn't a member),
                     # missing_scope. Surface so the caller can skip the channel.
-                    raise SlackAPIError(payload.get("error", "unknown"))
+                    _raise_for(payload)
                 for m in payload.get("messages", []):
                     yield m
                 if not payload.get("has_more"):

@@ -28,7 +28,7 @@ import httpx
 
 from app.config import get_settings
 from app.services.input.base import IngestionSource, register_source
-from app.services.input.slack.client import SlackAPIError, SlackClient
+from app.services.input.slack.client import SlackAPIError, SlackAuthError, SlackClient
 from app.services.input.slack.preprocess import preprocess_message
 from app.db.schemas.raw_input import RawInputCreate
 
@@ -67,9 +67,20 @@ class SlackSource(IngestionSource):
         self.watermarks = dict(watermarks or {})
         # Populated during fetch(); caller persists after a successful drain.
         self.next_watermarks: dict[str, str] = dict(self.watermarks)
+        # Set instead of raising so the poller can pause the account and
+        # notify once, rather than `drain` alerting on every poll.
+        self.auth_error: str | None = None
         self._user_cache: dict[str, str] = {}
 
     async def fetch(self) -> AsyncIterator[RawInputCreate]:
+        try:
+            async for envelope in self._fetch_conversations():
+                yield envelope
+        except SlackAuthError as exc:
+            self.auth_error = str(exc)
+            log.warning("slack auth dead · account=%s error=%s", self.account_key, exc)
+
+    async def _fetch_conversations(self) -> AsyncIterator[RawInputCreate]:
         bootstrap_oldest = _bootstrap_oldest()
         log.info(
             "slack fetch · account=%s bootstrap_oldest=%s known_channels=%d",
@@ -141,6 +152,8 @@ class SlackSource(IngestionSource):
                         },
                     )
                     yielded_for_channel += 1
+            except SlackAuthError:
+                raise
             except (SlackAPIError, httpx.HTTPError) as exc:
                 # SlackAPIError: not_in_channel, missing_scope, etc.
                 # httpx.HTTPError: request still failing after client retries.

@@ -127,6 +127,9 @@ def _bundle_from_token_response(payload: dict) -> TokenBundle:
         "authed_user_id": user.get("id"),
         "bot_user_id": payload.get("bot_user_id"),
         "app_id": payload.get("app_id"),
+        # `upsert` merges into the stored extra, so a re-auth must explicitly
+        # lift the pause the poller sets on a dead token.
+        "auth_error": None,
     }
     return TokenBundle(
         access_token=access_token,

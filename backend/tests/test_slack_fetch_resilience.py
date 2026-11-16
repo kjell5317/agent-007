@@ -7,7 +7,12 @@ import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
-from app.services.input.slack.client import SlackClient  # noqa: E402
+from app.services.input.slack.client import (  # noqa: E402
+    SlackAPIError,
+    SlackAuthError,
+    SlackClient,
+    _raise_for,
+)
 from app.services.input.slack.source import SlackSource  # noqa: E402
 
 
@@ -124,3 +129,42 @@ async def test_fetch_skips_channel_that_keeps_failing():
     assert [e.external_id for e in envelopes] == ["C_OK:1893456000.000100"]
     assert source.next_watermarks["C_BROKEN"] == "1751000000.000000"
     assert source.next_watermarks["C_OK"] == "1893456000.000100"
+
+
+def test_raise_for_splits_dead_token_from_channel_errors():
+    with pytest.raises(SlackAuthError):
+        _raise_for({"ok": False, "error": "token_revoked"})
+    with pytest.raises(SlackAPIError) as exc_info:
+        _raise_for({"ok": False, "error": "not_in_channel"})
+    assert not isinstance(exc_info.value, SlackAuthError)
+
+
+class RevokedSlackClient(FakeSlackClient):
+    async def users_conversations(self, **kwargs):
+        raise SlackAuthError("token_revoked")
+        yield
+
+
+@pytest.mark.asyncio
+async def test_fetch_records_dead_token_instead_of_raising():
+    source = SlackSource(account_key="T1", access_token="xoxp-test", authed_user_id="U_ME")
+    source.client = RevokedSlackClient()
+
+    envelopes = [e async for e in source.fetch()]
+
+    assert envelopes == []
+    assert source.auth_error == "token_revoked"
+
+
+@pytest.mark.asyncio
+async def test_fetch_stops_instead_of_skipping_channel_on_dead_token():
+    client = FakeSlackClient()
+    client.history["C_BROKEN"] = SlackAuthError("account_inactive")
+    source = SlackSource(account_key="T1", access_token="xoxp-test", authed_user_id="U_ME")
+    source.client = client
+
+    envelopes = [e async for e in source.fetch()]
+
+    assert envelopes == []
+    assert source.auth_error == "account_inactive"
+    assert "C_OK" not in source.next_watermarks

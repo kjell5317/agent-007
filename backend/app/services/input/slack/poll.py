@@ -11,11 +11,31 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.services.input.create import drain
 from app.services.input.slack.source import SlackSource
+from app.services.notify import notify
 
 log = logging.getLogger(__name__)
+
+
+async def _pause_account(
+    session: Session, account_key: str, workspace_name: str | None, error: str
+) -> None:
+    oauth_tokens.set_extra(
+        session, provider="slack", account_key=account_key, patch={"auth_error": error}
+    )
+    session.commit()
+    await notify(
+        title=f"Slack needs re-auth ({workspace_name or account_key})",
+        message=(
+            f"{account_key}: {error}. Polling for this account is paused. "
+            "Re-authorize it signed in as that Slack user, or disconnect it "
+            "if the user was deactivated."
+        ),
+        url=get_settings().public_url,
+    )
 
 
 def _empty_setup(error: str) -> dict:
@@ -49,6 +69,13 @@ async def poll(session: Session, account_key: str | None) -> dict:
             continue
 
         extra = token.extra or {}
+        if extra.get("auth_error"):
+            log.info(
+                "slack poll skipped · account=%s paused until re-auth (%s)",
+                ak, extra["auth_error"],
+            )
+            continue
+
         log.debug(
             "slack poll · account=%s known_watermarks=%d",
             ak, len(extra.get("channels") or {}),
@@ -62,6 +89,9 @@ async def poll(session: Session, account_key: str | None) -> dict:
         )
 
         summary = await drain(source, session)
+        if source.auth_error:
+            await _pause_account(session, ak, source.workspace_name, source.auth_error)
+            summary["errors"].append({"auth": source.auth_error})
         log.info(
             "slack poll workspace done · account=%s fetched=%d created=%d skipped=%d errors=%d",
             ak,
