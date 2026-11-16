@@ -272,6 +272,35 @@ async def test_closed_sibling_is_not_synced_after_child_duration_edit(monkeypatc
     assert synced == [(active.id, {"due_date", "estimation"})]
 
 
+@pytest.mark.asyncio
+async def test_parent_label_edit_relabels_subtasks_still_on_its_label(monkeypatch):
+    parent = SimpleNamespace(id=uuid.uuid4(), label="Work", is_container=True, parent_task_id=None)
+    follower = SimpleNamespace(id=uuid.uuid4(), label="Work", parent_task_id=parent.id, is_container=False)
+    own = SimpleNamespace(id=uuid.uuid4(), label="Errands", parent_task_id=parent.id, is_container=False)
+    rows = {row.id: row for row in (parent, follower, own)}
+    synced, published = [], []
+
+    async def fake_calendar_sync(_session, row, *, changed_fields):
+        synced.append((row.id, changed_fields))
+
+    monkeypatch.setattr(task_update.tasks_store, "get", lambda _s, task_id: rows[task_id])
+    monkeypatch.setattr(task_update.tasks_store, "update", lambda _s, task_id, **fields: _assign(rows[task_id], fields))
+    monkeypatch.setattr(task_update.tasks_store, "children", lambda _s, _id: [follower, own])
+    monkeypatch.setattr(task_update.tasks_store, "latest_status_for", lambda _s, _ids: {})
+    monkeypatch.setattr(task_update, "update_task_to_calendar", fake_calendar_sync)
+    monkeypatch.setattr(task_update, "publish_task", lambda _s, task_id: published.append(task_id))
+
+    await task_update.update_task(
+        SimpleNamespace(commit=lambda: None), parent.id, {"label": "Study"}, auto_split=False,
+    )
+
+    assert parent.label == "Study"
+    assert follower.label == "Study"
+    assert own.label == "Errands"
+    assert published == [parent.id, follower.id]
+    assert synced == [(follower.id, {"label"})]
+
+
 def _assign(row, fields):
     for key, value in fields.items():
         setattr(row, key, value)

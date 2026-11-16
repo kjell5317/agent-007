@@ -24,14 +24,31 @@ PLAN_TRIGGER_FIELDS = frozenset({
 
 
 def affected_tasks(session: Session, row: Task, changed: set[str]) -> list[tuple[uuid.UUID, set[str]]]:
-    if row.is_container and "due_date" in changed:
-        return [(child.id, {"due_date"}) for child in tasks_store.children(session, row.id)]
+    if row.is_container:
+        if not changed & {"due_date", "label"}:
+            return []
+        updates = []
+        for child in tasks_store.children(session, row.id):
+            fields = changed & {"due_date"}
+            if "label" in changed and child.label == row.label:
+                fields.add("label")
+            if fields:
+                updates.append((child.id, fields))
+        return updates
     if row.parent_task_id and "estimation" in changed:
         return [
             (child.id, {"due_date", "estimation"} if child.id == row.id else {"due_date"})
             for child in tasks_store.children(session, row.parent_task_id)
         ]
-    return [] if row.is_container else [(row.id, changed)]
+    return [(row.id, changed)]
+
+
+def _label_followers(session: Session, parent: Task) -> list[Task]:
+    # Only subtasks still on the parent's label follow a change to it: one the
+    # user labelled on its own keeps that choice.
+    return [
+        child for child in tasks_store.children(session, parent.id) if child.label == parent.label
+    ]
 
 
 async def sync_external(session: Session, updates: list[tuple[uuid.UUID, set[str]]]) -> None:
@@ -76,7 +93,14 @@ async def update_task(
         raise ValueError("Parent duration is calculated from its subtasks")
     if row.parent_task_id and "estimation" in fields and not (fields["estimation"] or 0) > 0:
         raise ValueError("A subtask needs a positive duration")
+    followers = (
+        _label_followers(session, row)
+        if row.is_container and "label" in fields and fields["label"] != row.label
+        else []
+    )
     row = tasks_store.update(session, task_id, **fields)
+    for child in followers:
+        child.label = row.label
     if before:
         from app.db.clients import overrides as overrides_store
 
@@ -100,6 +124,8 @@ async def update_task(
             return row
     updates = affected_tasks(session, row, changed)
     publish_task(session, task_id)
+    for child in followers:
+        publish_task(session, child.id)
     if sync_calendar:
         await sync_external(session, updates)
     return row
