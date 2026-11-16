@@ -69,6 +69,8 @@ export const api = {
   getTask: (id: string) => request<Task>(`/tasks/${id}`),
   splitTask: (id: string) => request<Task>(`/tasks/${id}/split`, { method: "POST" }),
   splitTaskDeterministic: (id: string) => request<Task>(`/tasks/${id}/split_deterministic`, { method: "POST" }),
+  // Deletes the subtasks; the parent becomes a normal task with the open work.
+  collapseTask: (id: string) => request<Task>(`/tasks/${id}/collapse`, { method: "POST" }),
   addSubtask: (id: string, title: string) => request<Task>(`/tasks/${id}/subtasks`, {
     method: "POST", body: JSON.stringify({ title }),
   }),

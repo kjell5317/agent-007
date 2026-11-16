@@ -8,6 +8,7 @@
   * POST   /tasks/{task_id}/close       — mark done
   * POST   /tasks/{task_id}/not_task    — dismiss
   * POST   /tasks/{task_id}/reopen      — revive a closed/dismissed task
+  * POST   /tasks/{task_id}/collapse    — delete the subtasks; the parent is a normal task again
   * POST   /tasks/{task_id}/handoff     — accept the proposed agent hand-off, or start one
   * POST   /tasks/{task_id}/handoff/decline
   * POST   /tasks/{task_id}/draft/regenerate — rewrite the reply draft
@@ -58,7 +59,7 @@ from app.services.task.recur import (
 from app.services.task.reopen import enqueue_reopen_task
 from app.services.task.reschedule import reschedule_task as reschedule_task_svc
 from app.services.task.split import (
-    create_subtask as create_subtask_svc, reflow_children,
+    collapse_subtasks, create_subtask as create_subtask_svc, reflow_children,
     split_deterministically, split_task as split_task_svc,
 )
 from app.services.task.update import affected_tasks, sync_external, update_task as update_task_svc
@@ -231,6 +232,19 @@ async def add_subtask(
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return task_read(session, parent, status_, is_manual)
+
+
+@router.post("/{task_id}/collapse", response_model=TaskRead)
+async def collapse_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    try:
+        await collapse_subtasks(session, row)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return task_read(session, row, "open", is_manual)
 
 
 @router.put("/{task_id}/subtasks/order", response_model=TaskRead)

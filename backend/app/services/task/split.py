@@ -18,8 +18,9 @@ from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
-from app.events import publish_task
+from app.events import publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
+from app.services.notify import clear_task_notification
 from app.services.plan import schedule_task
 from app.services.plan.replan import batch as replan_batch
 
@@ -188,6 +189,37 @@ def reflow_children(session: Session, parent: Task, children: list[Task] | None 
     for child in children:
         publish_task(session, child.id)
     return children
+
+
+async def collapse_subtasks(session: Session, parent: Task) -> Task:
+    """Undo a split: delete the subtasks with their calendar events and make
+    the parent a normal task again, carrying the work still open."""
+    from app.services.task.vacate import replan_vacated_window, vacated_commute_window
+
+    if not parent.is_container:
+        raise ValueError("Task has no subtasks")
+    if tasks_store.latest_status_for(session, [parent.id]).get(parent.id, "open") != "open":
+        raise ValueError("Only an open task can be collapsed")
+    children = tasks_store.children(session, parent.id)
+    statuses = tasks_store.latest_status_for(session, [child.id for child in children])
+    remaining = sum(
+        child.estimation or 30 for child in children if statuses.get(child.id, "open") == "open"
+    )
+    for child in children:
+        vacated = vacated_commute_window(child)
+        await delete_task_event(session, child)
+        await clear_task_notification(child.id)
+        # Subtask rows and their generated `subtask` inputs carry no history.
+        tasks_store.delete_with_inputs(session, child)
+        session.commit()
+        publish_task_removed(child.id)
+        await replan_vacated_window(session, vacated)
+    parent.is_container = False
+    parent.estimation = remaining or parent.estimation
+    session.commit()
+    await schedule_task(session, parent)
+    publish_task(session, parent.id)
+    return parent
 
 
 def roman(number: int) -> str:

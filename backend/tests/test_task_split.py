@@ -402,3 +402,57 @@ async def test_maybe_split_keeps_the_conjunction_rule_without_jev(monkeypatch):
     monkeypatch.setattr(split, "split_task", fake_split)
     cue = SimpleNamespace(id=uuid.uuid4(), title="Wash and dry laundry", estimation=30, parent_task_id=None, is_container=False)
     assert await split.maybe_split_task(None, cue) == ["child"]
+
+
+@pytest.mark.asyncio
+async def test_collapse_deletes_subtasks_and_schedules_the_parent_with_the_open_work(monkeypatch):
+    parent = SimpleNamespace(id=uuid.uuid4(), is_container=True, estimation=150)
+    done = SimpleNamespace(id=uuid.uuid4(), estimation=60)
+    left = [SimpleNamespace(id=uuid.uuid4(), estimation=45), SimpleNamespace(id=uuid.uuid4(), estimation=None)]
+    children = [done, *left]
+    calls: dict[str, list] = {"event": [], "deleted": [], "removed": [], "scheduled": [], "vacated": []}
+
+    def statuses(_session, ids):
+        return {parent.id: "open"} if ids == [parent.id] else {done.id: "closed"}
+
+    async def delete_event(_session, task):
+        calls["event"].append(task.id)
+
+    async def clear(_task_id):
+        return None
+
+    async def schedule(_session, task):
+        calls["scheduled"].append((task.id, task.is_container, task.estimation))
+
+    async def replan(_session, window):
+        calls["vacated"].append(window)
+
+    from app.services.task import vacate
+
+    monkeypatch.setattr(split.tasks_store, "latest_status_for", statuses)
+    monkeypatch.setattr(split.tasks_store, "children", lambda *_: children)
+    monkeypatch.setattr(split.tasks_store, "delete_with_inputs", lambda _s, t: calls["deleted"].append(t.id))
+    monkeypatch.setattr(split, "delete_task_event", delete_event)
+    monkeypatch.setattr(split, "clear_task_notification", clear)
+    monkeypatch.setattr(split, "publish_task_removed", calls["removed"].append)
+    monkeypatch.setattr(split, "publish_task", lambda *_: None)
+    monkeypatch.setattr(split, "schedule_task", schedule)
+    monkeypatch.setattr(vacate, "vacated_commute_window", lambda task: None)
+    monkeypatch.setattr(vacate, "replan_vacated_window", replan)
+
+    await split.collapse_subtasks(SimpleNamespace(commit=lambda: None), parent)
+
+    ids = [child.id for child in children]
+    assert calls["event"] == ids and calls["deleted"] == ids and calls["removed"] == ids
+    # 45 + the 30-minute default for an unestimated subtask; the done one drops out.
+    assert calls["scheduled"] == [(parent.id, False, 75)]
+
+
+@pytest.mark.asyncio
+async def test_collapse_refuses_a_task_without_subtasks_or_a_closed_parent(monkeypatch):
+    with pytest.raises(ValueError, match="no subtasks"):
+        await split.collapse_subtasks(None, SimpleNamespace(id=uuid.uuid4(), is_container=False))
+    parent = SimpleNamespace(id=uuid.uuid4(), is_container=True)
+    monkeypatch.setattr(split.tasks_store, "latest_status_for", lambda *_: {parent.id: "closed"})
+    with pytest.raises(ValueError, match="Only an open task"):
+        await split.collapse_subtasks(None, parent)

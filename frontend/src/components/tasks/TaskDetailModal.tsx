@@ -15,6 +15,7 @@ import {
   ChevronRight,
   CircleCheckBig,
   ExternalLink,
+  FoldVertical,
   GitFork,
   GripVertical,
   Link2,
@@ -424,6 +425,9 @@ export function TaskDetailModal({
   const markDone = () =>
     runClosingTaskAction(() => api.closeTask(current.id), "Marked done");
 
+  const collapseCurrent = () =>
+    runTaskAction(() => api.collapseTask(current.id), "Collapsed into one task");
+
   const dismissTask = () =>
     runClosingTaskAction(
       () => api.markNotTask(current.id),
@@ -591,6 +595,16 @@ export function TaskDetailModal({
                   <span className="text-sm font-semibold">1h</span>
                 </TopbarButton>
               </div>
+            )}
+            {current.status === "open" && current.is_container && !kotxTask && (
+              <TopbarButton
+                label="Collapse subtasks into one task"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => { void collapseCurrent(); }}
+              >
+                <FoldVertical className="h-5 w-5" />
+              </TopbarButton>
             )}
             {current.status === "open" && !kotxTask && (
               <TopbarButton
