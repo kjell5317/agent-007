@@ -1,5 +1,4 @@
 from app.services.kotx.runs import (
-    KOTX_ISSUE_REPOS,
     KotxConfigError,
     KotxIssueRun,
     KotxRunError,
@@ -9,7 +8,6 @@ from app.services.kotx.runs import (
 )
 
 __all__ = [
-    "KOTX_ISSUE_REPOS",
     "KotxConfigError",
     "KotxIssueRun",
     "KotxRunError",

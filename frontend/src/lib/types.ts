@@ -17,15 +17,17 @@ export interface SubtaskSummary {
   depends_on_task_id: string | null;
 }
 
-export type HandoffKind = "web_research" | "own_data_lookup" | "email_reply" | "code_change";
+export type HandoffKind = "research" | "email_reply" | "code_change";
 
 // Work an agent does on a task after it's created (docs/handoff-plan.md).
 export interface TaskHandoff {
+  id: string;
   kind: HandoffKind;
   brief: string;
-  url: string | null;
   state: "proposed" | "running" | "ready" | "failed" | "declined";
   result: Record<string, unknown> | null;
+  // The agent's tool calls, shaped like a raw input's agent_trace.
+  trace: AgentTrace | null;
   created_at: string;
   updated_at: string;
 }
@@ -70,7 +72,8 @@ export interface Task {
   // What the planner books after the learned estimate correction; null while
   // no correction is fitted.
   estimation_corrected: number | null;
-  handoff: TaskHandoff | null;
+  // Newest first.
+  handoffs: TaskHandoff[];
   created_at: string;
   updated_at: string;
 }

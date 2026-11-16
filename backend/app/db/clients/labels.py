@@ -107,3 +107,12 @@ def get_by_repo(session: Session, repo: str) -> Label | None:
     return session.scalar(
         select(Label).where(func.lower(Label.github_repo) == repo.strip().lower())
     )
+
+
+def repos_by_name(session: Session) -> dict[str, str]:
+    """`{label: owner/repo}` for the labels connected to a GitHub repo."""
+    return {
+        row.name: row.github_repo
+        for row in session.scalars(select(Label).where(Label.github_repo.is_not(None)))
+        if row.github_repo
+    }

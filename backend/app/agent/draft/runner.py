@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from app.agent.helpers.llm import (
     user_message,
 )
 from app.agent.chat.runner import Citations, read_only_tools, run_read_only_tool
+from app.agent.handoff.trace import iteration, tool_entry
 from app.agent.helpers.text import now_iso
 from app.agent.prompts.draft import DRAFT_REPLY_SYSTEM_PROMPT
 from app.config import get_settings
@@ -42,6 +44,13 @@ _WRITE_REPLY_TOOL = {
         "required": ["body", "open_questions"],
     },
 }
+
+
+@dataclass(frozen=True)
+class DraftReply:
+    body: str
+    open_questions: list[str]
+    trace: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -74,7 +83,7 @@ def reply_prompt(
 async def write_reply(
     session: Session, *, task, brief: str, recipient: str, thread: list[ThreadMessage],
     examples: list[str],
-) -> tuple[str, list[str]]:
+) -> DraftReply:
     settings = get_settings()
     lookups = read_only_tools(session)
     cites = Citations()
@@ -84,6 +93,7 @@ async def write_reply(
     ))]
     # The same model as the lookup and chat (Gemini Flash): the tools are chat's.
     provider, model = settings.llm_target("chat")
+    trace: dict[str, Any] = {"branch": "handoff_draft", "goal": brief, "iterations": []}
     for step in range(_MAX_STEPS):
         last = step == _MAX_STEPS - 1
         resp = await chat(
@@ -98,14 +108,19 @@ async def write_reply(
             max_tokens=_MAX_TOKENS,
             name="draft-reply",
         )
+        step_trace = iteration(resp)
+        trace["iterations"].append(step_trace)
         reply = next((c for c in resp.tool_calls if c.name == "write_reply"), None)
         if reply is not None:
             body = str(reply.input.get("body") or "").strip()
             if not body:
                 raise ValueError("The draft came back empty")
             questions = [str(q).strip() for q in reply.input.get("open_questions") or [] if str(q).strip()]
-            return body, questions
+            trace["outcome"] = "updated"
+            return DraftReply(body, questions, trace)
         messages.append(assistant_message(resp))
         for call in resp.tool_calls:
-            messages.append(tool_result_message(call, await run_read_only_tool(session, cites, call)))
+            out = await run_read_only_tool(session, cites, call)
+            step_trace.setdefault("tool_results", []).append(tool_entry(call.name, call.input or {}, out))
+            messages.append(tool_result_message(call, out))
     raise ValueError("The draft agent did not write a reply")

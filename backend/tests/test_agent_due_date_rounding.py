@@ -64,9 +64,8 @@ async def test_new_input_create_task_normalizes_due_date_and_starts_handoff(monk
     async def fake_chat(messages, *_args, **kwargs):
         create_tool = next(t for t in kwargs["tools"] if t["name"] == "create_task")
         handoff = create_tool["parameters"]["properties"]["handoff"]
-        assert handoff["properties"]["kind"]["enum"] == [
-            "web_research", "own_data_lookup", "email_reply", "code_change",
-        ]
+        # No label is connected to a repo here, so no code change is offered.
+        assert handoff["properties"]["kind"]["enum"] == ["research", "email_reply"]
         assert all(t["name"] != "research_input_link" for t in kwargs["tools"])
         return _response(
             ToolCall(
@@ -80,9 +79,8 @@ async def test_new_input_create_task_normalizes_due_date_and_starts_handoff(monk
                     "reason": "explicit deadline in the email",
                     "confidence": 0.85,
                     "handoff": {
-                        "kind": "web_research",
+                        "kind": "research",
                         "brief": "Find the submission steps on the linked page.",
-                        "url": "https://example.com/report",
                     },
                 },
             )
@@ -130,11 +128,7 @@ async def test_new_input_create_task_normalizes_due_date_and_starts_handoff(monk
     # the inbox surfaces in the Agent-trace dropdown), not on the created task.
     assert trace["reason"] == "explicit deadline in the email"
     assert trace["confidence"] == 0.85
-    handoff = {
-        "kind": "web_research",
-        "brief": "Find the submission steps on the linked page.",
-        "url": "https://example.com/report",
-    }
+    handoff = {"kind": "research", "brief": "Find the submission steps on the linked page."}
     assert trace["handoff"] == handoff
     assert started == [(task_id, handoff)]
     assert not hasattr(created_payloads[0], "reason")

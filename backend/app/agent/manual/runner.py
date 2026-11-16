@@ -45,7 +45,7 @@ from app.db.clients import tasks
 from app.db.clients.documents import CalendarMatch
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.event_context import apply_event_context, mentions_event
-from app.services.handoff.eligible import handoff_kinds, valid_handoff
+from app.services.handoff.eligible import handoff_kinds, valid_answer, valid_handoff
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,10 @@ async def extract_task_fields(
         session, raw, context_inputs, precedent_candidates, related_events
     )
     source_url = first_input_url(raw) if raw.source == "manual" else None
-    tools = new_input_tools(labels_store.agent_descriptions(session), handoff_kinds(raw))
+    repo_labels = labels_store.repos_by_name(session)
+    tools = new_input_tools(
+        labels_store.agent_descriptions(session), handoff_kinds(raw, repo_labels), list(repo_labels),
+    )
     create_tool = next(t for t in tools if t["name"] == "create_task")
     if not harvest_notes:
         create_tool = _without_notes(create_tool)
@@ -253,10 +256,15 @@ async def extract_task_fields(
     # trace and strip so they don't count as agent-extracted task fields.
     trace["reason"] = payload.pop("reason", None)
     trace["confidence"] = payload.pop("confidence", None)
+    # `answer` completes the task, so a hand-off would only repeat the work.
+    answer = valid_answer(payload.pop("answer", None))
     handoff = valid_handoff(
         payload.pop("handoff", None), raw, label=payload.get("label"), link=payload.get("link"),
+        repo_labels=repo_labels,
     )
-    if handoff:
+    if answer:
+        trace["answer"] = answer
+    elif handoff:
         trace["handoff"] = handoff
     attributes: dict[str, str | None] = valid_attributes(payload)
     for field in ATTRIBUTE_FIELDS:

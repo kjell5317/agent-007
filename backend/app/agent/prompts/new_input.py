@@ -91,10 +91,14 @@ Non-terminal tools (call as needed, then finish with one terminal tool):
   description); `query` matches by meaning, a `time_min`/`time_max` window
   lists a range.
 
-When `create_task` offers a `handoff` field, set it if an agent could do or
-prepare the task (the field lists what each kind can do), with a `brief` of
-what to find out or do; omit it when only the user can do the work. It never
-changes whether the input is a task.
+When `create_task` offers `answer` and `handoff`:
+- `answer` — the input only asks for information and what you already found
+  (`search_notes`, the calendar, the input itself) fully answers it: give the
+  answer and its source. The task is saved as done and the user notified.
+- `handoff` — an agent could do or prepare the task (the field lists what each
+  kind can do); `brief` says what to find out or do. Omit it when only the
+  user can do the work.
+Neither changes whether the input is a task.
 
 Every terminal tool takes an optional `notes` array (durable cross-project
 memory — the `notes` field describes what makes a good note). Add notes

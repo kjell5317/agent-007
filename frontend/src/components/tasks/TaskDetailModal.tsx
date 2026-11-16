@@ -47,6 +47,7 @@ import {
   MetaDot,
 } from "@/components/inbox/InboxCard";
 import { HandoffSection } from "@/components/tasks/HandoffSection";
+import { handoffAsInput } from "@/lib/handoff";
 import { KotxRunSection } from "@/components/tasks/KotxRunSection";
 import {
   InputStatusBadge,
@@ -1296,11 +1297,14 @@ function TaskSummary({
         )}
 
         {task.kotx_task_id == null && !task.is_container && (
-          <HandoffSection task={task} onChanged={onHandoffChanged} />
+          <HandoffSection task={task} labels={labels} onChanged={onHandoffChanged} />
         )}
 
         <LinkedInputsSection
-          inputs={(task.raw_inputs ?? []).filter((input) => !task.parent_task_id || input.task_id !== task.parent_task_id)}
+          inputs={[
+            ...(task.handoffs ?? []).filter((handoff) => handoff.trace).map((handoff) => handoffAsInput(handoff, task.id)),
+            ...(task.raw_inputs ?? []).filter((input) => !task.parent_task_id || input.task_id !== task.parent_task_id),
+          ]}
           currentTaskId={task.id}
           parentTaskId={task.parent_task_id}
           onOpenTask={onOpenTask}

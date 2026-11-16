@@ -4,49 +4,60 @@ of its choice. Pure: no I/O, so it's testable from fixture rows."""
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from email.utils import parseaddr
 from typing import Any
 
-from app.agent.helpers.web import task_urls
-from app.services.kotx.runs import KOTX_ISSUE_REPOS, has_github_url
+from app.services.kotx.runs import has_github_url
 
-HANDOFF_KINDS = ("web_research", "own_data_lookup", "email_reply", "code_change")
-# Started right after the task is saved; anything else waits for a tap.
-AUTO_KINDS = frozenset({"web_research", "own_data_lookup", "email_reply"})
+HANDOFF_KINDS = ("research", "email_reply", "code_change")
+# Started right after the task is saved; a code change waits for a tap.
+AUTO_KINDS = frozenset({"research", "email_reply"})
 
 _SOURCES = frozenset({"manual", "gmail", "slack"})
 _NO_REPLY_RE = re.compile(r"no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?@|mailer-daemon", re.I)
 
 
-def handoff_kinds(raw) -> list[str]:
+def handoff_kinds(raw, repo_labels: Collection[str]) -> list[str]:
+    """`repo_labels` are the labels connected to a GitHub repo; without any,
+    a code change can't be filed."""
     if raw.source not in _SOURCES:
         return []
-    kinds = ["web_research", "own_data_lookup", "code_change"]
-    if raw.source == "gmail" and not _NO_REPLY_RE.search(_sender(raw)):
-        kinds.insert(2, "email_reply")
+    kinds = ["research"]
+    if replyable(raw):
+        kinds.append("email_reply")
+    if repo_labels:
+        kinds.append("code_change")
     return kinds
 
 
-def _sender(raw) -> str:
+def replyable(raw) -> bool:
     meta = raw.source_metadata or {}
-    return parseaddr(str(meta.get("reply_to") or meta.get("from") or ""))[1]
+    sender = parseaddr(str(meta.get("reply_to") or meta.get("from") or ""))[1]
+    return raw.source == "gmail" and bool(sender) and not _NO_REPLY_RE.search(sender)
 
 
-def valid_handoff(choice: Any, raw, *, label: str | None, link: str | None) -> dict[str, str] | None:
+def valid_handoff(
+    choice: Any, raw, *, label: str | None, link: str | None, repo_labels: Collection[str],
+) -> dict[str, str] | None:
     """The agent's `handoff` field, checked against the input and the task it
-    created. Drops kinds the input wasn't offered and code changes the kotx
-    mapping can't take; a `url` not among the input's links falls back to
-    query-mode research."""
+    created: kinds the input wasn't offered are dropped, and a code change
+    needs a label connected to a repo and no GitHub link yet."""
     if not isinstance(choice, dict):
         return None
     kind = choice.get("kind")
     brief = " ".join(str(choice.get("brief") or "").split())
-    if kind not in handoff_kinds(raw) or not brief:
+    if kind not in handoff_kinds(raw, repo_labels) or not brief:
         return None
-    if kind == "code_change" and (label not in KOTX_ISSUE_REPOS or has_github_url(link)):
+    if kind == "code_change" and not code_change_possible(label, link, repo_labels):
         return None
-    out = {"kind": kind, "brief": brief[:500]}
-    url = str(choice.get("url") or "").strip()
-    if kind == "web_research" and url in task_urls(raw):
-        out["url"] = url
-    return out
+    return {"kind": kind, "brief": brief[:500]}
+
+
+def code_change_possible(label: str | None, link: str | None, repo_labels: Collection[str]) -> bool:
+    return label in repo_labels and not has_github_url(link)
+
+
+def valid_answer(value: Any) -> str | None:
+    answer = str(value or "").strip()
+    return answer or None

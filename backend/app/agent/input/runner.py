@@ -53,8 +53,10 @@ from app.agent.helpers.precedents import (
 )
 from app.agent.tools import new_input_tools
 from app.config import get_settings
-from app.services.handoff.eligible import handoff_kinds, valid_handoff
+from app.services.handoff.eligible import handoff_kinds, valid_answer, valid_handoff
 from app.services.handoff.run import start as start_handoff
+from app.services.handoff.text import append_section
+from app.services.notify import notify_task_answered
 from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
 from app.services.task.build import task_create_from_fields
@@ -111,7 +113,11 @@ async def run_new_input_agent(
         raw.id, len(task_candidates), len(not_task_signals),
     )
 
-    tools = new_input_tools(labels_store.agent_descriptions(session), handoff_kinds(raw))
+    repo_labels = labels_store.repos_by_name(session)
+    tools = new_input_tools(
+        labels_store.agent_descriptions(session), handoff_kinds(raw, repo_labels), list(repo_labels),
+    )
+    answered_task = None
     done = False
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await chat(
@@ -244,6 +250,11 @@ async def run_new_input_agent(
             )
             if event_warning:
                 trace["event_warning"] = event_warning
+            answer = valid_answer(payload.get("answer"))
+            if answer:
+                event_fields["description"] = append_section(
+                    event_fields.get("description"), "Answer", answer,
+                )
             # The schema marks `label` required, but the LLM sometimes skips
             # it — warn and leave NULL so the user can assign one later.
             if not payload.get("label"):
@@ -262,10 +273,14 @@ async def run_new_input_agent(
             trace["task_title"] = task.title
             trace["reason"] = payload.get("reason")
             trace["confidence"] = payload.get("confidence")
-            handoff = valid_handoff(
+            # An answer completes the task; a hand-off would only repeat the work.
+            handoff = None if answer else valid_handoff(
                 payload.get("handoff"), raw, label=payload.get("label"), link=payload.get("link"),
+                repo_labels=repo_labels,
             )
-            if handoff:
+            if answer:
+                trace["answer"] = answer
+            elif handoff:
                 trace["handoff"] = handoff
             saved = await save_notes(session, raw.id, payload.get("notes"))
             if saved:
@@ -279,12 +294,17 @@ async def run_new_input_agent(
                     artifact_refs=[f"task:{task.id}"],
                 )
             )
-            final_status = "open"
             final_task_id = task.id
-            # A task handed to an agent stays whole (see `maybe_split_task`).
-            children = [] if handoff else await maybe_split_task(session, task)
-            if not children:
-                await schedule_task(session, task)
+            if answer:
+                # Saved as done: nothing to schedule, the push carries the answer.
+                final_status = "closed"
+                answered_task = task
+            else:
+                final_status = "open"
+                # A task handed to an agent stays whole (see `maybe_split_task`).
+                children = [] if handoff else await maybe_split_task(session, task)
+                if not children:
+                    await schedule_task(session, task)
             done = True
             break
         if tu.name in ("no_change", "update_task"):
@@ -383,7 +403,9 @@ async def run_new_input_agent(
         agent_trace=trace,
     )
     session.commit()
-    if final_task_id is not None and trace.get("handoff"):
+    if answered_task is not None:
+        await notify_task_answered(answered_task, trace["answer"])
+    elif final_task_id is not None and trace.get("handoff"):
         await start_handoff(session, final_task_id, trace["handoff"])
     return trace
 

@@ -210,9 +210,11 @@ async def test_compose_replies_to_the_latest_incoming_message_from_the_primary_a
                 yield ""
 
     async def fake_write_reply(_session, **kwargs):
+        from app.agent.draft.runner import DraftReply
+
         calls["thread"] = [m.body for m in kwargs["thread"]]
         calls["recipient"] = kwargs["recipient"]
-        return "Tuesday works for me.", ["[[room]]"]
+        return DraftReply("Tuesday works for me.", ["[[room]]"], {"iterations": []})
 
     monkeypatch.setattr(draft_svc, "write_reply", fake_write_reply)
     monkeypatch.setattr(draft_svc, "get_settings", lambda: SimpleNamespace(my_email_addresses=["hello@csee.example"]))
@@ -291,7 +293,7 @@ async def test_draft_agent_searches_the_users_data_before_writing(monkeypatch):
         llm_target=lambda flow: ("google", "gemini-3.8-flash"),
     ))
 
-    body, questions = await draft_runner.write_reply(
+    reply = await draft_runner.write_reply(
         None, task=SimpleNamespace(title="Answer Anna", description=None), brief="Confirm the room",
         recipient="anna@example.com",
         thread=[draft_runner.ThreadMessage("Anna", "Mon", "Which room?")], examples=[],
@@ -299,4 +301,5 @@ async def test_draft_agent_searches_the_users_data_before_writing(monkeypatch):
 
     assert offered[0] == ["messages_search", "web_search", "write_reply"]
     assert ran == ["messages_search"]
-    assert (body, questions) == ("Tuesday in Room 4 works.", [])
+    assert (reply.body, reply.open_questions) == ("Tuesday in Room 4 works.", [])
+    assert [r["name"] for r in reply.trace["iterations"][0]["tool_results"]] == ["messages_search"]

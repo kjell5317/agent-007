@@ -27,6 +27,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_session
+from app.db.clients import labels as labels_store
 from app.db.clients import route_cache as route_cache_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.task import (
@@ -59,8 +60,8 @@ from app.services.task.recur import (
 from app.services.task.reopen import enqueue_reopen_task
 from app.services.task.reschedule import reschedule_task as reschedule_task_svc
 from app.services.task.split import (
-    collapse_subtasks, create_subtask as create_subtask_svc, reflow_children,
-    split_deterministically, split_task as split_task_svc,
+    RemovedMirror, collapse_subtasks, create_subtask as create_subtask_svc, finish_collapse,
+    place_subtasks, reflow_children, split_deterministically, split_task as split_task_svc,
 )
 from app.services.task.update import affected_tasks, sync_external, update_task as update_task_svc
 
@@ -124,6 +125,29 @@ async def _split_in_background(task_id: uuid.UUID) -> None:
             log.exception("task split failed · task=%s", task_id)
             from app.services.notify import notify_error
             await notify_error("Task split failed", exc, context=row.title)
+
+
+async def _place_split_in_background(parent_id: uuid.UUID) -> None:
+    with SessionLocal() as session:
+        parent = tasks_store.get(session, parent_id)
+        if parent is None:
+            return
+        try:
+            await place_subtasks(session, parent, tasks_store.children(session, parent_id))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("subtask placement failed · parent=%s", parent_id)
+            from app.services.notify import notify_error
+            await notify_error("Subtask scheduling failed", exc, context=parent.title)
+
+
+async def _finish_collapse_in_background(parent_id: uuid.UUID, removed: list[RemovedMirror]) -> None:
+    with SessionLocal() as session:
+        try:
+            await finish_collapse(session, parent_id, removed)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("collapse calendar cleanup failed · parent=%s", parent_id)
+            from app.services.notify import notify_error
+            await notify_error("Collapse calendar update failed", exc)
 
 
 async def _refresh_series_in_background(
@@ -197,12 +221,10 @@ async def split_task_deterministic(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     try:
-        children = split_deterministically(session, row)
+        split_deterministically(session, row)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    background_tasks.add_task(
-        _sync_task_changes, [(child.id, {"due_date", "estimation"}) for child in children], task_id
-    )
+    background_tasks.add_task(_place_split_in_background, task_id)
     status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return task_read(session, row, status_, is_manual)
@@ -235,14 +257,17 @@ async def add_subtask(
 
 
 @router.post("/{task_id}/collapse", response_model=TaskRead)
-async def collapse_task(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+async def collapse_task(
+    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session),
+) -> TaskRead:
     row = tasks_store.get(session, task_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     try:
-        await collapse_subtasks(session, row)
+        removed = collapse_subtasks(session, row)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    background_tasks.add_task(_finish_collapse_in_background, task_id, removed)
     is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
     return task_read(session, row, "open", is_manual)
 
@@ -390,8 +415,11 @@ async def create_github_issue(task_id: uuid.UUID, session: Session = Depends(get
     if has_github_url(row.link):
         raise HTTPException(status.HTTP_409_CONFLICT, "Task already has a GitHub URL")
 
+    repo = labels_store.repos_by_name(session).get(row.label or "")
+    if not repo:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Connect the task's label to a GitHub repo first")
     try:
-        run = await create_issue_run(row)
+        run = await create_issue_run(row, repo=repo)
     except KotxUnsupportedTaskError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except KotxConfigError as exc:

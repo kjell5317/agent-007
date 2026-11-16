@@ -66,7 +66,7 @@ def task_read(session: Session, task, status_: str, is_manual: bool) -> TaskRead
         status_,
         is_manual,
         parent_card=parent_card,
-        handoff=handoffs_store.latest_for_task(session, task.id),
+        handoffs=handoffs_store.list_for_task(session, task.id),
         source_url=source_url_for_raw_input(raw),
         raw_inputs=[
             TaskRawInputRead.build(

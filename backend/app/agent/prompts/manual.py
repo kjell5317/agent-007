@@ -63,9 +63,13 @@ You also have non-terminal lookup tools:
   event. Preserve the description `find_calendar_events` returned when adding
   facts; never replace one it marks `[truncated]`.
 
-When `create_task` offers a `handoff` field, set it if an agent could do or
-prepare the task (the field lists what each kind can do), with a `brief` of
-what to find out or do; omit it when only the user can do the work.
+When `create_task` offers `answer` and `handoff`:
+- `answer` — the input only asks for information and what you already found
+  (`search_notes`, the calendar, the input itself) fully answers it: give the
+  answer and its source. The task is saved as done and the user notified.
+- `handoff` — an agent could do or prepare the task (the field lists what each
+  kind can do); `brief` says what to find out or do. Omit it when only the
+  user can do the work.
 
 When a "Candidate tasks" section is present, use `update_task` with its
 existing_task_id if the input changes that task. Include at least one changed

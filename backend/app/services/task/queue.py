@@ -40,7 +40,9 @@ from app.services.task.split import maybe_split_task
 from app.services.event_context import apply_event_context, mentions_event
 from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
+from app.services.handoff.text import append_section
 from app.services.input.embedding import candidate_query_text, embed
+from app.services.notify import notify_task_answered
 
 log = logging.getLogger(__name__)
 
@@ -241,6 +243,10 @@ async def _process(
             agent_trace["extraction_fallback"] = True
 
         merged = {**agent_fields, **user_fields}
+        # The extractor already answered the question: the task is saved as done.
+        answer = agent_trace.get("answer")
+        if answer:
+            merged["description"] = append_section(merged.get("description"), "Answer", answer)
         merged, event_warning = apply_event_context(
             session, merged, explicit_due=user_fields.get("due_date") is not None
         )
@@ -265,7 +271,7 @@ async def _process(
             except Exception:
                 log.exception("manual task input embedding failed · raw=%s", raw.id)
 
-        raw.status = "open"
+        raw.status = "closed" if answer else "open"
         raw.task_id = task.id
         raw.processed_at = raw.processed_at or datetime.now(timezone.utc)
 
@@ -275,7 +281,9 @@ async def _process(
             "agent_extracted": sorted(agent_fields.keys()) if agent_fields else [],
             "user_provided": sorted(user_fields.keys()),
         }
-        manual_trace = {**agent_trace, **override_entry, "scheduling": "pending"}
+        manual_trace = {
+            **agent_trace, **override_entry, "scheduling": "not_needed" if answer else "pending",
+        }
         _attach_task_action_ref(manual_trace, task.id, "create_task", "task_created")
         if is_override:
             trace = dict(raw.agent_trace or {})
@@ -288,20 +296,10 @@ async def _process(
         # Creation is complete even if calendar scheduling is slow or fails.
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
-        try:
-            # A task handed to an agent stays whole (see `maybe_split_task`).
-            children = (
-                [] if (user_fields.get("estimation") or 0) > 180 or agent_trace.get("handoff")
-                else await maybe_split_task(session, task)
-            )
-            if not children:
-                await schedule_task(session, task)
-        except Exception:
-            log.exception("task scheduling failed · task=%s", task.id)
-        manual_trace["scheduling"] = (
-            "scheduled" if getattr(task, "scheduled_date", None) is not None and getattr(task, "calendar_event_id", None) else
-            "failed"
-        )
+        if answer:
+            await notify_task_answered(task, answer)
+        else:
+            await _place_new_task(session, task, user_fields, agent_trace, manual_trace)
         if is_override:
             trace = dict(raw.agent_trace or {})
             trace["manual_override"] = manual_trace
@@ -322,6 +320,23 @@ async def _process(
                 await harvest_notes(session, raw)
             except Exception:  # noqa: BLE001 — memory is best-effort; the task stands
                 log.exception("manual notes harvest failed · raw=%s", raw_input_id)
+
+
+async def _place_new_task(session, task, user_fields, agent_trace, manual_trace) -> None:
+    try:
+        # A task handed to an agent stays whole (see `maybe_split_task`).
+        children = (
+            [] if (user_fields.get("estimation") or 0) > 180 or agent_trace.get("handoff")
+            else await maybe_split_task(session, task)
+        )
+        if not children:
+            await schedule_task(session, task)
+    except Exception:
+        log.exception("task scheduling failed · task=%s", task.id)
+    manual_trace["scheduling"] = (
+        "scheduled" if getattr(task, "scheduled_date", None) is not None and getattr(task, "calendar_event_id", None) else
+        "failed"
+    )
 
 
 def _load_context_inputs(

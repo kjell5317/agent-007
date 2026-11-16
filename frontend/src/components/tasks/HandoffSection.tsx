@@ -8,12 +8,13 @@ import {
   handoffActive,
   handoffChip,
   HANDOFF_KIND_LABEL,
+  latestHandoff,
   manualHandoffKinds,
   resultList,
   resultText,
 } from "@/lib/handoff";
 import { cn } from "@/lib/utils";
-import type { HandoffKind, Task } from "@/lib/types";
+import type { HandoffKind, Label, Task } from "@/lib/types";
 
 const TONE_CLASS = {
   proposed: "bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200",
@@ -23,11 +24,12 @@ const TONE_CLASS = {
 } as const;
 
 export function HandoffChip({ task, className }: { task: Task; className?: string }) {
-  const chip = handoffChip(task.handoff);
+  const handoff = latestHandoff(task);
+  const chip = handoffChip(handoff);
   if (!chip) return null;
   return (
     <span
-      title={task.handoff?.brief}
+      title={handoff?.brief}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
         TONE_CLASS[chip.tone],
@@ -42,15 +44,17 @@ export function HandoffChip({ task, className }: { task: Task; className?: strin
 
 export function HandoffSection({
   task,
+  labels,
   onChanged,
 }: {
   task: Task;
+  labels: Label[];
   onChanged: () => Promise<void> | void;
 }) {
   const [pending, setPending] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [brief, setBrief] = useState("");
-  const handoff = task.handoff;
+  const handoff = latestHandoff(task);
   const shown = handoff && handoff.state !== "declined" ? handoff : null;
 
   async function act(action: () => Promise<unknown>, message: string) {
@@ -107,8 +111,12 @@ export function HandoffSection({
             </a>
           )}
 
-          {shown.state === "ready" && (shown.kind === "web_research" || shown.kind === "own_data_lookup") && (
-            <p className="text-xs text-muted-foreground">Added to the description.</p>
+          {shown.state === "ready" && shown.kind === "research" && (
+            <p className="text-xs text-muted-foreground">
+              {shown.result?.completed === true
+                ? "The findings answer the task, so it was closed. They're in the description."
+                : "Added to the description."}
+            </p>
           )}
 
           {shown.state === "ready" && shown.kind === "email_reply" && (
@@ -158,7 +166,7 @@ export function HandoffSection({
             <Input value={brief} onChange={(event) => setBrief(event.target.value)}
               placeholder="What should the agent do? (optional)" aria-label="Agent brief" />
             <div className="flex flex-wrap gap-2">
-              {manualHandoffKinds(task).map((kind) => (
+              {manualHandoffKinds(task, labels).map((kind) => (
                 <Button key={kind} size="sm" variant="outline" disabled={pending} onClick={() => start(kind)}>
                   {HANDOFF_KIND_LABEL[kind]}
                 </Button>

@@ -269,7 +269,7 @@ async def test_dismiss_keeps_task_and_input_links_for_reopen(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_issue_run_maps_csee_to_repo_and_payload(monkeypatch):
+async def test_create_issue_run_sends_the_label_repo_and_payload(monkeypatch):
     task = _task(label="CSEE")
     calls = []
 
@@ -301,14 +301,14 @@ async def test_create_issue_run_maps_csee_to_repo_and_payload(monkeypatch):
     )
     monkeypatch.setattr(kotx_runs.httpx, "AsyncClient", FakeAsyncClient)
 
-    run = await kotx_runs.create_issue_run(task)
+    run = await kotx_runs.create_issue_run(task, repo="askLio/CSEE-strategic-negotiation-agent")
 
     assert run.issue_url == "https://github.com/askLio/CSEE-strategic-negotiation-agent/issues/7"
     assert calls == [
         {
             "url": "https://kotx.example/api/runs",
             "json": {
-                "repo": "CSEE",
+                "repo": "askLio/CSEE-strategic-negotiation-agent",
                 "title": "Implement task action",
                 "body": "Use deterministic backend behavior.",
             },
@@ -317,44 +317,6 @@ async def test_create_issue_run_maps_csee_to_repo_and_payload(monkeypatch):
             },
         }
     ]
-
-
-@pytest.mark.asyncio
-async def test_create_issue_run_maps_social_ai_to_kotx_alias(monkeypatch):
-    task = _task(label="SocialAI", link="https://example.com/context")
-    calls = []
-
-    class FakeResponse:
-        status_code = 201
-
-        def json(self):
-            return {"issueUrl": "https://github.com/TUM-Social-AI/AflaConnect/issues/5"}
-
-    class FakeAsyncClient:
-        def __init__(self, **_kwargs):
-            return None
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def post(self, url, *, json):
-            calls.append((url, json))
-            return FakeResponse()
-
-    monkeypatch.setattr(
-        kotx_runs,
-        "get_settings",
-        lambda: SimpleNamespace(kotx_base_url="https://kotx.example/", kotx_api_token="kotx_test"),
-    )
-    monkeypatch.setattr(kotx_runs.httpx, "AsyncClient", FakeAsyncClient)
-
-    await kotx_runs.create_issue_run(task)
-
-    assert calls[0][0] == "https://kotx.example/api/runs"
-    assert calls[0][1]["repo"] == "Social Ai"
 
 
 @pytest.mark.asyncio
@@ -383,6 +345,7 @@ async def test_create_github_issue_propagates_kotx_error_status(monkeypatch):
             return FakeResponse()
 
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(tasks_api.labels_store, "repos_by_name", lambda _s: {"CSEE": "askLio/csee"})
     monkeypatch.setattr(
         kotx_runs,
         "get_settings",
@@ -418,15 +381,16 @@ async def test_create_github_issue_denies_existing_github_link(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_github_issue_rejects_unsupported_label(monkeypatch):
+async def test_create_github_issue_rejects_a_label_without_a_repo(monkeypatch):
     task = _task(label="Other")
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(tasks_api.labels_store, "repos_by_name", lambda _s: {"CSEE": "askLio/csee"})
 
     with pytest.raises(HTTPException) as exc:
         await tasks_api.create_github_issue(task.id, session=FakeSession())
 
     assert exc.value.status_code == 400
-    assert "only supported for CSEE and SocialAI" in exc.value.detail
+    assert "Connect the task's label to a GitHub repo" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -438,7 +402,7 @@ async def test_create_github_issue_rejects_missing_label(monkeypatch):
         await tasks_api.create_github_issue(task.id, session=FakeSession())
 
     assert exc.value.status_code == 400
-    assert "only supported for CSEE and SocialAI" in exc.value.detail
+    assert "Connect the task's label to a GitHub repo" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -447,10 +411,12 @@ async def test_create_github_issue_stores_url_commits_and_publishes(monkeypatch)
     session = FakeSession()
     published = []
 
-    async def fake_create_issue_run(_task):
+    async def fake_create_issue_run(_task, *, repo):
+        assert repo == "TUM-Social-AI/aflaconnect"
         return SimpleNamespace(issue_url="https://github.com/TUM-Social-AI/AflaConnect/issues/5")
 
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
+    monkeypatch.setattr(tasks_api.labels_store, "repos_by_name", lambda _s: {"SocialAI": "TUM-Social-AI/aflaconnect"})
     monkeypatch.setattr(tasks_api, "create_issue_run", fake_create_issue_run)
     monkeypatch.setattr(tasks_api, "publish_task", lambda _session, task_id: published.append(task_id))
     _patch_read_helpers(monkeypatch, task)

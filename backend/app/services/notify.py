@@ -427,6 +427,18 @@ async def notify_calendar_event_updated(event) -> None:
     )
 
 
+async def notify_task_answered(task, answer: str) -> None:
+    """An agent completed an information task itself and closed it. The push
+    carries the answer and opens the closed task; Reopen undoes the close."""
+    await notify(
+        title=f"Answered: {_short_title(task)}",
+        message=_clip(answer, 300),
+        url=task_url(task.id),
+        tag=task_tag(task.id),
+        actions=[{"action": ACTION_REOPEN_TASK, "title": "Reopen"}],
+    )
+
+
 def handoff_tag(task_id: UUID | str) -> str:
     return f"handoff-{task_id}"
 

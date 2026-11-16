@@ -29,6 +29,7 @@ def _empty_label_catalog(monkeypatch):
     monkeypatch.setattr(labels_store, "google_id_for", lambda session, name: None)
     monkeypatch.setattr(labels_store, "get_by_repo", lambda session, repo: None)
     monkeypatch.setattr(labels_store, "defaults_by_name", lambda session: {})
+    monkeypatch.setattr(labels_store, "repos_by_name", lambda session: {})
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +50,7 @@ def _no_handoffs_or_drafts(monkeypatch):
     """Task reads look up the latest agent hand-off, and a Gmail thread
     follow-up checks for a reply draft to mark stale."""
     monkeypatch.setattr(handoffs_store, "latest_for_task", lambda session, task_id: None)
+    monkeypatch.setattr(handoffs_store, "list_for_task", lambda session, task_id: [])
 
     async def no_draft(session, task, raw):
         return None

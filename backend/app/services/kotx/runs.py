@@ -8,12 +8,6 @@ import httpx
 from app.config import get_settings
 from app.services.kotx import client as kotx_client
 
-KOTX_ISSUE_REPOS: dict[str, str] = {
-    "CSEE": "CSEE",
-    "SocialAI": "Social Ai",
-}
-
-
 class KotxConfigError(RuntimeError):
     pass
 
@@ -40,16 +34,8 @@ def has_github_url(value: str | None) -> bool:
     return parsed.netloc.lower() in {"github.com", "www.github.com"}
 
 
-def repo_for_label(label: str | None) -> str:
-    if label not in KOTX_ISSUE_REPOS:
-        raise KotxUnsupportedTaskError(
-            "GitHub issue creation is only supported for CSEE and SocialAI tasks"
-        )
-    return KOTX_ISSUE_REPOS[label]
-
-
-async def create_issue_run(task, *, body: str | None = None) -> KotxIssueRun:
-    repo = repo_for_label(task.label)
+async def create_issue_run(task, *, repo: str, body: str | None = None) -> KotxIssueRun:
+    """`repo` is the `owner/repo` the task's label is connected to."""
     if has_github_url(task.link):
         raise KotxUnsupportedTaskError("Task already has a GitHub URL")
 

@@ -8,6 +8,3 @@ def append_section(description: str | None, heading: str, body: str) -> str:
     current = (description or "").rstrip()
     return f"{current}\n\n{section}" if current else section
 
-
-def sources_markdown(sources: list[tuple[str, str]]) -> str:
-    return "Sources: " + ", ".join(f"[{title}]({url})" for title, url in sources)

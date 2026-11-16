@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -191,11 +192,20 @@ def reflow_children(session: Session, parent: Task, children: list[Task] | None 
     return children
 
 
-async def collapse_subtasks(session: Session, parent: Task) -> Task:
-    """Undo a split: delete the subtasks with their calendar events and make
-    the parent a normal task again, carrying the work still open."""
-    from app.services.task.vacate import replan_vacated_window, vacated_commute_window
+@dataclass
+class RemovedMirror:
+    """What `delete_task_event` needs of a deleted subtask: its calendar event
+    and slot (the slot locates its commute legs)."""
 
+    id: uuid.UUID
+    calendar_event_id: str | None
+    scheduled_date: datetime | None
+
+
+def collapse_subtasks(session: Session, parent: Task) -> list[RemovedMirror]:
+    """Undo a split in the database: delete the subtasks and make the parent a
+    normal task again, carrying the work still open. Their calendar events go
+    in `finish_collapse`, after the response."""
     if not parent.is_container:
         raise ValueError("Task has no subtasks")
     if tasks_store.latest_status_for(session, [parent.id]).get(parent.id, "open") != "open":
@@ -205,21 +215,31 @@ async def collapse_subtasks(session: Session, parent: Task) -> Task:
     remaining = sum(
         child.estimation or 30 for child in children if statuses.get(child.id, "open") == "open"
     )
+    removed = [
+        RemovedMirror(child.id, child.calendar_event_id, child.scheduled_date) for child in children
+    ]
     for child in children:
-        vacated = vacated_commute_window(child)
-        await delete_task_event(session, child)
-        await clear_task_notification(child.id)
         # Subtask rows and their generated `subtask` inputs carry no history.
         tasks_store.delete_with_inputs(session, child)
-        session.commit()
-        publish_task_removed(child.id)
-        await replan_vacated_window(session, vacated)
     parent.is_container = False
     parent.estimation = remaining or parent.estimation
     session.commit()
-    await schedule_task(session, parent)
+    for mirror in removed:
+        publish_task_removed(mirror.id)
     publish_task(session, parent.id)
-    return parent
+    return removed
+
+
+async def finish_collapse(session: Session, parent_id: uuid.UUID, removed: list[RemovedMirror]) -> None:
+    """The calendar side: drop the subtasks' events and commute legs, then
+    place the parent; that solve also rewrites the commute legs."""
+    for mirror in removed:
+        await delete_task_event(session, mirror)
+        await clear_task_notification(mirror.id)
+    parent = tasks_store.get(session, parent_id)
+    if parent is not None:
+        await schedule_task(session, parent)
+        publish_task(session, parent_id)
 
 
 def roman(number: int) -> str:
@@ -348,11 +368,18 @@ async def split_task(
     task.due_date = children[-1].due_date
     task.estimation = sum(getattr(child, "estimation", None) or 30 for child in children)
     session.commit()
-    if task.calendar_event_id:
-        await delete_task_event(session, task)
-    task.scheduled_date = None
+    await place_subtasks(session, task, children)
+    return children
+
+
+async def place_subtasks(session: Session, parent: Task, children: list[Task]) -> None:
+    """Calendar side of a split: the parent's event goes, and every subtask is
+    placed in one solve (each solve can take the solver's whole time limit)."""
+    if parent.calendar_event_id:
+        await delete_task_event(session, parent)
+    parent.scheduled_date = None
     session.commit()
-    publish_task(session, task.id)
+    publish_task(session, parent.id)
     async with replan_batch(session):
         for child in children:
             publish_task(session, child.id)
@@ -360,7 +387,6 @@ async def split_task(
                 await schedule_task(session, child)
             except Exception:  # noqa: BLE001 — keep the saved split on calendar failure
                 log.exception("subtask scheduling failed · task=%s", child.id)
-    return children
 
 
 async def maybe_split_task(

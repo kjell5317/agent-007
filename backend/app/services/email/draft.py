@@ -55,6 +55,7 @@ class _Reply:
     body: str
     open_questions: list[str]
     message: bytes
+    trace: dict
 
 
 def mail_url(account: str, thread_id: str) -> str:
@@ -127,7 +128,7 @@ async def _compose(session: Session, client: GmailClient, task, raw, brief: str)
         raise ValueError("The email has no sender to reply to")
     sender = primary_sender(await client.list_send_as(), account)
     examples = await _style_examples(client, me, recipient_address(to))
-    body, questions = await write_reply(
+    written = await write_reply(
         session,
         task=task,
         brief=brief,
@@ -143,12 +144,12 @@ async def _compose(session: Session, client: GmailClient, task, raw, brief: str)
         examples=examples,
     )
     message = build_reply(
-        from_header=sender.from_header, meta=original, body=body,
+        from_header=sender.from_header, meta=original, body=written.body,
         signature=sender.signature, original_body=original_body,
     )
     return _Reply(
-        sender=sender, to=to, subject=reply_subject(original.get("subject")), body=body,
-        open_questions=questions, message=message,
+        sender=sender, to=to, subject=reply_subject(original.get("subject")), body=written.body,
+        open_questions=written.open_questions, message=message, trace=written.trace,
     )
 
 
@@ -156,7 +157,8 @@ def _note(reply: _Reply) -> str | None:
     return "Fill in: " + "; ".join(reply.open_questions) if reply.open_questions else None
 
 
-async def create_reply_draft(session: Session, task, *, brief: str) -> EmailDraft:
+async def create_reply_draft(session: Session, task, *, brief: str) -> tuple[EmailDraft, dict]:
+    """The draft plus the writing agent's trace."""
     if drafts_store.live_for_task(session, task.id) is not None:
         # A second draft hand-off rewrites the draft instead of adding one.
         return await regenerate(session, task)
@@ -180,10 +182,10 @@ async def create_reply_draft(session: Session, task, *, brief: str) -> EmailDraf
         state="pushed",
     )
     await notify_draft_ready(task, mail_url=mail_url(account, thread_id), note=_note(reply))
-    return draft
+    return draft, reply.trace
 
 
-async def regenerate(session: Session, task) -> EmailDraft:
+async def regenerate(session: Session, task) -> tuple[EmailDraft, dict]:
     draft = drafts_store.live_for_task(session, task.id)
     if draft is None:
         raise LookupError("No draft on this task")
@@ -204,9 +206,11 @@ async def regenerate(session: Session, task) -> EmailDraft:
     draft.provider_draft_id = updated.get("id") or draft.provider_draft_id
     draft.from_address, draft.to, draft.subject = reply.sender.address, reply.to, reply.subject
     draft.body, draft.open_questions, draft.state = reply.body, reply.open_questions, "pushed"
+    if handoff is not None and handoff.kind == "email_reply":
+        handoff.trace = reply.trace
     session.commit()
     await notify_draft_ready(task, mail_url=mail_url(account, thread_id), note=_note(reply))
-    return draft
+    return draft, reply.trace
 
 
 async def regenerate_in_background(task_id) -> None:

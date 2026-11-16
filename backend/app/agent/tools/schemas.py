@@ -26,25 +26,18 @@ storage concerns.
 from collections.abc import Mapping, Sequence
 
 from app.agent.helpers.attributes import DEADLINE_KINDS, EFFORTS, WORK_TYPES
-from app.services.kotx.runs import KOTX_ISSUE_REPOS
 
 # Provider-neutral JSON schema format; provider adapters translate at the boundary.
 
 # The agent sees only these texts, not the executors — keep them in step with
 # what each executor can actually do (`app.services.handoff.run`).
 _HANDOFF_KIND_DOCS = {
-    "web_research": (
-        "search the public web, or read one public page linked in the input, and "
-        "add the findings (deadlines, required steps, prices, addresses, sources) "
-        "to the task description. For tasks that need public facts the input "
-        "doesn't state."
-    ),
-    "own_data_lookup": (
-        "search the user's own tasks, emails, Slack messages, notes, calendar, "
-        "contacts, Google Drive, Notion and GitHub (and the web) and add the "
-        "answer or preparation notes to the task description. For tasks that "
-        "need facts the user already has somewhere, or prep material. Also for "
-        "Notion, Drive or GitHub links in the input."
+    "research": (
+        "find out what the task needs: search the user's own tasks, emails, Slack "
+        "messages, notes, calendar, contacts, Google Drive, Notion and GitHub, "
+        "search the public web, and read pages linked in the input. The findings "
+        "go into the task description; when they complete the task (it only asked "
+        "for information), the task is closed and the user notified."
     ),
     "email_reply": (
         "draft a reply to this email in the user's mailbox for them to review "
@@ -52,39 +45,42 @@ _HANDOFF_KIND_DOCS = {
         "the web. For tasks that consist of answering the sender."
     ),
     "code_change": (
-        "open a GitHub issue and start the coding agent for a change in one of "
-        "the user's repositories (labels: " + ", ".join(KOTX_ISSUE_REPOS) + "). "
-        "The user approves before anything starts."
+        "open a GitHub issue and start the coding agent for a change in the "
+        "repository of the task's label (labels with a repo: {labels}). The user "
+        "approves before anything starts."
+    ),
+}
+
+_ANSWER_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Only when the input asks for information that what you already found "
+        "(notes, calendar, the input itself) fully provides: the answer, with "
+        "where it came from. The task is then saved as done with this answer and "
+        "the user is notified; nothing is scheduled. Don't combine with handoff."
     ),
 }
 
 
-def _handoff_schema(kinds: Sequence[str]) -> dict:
-    lines = [f"- {kind}: {_HANDOFF_KIND_DOCS[kind]}" for kind in kinds]
-    props: dict = {
-        "kind": {"type": "string", "enum": list(kinds)},
-        "brief": {
-            "type": "string",
-            "description": "What the agent should do or find out, in one or two sentences.",
-        },
-    }
-    if "web_research" in kinds:
-        props["url"] = {
-            "type": "string",
-            "description": (
-                "web_research only: the link from the input whose page holds the "
-                "needed facts. Omit for a web search."
-            ),
-        }
+def _handoff_schema(kinds: Sequence[str], repo_labels: Sequence[str]) -> dict:
+    docs = {**_HANDOFF_KIND_DOCS}
+    docs["code_change"] = docs["code_change"].format(labels=", ".join(repo_labels))
+    lines = [f"- {kind}: {docs[kind]}" for kind in kinds]
     return {
         "type": "object",
         "description": (
             "Optional. Set when an agent could do this task or prepare it; it runs "
             "right after the task is saved. Omit when only the user can do it "
-            "(attend, decide, pay, sign, errands) or no kind fits.\n\nKinds:\n"
-            + "\n".join(lines)
+            "(attend, decide, pay, sign, errands), no kind fits, or `answer` "
+            "already completes it.\n\nKinds:\n" + "\n".join(lines)
         ),
-        "properties": props,
+        "properties": {
+            "kind": {"type": "string", "enum": list(kinds)},
+            "brief": {
+                "type": "string",
+                "description": "What the agent should do or find out, in one or two sentences.",
+            },
+        },
         "required": ["kind", "brief"],
     }
 
@@ -889,15 +885,21 @@ GITHUB_CHAT_TOOLS = [
 # and is never asked for it.
 
 
-def new_input_tools(labels: Mapping[str, str], handoff_kinds: Sequence[str] = ()) -> list[dict]:
+def new_input_tools(
+    labels: Mapping[str, str],
+    handoff_kinds: Sequence[str] = (),
+    repo_labels: Sequence[str] = (),
+) -> list[dict]:
+    """`handoff_kinds` non-empty also offers `handoff` and `answer` on
+    `create_task`: the input's source lets an agent finish the task."""
     tools = _with_label_field(_NEW_INPUT_TOOLS, labels, require_on_create=True)
     if not handoff_kinds:
         return tools
-    field = _handoff_schema(handoff_kinds)
+    extra = {"handoff": _handoff_schema(handoff_kinds, repo_labels), "answer": _ANSWER_SCHEMA}
     return [
         {**tool, "parameters": {
             **tool["parameters"],
-            "properties": {**tool["parameters"]["properties"], "handoff": field},
+            "properties": {**tool["parameters"]["properties"], **extra},
         }} if tool["name"] == "create_task" else tool
         for tool in tools
     ]
