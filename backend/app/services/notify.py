@@ -53,6 +53,13 @@ ACTION_KOTX_APPROVE = "KOTX_APPROVE"
 ACTION_KOTX_MERGE = "KOTX_MERGE"
 ACTION_KOTX_COMMENT = "KOTX_COMMENT"
 
+# Agent hand-offs (docs/handoff-plan.md). Their notifications carry
+# `tag="handoff-<task id>"` so they don't replace the task's "Scheduled" push.
+ACTION_HANDOFF_ACCEPT = "HANDOFF_ACCEPT"
+ACTION_HANDOFF_DECLINE = "HANDOFF_DECLINE"
+ACTION_DRAFT_REGENERATE = "DRAFT_REGENERATE"
+ACTION_DRAFT_DISCARD = "DRAFT_DISCARD"
+
 
 async def notify(
     title: str,
@@ -417,6 +424,64 @@ async def notify_calendar_event_updated(event) -> None:
         url=event.html_link or get_settings().public_url,
         tag=f"event-update-{event.id}",
         channel="Calendar",
+    )
+
+
+def handoff_tag(task_id: UUID | str) -> str:
+    return f"handoff-{task_id}"
+
+
+async def notify_handoff_proposed(task, *, brief: str) -> None:
+    """A code change the agent can start: GitHub issue + kotx run."""
+    await notify(
+        title=f"Open issue? {_short_title(task)}",
+        message=_clip(brief, 300),
+        url=task_url(task.id),
+        tag=handoff_tag(task.id),
+        actions=[
+            {"action": ACTION_HANDOFF_ACCEPT, "title": "Open issue"},
+            {"action": ACTION_HANDOFF_DECLINE, "title": "Decline"},
+        ],
+        sticky=True,
+    )
+
+
+async def notify_research_moved_due(task) -> None:
+    await notify(
+        title=f"Research moved the deadline: {_short_title(task)}",
+        message=f"Due {_fmt_when(to_user_tz(task.due_date))}",
+        url=task_url(task.id),
+        tag=handoff_tag(task.id),
+    )
+
+
+async def notify_draft_ready(task, *, mail_url: str, note: str | None = None) -> None:
+    """A reply draft sits in the mailbox; opening the notification opens the
+    thread with the draft. `note` lists the open questions."""
+    await notify(
+        title=f"Draft ready: {_short_title(task)}",
+        message=_clip(note, 300) if note else "Review and send it from your mailbox.",
+        url=mail_url,
+        tag=handoff_tag(task.id),
+        actions=[
+            {"action": ACTION_DRAFT_REGENERATE, "title": "Regenerate"},
+            {"action": ACTION_DRAFT_DISCARD, "title": "Discard"},
+        ],
+        sticky=True,
+    )
+
+
+async def notify_draft_stale(task, *, mail_url: str) -> None:
+    await notify(
+        title=f"New reply in the thread: {_short_title(task)}",
+        message="Your draft doesn't cover it yet.",
+        url=mail_url,
+        tag=handoff_tag(task.id),
+        actions=[
+            {"action": ACTION_DRAFT_REGENERATE, "title": "Regenerate"},
+            {"action": ACTION_DRAFT_DISCARD, "title": "Discard"},
+        ],
+        sticky=True,
     )
 
 

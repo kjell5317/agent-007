@@ -54,8 +54,6 @@ class Settings(BaseSettings):
     # custom tool and widget output.
     chat_thinking_level: str = "low"
     chat_web_search: bool = True
-    # Grounded URL lookup for manual and incoming task extraction.
-    task_web_search: bool = False
 
     # Chat answer cache. Completed read-only chat turns persist (question,
     # question-embedding, answer); a later similarly-phrased question pulls the

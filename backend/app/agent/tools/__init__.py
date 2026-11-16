@@ -10,7 +10,6 @@ from app.agent.tools.calendar_lookup import (
 from app.agent.tools.notes_lookup import run_search_notes
 from app.agent.tools.schemas import (
     CHAT_TOOLS,
-    INPUT_LINK_RESEARCH_TOOL,
     GITHUB_CHAT_TOOLS,
     NOTION_CHAT_TOOLS,
     SAVE_NOTES_TOOL,
@@ -21,7 +20,6 @@ from app.agent.tools.schemas import (
 
 __all__ = [
     "CHAT_TOOLS",
-    "INPUT_LINK_RESEARCH_TOOL",
     "GITHUB_CHAT_TOOLS",
     "NOTION_CHAT_TOOLS",
     "SAVE_NOTES_TOOL",

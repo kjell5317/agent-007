@@ -23,22 +23,70 @@ configured. Callers pass the catalog in as `{name: description}` (see
 storage concerns.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from app.agent.helpers.attributes import DEADLINE_KINDS, EFFORTS, WORK_TYPES
+from app.services.kotx.runs import KOTX_ISSUE_REPOS
 
 # Provider-neutral JSON schema format; provider adapters translate at the boundary.
 
-INPUT_LINK_RESEARCH_TOOL = {
-    "name": "research_input_link",
-    "description": (
-        "Research the first URL in this input when the page's facts are needed to "
-        "decide or fill in a task or event. Optional: skip it when the input "
-        "already has enough information. Read-only; returns a short grounded "
-        "summary. Call at most once before the terminal decision."
+# The agent sees only these texts, not the executors — keep them in step with
+# what each executor can actually do (`app.services.handoff.run`).
+_HANDOFF_KIND_DOCS = {
+    "web_research": (
+        "search the public web, or read one public page linked in the input, and "
+        "add the findings (deadlines, required steps, prices, addresses, sources) "
+        "to the task description. For tasks that need public facts the input "
+        "doesn't state."
     ),
-    "parameters": {"type": "object", "properties": {}},
+    "own_data_lookup": (
+        "search the user's own tasks, emails, Slack messages, notes, calendar, "
+        "contacts, Google Drive, Notion and GitHub (and the web) and add the "
+        "answer or preparation notes to the task description. For tasks that "
+        "need facts the user already has somewhere, or prep material. Also for "
+        "Notion, Drive or GitHub links in the input."
+    ),
+    "email_reply": (
+        "draft a reply to this email in the user's mailbox for them to review "
+        "and send; while writing it can look up facts in the user's data and on "
+        "the web. For tasks that consist of answering the sender."
+    ),
+    "code_change": (
+        "open a GitHub issue and start the coding agent for a change in one of "
+        "the user's repositories (labels: " + ", ".join(KOTX_ISSUE_REPOS) + "). "
+        "The user approves before anything starts."
+    ),
 }
+
+
+def _handoff_schema(kinds: Sequence[str]) -> dict:
+    lines = [f"- {kind}: {_HANDOFF_KIND_DOCS[kind]}" for kind in kinds]
+    props: dict = {
+        "kind": {"type": "string", "enum": list(kinds)},
+        "brief": {
+            "type": "string",
+            "description": "What the agent should do or find out, in one or two sentences.",
+        },
+    }
+    if "web_research" in kinds:
+        props["url"] = {
+            "type": "string",
+            "description": (
+                "web_research only: the link from the input whose page holds the "
+                "needed facts. Omit for a web search."
+            ),
+        }
+    return {
+        "type": "object",
+        "description": (
+            "Optional. Set when an agent could do this task or prepare it; it runs "
+            "right after the task is saved. Omit when only the user can do it "
+            "(attend, decide, pay, sign, errands) or no kind fits.\n\nKinds:\n"
+            + "\n".join(lines)
+        ),
+        "properties": props,
+        "required": ["kind", "brief"],
+    }
 
 _CONFIDENCE_SCHEMA = {
     "type": "number",
@@ -841,8 +889,18 @@ GITHUB_CHAT_TOOLS = [
 # and is never asked for it.
 
 
-def new_input_tools(labels: Mapping[str, str]) -> list[dict]:
-    return _with_label_field(_NEW_INPUT_TOOLS, labels, require_on_create=True)
+def new_input_tools(labels: Mapping[str, str], handoff_kinds: Sequence[str] = ()) -> list[dict]:
+    tools = _with_label_field(_NEW_INPUT_TOOLS, labels, require_on_create=True)
+    if not handoff_kinds:
+        return tools
+    field = _handoff_schema(handoff_kinds)
+    return [
+        {**tool, "parameters": {
+            **tool["parameters"],
+            "properties": {**tool["parameters"]["properties"], "handoff": field},
+        }} if tool["name"] == "create_task" else tool
+        for tool in tools
+    ]
 
 
 def thread_followup_tools(labels: Mapping[str, str]) -> list[dict]:

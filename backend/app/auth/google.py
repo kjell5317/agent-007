@@ -27,6 +27,9 @@ DEFAULT_SCOPES = [
     "openid",
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
+    # Reply drafts. The scope would also allow sending; 007 never sends — the
+    # Gmail client has no send method (see services/email/draft.py).
+    "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/calendar.events",
     # Drive read-only powers the chat/search federated Drive lookup.
     "https://www.googleapis.com/auth/drive.readonly",

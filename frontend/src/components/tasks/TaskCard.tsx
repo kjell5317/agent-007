@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { HandoffChip } from "@/components/tasks/HandoffSection";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { actionHint } from "@/components/runs/runLabels";
@@ -370,6 +371,8 @@ export function TaskCard({
                   Later
                 </Badge>
               )}
+
+              <HandoffChip task={task} />
 
               {task.label && (
                 <span

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled", "deferred"]
 RecurrenceUnit = Literal["day", "week", "month"]
@@ -12,6 +12,28 @@ WorkType = Literal["physical", "cognitive", "social"]
 Effort = Literal["low", "medium", "high"]
 DeadlineKind = Literal["hard", "firm", "soft"]
 ScheduleState = Literal["placed", "deferred", "unplaced"]
+
+
+HandoffKind = Literal["web_research", "own_data_lookup", "email_reply", "code_change"]
+
+
+class HandoffRead(BaseModel):
+    kind: HandoffKind
+    brief: str
+    url: str | None = None
+    state: Literal["proposed", "running", "ready", "failed", "declined"]
+    result: dict | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HandoffStart(BaseModel):
+    """Empty body accepts the proposed hand-off; `kind` starts one by hand."""
+
+    kind: HandoffKind | None = None
+    brief: str | None = Field(None, max_length=500)
 
 
 class SubtaskSummary(BaseModel):
@@ -172,6 +194,7 @@ class TaskRead(TaskBase):
     # The slot length the planner booked when it differs from the estimate
     # (rounded up to the solver's grid). Null means the estimate itself.
     estimation_corrected: int | None = None
+    handoff: HandoffRead | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -189,6 +212,7 @@ class TaskRead(TaskBase):
         subtasks: list[SubtaskSummary] | None = None,
         scheduling: str | None = None,
         parent_card: TaskRead | None = None,
+        handoff=None,
     ) -> "TaskRead":
         """Assemble the read model from an ORM row plus its derived
         `status` / `is_manual` (both come from separate queries — see
@@ -254,6 +278,7 @@ class TaskRead(TaskBase):
                     and booked != task.estimation
                     else None
                 ),
+                "handoff": HandoffRead.model_validate(handoff) if handoff is not None else None,
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
             }

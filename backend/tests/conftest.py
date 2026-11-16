@@ -4,7 +4,7 @@ The runner tests drive the agent with hand-rolled fake sessions
 (`SimpleNamespace`), which can't serve queries. Each agent run now reads the
 label catalog from the DB — for the tool enum, the calendar mirror's
 `eventLabelId`, the kotx repo mapping and the work type / effort defaults —
-so stub those lookups out by default. Tests that exercise labels override
+so stub those lookups out by default (likewise hand-offs and reply drafts). Tests that exercise labels override
 them in the test body. The related-calendar-events lookup (DB query, possibly
 an embedding call) is stubbed to "no events" the same way, and the learned
 duration model a new task's estimate is corrected with to "none fitted yet".
@@ -17,7 +17,9 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
 from app.agent import retrieval  # noqa: E402
+from app.db.clients import handoffs as handoffs_store  # noqa: E402
 from app.db.clients import labels as labels_store  # noqa: E402
+from app.services.email import draft as email_draft  # noqa: E402
 from app.services.learn import jobs as learn_jobs  # noqa: E402
 
 
@@ -40,3 +42,16 @@ def _no_related_calendar_events(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_learned_durations(monkeypatch):
     monkeypatch.setattr(learn_jobs, "duration_params", lambda session: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_handoffs_or_drafts(monkeypatch):
+    """Task reads look up the latest agent hand-off, and a Gmail thread
+    follow-up checks for a reply draft to mark stale."""
+    monkeypatch.setattr(handoffs_store, "latest_for_task", lambda session, task_id: None)
+
+    async def no_draft(session, task, raw):
+        return None
+
+    monkeypatch.setattr(email_draft, "mark_stale", no_draft)
+

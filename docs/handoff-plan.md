@@ -1,137 +1,184 @@
 # Agent hand-off and email drafts — implementation plan
 
-When a task is created, Jev also decides whether an agent could do it,
-fully or as preparation. If so, 007 either runs the agent (read-only work)
-or proposes it with one tap (anything that writes somewhere). The largest
-new piece is reply drafts that come from the address the mail was sent to.
+When the extraction agent creates a task, it also says in the same tool
+call whether an agent could do the task or prepare it. Right after the
+task is saved, 007 runs that agent. Research, lookups and email drafts
+start without asking. A code change waits for one tap. The largest new
+piece is reply drafts, always from the Gmail account's primary address.
 
-Builds on the Jev triage code (`agent/helpers/jev.py`, `agent/triage/`, see
-`docs/jev-plan.md`). The hand-off questions ride on the same Jev call as
-triage.
+Nothing here depends on Jev, which stays parked (`docs/jev-plan.md`).
 
-## Decisions and assumptions
+**Status (2026-11-16):** H1–H4, W1–W4 and E1–E5 are implemented. Open:
 
-- **Read-only executors run automatically** when Jev is confident
-  (research, lookups in the user's own data). Their output lands on the
-  task, and the task stays open until the user closes it.
-- **Writing executors are proposed**, accepted with one tap in the
-  notification or on the task: kotx issue run, calendar entry. Drafts
-  are the exception and are created automatically, because nothing
-  leaves the mailbox until the user presses send
-  (setting `email_draft_auto`, default on).
+- the before/after run of ~20 recent inputs from H1;
+- `create_event` for the manual extractor.
+
+Deploying needs migrations 0046–0047 and one Google re-consent for
+`gmail.compose`; until then drafts fail with a "reconnect Google" error.
+
+## Decisions
+
+- **Same turn, same model.** `create_task` gets an optional `handoff`
+  field, so the agent that creates the task (Haiku in prod) picks the
+  hand-off in the same call. No extra classifier call.
+- **Research, lookups and drafts run without asking.** At about 2.6 new
+  tasks a day (30 days to 2026-11-15: manual 48, Gmail 21, Slack 8) they
+  cost very little. They only add text to the task or put a draft in a
+  mailbox, so a wrong pick wastes a few cents and breaks nothing. No
+  confidence score, no thresholds, no daily cap.
+- **A code change always needs a tap.** It creates a GitHub issue and
+  starts kotx.
 - **No executor ever sends, merges, pays or books.** kotx keeps its own
   start/approve/merge gates. Email drafts are never sent by 007: there is
   no send code path.
-- **Accept and decline are feedback.** They are the training labels for
-  hand-off thresholds, since no historical labels exist.
+- **Calendar entries aren't a hand-off.** The new-input agent
+  (Gmail/Slack) already has `create_event` and creates events in the same
+  run. The manual extractor only has `update_event`; if typed entries like
+  "put the exam dates in my calendar" should create events, give it
+  `create_event` as a separate small change.
 
 ## Hand-off kinds
 
-| Kind | Typical tasks | Executor | Exists today | Mode | Result |
-|---|---|---|---|---|---|
-| `code_change` | "Fix the export bug in CSEE", GitHub mention emails asking for a change | `services/kotx/runs.create_issue_run` (CSEE / SocialAI labels) | yes, as a manual button | propose | GitHub issue + kotx run; the existing kotx flow takes over |
-| `email_reply` | "Answer Anna about the meeting slot", direct questions by email | email drafts (below) | no | auto draft | draft in the mailbox of the receiving address; task closes when sent |
-| `web_research` | Query: "Find a physio near the office", "Check visa rules for Japan", "Compare train vs flight to Munich". Link: "Register for the workshop" (deadline and steps on the linked page) | the research executor (below) — **replaces today's inline link research completely** | partly (grounded search helpers) | auto | "Research" section + sources in the description; due date / location corrected when the page states them |
-| `own_data_lookup` | "Find the landlord's invoice number", "Which date did we agree with Tom?", "Get the venue address" | chat agent, read-only tools (tasks, notes, messages, calendar, Drive, contacts, Notion, GitHub search) | runner yes, non-interactive entry no | auto | answer + references in the description; propose closing when it answers the task |
-| `calendar_entry` | "Put the exam dates in my calendar", "Add the conference to the calendar" | `run_create_event` (after `find_calendar_events`) | yes | propose | events created; task closed |
-
-A second question, `agent_share`, separates **prep** from **complete**.
-"Prepare slides for Friday" is `own_data_lookup` + `web_research` with
-`agent_share = prep`: the agent writes a brief into the description, and
-the task stays with the user. Only `complete` ever proposes closing.
+| Kind | Typical tasks | Executor | Starts | Result |
+| --- | --- | --- | --- | --- |
+| `code_change` | "Fix the export bug in CSEE", GitHub mention emails asking for a change | `services/kotx/runs.create_issue_run` (CSEE / SocialAI labels) | after a tap | GitHub issue + kotx run; the existing kotx flow takes over |
+| `email_reply` | "Answer Anna about the meeting slot", direct questions by email | email drafts (below) | right away | draft in the mailbox of the receiving address; task closes when sent |
+| `web_research` | Query: "Find a physio near the office", "Check visa rules for Japan". Link: "Register for the workshop" (deadline and steps on the linked page) | the research executor (below) — **replaces the inline link research** | right away | "Research" section + sources in the description; due date / location corrected when the page states them |
+| `own_data_lookup` | "Find the landlord's invoice number", "Which date did we agree with Tom?", "Prepare slides for Friday" | chat agent, read-only tools plus `web_search` | right away | answer or prep notes + references in the description |
 
 Not planned:
+
+- **Calendar entries:** see Decisions.
 - **Payments, bookings, forms:** financial or personal-data actions, and
   no tools for them.
 - **Notion / Drive writing:** those grants are read-only today.
-- **Slack replies:** the user scopes are read-only.
+- **Slack replies:** the user scopes are read-only, and Slack's Web API
+  has no documented drafts endpoint. Sending as the user (`chat:write`)
+  would break the no-send rule. If wanted later: generate the reply and
+  show it with a copy button and a link to the thread.
 - **Home Assistant actions:** physical side effects.
 
-## Step H1 — Classification
+## Step H1 — The agent picks the hand-off
 
-Two questions added to the triage call (`app/agent/triage/questions.py`):
+`create_task` (`agent/tools/schemas.py`) gets an optional property:
 
-| Id | Type | Options |
-|---|---|---|
-| `handoff` | choice | none / code_change / email_reply / web_research / own_data_lookup / calendar_entry |
-| `agent_share` | score | none / prep only / complete |
-| `link_facts` | noul (only when the input has links) | the task needs facts from a linked page that the input itself doesn't state (a deadline, required steps, a price, an address) |
+```json
+"handoff": {
+  "type": "object",
+  "description": "Set only when an agent could do or prepare this task. ...",
+  "properties": {
+    "kind": {"enum": ["code_change", "email_reply", "web_research", "own_data_lookup"]},
+    "brief": {"type": "string", "description": "What the agent should do or find out, one or two sentences."},
+    "url": {"type": "string", "description": "web_research only: the input link whose page holds the facts."}
+  },
+  "required": ["kind", "brief"]
+}
+```
 
-- Each option's text describes what the executor can actually do
-  ("draft a reply email for the user to review"). Jev only sees text, not
-  tools, so the descriptions are the contract. When a toolset changes,
-  update the description and recalibrate.
-- Eligibility is pure, in `app/services/handoff/eligible.py`. Ineligible
-  kinds are removed from the options before asking:
-  - `code_change`: label in `KOTX_ISSUE_REPOS` and no GitHub link yet.
-  - `email_reply`: Gmail source, sender is not a no-reply address.
-  - `web_research`: Gemini configured.
-  - The rest: always eligible.
-- Tasks created by the LLM fallback path get a single Jev call after creation.
-- Thresholds: seeded by hand (strict), then refit from accept/decline in
-  `services/learn/jev.refit_thresholds` (a new `handoff` decision). Run in
-  shadow for the first 1–2 weeks: log answers and show an unobtrusive
-  "agent could…" chip, but execute nothing.
+- **Which agents:** the new-input agent (`agent/input/runner.py`, Gmail
+  and Slack) and the manual extractor (`agent/manual/runner.py`, fresh
+  entries and promotions). Both build their tools from
+  `new_input_tools`, so one schema change covers both. The manual
+  extractor returns the hand-off with the other fields; the queue
+  (`services/task/queue.py`) handles it after `tasks_store.create`.
+  Thread follow-ups, kotx tasks, subtasks and recurrence instances get
+  no hand-off.
+- **Kinds per input (pure)**, `services/handoff/eligible.py`:
+  `handoff_kinds(raw) -> list[str]` sets the enum.
+  - `email_reply`: Gmail source, and the sender is not a no-reply address.
+  - The other kinds: always offered.
+- **Check after the call (pure):** drop `code_change` when the chosen
+  label isn't in `KOTX_ISSUE_REPOS` or the task already has a GitHub
+  link. Keep `url` only if it is one of `task_urls(raw)` (see "Web
+  research"); otherwise research runs in query mode.
+- **Prompt:** a short "Hand-off" section in `agent/prompts/new_input.py`
+  and `agent/prompts/manual.py`. It says what each executor can do; the
+  agent only sees text, so this description is the contract. When a
+  toolset changes, update it. For links to Notion, Drive or GitHub,
+  pick `own_data_lookup`, which reads them with the user's grants.
+- **Trace:** the choice goes into `trace["handoff"]`.
+- **Check before shipping:** the prompt and tool change touch the
+  task-creation agent. Run about 20 recent inputs locally before and
+  after the change; the create / not-task / duplicate decisions must not
+  change.
 
 ## Step H2 — Data model
 
-Migration `0044_task_handoffs`:
+Migration `0046_task_handoffs`:
 
 | Column | Notes |
-|---|---|
+| --- | --- |
 | `id` | uuid pk |
 | `task_id` | fk → tasks, cascade |
 | `kind` | one of the kinds above |
-| `agent_share` | `prep` \| `complete` |
-| `state` | `proposed` \| `running` \| `ready` \| `declined` \| `failed` \| `done` |
-| `confidence` | Jev probability for the chosen kind |
-| `result` | jsonb: `issue_url`, `draft_id`, `event_ids`, `summary`, … |
-| `jev_model` | for threshold refits |
+| `brief` | from the agent, or typed when started by hand |
+| `url` | link-mode research only |
+| `state` | `proposed` \| `running` \| `ready` \| `failed` \| `declined` |
+| `result` | jsonb: `issue_url`, `draft_id`, `summary`, `sources`, changed fields, … |
 | `created_at`, `updated_at` | |
 
 At most one non-terminal row per task. DB access goes in
 `app/db/clients/handoffs.py`.
 
-## Step H3 — Proposal surface
+## Step H3 — Run
 
-- `services/notify.py`: `notify_handoff_proposed(task, handoff)` with
-  `ACTION_HANDOFF_ACCEPT` / `ACTION_HANDOFF_DECLINE`, following
-  `notify_kotx_start`. Plus `notify_handoff_ready` for auto-run results.
-- API, thin, in `app/api/tasks.py`:
-  - `POST /tasks/{id}/handoff`: accept or start, optional `kind` override.
-  - `POST /tasks/{id}/handoff/decline`.
+A task handed to an agent is never split automatically: the creation paths
+skip the split when the agent set `handoff`, and `maybe_split_task` returns
+nothing for a task with a hand-off row (later estimate edits). Splitting would
+make it a parent task, where the result isn't shown. The user's explicit
+"Split" still works.
 
-  Both call `app/services/handoff/`.
-- Frontend: a chip on `TaskCard` ("Agent can draft a reply"), and a
-  panel in `TaskDetailModal` with the result, accept and decline. A
-  "Hand off…" menu on any task lets the user pick a kind manually. A
-  manual pick counts as a label.
+`services/handoff/run.py`:
 
-## Step H4 — Executors
-
-`app/services/handoff/run.py`: a dict from kind to async function, with
-no base class. Each executor returns `(state, result)`. A failure sets
-`failed`, calls `notify_error`, and leaves the task untouched.
-
-- **`code_change`:** kotx needs a body. If the task has no description,
-  run the triage writer (`agent/triage/write.py`) with `description` forced, then
-  `create_issue_run(task)`. Store `issue_url` on `task.link`, so the
-  existing "007 task created the issue" adoption path links the kotx task
-  when it appears.
+- `start(task_id)`: called right after the task is committed, as a
+  background task with its own session, so task creation never waits.
+  - `code_change` → `proposed` and a push with Accept / Decline.
+  - Every other kind → `running`, then the executor.
+- A dict from kind to async function, with no base class. Each executor
+  returns `(state, result)`. A failure sets `failed`, calls
+  `notify_error`, and leaves the task untouched.
+- **`code_change`** (on accept): `create_issue_run(task)` sends
+  `task.description` as the issue body. When the description is empty,
+  send the brief plus the cleaned input text instead. Store `issue_url`
+  on `task.link`, so the existing "007 task created the issue" adoption
+  path links the kotx task when it appears.
 - **`web_research`:** see "Web research" below.
-- **`own_data_lookup`:** new non-interactive entry in
-  `agent/chat/runner.py`: `answer_task(session, task) -> str`, restricted
-  to the read-only search tools (no `create_*` / `update_*`). Append the
-  answer. With `agent_share = complete`, the ready notification carries
-  a Close action.
-- **`calendar_entry`:** one LLM call with `find_calendar_events` +
-  `create_event`, reusing the handlers in `agent/tools/calendar_lookup.py`.
-  Event ids go into `result`. Close the task after the events exist (the
-  user already accepted).
-- **`email_reply`:** see below.
+- **`own_data_lookup`:** a new non-interactive entry in
+  `agent/chat/runner.py`, `answer_task(session, task, brief) -> str`,
+  restricted to read-only tools:
+  - `tasks_search`, `messages_search`, `search_notes`;
+  - `calendar_search`, `find_calendar_events`, `contacts_search`;
+  - `drive_search`, `get_drive_file`, `notion_search`, `notion_fetch`;
+  - `github_search`, `github_my_work`, `web_search`.
 
-Auto-run executors have a daily cap (`handoff_auto_daily_cap`) so a burst
-of inputs can't fan out into dozens of research calls.
+  No `create_*`, `update_*` or `save_notes`. The answer is appended to the
+  description.
+- **`email_reply`:** see "Email drafts" below.
+
+## Step H4 — Surface
+
+- **Notifications** (`services/notify.py`, following `notify_kotx_start`):
+  - a code-change proposal: `ACTION_HANDOFF_ACCEPT` /
+    `ACTION_HANDOFF_DECLINE`;
+  - "Draft ready": Open / Regenerate / Discard (Step E5);
+  - research that changed the due date: one push saying so.
+
+  Other research and lookup results land on the task without a push. The
+  task's own "Scheduled" push already went out.
+- **API**, thin, in `app/api/tasks.py`, calling `app/services/handoff/`:
+  - `POST /tasks/{id}/handoff`: accept a proposal, or start a kind by
+    hand with an optional `brief`;
+  - `POST /tasks/{id}/handoff/decline`;
+  - `POST /tasks/{id}/draft/regenerate` and `POST /tasks/{id}/draft/discard`.
+- **Frontend:**
+  - a chip on `TaskCard` with the state ("Draft ready", "Researched",
+    "Agent can open an issue");
+  - a panel in `TaskDetailModal` with the brief, the result, and
+    accept / decline for proposals;
+  - a "Hand off…" menu on any task for when the agent didn't pick one.
+
+Research and lookup output is ordinary description text; if it's wrong,
+the user edits it like any description. No separate discard.
 
 ---
 
@@ -139,17 +186,29 @@ of inputs can't fan out into dozens of research calls.
 
 ### What exists today
 
-- **Inline link research in the agents** (the only task web research that
-  runs). The new-input agent (`agent/input/runner.py`) and the manual
-  extractor (`agent/manual/runner.py`) get a `research_input_link` tool
-  (`INPUT_LINK_RESEARCH_TOOL`):
-  - it is enabled by `TASK_WEB_SEARCH`, which is **on in prod**;
+- **Inline link research in the agents.** The new-input agent
+  (`agent/input/runner.py`) and the manual extractor
+  (`agent/manual/runner.py`) can get an optional tool,
+  `research_input_link()` (`INPUT_LINK_RESEARCH_TOOL`, no arguments):
+  - it is offered only when `TASK_WEB_SEARCH` is on, Gemini is
+    configured, and the input contains a URL;
+  - the agent decides whether to call it (at most once), but not which
+    URL. `first_input_url` takes the first `https?://` regex match in the
+    content, else the first entry of `source_metadata["urls"]`;
+  - after the result comes back, the runner makes the agent decide again;
+  - `research_link` in `agent/helpers/web.py` makes a separate Flash call
+    with Google Search grounding ("Inspect this URL"). Grounding searches
+    Google; it does not load the page, so pages that Google hasn't indexed
+    or that need a login return nothing;
   - fresh manual entries pass `research=False`, so only promotions use it
-    there;
-  - the agent may call it once, mid-decision; `research_link` in
-    `agent/helpers/web.py` inspects the input's first URL with Gemini
-    Search grounding;
-  - the result feeds the decision and lands in `trace["web_search"]`.
+    there. The thread follow-up agent doesn't have it.
+- **In prod (checked 2026-11-15)** `task_web_search` is off. It was on
+  from about 2026-09-28 to 2026-10-25. In that window the agent called the
+  tool 20 times: 3 calls returned a usable summary, and none of the 20
+  inputs became a task (all `not_task` or `duplicate`). The failures:
+  - private pages: Notion, Microsoft Forms, LinkedIn;
+  - tracking and redirect links: a PayPal footer link, `c.gle`;
+  - a regex bug that captured a Markdown link (`url](url`) as one URL.
 - **Leftovers of the old background research.** The `web_research` source
   was a follow-up input that patched the task. Its creation was removed on
   2026-10-01 (6df9545), but the handling is still there:
@@ -167,21 +226,32 @@ of inputs can't fan out into dozens of research calls.
 
 ### The replacement
 
-One executor for every kind of task web research, run after the task
-exists — never inside the triage decision. Two modes:
+One executor for all task web research, run after the task exists:
 
-| Mode | Trigger | Research | Applied as |
-|---|---|---|---|
-| `link` | Jev `link_facts` yes ≥ 0.5 on an input with links (the `link` answer picks which URL; else the first) | grounded inspection of that URL — today's `research_link` prompt (deadlines, required actions, contacts) | a patch: "Research" section in the description; `due_date` / `location` only when the page states them explicitly |
-| `query` | Jev `handoff = web_research` | grounded search on the task title + description — today's `research_web` | a "Research" section with sources; the task stays with the user |
+| Mode | When | Research | Applied as |
+| --- | --- | --- | --- |
+| `link` | the hand-off has a valid `url` | Flash with `url_context` (loads the page) plus Google Search, with today's `research_link` prompt (deadlines, required actions, contacts) | a patch: "Research" section in the description; `due_date` / `location` only when the page states them explicitly |
+| `query` | no `url` | grounded search on the `brief`, like today's `research_web` | a "Research" section with sources |
 
 Code:
 
-- **Helper.** `agent/helpers/web.py`: merge `research_web` and
-  `research_link` into one helper, `research(url=… | query=…, context=…)`.
-  It returns `(summary, sources, queries, status)`. One Gemini grounded
-  call per mode, the same NONE / truncation handling as today. Chat's
-  `web_search` calls the same helper.
+- **URL check** (pure, in `agent/helpers/web.py`):
+  `task_urls(raw) -> list[str]`.
+  - Collect all URLs from the content and `source_metadata["urls"]`.
+  - Split Markdown links correctly.
+  - Drop tracking, unsubscribe, help-centre and redirect links.
+  - Leave out Notion, Drive and GitHub links (`own_data_lookup` covers
+    them).
+
+  Fixture tests with the failure cases listed above. It replaces
+  `first_input_url`.
+- **Helper.** Merge `research_web` and `research_link` into one helper,
+  `research(url=… | query=…, context=…)`, returning
+  `(summary, sources, queries, status)`. One Gemini call per mode. Link
+  mode adds the `url_context` tool (the installed `google-genai` has it).
+  Pass `max_tokens` and `thinking_level` explicitly: Gemini's thinking
+  counts against the output budget. Chat's `web_search` calls the same
+  helper.
 - **Executor.** `services/handoff/research.py`:
   1. research;
   2. one forced `update_task` call on Flash with the moved
@@ -191,45 +261,26 @@ Code:
   3. `apply_task_action` with the patch.
 
   Result in `task_handoffs.result`: summary, sources, queries, changed
-  fields. A changed due date is announced through `notify_handoff_ready`;
-  a description-only enrichment is silent.
+  fields.
 - **Scheduling.** A patched due date flows through `update_task`, which
   already replans.
-- **Guards.** Read-only, so it runs automatically within
-  `handoff_auto_daily_cap`. The website is untrusted: the patch can't
-  change status, label or links. Only `description`, `due_date` and
-  `location` are in the tool schema.
+- **Guards.** The website is untrusted: the patch can't change status,
+  label or links. Only `description`, `due_date` and `location` are in the
+  tool schema.
 
-### Trade-offs
+### Trade-off
 
-- **The page no longer informs the triage decision.** Today the agent can
-  read a linked page before deciding. Now:
-  - the task is created with Jev's fields first;
-  - a deadline that only the page states arrives a few seconds later
-    through the patch;
-  - an input Jev drops as not-a-task is never researched.
-
-  The replay shows how often today's agent changed its decision after link
-  research (`trace["web_search"]` with a `task_created` outcome). Check
-  that before W4.
-- **Gains:**
-  - triage stays one Jev call plus at most one writer call;
-  - research runs only when Jev says the page matters, not whenever an
-    agent decides to look;
-  - all task research has one code path, one trace format, and one place
-    to cap cost.
+The page no longer informs the "is this a task" decision. The prod window
+above puts that cost close to zero: research ran almost only on inputs
+that weren't tasks and never turned one into a task.
 
 ### Steps
 
-- **W1:** merge the research helpers; switch chat's `web_search` to the new
-  helper. No behaviour change.
-- **W2:** the executor, plus the `link_facts` question in
-  `agent/triage/questions.py`, wired into triage creation and into tasks the
-  LLM fallback creates (single Jev call after creation, like `handoff`).
-- **W3:** set `TASK_WEB_SEARCH=false` in prod once W2 is live, and compare
-  a week of tasks with links: due-date corrections from the executor against
-  what the inline tool used to find.
-- **W4: delete the inline tool.**
+- **W1:** the URL check, the merged helper with `url_context`, and chat's
+  `web_search` on the new helper. No behaviour change for chat.
+- **W2:** the executor, started from Step H3.
+- **W3: delete the inline tool.** It is already off in prod, so no
+  comparison week is needed.
   - `INPUT_LINK_RESEARCH_TOOL` (`agent/tools/schemas.py`, `__init__`);
   - the `research_enabled` / `researched_link` branches and the
     "decide again after research" loop in `agent/input/runner.py` and
@@ -239,13 +290,12 @@ Code:
   - `trace["web_search"]`;
   - the `research_input_link` sections in `agent/prompts/new_input.py` and
     `agent/prompts/manual.py`;
-  - the `task_web_search` setting and `TASK_WEB_SEARCH` in `.env.example` /
-    prod;
-  - `provisional_task_title` in `agent/helpers/web.py` if no caller
-    remains;
+  - the `task_web_search` setting and `TASK_WEB_SEARCH` in `.env.example`;
+  - `first_input_url` and `provisional_task_title` in
+    `agent/helpers/web.py` if no caller remains;
   - the research tests in `test_manual_runner.py` and the agent tests that
     stub `research_link`.
-- **W5: delete the `web_research` leftovers.**
+- **W4: delete the `web_research` leftovers.**
   - the thread-runner branch (its prompt moved to the executor in W2);
   - the backend special cases listed above;
   - the frontend labels and filter.
@@ -256,163 +306,128 @@ Code:
 
 ## Email drafts
 
-**Constraint.** Mail sent to several addresses is forwarded into one Gmail
-inbox. Replies should come from the address the mail was sent to, but
-Gmail can only send as the main address.
+Drafts always come from the Gmail account's primary address, whichever of
+the user's forwarded addresses the mail was sent to (decided 2026-11-16).
+No per-address routing, no Microsoft or IMAP mailboxes.
 
-### Step E1 — Know which address received the mail (pure)
+### Step E1 — Threading headers (pure)
 
-`services/input/gmail/preprocess.py`:
+`services/input/gmail/preprocess.py` also stores `references` in
+`source_metadata`; `Message-ID` is already stored as `message_id_header`.
+The reply's `In-Reply-To` / `References` are built from them.
 
-- `received_as(headers, my_addresses) -> str | None`, checking in order:
-  `To` ∩ mine → `Cc` ∩ mine → `X-Original-To` / `X-Forwarded-To` /
-  `Delivered-To` ∩ mine → `None` (meaning the main address).
-  `my_addresses` is the existing `my_email_addresses` setting plus the
-  account.
-- Also capture `In-Reply-To` and `References`. `Message-ID` is already
-  stored as `message_id_header`.
-- Store `received_as`, `in_reply_to` and `references` in `source_metadata`.
-  Older rows fall back to the stored `to` / `cc`.
-- Tests with fixture headers: a Workspace auto-forward, an M365 forward,
-  a Gmail alias, Bcc'd delivery.
+### Step E2 — Where the draft is created
 
-### Step E2 — Routes: where the draft is created
+`users.drafts.create` in the original Gmail thread (`threadId`), `From` =
+the primary "Send mail as" identity with its display name and signature
+(`sendAs.list`). Needs the `gmail.compose` scope.
 
-| Route | When | How | Scopes | Build cost |
-|---|---|---|---|---|
-| `gmail` | main address, and any verified Gmail "Send mail as" alias | `users.drafts.create` with `threadId`, `From` = alias, matching `Subject`, `In-Reply-To`, `References` | add `gmail.compose` | small |
-| `gmail` via SMTP alias | a forwarded address whose provider allows SMTP login | **configuration, not code:** add the address under Gmail → Settings → Accounts → "Send mail as" with that provider's SMTP server + app password. It then shows up in `sendAs.list` and the `gmail` route covers it | — | none |
-| `microsoft` | Microsoft 365 / Outlook addresses where SMTP login is disabled (common for university and work tenants) | new `@register_provider("microsoft")`. Graph: find the original by `internetMessageId` (forwarding keeps the Message-ID) → `createReply` → patch the body. The draft sits threaded in that mailbox; the user sends from Outlook | `Mail.ReadWrite`, `offline_access` (no `Mail.Send`) | medium |
-| `imap` | any other host | IMAP `APPEND` to Drafts with `\Draft`, `In-Reply-To` / `References` set. stdlib `imaplib`, app password stored as Fernet ciphertext like OAuth tokens | — | medium |
-| fallback | no route for the address | Gmail draft from the main address, clearly flagged in the UI and notification ("sends from your main address") | — | — |
+Code:
 
-- `sendAs.list` (readable with the existing `gmail.readonly` scope;
-  verify) lists the verified aliases, so the `gmail` route detects them
-  automatically. It also returns each alias's signature.
-- Setting `email_reply_routes: dict[str, str]` (address → route) covers
-  the non-Gmail routes. Unlisted addresses use `gmail` if verified,
-  otherwise the fallback.
-- **Decision needed before building E2:** list each forwarded address and
-  its provider. The cheapest outcome is that every provider allows SMTP
-  login: then they all become Gmail aliases and only the `gmail` route
-  is built. Build `microsoft` / `imap` only for addresses that can't. For
-  a university M365 tenant, check first whether the tenant lets users
-  consent to third-party apps.
-
-Code: `app/services/input/gmail/client.py` gains
-`create_draft` / `update_draft` / `delete_draft` / `get_thread` /
-`list_send_as`, but no send method. `app/services/email/route.py` (pure)
-picks the route and from-address. `app/services/email/compose.py` (pure)
-builds the RFC 2822 reply: `Re:` subject, threading headers, quoted
-original with an "On …, … wrote:" line.
+- `app/services/input/gmail/client.py` gains `create_draft` /
+  `update_draft` / `delete_draft` / `get_thread` / `list_send_as`, but no
+  send method.
+- `app/services/email/compose.py` (pure) picks the primary sender and
+  builds the RFC 2822 reply: `Re:` subject, threading headers, signature,
+  quoted original with an "On …, … wrote:" line.
 
 ### Step E3 — Draft generation
 
-`app/agent/draft/runner.py` + `app/agent/prompts/draft.py`, one
-forced-tool call: `write_reply {body, open_questions: [str]}`.
+`app/agent/draft/runner.py` + `app/agent/prompts/draft.py`: a lookup loop
+over chat's read-only search tools (tasks, messages, notes, calendar,
+contacts, Drive, Notion, GitHub, web search — the same set as
+`own_data_lookup`), then a forced `write_reply {body, open_questions: [str]}`.
 
 Context:
-- **The full thread:** `get_thread`, each message through the existing
-  preprocess cleaning.
-- **The task:** title and description.
-- **`search_notes` hits** for the sender and subject.
-- **Free slots** when the mail asks for a time: `find_calendar_events`
-  over the next two weeks.
-- **Style examples:** 3–5 recent messages the user sent to the same
-  recipient, else the same domain, else any recent sent mail in the same
-  language. The SENT label is readable with `gmail.readonly`.
+
+- **The thread:** `get_thread`, each message through the existing
+  preprocess cleaning; earlier drafts in the thread are skipped.
+- **The task:** title and description, plus the hand-off `brief` (what
+  the reply must answer).
+- **Free slots** when the mail asks for a time: a calendar search over
+  the next two weeks.
+- **Style examples:** 3 recent messages the user sent to the same
+  recipient, else the same domain, else any recent sent mail.
 - **Language:** the incoming mail's language.
-- **Signature:** from `sendAs` (gmail route) or per-address config.
 
 Rules:
+
 - Facts the agent doesn't have become `[[placeholders]]` and are listed
   in `open_questions`. Those are shown in the notification and the task panel.
 - **Recipients are deterministic** (pure, in `compose.py`): `Reply-To`,
   else `From`. They are never taken from the LLM or from text in the
   body, so an injected "cc this address" can't add recipients.
 - The prompt treats the thread as untrusted content.
-- Model: `draft_llm_model` setting. Drafting is low-volume and
-  quality-sensitive, so it can be a stronger model than the Haiku
-  default without a noticeable cost.
+- Model: Gemini Flash (`llm_target("chat")`), like the lookup: the draft
+  agent uses chat's tools, so it runs on chat's model.
 
 ### Step E4 — Push and lifecycle
 
-Migration `0045_email_drafts`:
+Migration `0047_email_drafts`:
 
 | Column | Notes |
-|---|---|
+| --- | --- |
 | `id`, `task_id`, `raw_input_id` | |
-| `route`, `from_address`, `to`, `subject`, `body` | |
+| `from_address`, `to`, `subject`, `body` | |
 | `open_questions` | json |
-| `provider_draft_id`, `provider_thread_ref` | Gmail draft id + thread id, Graph message id, IMAP UID |
+| `provider_draft_id`, `provider_thread_ref` | Gmail draft id + thread id |
 | `state` | `generated` \| `pushed` \| `stale` \| `sent` \| `discarded` |
 | `created_at`, `updated_at` | |
 
-- **Push:** through the route. `task.link` points at the Gmail thread or
-  the Outlook web link.
-- **New message on the thread:** the thread follow-up branch marks the
-  draft `stale` and notifies "New reply in the thread" with
+- **Push:** the "Draft ready" notification and the task panel link to the
+  Gmail thread.
+- **New message on the thread:** the thread shortcut marks the draft
+  `stale` and notifies "New reply in the thread" with
   `ACTION_DRAFT_REGENERATE`. Regenerating updates the draft in place
-  (`drafts.update`, Graph `PATCH`).
-- **Sent detection:**
-  - `gmail` route: the Gmail poll currently skips `SENT` messages. Before
-    skipping, check whether the thread has a pushed draft; if so, mark
-    it `sent` and close the reply task.
-  - `microsoft`: a cron check of the draft id (gone, or `isDraft = false`).
-  - `imap`: the user closes the task manually.
-- **Discard:** `ACTION_DRAFT_DISCARD` deletes the provider draft, sets
-  `discarded`, and records the hand-off as `declined`.
+  (`drafts.update`); a second draft hand-off on the task does the same.
+- **Sent detection:** the Gmail poll records the threads of `SENT`
+  messages before skipping them. A live draft on one of those threads is
+  marked `sent`, its task is closed, and a draft the user didn't use is
+  deleted.
+- **Discard:** `ACTION_DRAFT_DISCARD` deletes the Gmail draft, sets
+  `discarded`, and sets the hand-off to `declined`.
 
 ### Step E5 — Triggers
 
-- At ingestion, Jev's `handoff = email_reply` creates the task with:
-  - a template title, `Reply to {sender first name}: {clean subject}`
-    (pure, no LLM; a consistent title style);
-  - estimate 15 min;
-  - no description.
-
-  Then the draft is generated and pushed (if `email_draft_auto`), with a
-  "Draft ready" notification: Open / Regenerate / Discard.
-- Manually: a "Draft reply" action on any Gmail-sourced task.
+- **The agent picks `email_reply`:** the draft is generated and pushed
+  right after the task is saved, with a "Draft ready" notification:
+  Regenerate / Discard (tapping the notification opens the thread).
+- **Manually:** "Hand off… → Draft a reply" on any Gmail-sourced task.
 
 ### Security
 
 - **Gmail scope:** adds `gmail.compose`. It also permits sending, so
-  enforce "no send" in code: the client has no send method, and a test
-  asserts that no request goes to `…/messages/send` or `…/drafts/send`.
-  Users re-consent once (`prompt=consent` is already passed). Update the
-  Gmail bullet in CLAUDE.md's Security section when this ships.
-- **Microsoft:** `Mail.ReadWrite` only. Tokens are encrypted like the others.
-- **IMAP:** app passwords, Fernet-encrypted, decrypted only at use.
+  "no send" is enforced in code: the client has no send method, and a test
+  asserts that no request goes to a `…/send` endpoint. Users re-consent
+  once (`prompt=consent` is already passed).
 - **Review:** every draft is reviewed by the user before sending.
   Recipients are deterministic.
 
 ## Rollout order
 
-1. H1 in shadow (Jev triage must be configured), plus the chip.
-2. H2, H3.
-3. Executors, read-only first: `web_research` (with W1–W5 — the inline
-   link research goes away), `own_data_lookup`, then
-   `code_change` (wiring only), then `calendar_entry`.
-4. Email: E1 → the `gmail` route of E2 (main + verified aliases + SMTP
-   aliases) → E3 → E4 → E5. Then `microsoft` / `imap`, only for the
-   addresses that need them.
-5. Hand-off threshold refit once accept/decline data exists.
+1. H1 and H2. Until the executors exist, the agent's picks are only
+   stored and shown as a chip — a free week to see what it picks and
+   tune the prompt section.
+2. H3, H4 with `web_research` (W1–W4: the inline link research goes
+   away), then `own_data_lookup`, then `code_change`.
+3. Email: E1 → E2 → E3 → E4 → E5.
 
 ## Risks
 
-- **Research after creation:** a deadline only the linked page states
-  reaches the task through a patch, not the triage decision. A dropped
-  input is never researched. Check today's research-changed-decision rate
-  before W4.
-- **Jev judges text, not capability.** It can propose kinds the executor
-  can't deliver. Mitigations: descriptive options, eligibility rules,
-  propose-only for writes, decline feedback.
+- **The task-creation prompt changes.** The hand-off section and field
+  could shift create / not-task decisions. The before/after run in H1
+  checks this.
+- **The agent judges text, not capability.** It can pick a kind an
+  executor can't deliver. Mitigations: the prompt says what each executor
+  can do, the eligibility rules, and a wrong pick only costs a few cents.
+- **Prompt injection.** The agent and the executors read untrusted mail
+  and web pages. Research patches are limited to three fields, draft
+  recipients are deterministic, nothing is sent, and a code change needs
+  a tap.
+- **Research after creation:** a dropped input is never researched. The
+  prod window shows this cost nothing so far (0 of 20 researched inputs
+  became tasks).
 - **Draft voice:** style examples from the user's own sent mail, plus
   open questions instead of invented facts.
-- **Tenant consent (M365):** may block the `microsoft` route entirely.
-  Check before building it; the fallback still works.
 - **`gmail.compose` is broader than drafts-only.** Gmail has no
   drafts-only scope; mitigated by the absent send path and the test.
-- **Auto-run cost:** the daily cap, and auto-run only above a strict
-  threshold.

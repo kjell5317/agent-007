@@ -53,6 +53,14 @@ async def poll(session: Session, account_key: str | None) -> dict:
     )
 
     summary = await drain(gmail, session)
+    if gmail.sent_thread_ids:
+        from app.services.email.draft import mark_sent
+
+        try:
+            await mark_sent(session, gmail.client, gmail.sent_thread_ids)
+        except Exception:  # noqa: BLE001 — sent detection must not fail the poll
+            log.exception("gmail poll · sent-draft detection failed")
+            session.rollback()
 
     log.info(
         "gmail poll done · account=%s fetched=%d created=%d skipped=%d errors=%d",

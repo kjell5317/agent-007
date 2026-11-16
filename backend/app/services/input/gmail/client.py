@@ -1,9 +1,9 @@
 """Thin async wrapper around the Gmail REST API.
 
-Only the calls the ingestion source needs:
-  * `list_messages` (initial bootstrap with a `q=` filter)
-  * `history_list`  (incremental sync from a stored `historyId`)
-  * `get_message`   (fetch full payload for preprocessing)
+Ingestion calls (`list_messages`, `history_list`, `get_message`) plus what
+reply drafts need (`get_thread`, `list_send_as`, `create_draft`,
+`update_draft`, `delete_draft`). There is deliberately no send method: 007
+never sends mail, the user sends drafts from their mailbox.
 
 Uses httpx directly rather than the official google-api-python-client to
 avoid pulling in the full Google client stack for three endpoints.
@@ -11,6 +11,7 @@ avoid pulling in the full Google client stack for three endpoints.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -94,6 +95,51 @@ class GmailClient:
             resp = await client.get(f"{_BASE}/profile")
             resp.raise_for_status()
             return resp.json()["historyId"]
+
+
+    async def get_thread(self, thread_id: str) -> dict:
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.get(f"{_BASE}/threads/{thread_id}", params={"format": "full"})
+            resp.raise_for_status()
+            return resp.json()
+
+    async def list_send_as(self) -> list[dict]:
+        """Verified "Send mail as" identities, each with its signature."""
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.get(f"{_BASE}/settings/sendAs")
+            resp.raise_for_status()
+            return resp.json().get("sendAs", [])
+
+    async def create_draft(self, message: bytes, thread_id: str | None) -> dict:
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.post(f"{_BASE}/drafts", json=_draft_body(message, thread_id))
+            resp.raise_for_status()
+            return resp.json()
+
+    async def update_draft(self, draft_id: str, message: bytes, thread_id: str | None) -> dict | None:
+        """None when the draft is gone (sent or deleted by the user)."""
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.put(
+                f"{_BASE}/drafts/{draft_id}",
+                json={"id": draft_id, **_draft_body(message, thread_id)},
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+
+    async def delete_draft(self, draft_id: str) -> None:
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.delete(f"{_BASE}/drafts/{draft_id}")
+            if resp.status_code != 404:
+                resp.raise_for_status()
+
+
+def _draft_body(message: bytes, thread_id: str | None) -> dict[str, Any]:
+    body: dict[str, Any] = {"raw": base64.urlsafe_b64encode(message).decode()}
+    if thread_id:
+        body["threadId"] = thread_id
+    return {"message": body}
 
 
 class HistoryExpiredError(Exception):

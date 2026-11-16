@@ -104,7 +104,9 @@ RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
 
 - OAuth tokens are stored as Fernet ciphertext in `oauth_tokens`.
   Decrypt only at point of use (see `app.auth.crypto`).
-- Scope OAuth requests to least-privilege (e.g. Gmail uses `.readonly`).
+- Scope OAuth requests to least-privilege (e.g. Gmail uses `.readonly`,
+  plus `.compose` for reply drafts — that scope could send, so the Gmail
+  client has no send method and a test guards it).
 - Verify webhook signatures before parsing payloads — every source's
   `handle_webhook` should do its own signature check first.
 

@@ -229,7 +229,6 @@ function noteOrigin(note: Note): string {
     return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
   }
   if (note.source === "manual") return "Manual";
-  if (note.source === "web_research") return "Web";
   return note.source ?? (note.source_raw_input_id ? "" : "Chat");
 }
 

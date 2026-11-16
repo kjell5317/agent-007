@@ -13,6 +13,7 @@ import type {
   SearchHit,
   SearchHitType,
   Task,
+  HandoffKind,
 } from "./types";
 
 class ApiError extends Error {
@@ -101,6 +102,15 @@ export const api = {
     request<void>(`/tasks/${id}/close`, { method: "POST" }),
   markNotTask: (id: string) =>
     request<void>(`/tasks/${id}/not_task`, { method: "POST" }),
+  // Empty body accepts the proposed hand-off; `kind` starts one by hand.
+  startHandoff: (id: string, body: { kind?: HandoffKind; brief?: string } = {}) =>
+    request<Task>(`/tasks/${id}/handoff`, { method: "POST", body: JSON.stringify(body) }),
+  declineHandoff: (id: string) =>
+    request<void>(`/tasks/${id}/handoff/decline`, { method: "POST" }),
+  regenerateDraft: (id: string) =>
+    request<void>(`/tasks/${id}/draft/regenerate`, { method: "POST" }),
+  discardDraft: (id: string) =>
+    request<void>(`/tasks/${id}/draft/discard`, { method: "POST" }),
   reopenTask: (id: string) =>
     request<TaskCreationAccepted>(`/tasks/${id}/reopen`, { method: "POST" }),
 

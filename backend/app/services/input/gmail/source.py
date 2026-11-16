@@ -52,6 +52,9 @@ class GmailSource(IngestionSource):
         # The new high-watermark observed during this fetch, written back by
         # the caller into the OAuthToken row's `extra` field after a successful run.
         self.next_history_id: str | None = None
+        # Threads the user sent mail on during this fetch; a reply draft 007
+        # made on one of them has been sent (see `services.email.draft.mark_sent`).
+        self.sent_thread_ids: set[str] = set()
 
     async def fetch(self) -> AsyncIterator[RawInputCreate]:
         async for message_id in self._iter_new_message_ids():
@@ -63,6 +66,8 @@ class GmailSource(IngestionSource):
                 continue
 
             labels = raw.get("labelIds") or ()
+            if "SENT" in labels and raw.get("threadId"):
+                self.sent_thread_ids.add(raw["threadId"])
             skip = SKIP_LABELS.intersection(labels)
             if skip:
                 log.debug("gmail · skip id=%s labels=%s", message_id, sorted(skip))

@@ -126,6 +126,7 @@ def preprocess_message(
         "subject": headers.get("subject"),
         "date": headers.get("date"),
         "message_id_header": headers.get("message-id"),
+        "references": headers.get("references"),
         "thread_id": raw_message.get("threadId"),
         "label_ids": raw_message.get("labelIds", []),
         "urls": urls,

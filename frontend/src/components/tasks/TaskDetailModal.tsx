@@ -45,6 +45,7 @@ import {
   InputBody,
   MetaDot,
 } from "@/components/inbox/InboxCard";
+import { HandoffSection } from "@/components/tasks/HandoffSection";
 import { KotxRunSection } from "@/components/tasks/KotxRunSection";
 import {
   InputStatusBadge,
@@ -652,6 +653,7 @@ export function TaskDetailModal({
           onDragSubtask={setDraggedSubtask}
           onMoveSubtask={(order) => { void moveSubtask(order); }}
           onSubtaskChanged={refreshAfterSubtaskChange}
+          onHandoffChanged={onChanged}
           kotxTask={kotxTask}
           onKotxChanged={onKotxChanged}
           onKotxActionDone={onClose}
@@ -771,6 +773,7 @@ function TaskSummary({
   onDragSubtask,
   onMoveSubtask,
   onSubtaskChanged,
+  onHandoffChanged,
   kotxTask,
   onKotxChanged,
   onKotxActionDone,
@@ -812,6 +815,7 @@ function TaskSummary({
   onDragSubtask: (id: string | null) => void;
   onMoveSubtask: (order: string[]) => void;
   onSubtaskChanged: () => Promise<void>;
+  onHandoffChanged: () => Promise<void> | void;
   kotxTask: KotxTask | null;
   onKotxChanged?: () => Promise<void> | void;
   onKotxActionDone: () => void;
@@ -1275,6 +1279,10 @@ function TaskSummary({
               onChange={onChangeText}
             />
           </div>
+        )}
+
+        {task.kotx_task_id == null && !task.is_container && (
+          <HandoffSection task={task} onChanged={onHandoffChanged} />
         )}
 
         <LinkedInputsSection

@@ -25,6 +25,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.db.clients import (
+    handoffs as handoffs_store,
     points as points_store,
     raw_inputs as raw_inputs_store,
     tasks as tasks_store,
@@ -56,7 +57,7 @@ def task_read(session: Session, task, status_: str, is_manual: bool) -> TaskRead
         parent = tasks_store.get(session, parent_id)
         if parent is not None:
             parent_status = next((item.status for item in parent_inputs if item.status != "duplicate"), "open")
-            parent_manual = bool(parent_inputs) and all(item.source in {"manual", "web_research"} for item in parent_inputs)
+            parent_manual = bool(parent_inputs) and all(item.source == "manual" for item in parent_inputs)
             parent_card = TaskRead.build(parent, parent_status, parent_manual)
     children = tasks_store.children(session, task.id) if getattr(task, "is_container", False) else []
     child_statuses = tasks_store.latest_status_for(session, [child.id for child in children])
@@ -65,6 +66,7 @@ def task_read(session: Session, task, status_: str, is_manual: bool) -> TaskRead
         status_,
         is_manual,
         parent_card=parent_card,
+        handoff=handoffs_store.latest_for_task(session, task.id),
         source_url=source_url_for_raw_input(raw),
         raw_inputs=[
             TaskRawInputRead.build(

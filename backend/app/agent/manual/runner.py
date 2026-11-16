@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.agent import retrieval
 from app.agent.prompts import EXTRACT_FIELDS_SYSTEM_PROMPT
-from app.agent.helpers.web import first_input_url, provisional_task_title, research_link
+from app.agent.helpers.web import first_input_url
 from app.agent.helpers.llm import (
     LLMMessage,
     MAX_TOOL_ITERATIONS,
@@ -38,13 +38,14 @@ from app.agent.helpers.precedents import (
     candidate_trace_ref,
     task_candidate_lines,
 )
-from app.agent.tools import INPUT_LINK_RESEARCH_TOOL, new_input_tools
+from app.agent.tools import new_input_tools
 from app.config import get_settings
 from app.db.clients import labels as labels_store
 from app.db.clients import tasks
 from app.db.clients.documents import CalendarMatch
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.event_context import apply_event_context, mentions_event
+from app.services.handoff.eligible import handoff_kinds, valid_handoff
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,6 @@ async def extract_task_fields(
     precedent_candidates: list[SimilarInput] | None = None,
     include_trace: bool = False,
     harvest_notes: bool = True,
-    research: bool = True,
 ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
     """Ask the LLM to extract task fields from a raw input.
 
@@ -92,7 +92,7 @@ async def extract_task_fields(
         session, raw, context_inputs, precedent_candidates, related_events
     )
     source_url = first_input_url(raw) if raw.source == "manual" else None
-    tools = new_input_tools(labels_store.agent_descriptions(session))
+    tools = new_input_tools(labels_store.agent_descriptions(session), handoff_kinds(raw))
     create_tool = next(t for t in tools if t["name"] == "create_task")
     if not harvest_notes:
         create_tool = _without_notes(create_tool)
@@ -100,13 +100,6 @@ async def extract_task_fields(
     calendar_tool = next(t for t in tools if t["name"] == "find_calendar_events")
     event_update_tool = next(t for t in tools if t["name"] == "update_event")
     extract_tools = [search_tool, calendar_tool, event_update_tool, create_tool]
-    research_enabled = bool(
-        source_url and research and getattr(settings, "task_web_search", False)
-        and getattr(settings, "gemini_api_key", "")
-    )
-    if research_enabled:
-        extract_tools.insert(0, INPUT_LINK_RESEARCH_TOOL)
-    researched_link = False
     if candidate_task_ids:
         extract_tools.append(next(tool for tool in tools if tool["name"] == "update_task"))
 
@@ -162,7 +155,7 @@ async def extract_task_fields(
 
         # Run lookups and event edits before accepting a terminal task action.
         search_uses = [tu for tu in tool_uses if tu.name in {
-            "search_notes", "find_calendar_events", "update_event", "research_input_link",
+            "search_notes", "find_calendar_events", "update_event",
         }]
         results = []
         for tu in search_uses:
@@ -170,22 +163,6 @@ async def extract_task_fields(
             changed_state = False
             if tu.name == "search_notes":
                 out = await run_search_notes(session, str(tin.get("query") or ""))
-            elif tu.name == "research_input_link":
-                if researched_link or not research_enabled:
-                    out = "Link research already attempted. Decide from the available facts."
-                else:
-                    researched_link = True
-                    extract_tools = [tool for tool in extract_tools if tool["name"] != "research_input_link"]
-                    out, web_trace = await research_link(
-                        source_url,
-                        settings,
-                        task_title=provisional_task_title(raw),
-                        task_context=raw.content,
-                    )
-                    out = out or "No page facts could be verified. Decide from the input."
-                    trace["web_search"] = web_trace or {
-                        "url": source_url, "status": "failed",
-                    }
             elif tu.name == "find_calendar_events":
                 out = await run_find_calendar_events(
                     session,
@@ -211,25 +188,10 @@ async def extract_task_fields(
                     tu.name,
                     tin,
                     out,
-                    status=(
-                        "failed" if tu.name == "research_input_link"
-                        and trace.get("web_search", {}).get("status") != "success"
-                        else "success"
-                    ),
                     changed_state=changed_state,
                 )
             )
             results.append(tool_result_message(tu, out))
-
-        if any(tu.name == "research_input_link" for tu in search_uses):
-            for tu in tool_uses:
-                if tu.name in {"create_task", "update_task"}:
-                    results.append(tool_result_message(
-                        tu, "Decide again after reading the link research result."
-                    ))
-            messages.append(assistant_message(resp))
-            messages.extend(results)
-            continue
 
         terminal_use = next(
             (tu for tu in tool_uses if tu.name in {"create_task", "update_task"}),
@@ -291,6 +253,11 @@ async def extract_task_fields(
     # trace and strip so they don't count as agent-extracted task fields.
     trace["reason"] = payload.pop("reason", None)
     trace["confidence"] = payload.pop("confidence", None)
+    handoff = valid_handoff(
+        payload.pop("handoff", None), raw, label=payload.get("label"), link=payload.get("link"),
+    )
+    if handoff:
+        trace["handoff"] = handoff
     attributes: dict[str, str | None] = valid_attributes(payload)
     for field in ATTRIBUTE_FIELDS:
         payload.pop(field, None)

@@ -34,7 +34,7 @@ def is_manual_for(
     for r in rows:
         by_task.setdefault(r.task_id, []).append(r.source)
     return {
-        tid: all(s in {"manual", "web_research"} for s in sources)
+        tid: all(s == "manual" for s in sources)
         for tid, sources in by_task.items()
     }
 

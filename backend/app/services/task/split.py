@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.agent.helpers.llm import chat, user_message
 from app.agent.triage.hints import split_hint as jev_split_hint
 from app.config import get_settings
+from app.db.clients import handoffs as handoffs_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.db.models.task import Task
@@ -334,6 +335,10 @@ async def maybe_split_task(
     session: Session, task: Task, *, split_hint: bool | None = None
 ) -> list[Task]:
     if getattr(task, "parent_task_id", None) or getattr(task, "is_container", False):
+        return []
+    # Splitting would turn the task into a parent, where the agent's result
+    # isn't shown. Only the user's explicit split still applies.
+    if handoffs_store.latest_for_task(session, task.id) is not None:
         return []
     long_task = (getattr(task, "estimation", None) or 0) > 120
     conjunction = _CONJUNCTION.search(getattr(task, "title", "") or "")

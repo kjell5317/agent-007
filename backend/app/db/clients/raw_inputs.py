@@ -181,7 +181,7 @@ def count_since(session: Session, ts: datetime) -> int:
     stmt = (
         select(func.count(RawInput.id))
         .where(RawInput.processed_at > ts,
-               RawInput.source.notin_(("manual", "web_research", "recurrence")))
+               RawInput.source.notin_(("manual", "recurrence")))
     )
     return int(session.execute(stmt).scalar_one() or 0)
 

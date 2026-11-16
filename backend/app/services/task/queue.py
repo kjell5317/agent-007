@@ -177,8 +177,6 @@ async def _process(
                     "context_inputs": context_inputs,
                     "include_trace": True,
                 }
-                if getattr(raw, "source", None) == "manual" and not is_override:
-                    extract_kwargs["research"] = False
                 if precedent_candidates:
                     extract_kwargs["precedent_candidates"] = precedent_candidates
                 extraction = await extract_task_fields(session, raw, **extract_kwargs)
@@ -291,8 +289,9 @@ async def _process(
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
         try:
+            # A task handed to an agent stays whole (see `maybe_split_task`).
             children = (
-                [] if (user_fields.get("estimation") or 0) > 180
+                [] if (user_fields.get("estimation") or 0) > 180 or agent_trace.get("handoff")
                 else await maybe_split_task(session, task)
             )
             if not children:
@@ -312,6 +311,10 @@ async def _process(
         session.commit()
         publish_input(session, raw_input_id)
         publish_task(session, task.id)
+        if handoff := agent_trace.get("handoff"):
+            from app.services.handoff.run import start as start_handoff
+
+            await start_handoff(session, task.id, handoff)
         if harvest:
             from app.agent.triage.runner import harvest_notes
 

@@ -37,7 +37,6 @@ from app.agent.tools.calendar_lookup import (
     run_update_event,
 )
 from app.agent.tools.notes_lookup import run_search_notes, save_notes
-from app.agent.helpers.web import first_input_url, provisional_task_title, research_link
 from app.agent.helpers.text import (
     append_meta_lines,
     normalize_agent_due_date,
@@ -52,8 +51,10 @@ from app.agent.helpers.precedents import (
     task_candidate_lines as _task_candidate_lines,
     truncate_inline as _truncate_inline,
 )
-from app.agent.tools import INPUT_LINK_RESEARCH_TOOL, new_input_tools
+from app.agent.tools import new_input_tools
 from app.config import get_settings
+from app.services.handoff.eligible import handoff_kinds, valid_handoff
+from app.services.handoff.run import start as start_handoff
 from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
 from app.services.task.build import task_create_from_fields
@@ -89,7 +90,6 @@ async def run_new_input_agent(
         )
 
     user_msg = _build_new_input_message(raw, task_candidates, not_task_signals, related_events)
-    source_url = first_input_url(raw)
 
     trace: dict[str, Any] = {
         "outcome": None,
@@ -111,14 +111,7 @@ async def run_new_input_agent(
         raw.id, len(task_candidates), len(not_task_signals),
     )
 
-    tools = new_input_tools(labels_store.agent_descriptions(session))
-    research_enabled = bool(
-        source_url and getattr(settings, "task_web_search", False)
-        and getattr(settings, "gemini_api_key", "")
-    )
-    if research_enabled:
-        tools.append(INPUT_LINK_RESEARCH_TOOL)
-    researched_link = False
+    tools = new_input_tools(labels_store.agent_descriptions(session), handoff_kinds(raw))
     done = False
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await chat(
@@ -161,22 +154,6 @@ async def run_new_input_agent(
                 event_id = None
                 if tu.name == "search_notes":
                     out = await run_search_notes(session, str(tin.get("query") or ""))
-                elif tu.name == "research_input_link":
-                    if researched_link or not research_enabled:
-                        out = "Link research already attempted. Decide from the available facts."
-                    else:
-                        researched_link = True
-                        tools = [tool for tool in tools if tool["name"] != "research_input_link"]
-                        out, web_trace = await research_link(
-                            source_url,
-                            settings,
-                            task_title=provisional_task_title(raw),
-                            task_context=raw.content,
-                        )
-                        out = out or "No page facts could be verified. Decide from the input."
-                        trace["web_search"] = web_trace or {
-                            "url": source_url, "status": "failed",
-                        }
                 elif tu.name == "find_calendar_events":
                     out = await run_find_calendar_events(
                         session,
@@ -229,10 +206,6 @@ async def run_new_input_agent(
                         status=(
                             "success"
                             if tu.name in {"search_notes", "find_calendar_events", "create_event"}
-                            or (
-                                tu.name == "research_input_link"
-                                and trace.get("web_search", {}).get("status") == "success"
-                            )
                             or changed_event
                             else "failed"
                         ),
@@ -248,14 +221,6 @@ async def run_new_input_agent(
                     )
                 )
                 results.append(tool_result_message(tu, out))
-            if researched_link and any(tu.name == "research_input_link" for tu in non_terminal_uses):
-                for tu in terminal_uses:
-                    results.append(tool_result_message(
-                        tu, "Decide again after reading the link research result."
-                    ))
-                messages.append(assistant_message(resp))
-                messages.extend(results)
-                continue
             if not terminal_uses:
                 messages.append(assistant_message(resp))
                 messages.extend(results)
@@ -297,6 +262,11 @@ async def run_new_input_agent(
             trace["task_title"] = task.title
             trace["reason"] = payload.get("reason")
             trace["confidence"] = payload.get("confidence")
+            handoff = valid_handoff(
+                payload.get("handoff"), raw, label=payload.get("label"), link=payload.get("link"),
+            )
+            if handoff:
+                trace["handoff"] = handoff
             saved = await save_notes(session, raw.id, payload.get("notes"))
             if saved:
                 trace["notes_saved"] = saved
@@ -311,7 +281,8 @@ async def run_new_input_agent(
             )
             final_status = "open"
             final_task_id = task.id
-            children = await maybe_split_task(session, task)
+            # A task handed to an agent stays whole (see `maybe_split_task`).
+            children = [] if handoff else await maybe_split_task(session, task)
             if not children:
                 await schedule_task(session, task)
             done = True
@@ -412,6 +383,8 @@ async def run_new_input_agent(
         agent_trace=trace,
     )
     session.commit()
+    if final_task_id is not None and trace.get("handoff"):
+        await start_handoff(session, final_task_id, trace["handoff"])
     return trace
 
 

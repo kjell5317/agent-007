@@ -26,6 +26,8 @@ def test_main_google_grant_excludes_health_and_unions_scopes(monkeypatch):
 
     scopes = query["scope"][0].split()
     assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
+    # Reply drafts; the Gmail client has no send method (test_email_draft.py).
+    assert "https://www.googleapis.com/auth/gmail.compose" in scopes
     assert "https://www.googleapis.com/auth/calendar.events" in scopes
     # Health lives on its own grant — the Health API rejects mixed-scope tokens.
     assert _HEALTH_SCOPE not in scopes

@@ -48,7 +48,7 @@ def repo_for_label(label: str | None) -> str:
     return KOTX_ISSUE_REPOS[label]
 
 
-async def create_issue_run(task) -> KotxIssueRun:
+async def create_issue_run(task, *, body: str | None = None) -> KotxIssueRun:
     repo = repo_for_label(task.label)
     if has_github_url(task.link):
         raise KotxUnsupportedTaskError("Task already has a GitHub URL")
@@ -62,7 +62,7 @@ async def create_issue_run(task) -> KotxIssueRun:
     payload = {
         "repo": repo,
         "title": task.title,
-        "body": task.description or "",
+        "body": body if body is not None else task.description or "",
     }
     headers = {"Authorization": f"Bearer {token}"}
 

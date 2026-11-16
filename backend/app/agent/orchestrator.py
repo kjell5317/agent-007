@@ -143,6 +143,10 @@ async def _process_raw_input(session: Session, raw_input_id: uuid.UUID) -> dict:
                     "branch=thread_followup · raw=%s task=%s (prior_raw=%s)",
                     raw_input_id, container.id, prior.id,
                 )
+                if raw.source == "gmail":
+                    from app.services.email.draft import mark_stale
+
+                    await mark_stale(session, task, raw)
                 if container.is_container:
                     return await run_thread_followup(
                         session, raw, container, subtasks=tasks.children(session, container.id)

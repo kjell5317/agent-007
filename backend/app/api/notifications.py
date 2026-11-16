@@ -32,6 +32,10 @@ from app.services.notify import (
     ACTION_CLOSE_TASK,
     ACTION_DAY,
     ACTION_DISMISS_TASK,
+    ACTION_DRAFT_DISCARD,
+    ACTION_DRAFT_REGENERATE,
+    ACTION_HANDOFF_ACCEPT,
+    ACTION_HANDOFF_DECLINE,
     ACTION_KOTX_APPROVE,
     ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
@@ -41,6 +45,8 @@ from app.services.notify import (
     ACTION_RESCHEDULE_TASK,
     clear_task_notification,
 )
+from app.services import handoff
+from app.services.email import draft as draft_svc
 from app.services.ntfy import action_secret, verify_action
 from app.services.plan.checkin import CHECKIN_ACTIONS, handle_checkin_action
 from app.services.points import adjust_points
@@ -98,8 +104,10 @@ def _check_secret(request: Request, payload: ActionPayload) -> None:
 
 def _resolve_task_id(payload: ActionPayload) -> uuid.UUID:
     raw = payload.task_id
-    if not raw and payload.tag and payload.tag.startswith("task-"):
-        raw = payload.tag[len("task-") :]
+    # Hand-off pushes use their own tag so they don't replace the task's push.
+    for prefix in ("task-", "handoff-"):
+        if not raw and payload.tag and payload.tag.startswith(prefix):
+            raw = payload.tag[len(prefix) :]
     if not raw:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -222,6 +230,34 @@ async def handle_action(
         result = await reschedule_task(session, task)
         if result is not None:
             publish_task(session, task.id)
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    if payload.action in (ACTION_HANDOFF_ACCEPT, ACTION_HANDOFF_DECLINE):
+        log.info("notify action · %s task=%s", payload.action, task.id)
+        try:
+            if payload.action == ACTION_HANDOFF_ACCEPT:
+                await handoff.accept(session, task)
+            else:
+                await handoff.decline(session, task)
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    if payload.action == ACTION_DRAFT_REGENERATE:
+        log.info("notify action · regenerate draft task=%s", task.id)
+        if background_tasks is not None:
+            background_tasks.add_task(draft_svc.regenerate_in_background, task.id)
+        else:
+            await draft_svc.regenerate_in_background(task.id)
+        return {"ok": True, "action": payload.action, "task_id": str(task.id)}
+
+    if payload.action == ACTION_DRAFT_DISCARD:
+        log.info("notify action · discard draft task=%s", task.id)
+        try:
+            await draft_svc.discard(session, task)
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        publish_task(session, task.id)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     kotx_fn_name = _KOTX_ACTIONS.get(payload.action)

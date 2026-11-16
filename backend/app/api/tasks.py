@@ -8,6 +8,10 @@
   * POST   /tasks/{task_id}/close       — mark done
   * POST   /tasks/{task_id}/not_task    — dismiss
   * POST   /tasks/{task_id}/reopen      — revive a closed/dismissed task
+  * POST   /tasks/{task_id}/handoff     — accept the proposed agent hand-off, or start one
+  * POST   /tasks/{task_id}/handoff/decline
+  * POST   /tasks/{task_id}/draft/regenerate — rewrite the reply draft
+  * POST   /tasks/{task_id}/draft/discard    — delete the reply draft
   * PUT    /tasks/{task_id}/recurrence  — make a task repeat / change its rule
   * DELETE /tasks/{task_id}/recurrence  — stop the task's series repeating
 
@@ -25,6 +29,7 @@ from app.db import SessionLocal, get_session
 from app.db.clients import route_cache as route_cache_store
 from app.db.clients import tasks as tasks_store
 from app.db.schemas.task import (
+    HandoffStart,
     LocationSuggestionsRead,
     TaskCreationAccepted,
     TaskOpenRequest,
@@ -41,6 +46,8 @@ from app.services.kotx import (
     create_issue_run,
     has_github_url,
 )
+from app.services import handoff
+from app.services.email import draft as draft_svc
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.create import create_manual_task
 from app.services.task.dismiss import cleanup_dismissed_container, dismiss_container, dismiss_task
@@ -422,3 +429,53 @@ async def reopen_task(
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return TaskCreationAccepted(raw_input_id=raw.id, status="processing")
+
+
+def _task_or_404(session: Session, task_id: uuid.UUID):
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    return row
+
+
+@router.post("/{task_id}/handoff", response_model=TaskRead)
+async def start_handoff(
+    task_id: uuid.UUID, body: HandoffStart | None = None, session: Session = Depends(get_session),
+) -> TaskRead:
+    row = _task_or_404(session, task_id)
+    try:
+        if body is not None and body.kind is not None:
+            await handoff.start_manual(session, row, body.kind, body.brief)
+        else:
+            await handoff.accept(session, row)
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
+    return task_read(session, row, status_, is_manual)
+
+
+@router.post("/{task_id}/handoff/decline", status_code=status.HTTP_204_NO_CONTENT)
+async def decline_handoff(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
+    try:
+        await handoff.decline(session, _task_or_404(session, task_id))
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.post("/{task_id}/draft/regenerate", status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_draft(
+    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session),
+) -> None:
+    _task_or_404(session, task_id)
+    background_tasks.add_task(draft_svc.regenerate_in_background, task_id)
+
+
+@router.post("/{task_id}/draft/discard", status_code=status.HTTP_204_NO_CONTENT)
+async def discard_draft(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
+    row = _task_or_404(session, task_id)
+    try:
+        await draft_svc.discard(session, row)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    publish_task(session, task_id)

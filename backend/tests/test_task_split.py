@@ -383,8 +383,8 @@ async def test_maybe_split_asks_jev_only_for_a_conjunction_cue(monkeypatch):
     monkeypatch.setattr(split, "jev_split_hint", hint)
     monkeypatch.setattr(split, "split_task", never_split)
 
-    cue = SimpleNamespace(title="Watch Tom and Jerry", estimation=30, parent_task_id=None, is_container=False)
-    plain = SimpleNamespace(title="Gym", estimation=30, parent_task_id=None, is_container=False)
+    cue = SimpleNamespace(id=uuid.uuid4(), title="Watch Tom and Jerry", estimation=30, parent_task_id=None, is_container=False)
+    plain = SimpleNamespace(id=uuid.uuid4(), title="Gym", estimation=30, parent_task_id=None, is_container=False)
     assert await split.maybe_split_task(None, cue) == []
     assert await split.maybe_split_task(None, plain) == []
     assert asked == ["Watch Tom and Jerry"]
@@ -400,5 +400,5 @@ async def test_maybe_split_keeps_the_conjunction_rule_without_jev(monkeypatch):
 
     monkeypatch.setattr(split, "jev_split_hint", no_hint)
     monkeypatch.setattr(split, "split_task", fake_split)
-    cue = SimpleNamespace(title="Wash and dry laundry", estimation=30, parent_task_id=None, is_container=False)
+    cue = SimpleNamespace(id=uuid.uuid4(), title="Wash and dry laundry", estimation=30, parent_task_id=None, is_container=False)
     assert await split.maybe_split_task(None, cue) == ["child"]
