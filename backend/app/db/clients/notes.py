@@ -35,16 +35,6 @@ def find_exact(session: Session, content: str) -> Note | None:
     ).scalar_one_or_none()
 
 
-def find_exact_before(session: Session, content: str, note: Note) -> Note | None:
-    return session.execute(
-        select(Note).where(
-            func.lower(func.trim(Note.content)) == content.strip().lower(),
-            (Note.created_at < note.created_at)
-            | ((Note.created_at == note.created_at) & (Note.id < note.id)),
-        ).order_by(Note.created_at, Note.id).limit(1)
-    ).scalar_one_or_none()
-
-
 def add_source(session: Session, note_id: uuid.UUID, raw_input_id: uuid.UUID | None) -> None:
     note = session.get(Note, note_id)
     if note is not None:
@@ -52,19 +42,6 @@ def add_source(session: Session, note_id: uuid.UUID, raw_input_id: uuid.UUID | N
         if raw_input_id is not None and str(raw_input_id) not in sources:
             note.source_raw_input_ids = [*sources, str(raw_input_id)]
         note.updated_at = func.now()
-
-
-def absorb_sources(session: Session, target_id: uuid.UUID, source: Note) -> None:
-    target = session.get(Note, target_id)
-    if target is None:
-        return
-    source_ids = list(source.source_raw_input_ids or [])
-    if source.source_raw_input_id:
-        source_ids.append(str(source.source_raw_input_id))
-    target.source_raw_input_ids = list(dict.fromkeys([*(target.source_raw_input_ids or []), *source_ids]))
-    if target.source_raw_input_id is None and source.source_raw_input_id is not None:
-        target.source_raw_input_id = source.source_raw_input_id
-    target.updated_at = func.now()
 
 
 def mark_review(session: Session, note_id: uuid.UUID) -> None:
@@ -102,8 +79,6 @@ _SIMILAR_NOTES_SQL = text(
         WHERE n.embedding IS NOT NULL
           AND NOT n.needs_review
           AND (CAST(:source AS text) IS NULL OR coalesce(sr.source, 'chat') = :source)
-          AND (CAST(:before_at AS timestamptz) IS NULL OR (n.created_at, n.id) <
-               (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
           AND (1.0 - (n.embedding <=> CAST(:emb AS vector))) >= :min_sim
         ORDER BY n.embedding <=> CAST(:emb AS vector)
         LIMIT :pool
@@ -115,8 +90,6 @@ _SIMILAR_NOTES_SQL = text(
         WHERE q.tsq @@ n.tsv
           AND NOT n.needs_review
           AND (CAST(:source AS text) IS NULL OR coalesce(sr.source, 'chat') = :source)
-          AND (CAST(:before_at AS timestamptz) IS NULL OR (n.created_at, n.id) <
-               (CAST(:before_at AS timestamptz), CAST(:before_id AS uuid)))
         ORDER BY ts_rank_cd(n.tsv, q.tsq) DESC
         LIMIT :pool
     ),
@@ -154,7 +127,6 @@ def search_similar(
     query: str,
     k: int = 5,
     min_similarity: float = 0.0,
-    before: Note | None = None,
     source: str | None = None,
 ) -> list[SimilarNote]:
     """Top-k notes by hybrid similarity + keyword (RRF over pgvector and FTS),
@@ -172,8 +144,6 @@ def search_similar(
             "half_life_days": half_life_days,
             "min_sim": min_similarity,
             "source": source,
-            "before_at": before.created_at.isoformat() if before else None,
-            "before_id": str(before.id) if before else None,
         },
     ).all()
     return [

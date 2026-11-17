@@ -1,20 +1,16 @@
-"""Regression coverage for nullable cursor parameters in note search."""
+"""Regression coverage for note and message search query building."""
 
 from app.db.clients import notes, search
 
 
-def test_numeric_note_query_types_null_cursor(monkeypatch):
+def test_numeric_note_query_is_passed_as_text(monkeypatch):
     class Result:
         def all(self):
             return []
 
     class Session:
         def execute(self, statement, params):
-            sql = str(statement)
-            assert sql.count("CAST(:before_at AS timestamptz) IS NULL") == 2
-            assert ":before_at IS NULL" not in sql
             assert params["raw_q"] == "3. Januar"
-            assert params["before_at"] is None
             return Result()
 
     assert notes.search_similar(Session(), embedding=[0.1, 0.2], query="3. Januar") == []

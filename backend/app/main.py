@@ -39,7 +39,6 @@ from app.auth.middleware import AuthMiddleware
 from app.config import get_settings
 from app.services import github
 from app.services.task import queue as task_queue
-from app.services.note.startup import moderate_existing_notes
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _ASSETS_DIR = _STATIC_DIR / "assets"
@@ -65,17 +64,11 @@ def _configure_logging(level: str) -> None:
 async def _lifespan(_app: FastAPI):
     await task_queue.start()
     await cron.start()
-    moderation_task = asyncio.create_task(moderate_existing_notes(), name="moderate-existing-notes")
     github_task = asyncio.create_task(github.warm_repo_cache(), name="github-repo-cache")
     try:
         yield
     finally:
         github_task.cancel()
-        moderation_task.cancel()
-        try:
-            await moderation_task
-        except asyncio.CancelledError:
-            pass
         await cron.stop()
         await task_queue.stop()
         observability.shutdown()

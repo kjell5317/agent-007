@@ -5,7 +5,6 @@ import pytest
 
 from app.agent.helpers import llm
 from app.services.note import moderate
-from app.services.note import startup
 
 
 @pytest.mark.asyncio
@@ -26,38 +25,6 @@ async def test_exact_note_is_skipped_and_source_is_recorded(monkeypatch):
     )
     assert decision.action == "skip"
     assert linked == [(note_id, source_id)]
-
-
-@pytest.mark.asyncio
-async def test_historical_moderation_accepts_null_initial_checkpoint(monkeypatch):
-    class Session:
-        committed = False
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def execute(self, statement, params=None):
-            sql = str(statement)
-            if "pg_try_advisory_xact_lock" in sql:
-                return SimpleNamespace(scalar=lambda: True)
-            if "FROM note_moderation_checkpoint" in sql:
-                return SimpleNamespace(one=lambda: SimpleNamespace(
-                    last_created_at=None, last_note_id=None,
-                ))
-            assert "CAST(:last_at AS timestamptz) IS NULL" in sql
-            assert params == {"last_at": None, "last_id": None}
-            return SimpleNamespace(first=lambda: None)
-
-        def commit(self):
-            self.committed = True
-
-    session = Session()
-    monkeypatch.setattr(startup, "SessionLocal", lambda: session)
-    await startup.moderate_existing_notes()
-    assert session.committed
 
 
 @pytest.mark.asyncio
@@ -97,22 +64,36 @@ async def test_related_note_can_merge_without_creating_another(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_existing_duplicate_absorbs_sources_and_removes_later_note(monkeypatch):
-    older = SimpleNamespace(id=uuid.uuid4(), content="Alice prefers afternoons")
-    later = SimpleNamespace(id=uuid.uuid4(), content=older.content)
-    actions = []
-    monkeypatch.setattr(moderate.notes_store, "find_exact_before",
-                        lambda _session, _content, note: older if note is later else None)
-    monkeypatch.setattr(moderate.notes_store, "absorb_sources",
-                        lambda _session, target, source: actions.append(("absorb", target, source.id)))
-    monkeypatch.setattr(moderate.notes_store, "delete",
-                        lambda _session, note_id: actions.append(("delete", note_id)))
+async def test_create_without_content_stores_proposal_as_is(monkeypatch):
+    embedded = []
+    created = []
+    monkeypatch.setattr(moderate.notes_store, "find_exact", lambda *_: None)
 
-    decision = await moderate.moderate_note(object(), later.content, existing=later,
-                                            raise_on_error=True)
+    async def fake_embed(text):
+        embedded.append(text)
+        return [0.1]
 
-    assert decision.note_id == older.id
-    assert actions == [("absorb", older.id, later.id), ("delete", later.id)]
+    monkeypatch.setattr(moderate, "embed", fake_embed)
+    monkeypatch.setattr(moderate.notes_store, "search_similar", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        moderate.notes_store, "create",
+        lambda _session, **kwargs: created.append(kwargs) or SimpleNamespace(
+            id=uuid.uuid4(), content=kwargs["content"],
+        ),
+    )
+
+    async def fake_chat(*_args, **_kwargs):
+        return SimpleNamespace(tool_calls=[SimpleNamespace(
+            name="moderate_note", input={"action": "create"},
+        )])
+
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    decision = await moderate.moderate_note(object(), "Alice is the new lead")
+
+    assert decision.action == "create"
+    assert decision.content == "Alice is the new lead"
+    assert created[0]["content"] == "Alice is the new lead"
+    assert embedded == ["Alice is the new lead"]
 
 
 async def _embed():
