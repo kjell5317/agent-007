@@ -15,7 +15,6 @@ All paths return `SearchHit`s so the runner renders one uniform record.
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -31,13 +30,12 @@ from app.db.clients import search as search_client
 from app.db.clients.chat_answers import SimilarAnswer
 from app.db.clients import tasks as tasks_store
 from app.db.clients.search import INPUT, NOTE, TASK
-from app.db.models.raw_input import RawInput
 from app.db.schemas.search import SearchHit
 from app.services.calendar.cache import EVENT_DETAIL_CHARS, event_metadata
 from app.services.calendar.client import CalendarEvent
 from app.services.calendar.events import list_events_between
 from app.services.input.embedding import embed
-from app.services.source_url import source_url_for_raw_input
+from app.services.search.suggest import attach_input_source_urls
 
 # Pre-injection is the app's own task-tracking data: keyword-matched tasks and
 # semantically-matched notes. Inputs, calendar, Drive and external sources are
@@ -128,7 +126,7 @@ async def search_messages(
     for hit in hits:
         if hit.snippet and len(hit.snippet) > search_client.MESSAGE_CONTENT_CHARS:
             hit.snippet = hit.snippet[:search_client.MESSAGE_CONTENT_CHARS].rstrip() + "…"
-    _attach_input_source_urls(session, hits)
+    attach_input_source_urls(session, hits)
     return hits
 
 
@@ -309,7 +307,7 @@ async def _calendar_window(
     events = await list_events_between(
         session, calendar_ids=[calendar_id], time_min=start, time_max=end
     )
-    return [_calendar_event_hit(e) for e in events]
+    return [calendar_event_hit(e) for e in events]
 
 
 def _note_hit(h) -> SearchHit:
@@ -354,7 +352,7 @@ def _calendar_match_hit(m) -> SearchHit:
     )
 
 
-def _calendar_event_hit(e: CalendarEvent) -> SearchHit:
+def calendar_event_hit(e: CalendarEvent) -> SearchHit:
     return SearchHit(
         type="document",
         id=e.id,
@@ -392,17 +390,3 @@ def _event_meta(
     if ends_at is not None:
         meta["end"] = ends_at.isoformat()
     return meta
-
-
-def _attach_input_source_urls(session: Session, hits: list[SearchHit]) -> None:
-    """Give input hits a deep link to their source (gmail thread, Slack message)
-    so a citation can jump to the original."""
-    for hit in hits:
-        if hit.type != "input" or hit.url:
-            continue
-        try:
-            raw = session.get(RawInput, uuid.UUID(hit.id))
-        except ValueError:
-            continue
-        if raw is not None:
-            hit.url = source_url_for_raw_input(raw)

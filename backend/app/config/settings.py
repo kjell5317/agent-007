@@ -41,8 +41,6 @@ class Settings(BaseSettings):
     llm_provider: str = "anthropic"
     llm_model: str = ""
     anthropic_api_key: str = ""
-    # Deprecated compatibility alias. Prefer LLM_MODEL.
-    claude_model: str = ""
     # Per-agent overrides — blank falls back to the global LLM_PROVIDER/LLM_MODEL.
     # The interactive chat runs on Gemini Flash (breadth + cheap, cache not
     # needed) while the background extraction agent stays on the cached Anthropic
@@ -140,6 +138,8 @@ class Settings(BaseSettings):
     search_chat_messages_limit: int = 3
     search_chat_contacts_limit: int = 8
     search_contacts_timeout_seconds: float = 4.0
+    # The events filter asks Google Calendar on every keystroke, so it gives up sooner.
+    search_calendar_timeout_seconds: float = 3.0
     # Inputs whose cleaned content is shorter than this (chars) are noise (bare
     # "ok", "thanks", empty replies). They're skipped entirely at ingestion (the
     # preprocessing boundary in `input.create.drain`, kotx excepted) so they're
@@ -303,7 +303,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_llm_model(self) -> str:
-        return self.llm_model.strip() or self.claude_model.strip() or DEFAULT_ANTHROPIC_MODEL
+        return self.llm_model.strip() or DEFAULT_ANTHROPIC_MODEL
 
     def llm_target(self, agent: str) -> tuple[str, str]:
         """(provider, model) for a named agent flow, each field falling back to

@@ -48,8 +48,8 @@ Events vs. tasks — these are different things:
 - An invitation, appointment, talk, or announcement is NOT a task just
   because it arrived, and attending an event is not a task. If the input
   describes an event the user should have on their calendar, add it with
-  `create_event` (after `find_calendar_events` confirms it isn't already
-  there), then finish with `mark_not_task`.
+  `create_event` and the `label` that fits it (after `find_calendar_events`
+  confirms it isn't already there), then finish with `mark_not_task`.
 - If the input corrects or reschedules an existing calendar event, call
   `find_calendar_events` to get the existing event id, then call
   `update_event` with only the changed event fields, then finish with

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
+from app.agent.helpers.precedents import candidate_title  # noqa: E402
+from app.agent.helpers.tool_results import tool_result_entry  # noqa: E402
 from app.agent.input import runner  # noqa: E402
 from app.agent.prompts import (  # noqa: E402
     EXTRACT_FIELDS_SYSTEM_PROMPT,
@@ -115,13 +117,13 @@ def test_new_input_prompt_renders_not_task_context(monkeypatch):
 def test_not_task_title_falls_back_to_first_content_line():
     hit = _hit(subject=None, content_snippet="\n\nFirst meaningful line\nSecond line")
 
-    assert runner._candidate_title(hit) == "First meaningful line"
+    assert candidate_title(hit) == "First meaningful line"
 
 
 def test_candidate_title_falls_back_to_sender_without_placeholder():
     hit = _hit(subject=None, content_snippet="", sender="Ada Lovelace")
 
-    assert runner._candidate_title(hit) == "gmail from Ada Lovelace"
+    assert candidate_title(hit) == "gmail from Ada Lovelace"
 
 
 def test_candidate_trace_ref_includes_readable_evidence_fields():
@@ -147,7 +149,7 @@ def test_candidate_trace_ref_includes_readable_evidence_fields():
 
 
 def test_tool_result_entry_records_status_purpose_and_artifacts():
-    entry = runner._tool_result_entry(
+    entry = tool_result_entry(
         "create_task",
         {"title": "Send Q2 report", "api_key": "secret"},
         "created task 10000000-0000-0000-0000-000000000001",

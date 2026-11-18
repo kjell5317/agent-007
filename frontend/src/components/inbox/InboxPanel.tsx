@@ -14,7 +14,6 @@ interface Props {
   unseenInputIds: ReadonlySet<string>;
   onInputsVisible: (ids: string[]) => void;
   onOpenTask: (id: string) => void;
-  onActivate?: (input: RawInput) => void;
 }
 
 export function InboxPanel({
@@ -25,7 +24,6 @@ export function InboxPanel({
   unseenInputIds,
   onInputsVisible,
   onOpenTask,
-  onActivate,
 }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -86,7 +84,6 @@ export function InboxPanel({
             unseen={unseenInputIds.has(group.newest.id)}
             onVisible={(id) => onInputsVisible([id])}
             onOpenTask={onOpenTask}
-            onActivate={() => onActivate?.(group.newest)}
           />
         ) : (
           <InboxGroup
@@ -94,7 +91,6 @@ export function InboxPanel({
             group={group}
             onChanged={onChanged}
             onOpenTask={onOpenTask}
-            onActivate={() => onActivate?.(group.newest)}
             unseenMemberIds={group.members
               .filter((member) => unseenInputIds.has(member.id))
               .map((member) => member.id)}

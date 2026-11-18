@@ -41,6 +41,19 @@ async def test_list_notes_returns_enriched_reads(monkeypatch):
     assert payload["source_from"] == "alice@example.com"
 
 
+def test_get_note_returns_one_note_or_404(monkeypatch):
+    item = _item(uuid.uuid4())
+    monkeypatch.setattr(
+        notes_api.notes_store, "get_item",
+        lambda _s, note_id: item if note_id == item.id else None,
+    )
+
+    assert notes_api.get_note(item.id, session=object()).content == item.content
+    with pytest.raises(HTTPException) as exc_info:
+        notes_api.get_note(uuid.uuid4(), session=object())
+    assert exc_info.value.status_code == 404
+
+
 def test_list_notes_filters_source_before_limit():
     from app.db.clients import notes as notes_store
 

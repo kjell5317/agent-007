@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.agent.helpers.text import parse_iso
 from app.config import get_settings
 from app.db.clients import documents as documents_store
+from app.db.clients import labels as labels_store
 from app.db.clients.documents import CalendarMatch
 from app.services.calendar.cache import EVENT_DETAIL_CHARS, event_metadata
 from app.services.calendar.events import (
@@ -226,6 +227,7 @@ async def run_create_event(
     end: str | None = None,
     description: str | None = None,
     location: str | None = None,
+    label: str | None = None,
 ) -> tuple[str, str | None]:
     """Create the event; return (message_for_llm, event_id_or_None)."""
     settings = get_settings()
@@ -235,6 +237,15 @@ async def run_create_event(
         return "create_event: no calendar configured — event not created.", None
     if not summary.strip():
         return "create_event: `summary` is required.", None
+    # Label ids are opaque and mixed-case: pass Google's id through untouched.
+    event_label_id = labels_store.google_id_for(session, label)
+    if event_label_id is None:
+        known = labels_store.agent_descriptions(session)
+        if label or known:
+            return (
+                f"create_event: `label` must be one of: {', '.join(known)}. Event not created.",
+                None,
+            )
     start_dt = parse_iso(start)
     if start_dt is None:
         return "create_event: `start` is required.", None
@@ -251,10 +262,12 @@ async def run_create_event(
         end=end_dt,
         description=description,
         location=location,
+        event_label_id=event_label_id,
         private_properties={PROP_KIND: KIND_INVITATION, PROP_CREATED_BY: CREATED_BY_AGENT},
     )
+    labelled = f" labelled {label}" if event_label_id else ""
     return (
-        f"create_event: added '{summary}' at {start_dt.astimezone(tz).isoformat()} "
+        f"create_event: added '{summary}' at {start_dt.astimezone(tz).isoformat()}{labelled} "
         f"with id={event.id} calendar_id={calendar_id}.",
         event.id,
     )

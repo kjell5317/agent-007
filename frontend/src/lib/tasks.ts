@@ -104,7 +104,11 @@ export function compareTasksByDue(a: Task, b: Task): number {
   return compareCreatedNewestFirst(a, b);
 }
 
+// Deferred tasks have no slot yet, so the schedule order would float them to
+// the top; they only matter once everything planned is out of the way.
 export function compareTasks(a: Task, b: Task, mode: TaskSortMode): number {
+  const deferredOrder = Number(a.schedule_status === "deferred") - Number(b.schedule_status === "deferred");
+  if (deferredOrder !== 0) return deferredOrder;
   return mode === "due" ? compareTasksByDue(a, b) : compareTasksBySchedule(a, b);
 }
 

@@ -165,6 +165,26 @@ async def test_manual_composer_content_is_not_enqueued_as_title(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manual_composer_fields_ride_the_queue_next_to_the_content(monkeypatch):
+    enqueued = []
+
+    async def fake_enqueue(raw_input_id, user_fields):
+        enqueued.append((raw_input_id, user_fields))
+
+    monkeypatch.setattr(create_svc, "enqueue", fake_enqueue)
+    monkeypatch.setattr(create_svc, "publish_input", lambda *_args: None)
+    due = datetime(2026, 11, 20, 17, 0, tzinfo=timezone.utc)
+
+    raw = await create_svc.create_manual_task(
+        FakeSession(),
+        {"content": "Renew passport", "due_date": due, "label": "Admin", "estimation": 45},
+    )
+
+    assert raw.content == "Renew passport"
+    assert enqueued == [(raw.id, {"due_date": due, "label": "Admin", "estimation": 45})]
+
+
+@pytest.mark.asyncio
 async def test_short_manual_input_creates_task_when_extraction_fails(monkeypatch):
     raw_id = uuid.uuid4()
     raw = SimpleNamespace(
@@ -525,6 +545,81 @@ async def test_manual_queue_structured_title_overrides_extracted_title(monkeypat
     await task_queue._process(raw_id, {"title": "Explicit title"}, [])
 
     assert created_payloads[0].title == "Explicit title"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extractor", ["llm", "jev"])
+async def test_manual_composer_fields_override_whatever_the_agent_extracts(monkeypatch, extractor):
+    from app.agent.triage import runner as triage_runner
+
+    raw_id = uuid.uuid4()
+    raw = SimpleNamespace(
+        id=raw_id, task_id=None, processed_at=None, agent_trace=None, status="processing",
+        source="manual", content="Renew passport", source_metadata={"manual": True},
+        embedding=[0.0],
+    )
+    session = SimpleNamespace(commit=lambda: None)
+    created_payloads = []
+    learned = []
+    user_due = datetime(2026, 11, 20, 17, 0, tzinfo=timezone.utc)
+    extracted = {
+        "title": "Renew passport at the Bürgerbüro",
+        "estimation": 90,
+        "due_date": datetime(2026, 12, 1, 9, 0, tzinfo=timezone.utc),
+        "label": "Errands",
+    }
+
+    class FakeSessionLocal:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *_args):
+            return None
+
+    async def fake_extract_task_fields(*_args, **_kwargs):
+        if extractor == "jev":
+            raise AssertionError("Jev answered; the LLM extractor must not run")
+        return dict(extracted), {"branch": "manual", "iterations": []}
+
+    async def fake_jev_manual(_session, _raw, _user_fields):
+        return triage_runner.ManualOutcome(dict(extracted), {"branch": "manual", "agent": "jev"})
+
+    def fake_create(_session, payload):
+        created_payloads.append(payload)
+        return SimpleNamespace(id=uuid.uuid4(), scheduled_date=None)
+
+    async def no_split(*_args):
+        return []
+
+    async def fake_schedule_task(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(task_queue, "SessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(task_queue.raw_inputs_store, "get", lambda *_args: raw)
+    monkeypatch.setattr(task_queue.jev, "configured", lambda _settings: extractor == "jev")
+    monkeypatch.setattr(triage_runner, "manual", fake_jev_manual)
+    monkeypatch.setattr(task_queue, "extract_task_fields", fake_extract_task_fields)
+    monkeypatch.setattr(task_queue, "_collect_extraction_precedents", lambda *_args: _none())
+    monkeypatch.setattr(task_queue, "with_learned_estimate", lambda _s, task: learned.append(task) or task)
+    monkeypatch.setattr(task_queue.tasks_store, "create", fake_create)
+    monkeypatch.setattr(task_queue, "maybe_split_task", no_split)
+    monkeypatch.setattr(task_queue, "schedule_task", fake_schedule_task)
+    monkeypatch.setattr(task_queue, "publish_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(task_queue, "publish_input", lambda *_args, **_kwargs: None)
+
+    await task_queue._process(
+        raw_id, {"due_date": user_due, "label": "Admin", "estimation": 30}, []
+    )
+
+    task = created_payloads[0]
+    assert task.title == "Renew passport at the Bürgerbüro"
+    assert (task.due_date, task.label, task.estimation) == (user_due, "Admin", 30)
+    assert learned == []
+    assert raw.agent_trace["user_provided"] == ["due_date", "estimation", "label"]
+
+
+async def _none():
+    return None
 
 
 @pytest.mark.asyncio

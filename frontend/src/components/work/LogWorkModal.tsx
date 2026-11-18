@@ -1,9 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { LabelPicker } from "@/components/ui/label-picker";
 import { Modal } from "@/components/ui/modal";
-import { useLabels } from "@/hooks/useLabels";
 import { api, type WorkSpan } from "@/lib/api";
 import { fromZonedInputValue, toZonedInputValue } from "@/lib/dates";
 import { toast } from "@/lib/toast";
@@ -57,7 +55,7 @@ function useSubmitting() {
   return { busy, error, run };
 }
 
-// Complete on a task that was never started: ask when the work happened, but
+// Complete with work done outside a live session: ask when it happened, but
 // never block closing it.
 export function CompleteLogSheet({
   onLog,
@@ -94,56 +92,42 @@ export function CompleteLogSheet({
   );
 }
 
-// Work that was never a task: creates it, logs the span and closes it.
+// Work that was never a task: creates it, logs the span and closes it. The
+// title and label come from the composer.
 export function LogWorkModal({
+  title,
+  label,
   onClose,
   onLogged,
 }: {
+  title: string;
+  label: string | null;
   onClose: () => void;
-  onLogged: () => Promise<void> | void;
+  onLogged: () => void;
 }) {
-  const labels = useLabels();
-  const [title, setTitle] = useState("");
-  const [label, setLabel] = useState("");
   const { span, fields } = useSpanDraft();
   const { busy, error, run } = useSubmitting();
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!span || !title.trim()) return;
-    void run(async () => {
-      await api.logSpontaneousWork({ title: title.trim(), ...span, ...(label ? { label } : {}) });
+    if (span) void run(async () => {
+      await api.logSpontaneousWork({ title, ...span, ...(label ? { label } : {}) });
       toast.success("Work logged");
-      onClose();
-      void Promise.resolve(onLogged()).catch(() => {});
+      onLogged();
     });
   };
 
   return (
     <Modal open onClose={onClose} title="Log work">
       <form onSubmit={submit} className="space-y-4" autoComplete="off">
-        <Field id="work-title" label="What did you do?">
-          <Input
-            id="work-title"
-            autoFocus
-            required
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            autoCapitalize="sentences"
-            className="h-10"
-          />
-        </Field>
+        <p className="line-clamp-2 break-words text-sm font-medium" title={title}>{title}</p>
         {fields}
-        <div className="space-y-1.5">
-          <span className={FIELD_LABEL_CLASS}>Label</span>
-          <LabelPicker value={label} onChange={setLabel} labels={labels} />
-        </div>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <div className="flex gap-2">
           <Button type="button" variant="outline" className="flex-1" disabled={busy} onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" className="flex-1" disabled={busy || !span || !title.trim()}>
+          <Button type="submit" className="flex-1" disabled={busy || !span}>
             Log
           </Button>
         </div>

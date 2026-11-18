@@ -43,21 +43,6 @@ def get(session: Session, raw_input_id: uuid.UUID) -> RawInput | None:
     return session.get(RawInput, raw_input_id)
 
 
-def list_(
-    session: Session,
-    *,
-    status: str | None = None,
-    source: str | None = None,
-    limit: int = 100,
-) -> list[RawInput]:
-    stmt = select(RawInput).order_by(RawInput.received_at.desc()).limit(limit)
-    if status is not None:
-        stmt = stmt.where(RawInput.status == status)
-    if source is not None:
-        stmt = stmt.where(RawInput.source == source)
-    return list(session.execute(stmt).scalars())
-
-
 # Inputs the app generates itself rather than receives.
 GENERATED_SOURCES = ("subtask", "recurrence")
 

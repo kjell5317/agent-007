@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -74,7 +75,28 @@ def _end(session: Session, task: Task, row: WorkSession, at: datetime, reason: s
 
 
 # Strong references: the loop only keeps weak ones to running tasks.
-_solves: set[asyncio.Task] = set()
+_jobs: set[asyncio.Task] = set()
+
+
+def _later(what: str, step: Callable[[Session], Awaitable[None]]) -> None:
+    """Work after a tap's answer, in a session of its own."""
+
+    async def run() -> None:
+        from app.db import SessionLocal
+
+        try:
+            with SessionLocal() as session:
+                await step(session)
+        except Exception:  # noqa: BLE001 — the next solve / sweep catches up
+            log.exception("work · background %s failed", what)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    job = loop.create_task(run())
+    _jobs.add(job)
+    job.add_done_callback(_jobs.discard)
 
 
 def _solve_later(task_id: uuid.UUID | None = None, *, block: Interval | None = None) -> None:
@@ -82,29 +104,18 @@ def _solve_later(task_id: uuid.UUID | None = None, *, block: Interval | None = N
     first. With a `task_id`, that task is re-planned (kept out of `block`);
     without, everything is."""
 
-    async def run() -> None:
-        from app.db import SessionLocal
+    async def solve(session: Session) -> None:
         from app.services.plan.replan import request_replan
 
-        try:
-            with SessionLocal() as session:
-                if task_id is None:
-                    await request_replan(session, reason="work_session")
-                    return
-                task = tasks_store.get(session, task_id)
-                if task is not None:
-                    await schedule_task(session, task, block=block)
-                    publish_task(session, task.id)
-        except Exception:  # noqa: BLE001 — the next solve picks the task up
-            log.exception("work · background solve failed task=%s", task_id)
+        if task_id is None:
+            await request_replan(session, reason="work_session")
+            return
+        task = tasks_store.get(session, task_id)
+        if task is not None:
+            await schedule_task(session, task, block=block)
+            publish_task(session, task.id)
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    job = loop.create_task(run())
-    _solves.add(job)
-    job.add_done_callback(_solves.discard)
+    _later(f"solve task={task_id}", solve)
 
 
 def _replan_rest(task: Task, now: datetime, reason: str) -> None:
@@ -133,8 +144,13 @@ async def start_task(session: Session, task: Task, *, now: datetime | None = Non
     task.running_since = now
     task.waiting_since = None
     await pin_running(session, task, start=now, minutes=remaining_minutes(task, get_settings()))
-    await clear_task_notifications(session, task.id, kinds={"start_cue", "new_task"})
     publish_task(session, task.id)
+    task_id = task.id
+    # Each clear is a push round-trip, and nothing waits on them.
+    _later(
+        "push clear",
+        lambda s: clear_task_notifications(s, task_id, kinds={"start_cue", "new_task"}),
+    )
     if switched is not None:
         publish_task(session, switched.id)
         # Its solve also moves whatever sat where the new session runs.

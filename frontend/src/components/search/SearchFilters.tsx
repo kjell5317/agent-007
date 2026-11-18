@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
+import { sourceLabel } from "@/lib/inbox";
 import { labelChipOutlineStyle, labelChipStyle } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
-export type SearchKind = "tasks" | "messages" | "events" | "files" | "contacts" | "notes";
+export type SearchKind = "tasks" | "messages" | "events" | "files" | "contacts" | "notes" | "github";
 
 export interface SearchFiltersState {
   kind: SearchKind | null;
   label: string;
   source: string;
   format: string;
+  // Tasks only, combined with each other and the label: closed instead of
+  // open tasks, and only the ones that repeat.
+  closed: boolean;
+  recurring: boolean;
 }
 
 export const EMPTY_SEARCH_FILTERS: SearchFiltersState = {
@@ -18,6 +23,8 @@ export const EMPTY_SEARCH_FILTERS: SearchFiltersState = {
   label: "",
   source: "",
   format: "",
+  closed: false,
+  recurring: false,
 };
 
 const KINDS: { key: SearchKind; label: string }[] = [
@@ -27,11 +34,13 @@ const KINDS: { key: SearchKind; label: string }[] = [
   { key: "events", label: "Events" },
   { key: "files", label: "Files" },
   { key: "contacts", label: "Contacts" },
+  { key: "github", label: "GitHub" },
 ];
 
-function sourceLabel(source: string): string {
-  return source.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-}
+const TASK_TOGGLES: { key: "closed" | "recurring"; label: string }[] = [
+  { key: "closed", label: "Closed" },
+  { key: "recurring", label: "Recurring" },
+];
 
 const pillBase = "inline-flex h-7 max-w-40 shrink-0 items-center rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const childPill = (selected: boolean) => cn(
@@ -96,6 +105,17 @@ export function SearchFilters({
           )}
         >
           {kind.label}
+        </button>
+      ))}
+      {filters.kind === "tasks" && TASK_TOGGLES.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          aria-pressed={filters[key]}
+          onClick={() => onChange({ ...filters, [key]: !filters[key] })}
+          className={childPill(filters[key])}
+        >
+          {label}
         </button>
       ))}
       {filters.kind === "tasks" && (

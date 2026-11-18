@@ -91,6 +91,7 @@ _SCOPE_TOOLS = {
     "events": {"calendar_search"},
     "files": {"drive_search"},
     "contacts": {"contacts_search"},
+    "github": {"github_search", "github_my_work"},
 }
 
 

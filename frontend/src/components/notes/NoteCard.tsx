@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { Check, Pencil, Trash2 } from "lucide-react";
+import { Check, NotebookPen, Pencil, Trash2 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { fmtWhen } from "@/lib/dates";
+import { displaySender, sourceLabel } from "@/lib/inbox";
 import { cn } from "@/lib/utils";
 import type { Note, NoteAudit } from "@/lib/types";
 
@@ -142,13 +144,9 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
         }}
       >
         <div className="flex items-center gap-2">
-          <IconButton
-            label="Delete note"
-            Icon={Trash2}
-            disabled={busy}
-            onClick={remove}
-            className="hover:text-destructive"
-          />
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+            <NotebookPen className="h-5 w-5" />
+          </span>
 
           <div className="min-w-0 flex-1">
             {note.needs_review && expanded && (
@@ -162,12 +160,23 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
             <NoteMeta note={note} />
           </div>
 
-          <IconButton
-            label="Edit note"
-            Icon={Pencil}
-            disabled={busy}
-            onClick={startEdit}
-          />
+          {expanded && (
+            <div className="flex shrink-0 items-center gap-1">
+              <IconButton
+                label="Delete note"
+                Icon={Trash2}
+                disabled={busy}
+                onClick={remove}
+                className="hover:text-destructive"
+              />
+              <IconButton
+                label="Edit note"
+                Icon={Pencil}
+                disabled={busy}
+                onClick={startEdit}
+              />
+            </div>
+          )}
         </div>
         <Collapsible open={expanded && hasHistory}>
           <div className="mt-3 space-y-2 border-t pt-3 text-xs" onClick={(e) => e.stopPropagation()}>
@@ -195,16 +204,14 @@ export function NoteCard({ note, onSaved, onDeleted }: Props) {
   );
 }
 
+// Same layout as an inbox card: a datetime badge, then the sender as plain text.
 function NoteMeta({ note }: { note: Note }) {
   const origin = noteOrigin(note);
   const when = fmtWhen(note.updated_at ?? note.created_at);
   return (
     <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
-      {origin && (
-        <span className="min-w-0 flex-1 truncate font-medium">{origin}</span>
-      )}
-      {!origin && <span className="flex-1" />}
-      {when && <span className="shrink-0 font-medium">{when}</span>}
+      {when && <Badge variant="muted" className="shrink-0">{when}</Badge>}
+      {origin && <span className="min-w-0 flex-1 truncate font-medium">{origin}</span>}
     </div>
   );
 }
@@ -223,13 +230,9 @@ function auditLabel(entry: NoteAudit): string {
 // Use the same sender label as the input inbox; fall back to the source.
 function noteOrigin(note: Note): string {
   const from = note.source_from?.trim();
-  if (from) {
-    const match = from.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
-    const name = match ? match[1].trim() || match[2].trim() : from;
-    return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
-  }
-  if (note.source === "manual") return "Manual";
-  return note.source ?? (note.source_raw_input_id ? "" : "Chat");
+  if (from) return displaySender(from);
+  if (note.source) return sourceLabel(note.source);
+  return note.source_raw_input_id ? "" : "Chat";
 }
 
 function IconButton({

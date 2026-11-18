@@ -29,6 +29,8 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
+from app.services.input.text import collapse_whitespace
+
 # Cap on body size kept after preprocessing — protects the agent's context
 # from huge marketing emails. Tune as needed.
 MAX_BODY_CHARS = 8000
@@ -104,7 +106,7 @@ def preprocess_message(
 
     body = _strip_quoted_replies(body)
     body = _strip_signature(body)
-    body = _collapse_whitespace(body)
+    body = collapse_whitespace(body)
 
     # URLs in the Markdown body cover the common case. Anchors whose text was
     # empty or dropped (icons, tracking pixels) leave no inline URL behind, so
@@ -268,7 +270,7 @@ def _html_to_markdown(html: str) -> str:
     for tag in soup(list(_DROP_TAGS)):
         tag.decompose()
     md = _node_md(soup.body or soup)
-    # Leave trailing spaces alone here: `_collapse_whitespace` rstrips lines
+    # Leave trailing spaces alone here: `collapse_whitespace` rstrips lines
     # later, and stripping them now would strip the RFC-3676 sigdash's trailing
     # space ("-- "), defeating `_strip_signature`.
     md = re.sub(r"\n{3,}", "\n\n", md)
@@ -388,22 +390,6 @@ def _strip_signature(text: str) -> str:
         if any(p.match(line) for p in _SIGNATURE_PATTERNS):
             return "\n".join(lines[:i])
     return text
-
-
-def _collapse_whitespace(text: str) -> str:
-    """Trim trailing whitespace per line and collapse 3+ blank lines to one."""
-    lines = [line.rstrip() for line in text.splitlines()]
-    out: list[str] = []
-    blanks = 0
-    for line in lines:
-        if not line:
-            blanks += 1
-            if blanks <= 1:
-                out.append("")
-        else:
-            blanks = 0
-            out.append(line)
-    return "\n".join(out).strip()
 
 
 # --- URL extraction -----------------------------------------------------------

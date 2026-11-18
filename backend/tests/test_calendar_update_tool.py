@@ -214,6 +214,70 @@ async def test_update_event_preserves_duration_and_patches_selected_fields(monke
     assert notifications == []
 
 
+def _create_event_env(monkeypatch, catalog: dict[str, str]) -> list[dict]:
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        calendar_lookup,
+        "get_settings",
+        lambda: SimpleNamespace(
+            user_timezone="UTC", google_calendar_id="primary",
+            google_calendar_default_event_minutes=60,
+        ),
+    )
+    ids = {"Uni": "AbC-uni", "Arzt": "lbl_arzt"}
+    monkeypatch.setattr(
+        calendar_lookup.labels_store, "google_id_for",
+        lambda _s, name: ids.get(name) if name in catalog else None,
+    )
+    monkeypatch.setattr(calendar_lookup.labels_store, "agent_descriptions", lambda _s: catalog)
+
+    async def fake_create_event(_session, **kwargs):
+        calls.append(kwargs)
+        return _event("evt_new", summary=kwargs["summary"])
+
+    monkeypatch.setattr(calendar_lookup, "create_event", fake_create_event)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_create_event_files_the_event_under_its_label(monkeypatch):
+    calls = _create_event_env(monkeypatch, {"Uni": "coursework"})
+
+    out, event_id = await calendar_lookup.run_create_event(
+        SimpleNamespace(), summary="Guest lecture", start="2026-07-10T14:00:00+00:00", label="Uni",
+    )
+
+    assert event_id == "evt_new"
+    assert "labelled Uni" in out
+    assert calls[0]["event_label_id"] == "AbC-uni"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label", [None, "Nope"])
+async def test_create_event_refuses_a_missing_or_unknown_label(monkeypatch, label):
+    calls = _create_event_env(monkeypatch, {"Uni": "coursework"})
+
+    out, event_id = await calendar_lookup.run_create_event(
+        SimpleNamespace(), summary="Guest lecture", start="2026-07-10T14:00:00+00:00", label=label,
+    )
+
+    assert event_id is None
+    assert "`label` must be one of: Uni" in out
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_event_without_a_label_catalog_creates_an_unlabelled_event(monkeypatch):
+    calls = _create_event_env(monkeypatch, {})
+
+    _, event_id = await calendar_lookup.run_create_event(
+        SimpleNamespace(), summary="Guest lecture", start="2026-07-10T14:00:00+00:00",
+    )
+
+    assert event_id == "evt_new"
+    assert calls[0]["event_label_id"] is None
+
+
 @pytest.mark.asyncio
 async def test_update_event_validation_rejects_bad_inputs(monkeypatch):
     monkeypatch.setattr(

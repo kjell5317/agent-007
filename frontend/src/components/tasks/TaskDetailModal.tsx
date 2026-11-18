@@ -11,19 +11,21 @@ import {
   AlarmClock,
   ArrowLeft,
   CalendarDays,
-  ChevronDown,
-  ChevronRight,
   CircleCheckBig,
   ExternalLink,
   FoldVertical,
   GitFork,
   GripVertical,
+  History,
   Link2,
   MapPin,
+  Pause,
+  Play,
   RefreshCw,
   Repeat,
   RotateCcw,
   Shapes,
+  Timer,
   Trash2,
   X,
 } from "lucide-react";
@@ -33,6 +35,8 @@ import { ChoiceChips } from "@/components/ui/choice-chips";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import { DatePicker } from "@/components/ui/date-picker";
+import { DisclosureSection } from "@/components/ui/disclosure-section";
+import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { Input } from "@/components/ui/input";
 import { LabelPicker } from "@/components/ui/label-picker";
 import { Markdown } from "@/components/ui/markdown";
@@ -51,7 +55,6 @@ import {
   InputStatusBadge,
   RunStatusBadge,
 } from "@/components/runs/RunStatusBadge";
-import { WorkControls } from "@/components/work/WorkControls";
 import { WorkHistory } from "@/components/work/WorkHistory";
 import { useWorkActions } from "@/components/work/useWorkActions";
 import { useLabels } from "@/hooks/useLabels";
@@ -86,8 +89,8 @@ interface Props {
 
 type TextField = "title" | "description" | "link" | "location";
 // "due_date" also edits the deadline kind, "work" both work type and effort.
-type PickerField = "due_date" | "work" | "label" | "recurrence";
-type AttributePatch = Partial<Pick<Task, "work_type" | "effort" | "deadline_kind">>;
+type PickerField = "due_date" | "estimation" | "work" | "label" | "recurrence";
+type AttributePatch = Partial<Pick<Task, "estimation" | "work_type" | "effort" | "deadline_kind">>;
 
 const TEXT_LABEL: Record<TextField, string> = {
   title: "Title",
@@ -624,9 +627,33 @@ export function TaskDetailModal({
                 <RefreshCw className="h-5 w-5" />
               </TopbarButton>
             )}
+            {workable && work.waiting && (
+              <TopbarButton label="Resume" variant="ghost" disabled={busy} onClick={work.resume}>
+                <RotateCcw className="h-5 w-5" />
+              </TopbarButton>
+            )}
             {current.status !== "open" && !kotxTask && (
               <TopbarButton label="Re-open task" variant="ghost" disabled={busy} onClick={reopenCurrentTask}>
                 <RotateCcw className="h-5 w-5" />
+              </TopbarButton>
+            )}
+            {workable && !work.running && (
+              <TopbarButton
+                label="Complete with past times"
+                variant="ghost"
+                disabled={busy || work.completing}
+                onClick={work.logComplete}
+              >
+                <History className="h-5 w-5" />
+              </TopbarButton>
+            )}
+            {workable && (
+              <TopbarButton
+                label={work.running ? "Pause" : "Start"}
+                disabled={busy || work.completing}
+                onClick={work.running ? work.pause : work.start}
+              >
+                {work.running ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
               </TopbarButton>
             )}
             {current.status === "open" && !current.is_container && kotxTask && (
@@ -644,17 +671,14 @@ export function TaskDetailModal({
     >
       <TaskSummary
           title={
-            <>
-              <TaskTitleHeader
-                task={current}
-                editing={editingText === "title"}
-                draft={textDraft}
-                busy={busy}
-                onEdit={() => openTextEditor("title")}
-                onChange={onTextDraftChange}
-              />
-              {workable && <WorkControls work={work} />}
-            </>
+            <TaskTitleHeader
+              task={current}
+              editing={editingText === "title"}
+              draft={textDraft}
+              busy={busy}
+              onEdit={() => openTextEditor("title")}
+              onChange={onTextDraftChange}
+            />
           }
           task={current}
           knownTasks={knownTasks}
@@ -1012,6 +1036,36 @@ function TaskSummary({
             </button>
           </PickerAnchor>
 
+          <PickerAnchor
+            open={!task.is_container && activePicker === "estimation"}
+            onClose={onClosePicker}
+            panel={
+              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
+                <EstimationPicker
+                  value={task.estimation}
+                  onChange={(estimation) => onAttributeChange({ estimation })}
+                  allowNone={!task.parent_task_id}
+                />
+              </InlinePickerPanel>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => onEditPicker("estimation")}
+              disabled={busy || task.is_container}
+              title={task.is_container ? "Duration is set by subtasks" : "Set duration"}
+              className={cn(
+                TASK_SUMMARY_BADGE_BUTTON_CLASS,
+                task.estimation != null ? TASK_SUMMARY_BLUE_BADGE_CLASS : TASK_SUMMARY_MUTED_BADGE_CLASS,
+              )}
+            >
+              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
+                <Timer className="h-3 w-3" />
+                {task.estimation != null ? `${task.estimation} min` : "No estimate"}
+              </span>
+            </button>
+          </PickerAnchor>
+
           {!task.is_container && (
             <PickerAnchor
               open={activePicker === "work"}
@@ -1286,7 +1340,8 @@ function TopbarButton({ label, className, ...props }: ButtonProps & { label: str
       size="icon"
       aria-label={label}
       title={label}
-      className={cn("h-12 w-12 shrink-0", className)}
+      // Narrower on phones, so six fit beside Back on a 375-px screen.
+      className={cn("h-12 w-12 shrink-0 max-sm:w-11", className)}
       {...props}
     />
   );
@@ -1766,105 +1821,85 @@ function LinkedInputsSection({
   onOpenTask: (id: string) => void;
   muted?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   if (inputs.length === 0) return null;
 
   return (
-    <section
-      className={cn(
-        "space-y-2 border-t pt-3 transition-opacity",
-        muted && "pointer-events-none opacity-50",
-      )}
+    <DisclosureSection
+      title={`Linked inputs (${inputs.length})`}
+      className={cn("transition-opacity", muted && "pointer-events-none opacity-50")}
       aria-disabled={muted}
     >
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between text-left text-xs font-medium uppercase text-muted-foreground"
-      >
-        <span>Linked inputs ({inputs.length})</span>
-        {open ? (
-          <ChevronDown className="h-4 w-4" />
-        ) : (
-          <ChevronRight className="h-4 w-4" />
-        )}
-      </button>
-      {open && (
-        <div className="space-y-2">
-          {inputs.map((input) => {
-            const targetTaskId =
-              input.source === "subtask" && parentTaskId
-                ? parentTaskId
-                : input.task_id && input.task_id !== currentTaskId
-                  ? input.task_id
-                  : null;
-            return (
-              <div
-                key={input.id}
-                role={targetTaskId ? "button" : undefined}
-                tabIndex={targetTaskId ? 0 : undefined}
-                aria-label={
-                  targetTaskId
-                    ? `Open ${targetTaskId === parentTaskId ? "parent task" : "linked task"}: ${targetTaskId === parentTaskId && typeof input.source_metadata.parent_title === "string" ? input.source_metadata.parent_title : (input.task_title ?? inputTitle(input))}`
-                    : undefined
-                }
-                onClick={(event) => {
-                  if (!targetTaskId) return;
-                  const interactive = (event.target as HTMLElement).closest(
-                    "a,button,[role='button']",
-                  );
-                  if (interactive && interactive !== event.currentTarget)
-                    return;
-                  onOpenTask(targetTaskId);
-                }}
-                onKeyDown={(event) => {
-                  if (!targetTaskId || event.target !== event.currentTarget)
-                    return;
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onOpenTask(targetTaskId);
-                  }
-                }}
-                className={cn(
-                  "rounded-lg border p-3",
-                  targetTaskId &&
-                    "cursor-pointer transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-                )}
-              >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">
-                      {inputTitle(input)}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                      <InputStatusBadge input={input} />
-                      <span className="truncate font-medium">
-                        {senderName(input)}
-                      </span>
-                      <MetaDot />
-                      <span className="font-medium">
-                        {fmtWhen(input.received_at)}
-                      </span>
-                    </div>
-                  </div>
-                  {input.source_url && (
-                    <OpenLink href={input.source_url} disabled={muted}>
-                      Open source
-                    </OpenLink>
-                  )}
+      {inputs.map((input) => {
+        const targetTaskId =
+          input.source === "subtask" && parentTaskId
+            ? parentTaskId
+            : input.task_id && input.task_id !== currentTaskId
+              ? input.task_id
+              : null;
+        return (
+          <div
+            key={input.id}
+            role={targetTaskId ? "button" : undefined}
+            tabIndex={targetTaskId ? 0 : undefined}
+            aria-label={
+              targetTaskId
+                ? `Open ${targetTaskId === parentTaskId ? "parent task" : "linked task"}: ${targetTaskId === parentTaskId && typeof input.source_metadata.parent_title === "string" ? input.source_metadata.parent_title : (input.task_title ?? inputTitle(input))}`
+                : undefined
+            }
+            onClick={(event) => {
+              if (!targetTaskId) return;
+              const interactive = (event.target as HTMLElement).closest(
+                "a,button,[role='button']",
+              );
+              if (interactive && interactive !== event.currentTarget)
+                return;
+              onOpenTask(targetTaskId);
+            }}
+            onKeyDown={(event) => {
+              if (!targetTaskId || event.target !== event.currentTarget)
+                return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenTask(targetTaskId);
+              }
+            }}
+            className={cn(
+              "rounded-lg border p-3",
+              targetTaskId &&
+                "cursor-pointer transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+            )}
+          >
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">
+                  {inputTitle(input)}
                 </div>
-                {hasInputDetails(input) && (
-                  <div className="mt-3 space-y-3 border-t pt-3 text-sm">
-                    <InputBody data={input} onOpenTask={onOpenTask} />
-                  </div>
-                )}
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  <InputStatusBadge input={input} />
+                  <span className="truncate font-medium">
+                    {senderName(input)}
+                  </span>
+                  <MetaDot />
+                  <span className="font-medium">
+                    {fmtWhen(input.received_at)}
+                  </span>
+                </div>
               </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
+              {input.source_url && (
+                <OpenLink href={input.source_url} disabled={muted}>
+                  Open source
+                </OpenLink>
+              )}
+            </div>
+            {hasInputDetails(input) && (
+              <div className="mt-3 space-y-3 border-t pt-3 text-sm">
+                <InputBody data={input} onOpenTask={onOpenTask} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </DisclosureSection>
   );
 }
 

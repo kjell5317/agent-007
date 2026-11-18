@@ -111,11 +111,13 @@ export function isUrgent(
   return now >= due - estimationMinutes * 60_000 * 1.5;
 }
 
+// A task that isn't open has no deadline pressure left: its due date is neutral.
 export function dueDateBadgeVariant(
   iso: string | null,
   estimationMinutes: number | null,
+  status = "open",
 ): "overdue" | "urgent" | "closed" {
-  if (!iso) return "closed";
+  if (!iso || status !== "open") return "closed";
   const due = new Date(iso).getTime();
   if (Number.isNaN(due)) return "closed";
   const now = Date.now();

@@ -1,6 +1,7 @@
 import os
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 import pytest
@@ -141,7 +142,7 @@ async def test_authorize_registers_dynamic_client_and_uses_pkce(monkeypatch):
         state="state-123", redirect_uri="http://localhost/callback"
     )
 
-    params = notion_mcp.query_params(auth.url)
+    params = dict(parse_qsl(urlparse(auth.url).query))
     assert auth.url.startswith("https://mcp.notion.com/authorize?")
     assert params["client_id"] == "client-123"
     assert params["code_challenge"] == "challenge-123"

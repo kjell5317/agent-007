@@ -20,6 +20,15 @@ function contactDistance(hit: SearchHit, query: string): number {
   return DAY * 14;
 }
 
+// A cached event and Google's live copy of it carry different ids (the
+// cache row's, the event's) but the same Calendar link.
+export function searchHitKey(hit: SearchHit): string {
+  return hit.type === "document" && hit.source === "calendar" && hit.url
+    ? `event:${hit.url}`
+    : `${hit.type}:${hit.id}`;
+}
+
+// How far a hit lies from now; a far future counts like a far past.
 export function searchDistance(hit: SearchHit, tasks: ReadonlyMap<string, Task>, now: number, query = ""): number {
   if (hit.type === "contact") return contactDistance(hit, query);
   const isTask = hit.type === "task";
@@ -30,10 +39,12 @@ export function searchDistance(hit: SearchHit, tasks: ReadonlyMap<string, Task>,
   if (isTask || isEvent) {
     const today = new Date(now);
     const target = new Date(time);
-    return Math.abs(
+    // Whole calendar days: a DST change in between must not make one side an hour longer.
+    const days = Math.round((
       new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime() -
-      new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime(),
-    );
+      new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+    ) / DAY);
+    return Math.abs(days) * DAY;
   }
   return Math.abs(now - time);
 }

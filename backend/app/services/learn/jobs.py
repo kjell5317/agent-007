@@ -204,7 +204,7 @@ def completed_minutes(log_rows, start: datetime, end: datetime) -> float:
     total = 0.0
     seen: set[tuple] = set()
     for row in log_rows:
-        if row.kind not in {"done_confirmed", "closed"} or row.slot_start is None or row.slot_end is None:
+        if row.kind != "closed" or row.slot_start is None or row.slot_end is None:
             continue
         if not start <= row.created_at < end:
             continue
@@ -288,7 +288,7 @@ def scheduling_stats(session: Session, *, now: datetime, weeks: int = 8) -> dict
         if row.slot_start is not None:
             key = (row.task_id, row.slot_start)
             slots[key].add(row.kind)
-            if row.kind in {"cue_sent", "checkin_sent", "closed"}:
+            if row.kind in {"cue_sent", "closed"}:
                 slot_week.setdefault(key, week)
                 if row.kind == "closed" and row.slot_end is not None and not (
                     row.slot_start <= row.created_at <= row.slot_end + data.CLOSE_GRACE
@@ -306,9 +306,7 @@ def scheduling_stats(session: Session, *, now: datetime, weeks: int = 8) -> dict
                 counts["started"] += 1
             if kinds & {"cue_snoozed", "cue_declined"}:
                 counts["pushed_away"] += 1
-        if kinds & {"done_confirmed", "still_working", "started"} or (
-            "closed" in kinds and "closed_outside" not in kinds and "not_done" not in kinds
-        ):
+        if "started" in kinds or ("closed" in kinds and "closed_outside" not in kinds):
             counts["completed_in_slot"] += 1
 
     def rate(a: int, b: int) -> float | None:

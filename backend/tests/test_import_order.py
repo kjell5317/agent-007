@@ -25,7 +25,6 @@ ENTRY_POINTS = [
     "app.services.attribute_classifier",
     "app.services.task.queue",
     "app.scripts.jev_replay",
-    "app.scripts.backfill_task_attributes",
 ]
 
 

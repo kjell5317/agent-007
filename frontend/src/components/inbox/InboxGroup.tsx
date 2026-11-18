@@ -35,7 +35,6 @@ interface Props {
   group: GroupData;
   onChanged: () => Promise<void> | void;
   onOpenTask: (id: string) => void;
-  onActivate?: () => void;
   unseenMemberIds: string[];
   onVisible: (ids: string[]) => void;
 }
@@ -44,7 +43,6 @@ export function InboxGroup({
   group,
   onChanged,
   onOpenTask,
-  onActivate,
   unseenMemberIds,
   onVisible,
 }: Props) {
@@ -182,7 +180,6 @@ export function InboxGroup({
             ) {
               return;
             }
-            onActivate?.();
             onOpenTask(taskId);
           }}
         >
@@ -226,7 +223,7 @@ export function InboxGroup({
             type="button"
             aria-label={open ? "Collapse thread" : "Expand thread"}
             title={open ? "Collapse thread" : "Expand thread"}
-            onClick={() => { onActivate?.(); setOpen((v) => !v); }}
+            onClick={() => setOpen((v) => !v)}
             className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
           >
             <Chevron className="h-4 w-4" />

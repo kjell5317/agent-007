@@ -124,12 +124,6 @@ def children(session: Session, parent_id: uuid.UUID) -> list[Task]:
     ).scalars())
 
 
-def dependents(session: Session, predecessor_id: uuid.UUID) -> list[Task]:
-    return list(session.execute(
-        select(Task).where(Task.depends_on_task_id == predecessor_id)
-    ).scalars())
-
-
 def recurring_series_ids(session: Session) -> list[uuid.UUID]:
     return list(session.execute(
         select(Task.recurrence_series_id).where(Task.recurrence_unit.is_not(None)).distinct()

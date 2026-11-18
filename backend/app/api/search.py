@@ -4,11 +4,9 @@
     every source the filter kind allows (local, calendar, Drive, Contacts,
     GitHub).
   * GET /search/suggest — cross-corpus ranked suggestions as JSON (cached).
-  * GET /search/stream  — the same hits over SSE, one `hit` event per row then
-    a `done` event, so the client can render results as they arrive.
+  * GET /search/suggest/external — live GitHub or Calendar.
 
-Both share `run_suggest`, so the SSE stream reuses the JSON path's cache. All
-matching/ranking lives in `app.services.search` + `app.db.clients.search`.
+All matching/ranking lives in `app.services.search` + `app.db.clients.search`.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -31,20 +28,18 @@ from app.db import SessionLocal, get_session
 from app.db.models.raw_input import RawInput
 from app.db.clients import chats as chats_store
 from app.db.clients import raw_inputs as raw_inputs_store
-from app.db.clients import search_clicks
 from app.db.schemas.search import (
     ChatConversationRead,
     ChatConversationSummary,
     ChatConversationWrite,
     ChatRequest,
-    SearchHit,
     SuggestResponse,
 )
 from app.services.link_preview import get_link_preview
 from app.services.github import search_hits as search_github_hits
 from app.services.search import run_search, run_suggest
-from app.services.search.contacts import search_contacts
-from app.services.search.drive import available_drive_formats, search_drive
+from app.services.search.calendar import search_calendar_live
+from app.services.search.drive import available_drive_formats
 from app.services.search.filters import ALL_CORPORA
 
 log = logging.getLogger(__name__)
@@ -52,19 +47,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
 _MAX_LIMIT = 25
-
-
-@router.get("/popular", response_model=SuggestResponse)
-def popular_results(
-    limit: int = Query(10, ge=1, le=25),
-    session: Session = Depends(get_session),
-) -> SuggestResponse:
-    return SuggestResponse(hits=search_clicks.popular(session, limit=limit))
-
-
-@router.post("/click", status_code=204)
-def record_result_click(hit: SearchHit, session: Session = Depends(get_session)) -> None:
-    search_clicks.record(session, hit)
 
 
 @router.get("/facets")
@@ -103,15 +85,18 @@ def _parse_types(types: str | None) -> frozenset[str] | None:
 @router.get("", response_model=SuggestResponse)
 async def search(
     q: str = Query(..., min_length=1, max_length=256),
-    kind: str | None = Query(None, pattern="^(tasks|messages|events|files|contacts|notes)$"),
+    kind: str | None = Query(None, pattern="^(tasks|messages|events|files|contacts|notes|github)$"),
     limit: int = Query(40, ge=1, le=60),
     source: str | None = Query(None, max_length=64),
     label: str | None = Query(None, max_length=128),
     format: str | None = Query(None, max_length=32),
+    status: str | None = Query(None, pattern="^(open|closed|not_task|processing|event)$"),
+    recurring: bool = False,
     session: Session = Depends(get_session),
 ) -> SuggestResponse:
     return SuggestResponse(hits=await run_search(
         session, q, kind=kind, limit=limit, source=source, label=label, drive_format=format,
+        status=status, recurring=recurring,
     ))
 
 
@@ -123,11 +108,14 @@ def suggest(
     exclude_source: str | None = Query(None, max_length=64),
     source: str | None = Query(None, max_length=64),
     label: str | None = Query(None, max_length=128),
+    status: str | None = Query(None, pattern="^(open|closed|not_task|processing|event)$"),
+    recurring: bool = False,
     session: Session = Depends(get_session),
 ) -> SuggestResponse:
     return SuggestResponse(hits=run_suggest(
         session, q, limit=limit, types=_parse_types(types),
         exclude_source=exclude_source, source=source, label=label,
+        status=status, recurring=recurring,
     ))
 
 
@@ -135,74 +123,15 @@ def suggest(
 async def suggest_external(
     q: str = Query(..., min_length=1, max_length=256),
     limit: int = Query(6, ge=1, le=10),
-    kind: str | None = Query(None, pattern="^(contact|drive|github)$"),
-    mime_label: str | None = Query(None, max_length=32),
+    kind: str = Query(..., pattern="^(github|calendar)$"),
 ) -> SuggestResponse:
-    """Live Drive, contact, and GitHub matches, separate from fast local suggestions."""
+    """Live GitHub or Calendar matches, separate from fast local suggestions."""
     if kind == "github":
         return SuggestResponse(hits=await search_github_hits(q, limit=limit))
-    settings = get_settings()
-    per_source_limit = limit if kind in {"contact", "drive"} else min(limit, 4)
-
-    async def drive_hits():
-        with SessionLocal() as session:
-            search_kwargs = {}
-            if isinstance(mime_label, str):
-                search_kwargs["mime_label"] = mime_label
-            return await search_drive(
-                session, q, k=per_source_limit,
-                timeout=settings.search_drive_timeout_seconds,
-                **search_kwargs,
-            )
-
-    async def contact_hits():
-        with SessionLocal() as session:
-            return await search_contacts(
-                session, q, k=per_source_limit,
-                timeout=settings.search_contacts_timeout_seconds,
-            )
-
-    async def empty_hits():
-        return []
-
-    drive, contacts = await asyncio.gather(
-        drive_hits() if kind != "contact" else empty_hits(),
-        contact_hits() if kind != "drive" else empty_hits(),
-    )
-    hits = [hit for pair in zip(contacts, drive) for hit in pair]
-    hits.extend(contacts[len(drive):])
-    hits.extend(drive[len(contacts):])
-    return SuggestResponse(hits=hits[:limit])
-
-
-@router.get("/stream")
-async def stream(
-    q: str = Query("", max_length=256),
-    limit: int | None = Query(None, ge=1, le=_MAX_LIMIT),
-    types: str | None = Query(None, max_length=64),
-) -> EventSourceResponse:
-    branches = _parse_types(types)
-
-    # A fresh session per stream: the request-scoped `get_session` dependency
-    # would be torn down before the async generator drains. The query is fast
-    # and runs off the event loop in a threadpool.
-    def compute() -> list[str]:
-        session = SessionLocal()
-        try:
-            return [
-                hit.model_dump_json()
-                for hit in run_suggest(session, q, limit=limit, types=branches)
-            ]
-        finally:
-            session.close()
-
-    async def gen():
-        payloads = await run_in_threadpool(compute)
-        for payload in payloads:
-            yield {"event": "hit", "data": payload}
-        yield {"event": "done", "data": "{}"}
-
-    return EventSourceResponse(gen())
+    with SessionLocal() as session:
+        return SuggestResponse(hits=await search_calendar_live(
+            session, q, k=limit, timeout=get_settings().search_calendar_timeout_seconds,
+        ))
 
 
 @router.post("/chat")

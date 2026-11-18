@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -7,11 +8,13 @@ from sqlalchemy.pool import QueuePool
 
 from app.api import search as search_api
 from app.db.schemas.search import SearchHit
+from app.services.calendar.client import normalize
+from app.services.search import calendar as live_calendar
 from app.services.search import contacts
 
 
 @pytest.mark.asyncio
-async def test_external_suggestions_interleave_contacts_and_drive(monkeypatch):
+async def test_calendar_external_suggestions_ask_google_calendar_only(monkeypatch):
     class Session:
         def __enter__(self):
             return self
@@ -21,32 +24,71 @@ async def test_external_suggestions_interleave_contacts_and_drive(monkeypatch):
 
     calls = []
 
-    async def fake_drive(_session, query, *, k, timeout):
-        calls.append(("drive", query, k, timeout))
-        return [SearchHit(type="drive", id=f"file-{n}", title=f"File {n}", score=0)
-                for n in range(2)]
-
-    async def fake_contacts(_session, query, *, k, timeout):
-        calls.append(("contact", query, k, timeout))
-        return [SearchHit(type="contact", id=f"person-{n}", title=f"Person {n}", score=0)
-                for n in range(2)]
+    async def fake_calendar(_session, query, *, k, timeout):
+        calls.append((query, k, timeout))
+        return [SearchHit(type="document", id="evt-1", title="Dentist", source="calendar", score=0)]
 
     monkeypatch.setattr(search_api, "SessionLocal", Session)
-    monkeypatch.setattr(search_api, "search_drive", fake_drive)
-    monkeypatch.setattr(search_api, "search_contacts", fake_contacts)
-    monkeypatch.setattr(search_api, "get_settings", lambda: SimpleNamespace(
-        search_drive_timeout_seconds=4.0, search_contacts_timeout_seconds=4.0,
-    ))
+    monkeypatch.setattr(search_api, "search_calendar_live", fake_calendar)
+    monkeypatch.setattr(search_api, "get_settings", lambda: SimpleNamespace(search_calendar_timeout_seconds=3.0))
 
-    result = await search_api.suggest_external("Kjell", limit=3)
+    result = await search_api.suggest_external("Dentist", limit=10, kind="calendar")
 
-    assert [hit.id for hit in result.hits] == ["person-0", "file-0", "person-1"]
-    assert {name for name, *_ in calls} == {"drive", "contact"}
+    assert [hit.id for hit in result.hits] == ["evt-1"]
+    assert calls == [("Dentist", 10, 3.0)]
 
-    calls.clear()
-    contacts_only = await search_api.suggest_external("Kjell", limit=3, kind="contact")
-    assert [hit.id for hit in contacts_only.hits] == ["person-0", "person-1"]
-    assert [name for name, *_ in calls] == ["contact"]
+
+def _event(event_id: str, start: datetime, summary: str, series: str | None = None):
+    item = {
+        "id": event_id, "summary": summary, "htmlLink": f"https://calendar/{event_id}",
+        "start": {"dateTime": start.isoformat()},
+        "end": {"dateTime": (start + timedelta(hours=1)).isoformat()},
+    }
+    if series:
+        item["recurringEventId"] = series
+    return normalize(item, "me@example.com")
+
+
+def test_live_calendar_shows_the_next_instance_of_each_series():
+    now = datetime(2026, 11, 17, 9, tzinfo=timezone.utc)
+    standups = [_event(f"s_{d}", now + timedelta(days=d), "Standup", series="s") for d in (3, 1, 2)]
+    dentist = _event("d", now + timedelta(days=2), "Dentist")
+
+    kept = live_calendar.next_per_series([*standups, dentist])
+
+    assert [e.id for e in kept] == ["s_1", "d"]
+
+
+@pytest.mark.asyncio
+async def test_live_calendar_search_is_best_effort(monkeypatch):
+    settings = SimpleNamespace(google_busy_calendar_ids=["007", "me@example.com"], google_calendar_id="007")
+    monkeypatch.setattr(live_calendar, "get_settings", lambda: settings)
+    asked = []
+
+    class Client:
+        async def search_events(self, calendar_id, query, *, time_min, limit):
+            asked.append(calendar_id)
+            return [{
+                "id": "evt", "summary": "Dentist", "htmlLink": "https://calendar/evt",
+                "start": {"dateTime": "2026-11-20T09:00:00+00:00"},
+                "end": {"dateTime": "2026-11-20T10:00:00+00:00"},
+            }]
+
+    async def client(_session, _account):
+        return Client()
+
+    monkeypatch.setattr(live_calendar, "authorized_client", client)
+    hits = await live_calendar.search_calendar_live(object(), "dentist", k=5, timeout=1)
+    assert asked == ["me@example.com"]
+    assert [(h.id, h.url, h.source) for h in hits] == [("evt", "https://calendar/evt", "calendar")]
+
+    async def no_grant(_session, _account):
+        raise RuntimeError("No Google account connected")
+
+    monkeypatch.setattr(live_calendar, "authorized_client", no_grant)
+    assert await live_calendar.search_calendar_live(object(), "dentist", k=5, timeout=1) == []
+    settings.google_busy_calendar_ids = []
+    assert await live_calendar.search_calendar_live(object(), "dentist", k=5, timeout=1) == []
 
 
 @pytest.mark.asyncio

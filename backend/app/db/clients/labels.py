@@ -95,6 +95,10 @@ def _with_defaults(description: str, work_type: str | None, effort: str | None) 
     return f"{description} (defaults: {defaults})" if defaults else description
 
 
+def exists(session: Session, name: str) -> bool:
+    return session.scalar(select(Label.google_id).where(Label.name == name)) is not None
+
+
 def google_id_for(session: Session, name: str | None) -> str | None:
     """The Calendar `eventLabelId` for a task's label name, if it still exists."""
     if not name:

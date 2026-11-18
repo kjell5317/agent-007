@@ -1125,7 +1125,6 @@ async def test_kotx_post_action_returns_false_when_unconfigured(monkeypatch):
         (notif.ACTION_KOTX_START, "start_task"),
         (notif.ACTION_KOTX_APPROVE, "approve_task"),
         (notif.ACTION_KOTX_MERGE, "merge_task"),
-        (notif.ACTION_KOTX_COMMENT, "comment_task"),
     ],
 )
 async def test_notify_action_dispatches_to_kotx_and_clears(monkeypatch, action, fn_name):

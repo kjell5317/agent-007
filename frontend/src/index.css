@@ -103,8 +103,50 @@
 .animate-search-content-open { animation: search-content-open 220ms ease-out both; }
 .animate-search-content-close { animation: search-content-close 220ms ease-in both; }
 
+/* A gradient that travels around a card's existing 1px border: the gradient
+   paints the border box and a card-coloured layer covers the padding box, so
+   width, radius and layout stay untouched. The angle needs @property to
+   animate; without it the border just stays still. */
+@property --border-flow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes border-flow {
+  to { --border-flow-angle: 360deg; }
+}
+.border-flow-primary,
+.border-flow-sky {
+  border-color: transparent;
+  background:
+    linear-gradient(hsl(var(--card)), hsl(var(--card))) padding-box,
+    conic-gradient(
+      from var(--border-flow-angle),
+      var(--border-flow-faint) 0deg,
+      var(--border-flow-strong) 50deg,
+      var(--border-flow-faint) 100deg,
+      var(--border-flow-faint) 180deg,
+      var(--border-flow-strong) 230deg,
+      var(--border-flow-faint) 280deg
+    ) border-box;
+  animation: border-flow 4s linear infinite;
+}
+.border-flow-primary {
+  --border-flow-strong: hsl(var(--primary));
+  --border-flow-faint: hsl(var(--primary) / 0.3);
+}
+.border-flow-sky {
+  --border-flow-strong: rgb(56 189 248);
+  --border-flow-faint: rgb(56 189 248 / 0.3);
+}
+.dark .border-flow-sky {
+  --border-flow-strong: rgb(125 211 252);
+  --border-flow-faint: rgb(125 211 252 / 0.3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-points-pop, .animate-points-float { animation: none; }
   .animate-caret-blink { animation: none; opacity: 1; }
   .animate-search-content-open, .animate-search-content-close { animation: none; }
+  .border-flow-primary, .border-flow-sky { animation: none; }
 }

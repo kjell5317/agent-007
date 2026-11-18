@@ -1,5 +1,5 @@
 """Agent hand-offs: research, lookups, drafts and kotx runs started from a
-new task (docs/handoff-plan.md)."""
+new task."""
 
 import sqlalchemy as sa
 from alembic import op

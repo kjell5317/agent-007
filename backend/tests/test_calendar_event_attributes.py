@@ -11,6 +11,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.db.clients import documents as documents_store  # noqa: E402
 from app.db.clients import labels as labels_store  # noqa: E402
+from app.services.attribute_classifier import numbered  # noqa: E402
 from app.services.calendar import attributes as attrs  # noqa: E402
 from app.services.calendar import cache as cal_cache  # noqa: E402
 from app.services.calendar.client import normalize  # noqa: E402
@@ -162,11 +163,11 @@ def test_event_tool_schema_asks_for_work_type_and_effort():
 
 
 def test_batch_message_lists_title_facts_and_notes():
-    message = attrs.batch_message([
+    message = numbered([attrs.entry_text(event) for event in [
         {"title": "Design review", "label": "Uni", "location": "Room 4", "minutes": 90,
          "notes": "Bring\nspecs"},
         {"title": "Gym", "label": None, "location": None, "minutes": 60, "notes": ""},
-    ])
+    ]])
 
     assert message.splitlines() == [
         "1. Design review",

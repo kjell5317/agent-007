@@ -61,7 +61,6 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string }>("/health"),
   whoami: () => request<{ email: string | null }>("/auth/whoami"),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   slackApps: () => request<string[]>("/oauth/slack/apps"),
@@ -79,10 +78,11 @@ export const api = {
   reorderSubtasks: (id: string, order: string[]) => request<Task>(`/tasks/${id}/subtasks/order`, {
     method: "PUT", body: JSON.stringify(order),
   }),
-  createTask: (text: string) =>
+  // Set fields win over whatever the agent extracts from the text.
+  createTask: (text: string, fields: TaskDraftFields = {}) =>
     request<TaskCreationAccepted>("/tasks", {
       method: "POST",
-      body: JSON.stringify({ content: text }),
+      body: JSON.stringify({ content: text, ...fields }),
     }),
   updateTask: (id: string, fields: Partial<Task>) =>
     request<Task>(`/tasks/${id}`, {
@@ -168,33 +168,29 @@ export const api = {
     request<UnreadInputs>("/inputs/mark_seen", { method: "POST" }),
 
   suggest: (q: string, limit = 8, types?: readonly SearchHitType[], filters?: {
-    excludeSource?: string; source?: string; label?: string;
+    excludeSource?: string; source?: string; label?: string; status?: string; recurring?: boolean;
   }) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     if (types && types.length) params.set("types", types.join(","));
     if (filters) for (const [key, value] of Object.entries(filters)) {
-      if (value) params.set(key === "excludeSource" ? "exclude_source" : key, value);
+      if (value) params.set(key === "excludeSource" ? "exclude_source" : key, String(value));
     }
     return request<{ hits: SearchHit[] }>(`/search/suggest?${params}`);
   },
   // The Enter search: every source the filter kind allows, sorted by relevance.
   search: (q: string, filters: {
-    kind?: string | null; source?: string; label?: string; format?: string;
+    kind?: string | null; source?: string; label?: string; format?: string; status?: string; recurring?: boolean;
   } = {}) => {
     const params = new URLSearchParams({ q });
-    for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
+    for (const [key, value] of Object.entries(filters)) if (value) params.set(key, String(value));
     return request<{ hits: SearchHit[] }>(`/search?${params}`);
   },
-  suggestExternal: (q: string, limit = 6, kind?: "contact" | "drive" | "github", mimeLabel?: string) =>
+  suggestExternal: (q: string, limit: number, kind: "github" | "calendar") =>
     request<{ hits: SearchHit[] }>(
-      `/search/suggest/external?${new URLSearchParams({ q, limit: String(limit), ...(kind ? { kind } : {}), ...(mimeLabel ? { mime_label: mimeLabel } : {}) })}`,
+      `/search/suggest/external?${new URLSearchParams({ q, limit: String(limit), kind })}`,
     ),
   searchFacets: (kind: "messages" | "files" | "notes") =>
     request<{ options: string[] }>(`/search/facets?kind=${kind}`),
-  popularSearchResults: (limit = 10) =>
-    request<{ hits: SearchHit[] }>(`/search/popular?limit=${limit}`),
-  recordSearchClick: (hit: SearchHit) =>
-    request<void>("/search/click", { method: "POST", body: JSON.stringify(hit) }),
 
   chatStream,
 
@@ -225,6 +221,7 @@ export const api = {
 
   listNotes: (limit = 500, source = "", query = "") =>
     request<Note[]>(`/notes?${new URLSearchParams({ limit: String(limit), ...(source ? { source } : {}), ...(query ? { query } : {}) })}`),
+  getNote: (id: string) => request<Note>(`/notes/${id}`),
   noteHistory: (id: string) => request<NoteAudit[]>(`/notes/${id}/history`),
   updateNote: (id: string, content: string) =>
     request<Note>(`/notes/${id}`, {
@@ -349,6 +346,8 @@ export interface WorkSpan {
   started_at: string;
   ended_at: string;
 }
+
+export type TaskDraftFields = Partial<Pick<Task, "due_date" | "label" | "estimation">>;
 
 export interface TaskCreationAccepted {
   raw_input_id: string;

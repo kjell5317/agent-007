@@ -7,7 +7,6 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.scheduling import TaskOverride
@@ -75,28 +74,3 @@ def record_changes(
         )
         written += 1
     return written
-
-
-def list_for_field(session: Session, field: str) -> list[TaskOverride]:
-    return list(session.scalars(
-        select(TaskOverride).where(TaskOverride.field == field).order_by(TaskOverride.created_at)
-    ))
-
-
-def exists_for_source(session: Session, task_id: uuid.UUID, source: str) -> bool:
-    return session.scalar(
-        select(TaskOverride.id)
-        .where(TaskOverride.task_id == task_id, TaskOverride.source == source)
-        .limit(1)
-    ) is not None
-
-
-USER_SOURCES = ("ui", "calendar", "notification")
-
-
-def task_ids_with_user_override(session: Session, field: str) -> set[uuid.UUID]:
-    return set(session.scalars(
-        select(TaskOverride.task_id)
-        .where(TaskOverride.field == field, TaskOverride.source.in_(USER_SOURCES))
-        .distinct()
-    ))

@@ -100,6 +100,23 @@ class GoogleCalendarClient:
                     return out
                 params["pageToken"] = token
 
+    async def search_events(
+        self, calendar_id: str, query: str, *, time_min: datetime, limit: int,
+    ) -> list[dict]:
+        """The first `limit` instances matching free text `query` (Google's
+        `q`) that end after `time_min`, soonest first. One page, no paging."""
+        params: dict[str, Any] = {
+            "q": query,
+            "singleEvents": "true",
+            "orderBy": "startTime",
+            "timeMin": rfc3339(time_min),
+            "maxResults": limit,
+        }
+        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+            resp = await client.get(f"{_BASE}/calendars/{calendar_id}/events", params=params)
+            resp.raise_for_status()
+            return resp.json().get("items", [])
+
     async def sync_events(
         self,
         calendar_id: str,

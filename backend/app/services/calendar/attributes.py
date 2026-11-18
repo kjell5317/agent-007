@@ -10,7 +10,7 @@ the events they leave open are classified in batches by the cheap model
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.db.clients import documents as documents_store
 from app.db.clients import labels as labels_store
 from app.db.models.document import Document
-from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier, numbered
+from app.services.attribute_classifier import BATCH_SIZE, BatchClassifier
 from app.services.calendar.client import CalendarEvent
 from app.services.calendar.events import is_free_event, is_managed_event
 from app.services.location import is_online_location
@@ -120,10 +120,6 @@ def entry_text(event: Mapping[str, Any]) -> str:
     if notes:
         lines.append(f"   notes: {notes}")
     return "\n".join(lines)
-
-
-def batch_message(events: Sequence[Mapping[str, Any]]) -> str:
-    return numbered([entry_text(event) for event in events])
 
 
 def _notes(title: str, snippet: str | None) -> str:

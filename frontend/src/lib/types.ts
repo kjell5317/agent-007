@@ -33,7 +33,7 @@ export interface SubtaskSummary {
 
 export type HandoffKind = "research" | "email_reply" | "code_change";
 
-// Work an agent does on a task after it's created (docs/handoff-plan.md).
+// Work an agent does on a task after it's created.
 export interface TaskHandoff {
   id: string;
   kind: HandoffKind;
@@ -71,6 +71,8 @@ export interface Task {
   subtask_order: number | null;
   recurrence_unit: RecurrenceUnit | null;
   recurrence_interval: number | null;
+  // Shared by every instance of a repeating task.
+  recurrence_series_id: string | null;
   subtasks: SubtaskSummary[];
   status: TaskStatus;
   is_manual: boolean;
@@ -123,7 +125,7 @@ export interface AgentTrace {
 export type SearchHitType = "task" | "note" | "input" | "document" | "drive" | "contact" | "github";
 
 export interface ChatSearchScope {
-  kind: "tasks" | "messages" | "notes" | "events" | "files" | "contacts";
+  kind: "tasks" | "messages" | "notes" | "events" | "files" | "contacts" | "github";
   label?: string;
   source?: string;
   format?: string;

@@ -12,28 +12,19 @@ from app.agent.helpers import llm  # noqa: E402
 from app.config.settings import DEFAULT_ANTHROPIC_MODEL, Settings  # noqa: E402
 
 
-def test_settings_prefers_llm_model_and_keeps_claude_model_fallback():
+def test_settings_prefers_llm_model_over_the_default():
     configured = Settings(
         database_url="postgresql+psycopg://test:test@localhost/test",
         llm_provider="Anthropic",
         llm_model="claude-sonnet-4-5",
-        claude_model="legacy-claude",
     )
     assert configured.effective_llm_provider == "anthropic"
     assert configured.effective_llm_model == "claude-sonnet-4-5"
-
-    legacy = Settings(
-        database_url="postgresql+psycopg://test:test@localhost/test",
-        llm_model="",
-        claude_model="legacy-claude",
-    )
-    assert legacy.effective_llm_model == "legacy-claude"
 
     defaulted = Settings(
         database_url="postgresql+psycopg://test:test@localhost/test",
         llm_provider="",
         llm_model="",
-        claude_model="",
     )
     assert defaulted.effective_llm_provider == "anthropic"
     assert defaulted.effective_llm_model == DEFAULT_ANTHROPIC_MODEL

@@ -156,9 +156,5 @@ async def merge_task(kotx_task_id: int) -> bool:
     return await _post_action(kotx_task_id, "merge")
 
 
-async def comment_task(kotx_task_id: int) -> bool:
-    return await _post_action(kotx_task_id, "comment")
-
-
 async def discard_task(kotx_task_id: int) -> bool:
     return await _post_action(kotx_task_id, "discard")

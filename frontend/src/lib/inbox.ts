@@ -43,26 +43,41 @@ export function badgeKindLabel(kind: BadgeKind | string): string {
   return kind;
 }
 
-// Human-readable sender. Gmail's `from` is "Name <email>" → the name (or the
-// address when unnamed); Slack's is already "display (workspace)"; kotx
-// transitions come from their repo. Falls back to a source label when
-// there's no `from` (e.g. manual entries).
+const SOURCE_LABELS: Record<string, string> = {
+  manual: "Manual",
+  recurrence: "Repeat",
+  web_search: "Web Research",
+};
+
+// Display name for a source key (gmail → Gmail, web_search → Web Research).
+export function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source]
+    ?? source.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+// Display name for a raw `from`. Gmail's is "Name <email>" → the name (or the
+// address when unnamed); Slack's is "display (workspace)" → the display name;
+// an agent tool name like `web_search` gets its source label.
+export function displaySender(from: string): string {
+  const trimmed = from.trim();
+  if (SOURCE_LABELS[trimmed]) return SOURCE_LABELS[trimmed];
+  const m = trimmed.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
+  const name = m ? m[1].trim() || m[2].trim() : trimmed;
+  // Drop a trailing parenthetical (e.g. Slack's "(workspace)" suffix).
+  return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+}
+
+// Human-readable sender: the `from` when there is one; kotx transitions come
+// from their repo; otherwise the source label (e.g. manual entries).
 export function senderName(data: RawInput): string {
   const raw = data.source_metadata?.from;
   const from = typeof raw === "string" ? raw.trim() : "";
-  if (from) {
-    const m = from.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
-    const name = m ? m[1].trim() || m[2].trim() : from;
-    // Drop a trailing parenthetical (e.g. Slack's "(workspace)" suffix).
-    return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
-  }
+  if (from) return displaySender(from);
   if (data.source === "kotx") {
     const repo = data.source_metadata?.repo;
     if (typeof repo === "string" && repo) return repo;
   }
-  if (data.source === "manual") return "Manual";
-  if (data.source === "recurrence") return "Repeat";
-  return data.source;
+  return sourceLabel(data.source);
 }
 
 // A kotx transition carrying a run id. Its inbox card is a run breadcrumb, not

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOnForeground } from "@/hooks/useOnForeground";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
 import { inputGroupKey } from "@/lib/inbox";
 import { compareTasksBySchedule } from "@/lib/tasks";
+import { withOnlyRunning } from "@/lib/work";
 import type { RawInput, Task } from "@/lib/types";
 
 // Pagination counts inbox *groups* (threads / follow-ups), not raw rows — the
@@ -93,7 +95,7 @@ export function useAppData(inputSource = ""): AppData {
     const unsubscribe = subscribeEvents((event) => {
       switch (event.type) {
         case "task":
-          setTasks((prev) => upsertTask(prev, event.data));
+          setTasks((prev) => upsertTask(withOnlyRunning(prev, event.data, Date.now()), event.data));
           break;
         case "task_removed":
           setTasks((prev) => prev.filter((t) => t.id !== event.id));
@@ -118,12 +120,10 @@ export function useAppData(inputSource = ""): AppData {
     return unsubscribe;
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refreshInBackground = useMemo(() => {
     let inFlight = false;
-
-    const safeRefresh = async () => {
-      if (inFlight || cancelled) return;
+    return async () => {
+      if (inFlight) return;
       inFlight = true;
       try {
         await refresh();
@@ -133,20 +133,8 @@ export function useAppData(inputSource = ""): AppData {
         inFlight = false;
       }
     };
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") safeRefresh();
-    };
-
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", safeRefresh);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", safeRefresh);
-    };
   }, [refresh]);
+  useOnForeground(refreshInBackground);
 
   return {
     tasks,

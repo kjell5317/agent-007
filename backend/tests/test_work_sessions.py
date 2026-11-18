@@ -28,7 +28,7 @@ def _task(**kw):
 @pytest.fixture
 def world(monkeypatch):
     w = SimpleNamespace(tasks={}, sessions=[], logs=[], pinned=[], scheduled=[], solves=[],
-                        cleared=[], closed=[], deleted=[], status={})
+                        cleared=[], closed=[], deleted=[], status={}, later=[])
 
     def running(_s):
         return next((r for r in w.sessions if r.ended_at is None), None)
@@ -85,6 +85,7 @@ def world(monkeypatch):
     monkeypatch.setattr(work, "pin_running", pin)
     monkeypatch.setattr(work, "schedule_task", schedule)
     monkeypatch.setattr(work, "_solve_later", solve_later)
+    monkeypatch.setattr(work, "_later", lambda _what, step: w.later.append(step))
     monkeypatch.setattr(work, "clear_task_notifications", clear)
     monkeypatch.setattr(work, "close_task", close)
     monkeypatch.setattr(work, "publish_task", lambda *_a: None)
@@ -113,8 +114,12 @@ async def test_start_pins_the_slot_to_now_and_logs_the_planned_one(world):
     # Only what is left of the estimate is booked.
     assert world.pinned == [(task.id, NOW, 40)]
     assert world.logs[0]["kind"] == "started" and world.logs[0]["slot_start"] == planned
-    assert world.cleared == [(task.id, {"start_cue", "new_task"})]
     assert world.solves == ["work_session"]
+    # The start cue's push is cleared after the tap is answered.
+    assert world.cleared == []
+    for step in world.later:
+        await step(_session())
+    assert world.cleared == [(task.id, {"start_cue", "new_task"})]
 
 
 @pytest.mark.asyncio

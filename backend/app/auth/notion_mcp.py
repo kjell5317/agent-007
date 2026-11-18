@@ -13,7 +13,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 
@@ -53,11 +53,6 @@ def _json_or_raise(resp: httpx.Response, action: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"notion mcp oauth {action} failed: response was not an object")
     return payload
-
-
-def _origin(url: str) -> str:
-    parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _normalize_url(url: str) -> str:
@@ -340,8 +335,3 @@ class NotionMcpOAuthProvider(OAuthProvider):
         if context and context.get("mcp_server_url"):
             return f"notion-mcp:{context['mcp_server_url']}"
         return await self.identify(access_token)
-
-
-def query_params(url: str) -> dict[str, str]:
-    """Test helper for checking generated authorization URLs."""
-    return dict(parse_qsl(urlparse(url).query))

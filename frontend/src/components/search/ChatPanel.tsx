@@ -1,7 +1,9 @@
-import { Check, ChevronDown, Loader2, MessageSquare, Wrench, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, Loader2, MessageSquare, Wrench, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AssistantContent } from "@/components/search/AssistantContent";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { fmtWhen } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -13,12 +15,14 @@ export function ChatPanel({
   onOpenTask,
   recent,
   onLoadChat,
+  onFollowUp,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
   onOpenTask: (taskId: string) => void;
   recent: ChatSummary[];
   onLoadChat: (id: string) => void;
+  onFollowUp: (question: string) => void;
 }) {
   // A citation with no navigable target (note / url-less input) opens here.
   const [preview, setPreview] = useState<ChatCitation | null>(null);
@@ -66,8 +70,54 @@ export function ChatPanel({
           />
         ),
       )}
+      <FollowUpComposer streaming={streaming} onSend={onFollowUp} />
       <CitationModal cite={preview} onClose={() => setPreview(null)} onOpenTask={onOpenTask} />
     </div>
+  );
+}
+
+// Typing stays open while an answer streams; sending waits for it to finish.
+function FollowUpComposer({ streaming, onSend }: { streaming: boolean; onSend: (question: string) => void }) {
+  const [value, setValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const canSend = Boolean(value.trim()) && !streaming;
+
+  return (
+    <form
+      autoComplete="off"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!canSend) return;
+        onSend(value);
+        setValue("");
+        // Drop the on-screen keyboard so the answer has the screen.
+        inputRef.current?.blur();
+      }}
+      className="flex items-center gap-2 pt-2"
+    >
+      <div className="flex h-12 min-w-0 flex-1 items-center rounded-full bg-secondary px-4 shadow-sm">
+        <Input
+          ref={inputRef}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder={streaming ? "Answering…" : "Ask a follow-up…"}
+          enterKeyHint="send"
+          autoCapitalize="sentences"
+          autoCorrect="off"
+          autoComplete="off"
+          aria-label="Follow-up question"
+          className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+        />
+      </div>
+      <Button
+        type="submit"
+        disabled={!canSend}
+        aria-label="Send follow-up"
+        className="h-12 w-12 shrink-0 p-0 shadow-sm disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
+      >
+        {streaming ? <Loader2 className="h-5 w-5 animate-spin" /> : <ArrowUp className="h-5 w-5" />}
+      </Button>
+    </form>
   );
 }
 

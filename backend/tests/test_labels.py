@@ -63,6 +63,16 @@ def test_label_enum_and_descriptions_reach_the_create_tool():
     assert "label" not in update_task["parameters"]["required"]
 
 
+def test_create_event_requires_a_label_from_the_same_enum():
+    tools = new_input_tools({"Uni": "coursework", "Arzt": "doctor visits"})
+    create_event = next(t for t in tools if t["name"] == "create_event")
+    label = create_event["parameters"]["properties"]["label"]
+
+    assert label["enum"] == ["Uni", "Arzt"]
+    assert "event" in label["description"]
+    assert create_event["parameters"]["required"] == ["summary", "start", "label"]
+
+
 def test_label_descriptions_carry_their_defaults():
     assert labels_store._with_defaults("Training", "physical", "medium") == (
         "Training (defaults: physical, medium)"

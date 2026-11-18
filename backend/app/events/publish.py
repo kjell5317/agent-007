@@ -46,6 +46,12 @@ def _emit(event: dict) -> None:
     bus.publish(json.dumps(event))
 
 
+def read_task(session: Session, task) -> TaskRead:
+    status_ = tasks_store.latest_status_for(session, [task.id]).get(task.id, "open")
+    is_manual = tasks_store.is_manual_for(session, [task.id]).get(task.id, False)
+    return task_read(session, task, status_, is_manual)
+
+
 def task_read(session: Session, task, status_: str, is_manual: bool) -> TaskRead:
     raw = raw_inputs_store.latest_for_task(session, task.id)
     linked_inputs = raw_inputs_store.list_for_task(session, task.id)
@@ -91,10 +97,7 @@ def publish_task(session: Session, task_id: uuid.UUID) -> None:
         # as a removal so the client drops it either way.
         publish_task_removed(task_id)
         return
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    data = task_read(session, row, status_, is_manual).model_dump(mode="json")
-    _emit({"type": "task", "data": data})
+    _emit({"type": "task", "data": read_task(session, row).model_dump(mode="json")})
 
 
 def publish_task_removed(task_id: uuid.UUID) -> None:

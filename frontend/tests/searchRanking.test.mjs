@@ -44,3 +44,35 @@ test("contact match quality interleaves contacts with dated results", () => {
   assert.ok(ranking.searchDistance(weak, tasks, now, "Alice") > ranking.searchDistance(twoDayOldFile, tasks, now));
   assert.equal(ranking.searchDistance(exact, tasks, now, "alice@example.com"), 0);
 });
+
+test("the future is as far as the past for every dated source", () => {
+  const tasks = new Map();
+  for (const offset of [day * 3, day * 40]) {
+    const past = new Date(now - offset).toISOString();
+    const future = new Date(now + offset).toISOString();
+    const pairs = [
+      [{ type: "task", id: "t", meta: { due_date: past } }, { type: "task", id: "t", meta: { due_date: future } }],
+      [{ type: "document", source: "calendar", ts: past }, { type: "document", source: "calendar", ts: future }],
+      [{ type: "input", ts: past }, { type: "input", ts: future }],
+      [{ type: "note", ts: past }, { type: "note", ts: future }],
+      [{ type: "drive", ts: past }, { type: "drive", ts: future }],
+      [{ type: "github", ts: past }, { type: "github", ts: future }],
+    ];
+    for (const [before, after] of pairs) {
+      assert.equal(ranking.searchDistance(before, tasks, now), ranking.searchDistance(after, tasks, now), before.type);
+    }
+  }
+});
+
+test("a task hit without a due date falls back to the loaded task", () => {
+  const tasks = new Map([["t", { due_date: new Date(now + day * 2).toISOString() }]]);
+  assert.equal(ranking.searchDistance({ type: "task", id: "t", meta: null }, tasks, now), day * 2);
+});
+
+test("a cached event and its live copy share a key; other hits key by id", () => {
+  const link = "https://www.google.com/calendar/event?eid=abc";
+  const cached = { type: "document", source: "calendar", id: "row-uuid", url: link };
+  const live = { type: "document", source: "calendar", id: "event-id", url: link };
+  assert.equal(ranking.searchHitKey(cached), ranking.searchHitKey(live));
+  assert.equal(ranking.searchHitKey({ type: "task", id: "t1", url: link }), "task:t1");
+});

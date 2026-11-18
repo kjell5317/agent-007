@@ -4,12 +4,14 @@ import { SearchResultRow } from "@/components/search/SearchResultRow";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/api";
-import { searchDistance } from "@/lib/searchRanking";
+import { searchDistance, searchHitKey } from "@/lib/searchRanking";
 import { compareTasksByDue } from "@/lib/tasks";
 import type { RawInput, SearchHit, Task } from "@/lib/types";
 import type { SearchFiltersState } from "@/components/search/SearchFilters";
 
 const PER_SOURCE = 10;
+// The closed tasks list, shown without a query: the most a suggest returns.
+const LIST_LIMIT = 25;
 
 function filterHit(hit: SearchHit, filters: SearchFiltersState): boolean {
   if (filters.kind === "events") return hit.type === "document" && hit.source === "calendar";
@@ -19,6 +21,7 @@ function filterHit(hit: SearchHit, filters: SearchFiltersState): boolean {
   }
   if (filters.kind === "contacts") return hit.type === "contact";
   if (filters.kind === "notes") return hit.type === "note" && (!filters.source || (hit.source ?? "chat") === filters.source);
+  if (filters.kind === "github") return hit.type === "github";
   return true;
 }
 
@@ -28,21 +31,30 @@ function searchKey(query: string, filters: SearchFiltersState, submitted: boolea
 
 function searchRequests(query: string, filters: SearchFiltersState, submitted: boolean): Promise<{ hits: SearchHit[] }>[] {
   const source = filters.kind === "messages" || filters.kind === "notes" ? filters.source : undefined;
-  const label = filters.kind === "tasks" ? filters.label : undefined;
+  const tasks = filters.kind === "tasks";
+  const label = tasks ? filters.label : undefined;
+  const status = tasks && filters.closed ? "closed" : undefined;
+  const recurring = tasks && filters.recurring;
   // Enter: one request — the server gathers every source the filter allows
   // (local, calendar, Drive, Contacts, GitHub) and sorts them by relevance.
   if (submitted) {
     return [api.search(query, {
-      kind: filters.kind, source, label, format: filters.kind === "files" ? filters.format || undefined : undefined,
+      kind: filters.kind, source, label, status, recurring,
+      format: filters.kind === "files" ? filters.format || undefined : undefined,
     })];
   }
   // While typing: the fast keyword suggest, one request per corpus.
   const requests: Promise<{ hits: SearchHit[] }>[] = [];
-  if (filters.kind === null || filters.kind === "tasks") requests.push(api.suggest(query, PER_SOURCE, ["task"], { label }));
+  if (filters.kind === null || tasks) {
+    requests.push(api.suggest(query, query ? PER_SOURCE : LIST_LIMIT, ["task"], { label, status, recurring }));
+  }
   if (filters.kind === null || filters.kind === "messages") requests.push(api.suggest(query, PER_SOURCE, ["input"], { source }));
   if (filters.kind === null || filters.kind === "events") {
     requests.push(api.suggest(query, PER_SOURCE, ["document"], { source: "calendar" }));
   }
+  // The cache trails Google by a sync, so the events filter asks it too.
+  if (filters.kind === "events") requests.push(api.suggestExternal(query, PER_SOURCE, "calendar"));
+  if (filters.kind === "github") requests.push(api.suggestExternal(query, PER_SOURCE, "github"));
   if (filters.kind === null || filters.kind === "files") {
     requests.push(api.suggest(query, PER_SOURCE, ["document"], { excludeSource: "calendar" }));
   }
@@ -116,7 +128,7 @@ export function SearchResults({
       const seen = new Set<string>();
       const unique = available.filter((hit) => {
         if ((hit.type === "document" || hit.type === "input") && hit.task_id && taskIds.has(hit.task_id)) return false;
-        const key = `${hit.type}:${hit.id}`;
+        const key = searchHitKey(hit);
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -124,9 +136,11 @@ export function SearchResults({
       const now = Date.now();
       // After Enter the server's order is the relevance order. While typing,
       // the keyword scores (match × recency) are comparable across corpora.
-      // The tasks and events filters are list views: by due date / by date.
+      // The tasks and events filters are list views: by due date (closed
+      // ones latest first) / by distance from today.
       if (filters.kind === "tasks") {
-        unique.sort((a, b) => compareTasksByDue(taskMap.get(a.id)!, taskMap.get(b.id)!) || a.title.localeCompare(b.title));
+        const direction = filters.closed ? -1 : 1;
+        unique.sort((a, b) => direction * compareTasksByDue(taskMap.get(a.id)!, taskMap.get(b.id)!) || a.title.localeCompare(b.title));
       } else if (filters.kind === "events") {
         unique.sort((a, b) => searchDistance(a, taskMap, now, q) - searchDistance(b, taskMap, now, q));
       } else if (!submitted) {
@@ -156,7 +170,9 @@ export function SearchResults({
       ) : failed ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Search is unavailable right now.</p>
       ) : hits.length === 0 ? (
-        submitted ? (
+        !query.trim() ? (
+          <p className="py-12 text-center text-sm text-muted-foreground">No matching tasks.</p>
+        ) : submitted ? (
           <div className="flex flex-col items-center gap-3 py-12">
             <p className="text-center text-sm text-muted-foreground">No matching results.</p>
             <Button type="button" variant="outline" size="sm" onClick={() => onAiSearchRef.current(query.trim())}>
@@ -169,10 +185,12 @@ export function SearchResults({
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3 px-1">
             <p className="text-xs font-medium text-muted-foreground">{hits.length} results</p>
-            <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => onAiSearchRef.current(query.trim())}>
-              <Sparkles className="h-3.5 w-3.5" />
-              Ask AI
-            </Button>
+            {query.trim() && (
+              <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => onAiSearchRef.current(query.trim())}>
+                <Sparkles className="h-3.5 w-3.5" />
+                Ask AI
+              </Button>
+            )}
           </div>
           {hits.map((hit) => (
             <SearchResultRow
@@ -181,7 +199,6 @@ export function SearchResults({
               task={hit.type === "task" ? taskDetails.get(hit.id) : undefined}
               input={hit.type === "input" ? inputDetails.get(hit.id) : undefined}
               onChanged={onChanged}
-              onActivate={() => { if (hit.type !== "task") void api.recordSearchClick(hit).catch(() => {}); }}
               onOpenTask={onOpenTask}
               onShowContent={() => setPreview(hit)}
             />

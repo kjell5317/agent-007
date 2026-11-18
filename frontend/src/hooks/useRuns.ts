@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeEvents } from "@/lib/events";
 import { kotx, type KotxTask } from "@/lib/kotx";
+import { useOnForeground } from "@/hooks/useOnForeground";
 
 export interface RunsData {
   tasks: KotxTask[];
@@ -65,25 +66,7 @@ export function useRuns(
   // Refresh whenever the page returns to the foreground. Preloaded hooks keep
   // badges current even while their view is closed; non-preloaded hooks only
   // listen while their view is active.
-  useEffect(() => {
-    if (!preload && !active) return;
-
-    let cancelled = false;
-    const safeRefresh = () => {
-      if (!cancelled) backgroundRefresh();
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") safeRefresh();
-    };
-
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", safeRefresh);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", safeRefresh);
-    };
-  }, [active, backgroundRefresh, preload]);
+  useOnForeground(backgroundRefresh, preload || active);
 
   // Refresh once when the owning view becomes active (or its scope changes).
   useEffect(() => {

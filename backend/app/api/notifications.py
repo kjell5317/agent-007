@@ -34,7 +34,6 @@ from app.services.kotx.notify import (
     ACTION_HANDOFF_ACCEPT,
     ACTION_HANDOFF_DECLINE,
     ACTION_KOTX_APPROVE,
-    ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
     clear_kotx_prompt,
@@ -74,7 +73,6 @@ _KOTX_ACTIONS = {
     ACTION_KOTX_START: "start_task",
     ACTION_KOTX_APPROVE: "approve_task",
     ACTION_KOTX_MERGE: "merge_task",
-    ACTION_KOTX_COMMENT: "comment_task",
 }
 
 

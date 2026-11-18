@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Float, String, bindparam, text
+from sqlalchemy import Boolean, Float, String, bindparam, text
 from sqlalchemy.orm import Session
 
 from app.db.clients.raw_inputs import ORIGIN_SOURCE_SQL
@@ -58,7 +58,9 @@ class SuggestHit:
 
 
 # Per-corpus SQL fragments. `fts` is the stored, GIN-indexed tsvector column;
-# `ts` the recency anchor. The projected column list is identical across
+# `ts` the date shown and filtered on, and the recency anchor unless the branch
+# names its own `recency` (a task is as relevant as its due date is near, the
+# last input only dates it). The projected column list is identical across
 # branches so they UNION cleanly. (Searched text per corpus is defined by each
 # table's generated `tsv` column: tasks = title+description+label, raw_inputs =
 # subject+from+channel+content, documents = title+snippet+content.)
@@ -80,6 +82,7 @@ _BRANCHES: dict[str, dict[str, str]] = {
         "from": _TASK_LAST_INPUT,
         "fts": "t.tsv",
         "ts": "coalesce(li.received_at, t.updated_at, t.created_at)",
+        "recency": "t.due_date",
         "select": (
             "'task' AS type, t.id::text AS id, t.title AS title, "
             "left(coalesce(t.description,''), 200) AS snippet, t.link AS url, "
@@ -141,6 +144,12 @@ _BRANCHES: dict[str, dict[str, str]] = {
 # so an anchor-less task counts as open.
 _TASK_STATUS_CLAUSE = "coalesce(li.status, 'open') = :status"
 
+# A subtask of a split occurrence repeats with the occurrence it belongs to.
+_TASK_RECURRING_CLAUSE = (
+    "(t.recurrence_unit IS NOT NULL OR EXISTS (SELECT 1 FROM tasks rp "
+    "WHERE rp.id = t.parent_task_id AND rp.recurrence_unit IS NOT NULL))"
+)
+
 
 # Thread identity of an input — every input on a thread resolves to the same
 # source link, so a thread collapses to one hit. Mirrors the inbox grouping:
@@ -169,9 +178,11 @@ _HIT_COLUMNS = "type, id, title, snippet, url, task_id, source, sender, status, 
 
 def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
     b = _BRANCHES[corpus]
-    # A future calendar occurrence must decay with distance just like a past
-    # one. Without abs(), far-future recurrences gain an exponential boost.
-    recency = f"exp(- abs(extract(epoch from (now() - {b['ts']}))) / (:half_life * 86400.0))"
+    # Far in the future is as stale as far in the past: a due date or calendar
+    # occurrence decays with distance either way. Without abs(), far-future
+    # recurrences gain an exponential boost.
+    anchor = b.get("recency", b["ts"])
+    recency = f"exp(- abs(extract(epoch from (now() - {anchor}))) / (:half_life * 86400.0))"
     if match:
         tsq = "to_tsquery('english', :tsquery)"
         score = f"ts_rank_cd({b['fts']}, {tsq}) * {recency}"
@@ -206,7 +217,8 @@ def _branch_sql(corpus: str, *, match: bool, filters_sql: str) -> str:
 
 
 def _filters_sql(
-    corpus: str, *, source, label, status, before, after, exclude_source, exclude_calendar_id, exclude_linked_inputs: bool
+    corpus: str, *, source, label, status, before, after, exclude_source, exclude_calendar_id,
+    exclude_linked_inputs: bool, recurring: bool,
 ) -> str:
     parts: list[str] = []
     ts = _BRANCHES[corpus]["ts"]
@@ -222,6 +234,8 @@ def _filters_sql(
             parts.append("lower(t.label) = lower(:label)")
         if status is not None:
             parts.append(_TASK_STATUS_CLAUSE)
+        if recurring:
+            parts.append(_TASK_RECURRING_CLAUSE)
     if corpus == INPUT:
         # One `source:` filter spans both origin corpora — matched against the
         # input's `source` column and the document's `provider` column.
@@ -279,6 +293,7 @@ def suggest(
     after: str | None = None,
     exclude_source: str | None = None,
     exclude_calendar_id: str | None = None,
+    recurring: bool = False,
 ) -> list[SuggestHit]:
     match = bool(tsquery)
     active = [c for c in (TASK, INPUT, NOTE, DOCUMENT) if c in branches]
@@ -302,6 +317,7 @@ def suggest(
                 exclude_source=exclude_source,
                 exclude_calendar_id=exclude_calendar_id,
                 exclude_linked_inputs=exclude_linked_inputs,
+                recurring=recurring,
             ),
         )
         for c in active
@@ -442,6 +458,10 @@ _F_INPUT = (
 )
 _F_TASK = (
     " AND (:f_label IS NULL OR lower(t.label) = lower(:f_label))"
+    " AND (:f_status IS NULL OR coalesce((SELECT ri.status FROM raw_inputs ri"
+    " WHERE ri.task_id = t.id AND ri.status <> 'duplicate'"
+    " ORDER BY ri.received_at DESC LIMIT 1), 'open') = :f_status)"
+    f" AND (:f_recurring IS NOT TRUE OR {_TASK_RECURRING_CLAUSE})"
     " AND (:f_before IS NULL OR t.updated_at < CAST(:f_before AS timestamptz))"
     " AND (:f_after IS NULL OR t.updated_at >= CAST(:f_after AS timestamptz))"
 )
@@ -593,7 +613,8 @@ def _hybrid_sql(corpora: frozenset[str], trigram: bool = False):
         binds.append(bindparam("f_source", type_=String()))
     if TASK in corpora:
         binds.append(bindparam("f_label", type_=String()))
-    if INPUT in corpora:
+        binds.append(bindparam("f_recurring", type_=Boolean()))
+    if TASK in corpora or INPUT in corpora:
         binds.append(bindparam("f_status", type_=String()))
     clause = text(sql).bindparams(*binds)
     _HYBRID_SQL_CACHE[(corpora, trigram)] = clause
@@ -624,8 +645,10 @@ def _load_display(
     )
     scored = corpus == NOTE and emb is not None
     sim_expr = "1.0 - (n.embedding <=> CAST(:emb AS vector))" if scored else "NULL::float"
+    # Only the task select projects a due date; the Enter search ranks by it.
+    due = "due_date" if corpus == TASK else "NULL::timestamptz AS due_date"
     sql = text(
-        f"SELECT type, id, title, snippet, url, task_id, source, sender, status, ts, similarity "
+        f"SELECT type, id, title, snippet, url, task_id, source, sender, status, ts, similarity, {due} "
         f"FROM (SELECT {select_expr}, {b['ts']} AS ts, {sim_expr} AS similarity FROM {b['from']} "
         f"WHERE {_ID_COL[corpus]}::text = ANY(:ids)"
         f") x"
@@ -648,6 +671,7 @@ def _load_display(
             ts=r.ts,
             score=0.0,
             similarity=float(r.similarity) if r.similarity is not None else None,
+            due_date=r.due_date,
         )
         for r in rows
     ]
@@ -692,6 +716,7 @@ def hybrid_search(
     status: str | None = None,
     before: str | None = None,
     after: str | None = None,
+    recurring: bool = False,
     trigram: bool = False,
     note_origin: bool = False,
 ) -> list[SuggestHit]:
@@ -722,8 +747,10 @@ def hybrid_search(
         params["f_source"] = source
     if TASK in corpora:
         params["f_label"] = label
-    if INPUT in corpora:
+        params["f_recurring"] = recurring
+    if TASK in corpora or INPUT in corpora:
         params["f_status"] = status
+    if INPUT in corpora:
         params["min_input_chars"] = min_input_chars
     if trigram:
         session.execute(

@@ -1,4 +1,4 @@
-"""Start and run agent hand-offs (docs/handoff-plan.md).
+"""Start and run agent hand-offs.
 
 `start` is called right after the extraction agent's task is committed.
 Research and drafts run at once in the background; a code change waits for

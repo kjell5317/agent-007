@@ -111,6 +111,37 @@ async def test_search_hits_returns_navigable_issue_and_pr_with_modified_dates(mo
     assert [hit.id for hit in hits] == ["acme/widgets#7", "acme/widgets#8"]
     assert hits[0].ts.isoformat() == "2026-07-01T10:00:00+00:00"
     assert hits[1].url.endswith("/pull/8")
+    assert hits[0].meta == {"repo": "acme/widgets"}
+
+
+@pytest.mark.asyncio
+async def test_search_hits_carry_the_connected_label_and_a_repo_free_title(monkeypatch):
+    _install(
+        monkeypatch,
+        search=_response(200, {"total_count": 1, "items": [_issue(title="[Acme/Widgets] Fix it")]}),
+        repos=_response(200, [_repo("acme/widgets")]),
+    )
+    monkeypatch.setattr(
+        github.labels_store, "repos_by_name", lambda session: {"Widgets": "ACME/widgets"}
+    )
+    [hit] = await github.search_hits("fix", limit=10)
+    assert hit.title == "Fix it"
+    assert hit.meta == {"repo": "acme/widgets", "label": "Widgets"}
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("acme/widgets#12 Fix the parser", "Fix the parser"),
+        ("[acme/widgets] Fix the parser", "Fix the parser"),
+        ("acme/widgets: Fix the parser", "Fix the parser"),
+        ("Fix acme/widgets parser", "Fix acme/widgets parser"),
+        ("acme/widgets-cli Fix", "acme/widgets-cli Fix"),
+        ("acme/widgets", ""),
+    ],
+)
+def test_strip_repo_prefix(title, expected):
+    assert github.strip_repo_prefix(title, "acme/widgets") == expected
 
 
 @pytest.mark.asyncio

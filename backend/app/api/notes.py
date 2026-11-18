@@ -1,6 +1,7 @@
 """Note endpoints — audit and curate the agent's long-term memory.
 
   * GET    /notes            — list notes, newest first
+  * GET    /notes/{note_id}  — one note (a search hit opens it)
   * PATCH  /notes/{note_id}  — edit a note's content (re-embeds it)
   * DELETE /notes/{note_id}  — delete a note
 
@@ -30,6 +31,14 @@ def list_notes(
     session: Session = Depends(get_session),
 ) -> list[NoteRead]:
     return [NoteRead.from_item(item) for item in notes_store.list_all(session, limit=limit, source=source, query=query)]
+
+
+@router.get("/{note_id}", response_model=NoteRead)
+def get_note(note_id: uuid.UUID, session: Session = Depends(get_session)) -> NoteRead:
+    item = notes_store.get_item(session, note_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
+    return NoteRead.from_item(item)
 
 
 @router.get("/{note_id}/history", response_model=list[NoteAuditRead])

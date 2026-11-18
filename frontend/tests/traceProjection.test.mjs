@@ -9,7 +9,10 @@ const { outputText } = ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
 );
 const exports = {};
-vm.runInNewContext(outputText, { exports, require: () => ({ toYaml: () => "" }) });
+vm.runInNewContext(outputText, {
+  exports,
+  require: () => ({ toYaml: () => "", displaySender: (from) => from }),
+});
 
 test("projects prose in order with tool calls from failed extraction attempts", () => {
   const trace = {

@@ -1,7 +1,7 @@
 // Client for the external kotx coding-agent API, proxied by the backend
 // under /kotx (see backend app.api.kotx). kotx errors come back as
-// `{ "error": "…" }`; list/detail are JSON, the …/task, …/review, and
-// …/merge endpoints return raw markdown.
+// `{ "error": "…" }`; list/detail are JSON, the …/task and …/review
+// endpoints return raw markdown.
 
 export type KotxState =
   | "drafting"
@@ -76,36 +76,6 @@ export interface KotxMergeContext {
   commentMarkdown: string | null;
 }
 
-export interface KotxContainer {
-  id: string;
-  name: string;
-  runId: number;
-  image: string;
-  state: string;
-  status: string;
-  createdAt: number;
-}
-
-export interface KotxLogEntry {
-  offset: number;
-  record?: unknown;
-  raw?: string;
-  parseError?: string;
-}
-
-export interface KotxLogPage {
-  text: string | null;
-  hasMoreBefore: boolean;
-  // Byte cursor to pass as `before` when paging older; null when there's no
-  // older page.
-  before: number | null;
-}
-
-export interface KotxLogParams {
-  limit?: number;
-  before?: number;
-}
-
 export interface KotxRunRequest {
   repo?: string;
   title?: string;
@@ -163,8 +133,7 @@ async function jsonRequestOrNull<T>(path: string, opts: RequestInit = {}): Promi
   return body as T;
 }
 
-// Returns null on 404 — the document isn't generated yet (brief/review not
-// drafted, or prompt/log absent until a run has started).
+// Returns null on 404 — the brief/review isn't drafted yet.
 async function markdownRequest(path: string): Promise<string | null> {
   const res = await fetch(`/kotx${path}`);
   if (res.status === 404) return null;
@@ -180,53 +149,6 @@ async function markdownRequest(path: string): Promise<string | null> {
     throw new KotxError(res.status, msg);
   }
   return text;
-}
-
-// kotx returns the log as a JSON page: `{ runId, entries, page }`, where each
-// entry is `{ offset, record }` (parsed JSONL) or `{ offset, raw, parseError }`
-// (a line that wasn't valid JSON). Flatten entries back to one line each — a
-// stringified record or the raw text — and let the caller pretty-print them.
-function entryToLine(entry: KotxLogEntry): string {
-  if (typeof entry.raw === "string") return entry.raw;
-  if ("record" in entry) return JSON.stringify(entry.record);
-  return "";
-}
-
-interface LogPageResponse {
-  entries?: KotxLogEntry[];
-  page?: {
-    hasMoreBefore?: boolean;
-    nextBefore?: number | null;
-  };
-}
-
-async function logRequest(path: string, params: KotxLogParams = {}): Promise<KotxLogPage> {
-  const qs = new URLSearchParams();
-  if (params.limit !== undefined) qs.set("limit", String(params.limit));
-  if (params.before !== undefined) qs.set("before", String(params.before));
-
-  const query = qs.toString();
-  const res = await fetch(`/kotx${path}${query ? `?${query}` : ""}`);
-  if (res.status === 404) return { text: null, hasMoreBefore: false, before: null };
-  const text = await res.text();
-  if (!res.ok) {
-    let msg = res.statusText;
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === "object" && "error" in parsed) msg = String(parsed.error);
-    } catch {
-      /* keep statusText */
-    }
-    throw new KotxError(res.status, msg);
-  }
-
-  const body = JSON.parse(text) as LogPageResponse;
-  const entries = body.entries ?? [];
-  return {
-    text: entries.map(entryToLine).join("\n"),
-    hasMoreBefore: body.page?.hasMoreBefore ?? false,
-    before: body.page?.nextBefore ?? null,
-  };
 }
 
 function putMarkdown(path: string, content: string) {
@@ -246,10 +168,8 @@ export const kotx = {
   putBrief: (id: number, content: string) => putMarkdown(`/tasks/${id}/task`, content),
   getReview: (id: number) => markdownRequest(`/tasks/${id}/review`),
   putReview: (id: number, content: string) => putMarkdown(`/tasks/${id}/review`, content),
-  getMerge: (id: number) => markdownRequest(`/tasks/${id}/merge`),
   getMergeContext: (id: number) =>
     jsonRequestOrNull<KotxMergeContext>(`/tasks/${id}/merge/context`),
-  getPrompt: (id: number) => markdownRequest(`/tasks/${id}/prompt`),
   // The proposed PR title + body for an implement task. null until proposed.
   getPr: (id: number) => jsonRequestOrNull<KotxPr>(`/tasks/${id}/pr`),
   putPr: (id: number, pr: KotxPr) =>
@@ -258,8 +178,6 @@ export const kotx = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(pr),
     }),
-  getLog: (id: number, params: KotxLogParams = {}) =>
-    logRequest(`/tasks/${id}/log`, params),
 
   start: (id: number) =>
     jsonRequest<{ ok: true }>(`/tasks/${id}/start`, { method: "POST" }),
@@ -280,6 +198,4 @@ export const kotx = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     }),
-
-  listContainers: () => jsonRequest<KotxContainer[]>(`/containers`),
 };

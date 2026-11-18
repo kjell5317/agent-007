@@ -30,3 +30,24 @@ test("subtasks of a split occurrence show the occurrence's repeat", () => {
   );
   assert.equal(exports.taskRecurrence({ recurrence_unit: null, recurrence_interval: null, parent_card: null }), null);
 });
+
+test("tasks planned for later sort after every other task", () => {
+  const task = (id, fields) => ({
+    id,
+    schedule_status: "scheduled",
+    scheduled_date: null,
+    due_date: null,
+    created_at: "2026-11-01T00:00:00Z",
+    ...fields,
+  });
+  const tasks = [
+    task("deferred-soon", { schedule_status: "deferred", due_date: "2026-11-30T00:00:00Z" }),
+    task("planned", { scheduled_date: "2026-11-18T09:00:00Z", due_date: "2026-12-05T00:00:00Z" }),
+    task("deferred-late", { schedule_status: "deferred", due_date: "2026-12-10T00:00:00Z" }),
+    task("pending", { schedule_status: "pending", due_date: "2026-12-01T00:00:00Z" }),
+  ];
+  const order = (mode) => [...tasks].sort((a, b) => exports.compareTasks(a, b, mode)).map((t) => t.id);
+
+  assert.deepEqual(order("scheduled"), ["pending", "planned", "deferred-soon", "deferred-late"]);
+  assert.deepEqual(order("due"), ["pending", "planned", "deferred-soon", "deferred-late"]);
+});

@@ -21,6 +21,7 @@ import { useWorkActions } from "@/components/work/useWorkActions";
 import { useLabels } from "@/hooks/useLabels";
 import { api } from "@/lib/api";
 import { dueDateBadgeVariant, fmtClock, fmtDue } from "@/lib/dates";
+import { latestHandoff } from "@/lib/handoff";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
@@ -82,25 +83,25 @@ export function TaskCard({
   const kotxAction = kotxTask ? actionHint(kotxTask) : null;
   const canReopen = task.status !== "open" && task.kotx_task_id == null;
   const displayDate = task.due_date;
-  const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
+  const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation, task.status);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
-  const deferred = task.schedule_status === "deferred";
+  const handoffRunning = latestHandoff(task)?.state === "running";
   const recurrence = taskRecurrence(task);
   const recurrenceTitle = recurrence
     ? `${recurrence.inherited ? "Part of a task that repeats" : "Repeats"} ${recurrence.label.toLowerCase()}`
     : null;
   const cardBorderClass =
-    task.is_container ? null
-      : work.running ? "border-primary/50"
+    work.running ? "border-flow-primary"
+      : handoffRunning ? "border-flow-sky"
+      : task.is_container ? null
       : task.schedule_status === "pending" && !work.waiting ? "border-emerald-500/70"
       : task.kotx_task_id != null ? "border-primary/50"
       : unseen ? "border-emerald-500/70"
       : null;
   const locationProbeKey = [
-    work.running,
     work.waiting,
-    deferred,
+    handoffRunning,
     displayDate ?? "",
     task.label ?? "",
     displayLocation ?? "",
@@ -217,17 +218,14 @@ export function TaskCard({
   }
 
   // On kotx cards the check-off dismisses (discards the run — done is handled
-  // through kotx), but keeps the same icon and animation as every other task.
+  // through kotx).
   const crossOff = () => {
     if (task.status !== "open" || crossed || busy) return;
     if (task.is_container) {
       void withBusy(() => api.markNotTask(task.id), "Deleted parent and dismissed subtasks");
       return;
     }
-    if (!kotxTask) {
-      work.complete();
-      return;
-    }
+    if (!kotxTask) return;
     setCrossing(true);
     setTimeout(() => {
       if (kotxTask.canDiscard) {
@@ -303,20 +301,36 @@ export function TaskCard({
         className={cn("cursor-pointer", compact && "flex h-full items-center")}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
-          onOpen(task.id);
+          if (work.running) work.focus();
+          else onOpen(task.id);
         }}
       >
         <div className="flex w-full items-center gap-2">
-          {task.status === "open" ? (
+          {workable ? (
+            <IconButton
+              label={work.running ? "Pause" : "Start"}
+              disabled={busy || crossed}
+              onClick={work.running ? work.pause : work.start}
+              className={work.running ? "text-primary hover:bg-accent" : "text-muted-foreground hover:bg-accent hover:text-primary"}
+            >
+              {crossed ? (
+                <CircleCheckBig className="h-5 w-5 text-primary" />
+              ) : work.running ? (
+                <Pause className="h-5 w-5" />
+              ) : (
+                <Play className="h-5 w-5" />
+              )}
+            </IconButton>
+          ) : task.status === "open" ? (
             <IconButton
               label={
                 kotxTask
                   ? kotxTask.canDiscard
                     ? "Dismiss run"
                     : "Mark not a task"
-                  : task.is_container ? "Delete parent and dismiss subtasks" : "Complete"
+                  : "Delete parent and dismiss subtasks"
               }
-              disabled={busy || crossed || work.busy}
+              disabled={busy || crossed}
               onClick={crossOff}
               className={task.is_container ? "text-muted-foreground hover:text-destructive" : "text-muted-foreground hover:text-primary"}
             >
@@ -363,13 +377,6 @@ export function TaskCard({
               ref={metadataRef}
               className={cn("mt-1 flex items-center gap-x-2 gap-y-1 text-xs text-muted-foreground", compact ? "overflow-hidden whitespace-nowrap" : "flex-wrap")}
             >
-              {work.running && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-                  Working
-                </span>
-              )}
-
               {work.waiting && task.waiting_since && (
                 <Badge variant="muted" className="gap-1">
                   <Hourglass className="h-3 w-3" />
@@ -383,13 +390,7 @@ export function TaskCard({
                 </Badge>
               )}
 
-              {deferred && (
-                <Badge variant="muted" title={`Not planned yet — due ${fmtDue(task.due_date)}`}>
-                  Later
-                </Badge>
-              )}
-
-              <HandoffChip task={task} />
+              {!handoffRunning && <HandoffChip task={task} />}
 
               {task.label && (
                 <span
@@ -428,22 +429,10 @@ export function TaskCard({
                 {kotxAction}
               </Button>
             )
-          ) : workable ? (
-            <div className="flex shrink-0 items-center gap-1">
-              {work.waiting && (
-                <Button size="sm" variant="secondary" disabled={work.busy || crossed} onClick={work.resume}>
-                  Resume
-                </Button>
-              )}
-              <IconButton
-                label={work.running ? "Pause" : "Start"}
-                disabled={work.busy || crossed}
-                onClick={work.running ? work.pause : work.start}
-                className={work.running ? "text-primary hover:bg-accent" : "text-muted-foreground hover:bg-accent hover:text-primary"}
-              >
-                {work.running ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-              </IconButton>
-            </div>
+          ) : workable && work.waiting ? (
+            <Button size="sm" variant="secondary" className="shrink-0" disabled={crossed} onClick={work.resume}>
+              Resume
+            </Button>
           ) : null}
         </div>
       </CardContent>

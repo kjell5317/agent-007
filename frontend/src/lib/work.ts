@@ -17,13 +17,6 @@ export function runningSince(task: Pick<Task, "status" | "running_since">): stri
   return task.status === "open" ? task.running_since : null;
 }
 
-// Without any recorded work, Complete first asks when the work happened.
-export function needsWorkLog(
-  task: Pick<Task, "status" | "running_since" | "worked_minutes">,
-): boolean {
-  return !runningSince(task) && !task.worked_minutes;
-}
-
 export function elapsedMs(since: string, now: number): number {
   return Math.max(0, now - Date.parse(since));
 }
@@ -34,6 +27,53 @@ export function workedMinutes(
 ): number {
   const since = runningSince(task);
   return task.worked_minutes + (since ? elapsedMs(since, now) / 60_000 : 0);
+}
+
+export type WorkStep = "start" | "resume" | "complete" | PauseReason;
+
+function stopSession(task: Task, now: number): Task {
+  return { ...task, running_since: null, worked_minutes: Math.round(workedMinutes(task, now)) };
+}
+
+// What the server will answer to a work tap, so the tap shows before it does.
+export function afterWork(task: Task, step: WorkStep, now: number): Task {
+  const at = new Date(now).toISOString();
+  switch (step) {
+    case "start":
+      return { ...task, running_since: at, waiting_since: null, schedule_state: "placed", scheduled_date: at };
+    case "resume":
+      return { ...task, waiting_since: null, schedule_state: "unplaced" };
+    case "complete":
+      return { ...stopSession(task, now), status: "closed" };
+    case "waiting":
+      return { ...stopSession(task, now), schedule_state: "waiting", waiting_since: at, scheduled_date: null };
+    default:
+      return stopSession(task, now);
+  }
+}
+
+// Starting a task pauses the one that ran before, on the server as well.
+export function withOnlyRunning(tasks: Task[], changed: Task, now: number): Task[] {
+  if (!runningSince(changed)) return tasks;
+  return tasks.map((task) => (task.id !== changed.id && runningSince(task) ? stopSession(task, now) : task));
+}
+
+export interface FocusSession {
+  taskId: string;
+  since: string;
+}
+
+// The server's running_since lands a moment after the tap's own, so a close
+// made in between still counts for the session it was made on.
+const SAME_SESSION_MS = 60_000;
+
+export function focusClosedFor(
+  closed: FocusSession | null,
+  task: Pick<Task, "id" | "status" | "running_since">,
+): boolean {
+  const since = runningSince(task);
+  if (!closed || !since || closed.taskId !== task.id) return false;
+  return Math.abs(Date.parse(closed.since) - Date.parse(since)) < SAME_SESSION_MS;
 }
 
 export function sessionMinutes(

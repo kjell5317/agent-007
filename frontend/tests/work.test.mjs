@@ -19,13 +19,6 @@ test("only open tasks count as running", () => {
   assert.equal(work.runningSince({ status: "open", running_since: null }), null);
 });
 
-test("complete asks for a log only when no work was recorded", () => {
-  const idle = { status: "open", running_since: null, worked_minutes: 0 };
-  assert.equal(work.needsWorkLog(idle), true);
-  assert.equal(work.needsWorkLog({ ...idle, worked_minutes: 20 }), false);
-  assert.equal(work.needsWorkLog({ ...idle, running_since: "2026-11-17T11:00:00Z" }), false);
-});
-
 test("the stopwatch counts up in minutes, then hours", () => {
   assert.equal(work.fmtElapsed(0), "0:00");
   assert.equal(work.fmtElapsed(7_900), "0:07");
@@ -56,4 +49,65 @@ test("sessions are labelled by how they ended", () => {
   assert.equal(work.sessionLabel({ ...span, end_reason: "switched" }), "Switched task");
   assert.equal(work.sessionLabel({ ...span, end_reason: "completed", source: "retro" }), "Logged");
   assert.equal(work.sessionLabel({ ...span, ended_at: null, end_reason: null }), "Running");
+});
+
+const idle = {
+  id: "a", status: "open", running_since: null, waiting_since: null, worked_minutes: 20,
+  schedule_state: "placed", scheduled_date: "2026-11-17T15:00:00Z",
+};
+const runningTask = { ...idle, running_since: "2026-11-17T11:30:00Z" };
+
+test("a start shows as running from now, pinned to now", () => {
+  const started = work.afterWork({ ...idle, schedule_state: "waiting", waiting_since: "2026-11-17T09:00:00Z" }, "start", now);
+  assert.equal(started.running_since, "2026-11-17T12:00:00.000Z");
+  assert.equal(started.scheduled_date, "2026-11-17T12:00:00.000Z");
+  assert.equal(started.schedule_state, "placed");
+  assert.equal(started.waiting_since, null);
+});
+
+test("a pause banks the session's minutes", () => {
+  const paused = work.afterWork(runningTask, "break", now);
+  assert.equal(paused.running_since, null);
+  assert.equal(paused.worked_minutes, 50);
+  assert.equal(paused.schedule_state, "placed");
+  assert.equal(work.afterWork(runningTask, "interrupted", now).worked_minutes, 50);
+});
+
+test("waiting takes the task off the calendar until resumed", () => {
+  const waiting = work.afterWork(runningTask, "waiting", now);
+  assert.equal(waiting.schedule_state, "waiting");
+  assert.equal(waiting.waiting_since, "2026-11-17T12:00:00.000Z");
+  assert.equal(waiting.scheduled_date, null);
+  const resumed = work.afterWork(waiting, "resume", now);
+  assert.equal(resumed.schedule_state, "unplaced");
+  assert.equal(resumed.waiting_since, null);
+});
+
+test("complete closes the task and ends its session", () => {
+  const done = work.afterWork(runningTask, "complete", now);
+  assert.equal(done.status, "closed");
+  assert.equal(done.running_since, null);
+  assert.equal(done.worked_minutes, 50);
+});
+
+test("starting one task stops the one that ran before", () => {
+  const other = { ...runningTask, id: "b" };
+  const next = work.afterWork({ ...idle, id: "c" }, "start", now);
+  const [a, b] = work.withOnlyRunning([idle, other], next, now);
+  assert.equal(a, idle);
+  assert.equal(b.running_since, null);
+  assert.equal(b.worked_minutes, 50);
+  const list = [idle, other];
+  assert.equal(work.withOnlyRunning(list, idle, now), list);
+});
+
+test("a closed focus overlay stays closed for its session only", () => {
+  const closed = { taskId: "a", since: "2026-11-17T11:30:00.000Z" };
+  assert.equal(work.focusClosedFor(closed, runningTask), true);
+  // The server's start time replacing the tap's own is the same session.
+  assert.equal(work.focusClosedFor(closed, { ...runningTask, running_since: "2026-11-17T11:30:02Z" }), true);
+  assert.equal(work.focusClosedFor(closed, { ...runningTask, running_since: "2026-11-17T11:45:00Z" }), false);
+  assert.equal(work.focusClosedFor(closed, { ...runningTask, id: "b" }), false);
+  assert.equal(work.focusClosedFor(null, runningTask), false);
+  assert.equal(work.focusClosedFor(closed, idle), false);
 });

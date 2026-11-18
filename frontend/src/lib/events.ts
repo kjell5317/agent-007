@@ -38,6 +38,12 @@ function ensureOpen() {
   };
 }
 
+// A change made on this device, delivered like a push so every view shows it
+// before the server answers.
+export function publishLocal(event: ServerEvent): void {
+  handlers.forEach((h) => h(event));
+}
+
 export function subscribeEvents(handler: Handler): () => void {
   handlers.add(handler);
   ensureOpen();

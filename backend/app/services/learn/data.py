@@ -59,16 +59,16 @@ def preference_rows(log_rows, now: datetime) -> list[Row]:
 
     for (_, _), slot_rows in _by_slot(log_rows).items():
         kinds = {r.kind for r in slot_rows}
-        if kinds & {"no_response", "abandoned"}:
+        if "abandoned" in kinds:
             continue
         snapshot = _slot_features(slot_rows)
         if snapshot is None:
             continue
         closed = next((r for r in slot_rows if r.kind == "closed"), None)
         cue = next((r for r in slot_rows if r.kind == "cue_sent"), None)
-        if kinds & {"not_done", "cue_snoozed", "cue_declined"}:
+        if kinds & {"cue_snoozed", "cue_declined"}:
             outcome = 0.0
-        elif kinds & {"done_confirmed", "still_working", "started"}:
+        elif "started" in kinds:
             outcome = 1.0
         elif closed is not None and closed.slot_end is not None and _closed_in_slot(
             closed, closed.slot_start, closed.slot_end
@@ -93,7 +93,7 @@ def duration_observations(log_rows, now: datetime) -> list[Observation]:
     out: list[Observation] = []
     for (task_id, slot_start), slot_rows in _by_slot(log_rows).items():
         kinds = {r.kind for r in slot_rows}
-        if kinds & {"abandoned", "no_response", "not_done"}:
+        if "abandoned" in kinds:
             continue
         snapshot = _slot_features(slot_rows) or {}
         meta = snapshot.get("meta") or next(
@@ -105,18 +105,7 @@ def duration_observations(log_rows, now: datetime) -> list[Observation]:
         closed = next((r for r in slot_rows if r.kind == "closed"), None)
         stamp = max(r.created_at for r in slot_rows)
         weight = decay(stamp, now)
-        if "still_working" in kinds:
-            if closed is None:
-                continue
-            actual = (closed.created_at - slot_start).total_seconds() / 60
-            out.append(Observation(meta["estimate"], actual, group, False, weight, task_id))
-        elif "done_confirmed" in kinds:
-            done = next(r for r in slot_rows if r.kind == "done_confirmed")
-            if done.slot_end is None:
-                continue
-            bound = (done.slot_end - slot_start).total_seconds() / 60
-            out.append(Observation(meta["estimate"], bound, group, True, weight, task_id))
-        elif closed is not None and closed.slot_end is not None and _closed_in_slot(
+        if closed is not None and closed.slot_end is not None and _closed_in_slot(
             closed, slot_start, closed.slot_end
         ):
             bound = max(5.0, (closed.created_at - slot_start).total_seconds() / 60)

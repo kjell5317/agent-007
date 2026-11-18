@@ -18,7 +18,6 @@ from app.db.models.scheduling import (
     ScheduleLog,
     TaskOverride,
 )
-from app.db.models.search_result_click import SearchResultClick
 from app.db.models.task import Task
 from app.db.models.work import DayContext, WorkSession
 
@@ -40,7 +39,6 @@ __all__ = [
     "RawInput",
     "RouteCache",
     "ScheduleLog",
-    "SearchResultClick",
     "Task",
     "TaskHandoff",
     "WorkSession",

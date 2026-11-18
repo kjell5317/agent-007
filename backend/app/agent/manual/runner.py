@@ -38,6 +38,7 @@ from app.agent.helpers.precedents import (
     candidate_trace_ref,
     task_candidate_lines,
 )
+from app.agent.helpers.tool_results import tool_result_entry
 from app.agent.tools import new_input_tools
 from app.config import get_settings
 from app.db.clients import labels as labels_store
@@ -187,7 +188,7 @@ async def extract_task_fields(
                 if updated_id:
                     trace.setdefault("events_updated", []).append(updated_id)
             iter_log.setdefault("tool_results", []).append(
-                _tool_result_entry(
+                tool_result_entry(
                     tu.name,
                     tin,
                     out,
@@ -216,7 +217,7 @@ async def extract_task_fields(
                     raise ValueError("Manual update_task must change a task field or status")
                 trace["action"] = terminal_use.name
             iter_log.setdefault("tool_results", []).append(
-                _tool_result_entry(
+                tool_result_entry(
                     terminal_use.name,
                     payload,
                     "extracted task fields",
@@ -284,50 +285,12 @@ async def extract_task_fields(
     return payload
 
 
-def _tool_result_entry(
-    name: str,
-    tool_input: dict[str, Any],
-    summary: str,
-    *,
-    status: str = "success",
-    changed_state: bool = False,
-    artifact_refs: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "name": name,
-        "status": status,
-        "purpose": _tool_purpose(name, tool_input),
-        "result_markdown": str(summary or ""),
-        "preview": _truncate_inline(summary, 200),
-        "result_summary": _truncate_inline(summary, 500),
-        "changed_state": changed_state,
-        "artifact_refs": artifact_refs or [],
-    }
-
-
-def _tool_purpose(name: str, tool_input: dict[str, Any]) -> str:
-    if name == "search_notes":
-        return f"search notes for {_truncate_inline(str(tool_input.get('query') or ''), 80)}"
-    if name == "create_task":
-        return f"create task {_truncate_inline(str(tool_input.get('title') or ''), 80)}"
-    if name == "update_task":
-        return f"{name.replace('_', ' ')} {tool_input.get('existing_task_id') or ''}"
-    return name
-
-
 def _without_notes(tool: dict[str, Any]) -> dict[str, Any]:
     """A copy of a tool schema with its `notes` property removed, so the agent
     is never offered a place to write long-term memory."""
     params = tool["parameters"]
     props = {k: v for k, v in params["properties"].items() if k != "notes"}
     return {**tool, "parameters": {**params, "properties": props}}
-
-
-def _truncate_inline(value: str, limit: int) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)].rstrip() + "..."
 
 
 def _backstop_required(payload: dict, *, raw_id) -> None:

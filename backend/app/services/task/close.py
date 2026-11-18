@@ -24,6 +24,9 @@ from app.services.task.vacate import vacated_commute_window, replan_vacated_wind
 
 log = logging.getLogger(__name__)
 
+# A subtask no longer holds its parent open once it's completed or dismissed.
+FINISHED = frozenset({"closed", "not_task"})
+
 
 async def close_task(
     session: Session,
@@ -42,7 +45,7 @@ async def close_task(
     if getattr(task, "is_container", False):
         children = tasks_store.children(session, task_id)
         statuses = tasks_store.latest_status_for(session, [child.id for child in children])
-        if any(statuses.get(child.id, "open") != "closed" for child in children):
+        if any(statuses.get(child.id, "open") not in FINISHED for child in children):
             raise ValueError("Complete all subtasks before closing the parent task")
     kotx_task_id = task.kotx_task_id
     series_id = getattr(task, "recurrence_series_id", None)
@@ -98,12 +101,25 @@ async def close_task(
             log.exception("repeat planning failed · series=%s", series_id)
     parent_id = getattr(task, "parent_task_id", None)
     if parent_id:
-        siblings = tasks_store.children(session, parent_id)
-        statuses = tasks_store.latest_status_for(session, [sibling.id for sibling in siblings])
-        if siblings and all(statuses.get(sibling.id, "open") == "closed" for sibling in siblings):
-            parent_status = tasks_store.latest_status_for(session, [parent_id]).get(parent_id, "open")
-            if parent_status != "closed":
-                await close_task(session, parent_id, award_points=False)
+        await settle_parent(session, parent_id)
+
+
+async def settle_parent(session: Session, parent_id: uuid.UUID) -> None:
+    """An open parent finishes with its last open subtask: it closes when any
+    subtask was completed, and is dismissed when every one was dismissed."""
+    children = tasks_store.children(session, parent_id)
+    by_id = tasks_store.latest_status_for(session, [child.id for child in children])
+    statuses = [by_id.get(child.id, "open") for child in children]
+    if not children or any(status not in FINISHED for status in statuses):
+        return
+    if tasks_store.latest_status_for(session, [parent_id]).get(parent_id, "open") != "open":
+        return
+    if "closed" in statuses:
+        await close_task(session, parent_id, award_points=False)
+    else:
+        from app.services.task.dismiss import dismiss_task
+
+        await dismiss_task(session, parent_id)
 
 
 async def _log_close(session: Session, task) -> None:

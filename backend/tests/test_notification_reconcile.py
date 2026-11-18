@@ -175,6 +175,12 @@ async def test_reconcile_session_sends_clears_and_records(monkeypatch):
     async def fake_clear(tag):
         cleared.append(tag)
 
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz)
+
+    monkeypatch.setattr(settle, "datetime", FrozenDatetime)
     monkeypatch.setattr(settle.tasks_store, "open_schedulable", lambda _s: [task])
     monkeypatch.setattr(settle.ledger, "of_kinds", lambda _s, kinds: ledger_rows)
     monkeypatch.setattr(settle.ledger, "record_sent", lambda _s, **kw: recorded.append(kw["key"]))

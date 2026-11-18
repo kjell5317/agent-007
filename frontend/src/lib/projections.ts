@@ -1,4 +1,5 @@
 import { toYaml } from "@/lib/format";
+import { displaySender } from "@/lib/inbox";
 
 export interface ProjectionField {
   label: string;
@@ -40,93 +41,7 @@ export interface TraceProjection {
   tools: ToolRow[];
 }
 
-export interface MetadataProjection {
-  fields: ProjectionField[];
-}
-
-export interface LogRow {
-  id: string;
-  kind: "decision" | "tool" | "action" | "event";
-  indicator: string;
-  recordId?: string;
-  status: string;
-  title: string;
-  subtitle?: string;
-  body?: string;
-  bodyFormat?: "markdown" | "yaml" | "text";
-  tokens: ProjectionField[];
-}
-
-export interface KotxLogProjection {
-  rows: LogRow[];
-  rawFallback: string;
-  infrastructureCount: number;
-}
-
 type JsonRecord = Record<string, unknown>;
-
-const METADATA_KEYS: [string, string][] = [
-  ["from", "Sender"],
-  ["sender", "Sender"],
-  ["to", "To"],
-  ["recipients", "Recipients"],
-  ["cc", "Cc"],
-  ["subject", "Subject"],
-  ["date", "Date"],
-  ["received_at", "Received"],
-  ["thread_id", "Thread"],
-  ["channel", "Channel"],
-  ["channel_id", "Channel"],
-  ["account", "Account"],
-  ["url", "URL"],
-  ["link", "URL"],
-  ["permalink", "URL"],
-  ["attachments", "Attachments"],
-  ["attachment_count", "Attachments"],
-  ["is_dm", "Direct message"],
-  ["direct_message", "Direct message"],
-];
-
-const INFRA_KEYS = new Set([
-  "cache",
-  "cache_control",
-  "embedding",
-  "embedded_query",
-  "llm",
-  "meta",
-  "model",
-  "provider",
-  "retry",
-  "retries",
-  "timing",
-  "tokens",
-  "usage",
-]);
-
-export function projectSourceMetadata(
-  source: string,
-  externalId: string | null,
-  metadata: JsonRecord | null | undefined,
-): MetadataProjection {
-  const fields: ProjectionField[] = [{ label: "Source", value: source }];
-  const hiddenKeys = hiddenMetadataKeys(source);
-  if (externalId && !hiddenKeys.has("external_id")) {
-    fields.push({ label: "External id", value: externalId });
-  }
-
-  const seen = new Set<string>();
-  const meta = metadata ?? {};
-  for (const [key, label] of METADATA_KEYS) {
-    if (hiddenKeys.has(key)) continue;
-    if (seen.has(label)) continue;
-    const rendered = renderValue(meta[key]);
-    if (!rendered) continue;
-    seen.add(label);
-    fields.push({ label, value: rendered });
-  }
-
-  return { fields };
-}
 
 export function projectAgentTrace(trace: unknown): TraceProjection {
   const record = asRecord(trace) ?? {};
@@ -182,39 +97,6 @@ function currentTaskFields(trace: JsonRecord): ProjectionField[] {
   addField(fields, "link", stringValue(task.link));
   addField(fields, "label", stringValue(task.label));
   return fields;
-}
-
-export function projectKotxLog(text: string | null): KotxLogProjection {
-  if (!text?.trim()) {
-    return { rows: [], rawFallback: "", infrastructureCount: 0 };
-  }
-
-  const records = parseJsonRecords(text);
-  if (records.length === 0) {
-    return {
-      rows: [],
-      rawFallback: text,
-      infrastructureCount: 0,
-    };
-  }
-
-  const rows: LogRow[] = [];
-  let infrastructureCount = 0;
-
-  records.forEach((record, index) => {
-    const row = logRow(record, index);
-    if (row && !isInfrastructureLog(record)) {
-      rows.push(row);
-    } else {
-      infrastructureCount += 1;
-    }
-  });
-
-  return {
-    rows,
-    rawFallback: "",
-    infrastructureCount,
-  };
 }
 
 function collectEvidence(trace: JsonRecord): EvidenceRow[] {
@@ -287,7 +169,7 @@ function evidenceFromRecord(
     similarity: similarityValue(record.similarity ?? record.sim),
     taskId: stringValue(record.task_id),
     label: stringValue(record.label),
-    sender: senderDisplayName(stringValue(record.sender) ?? stringValue(record.from)),
+    sender: senderOf(record),
     receivedAt: stringValue(record.received_at),
     selected: Boolean(record.selected),
   };
@@ -379,218 +261,6 @@ function toolRowsFromBlocks(
       },
     ];
   });
-}
-
-function logRow(record: JsonRecord, index: number): LogRow | null {
-  const indicator =
-    stringValue(record.type) ??
-    stringValue(record.kind) ??
-    stringValue(record.event) ??
-    "event";
-  const recordId =
-    stringValue(record.id) ??
-    stringValue(record.record_id) ??
-    stringValue(record.item_id) ??
-    stringValue(record.run_item_id) ??
-    stringValue(record.call_id);
-  const message =
-    stringValue(record.message) ??
-    stringValue(record.msg) ??
-    stringValue(record.event) ??
-    stringValue(record.type);
-  const event = `${stringValue(record.event) ?? ""} ${stringValue(record.type) ?? ""} ${stringValue(record.kind) ?? ""}`.toLowerCase();
-  const toolName =
-    stringValue(record.tool) ??
-    stringValue(record.tool_name) ??
-    stringValue(asRecord(record.tool_call)?.name);
-  const status =
-    stringValue(record.status) ??
-    stringValue(record.level) ??
-    stringValue(record.outcome) ??
-    "event";
-  const payload =
-    asRecord(record.payload) ??
-    asRecord(record.item) ??
-    asRecord(record.data) ??
-    asRecord(record.body);
-  const title =
-    stringValue(record.title) ??
-    stringValue(payload?.title) ??
-    stringValue(payload?.name) ??
-    stringValue(payload?.summary);
-  const tokens = tokenFields(record);
-
-  if (event.includes("item_started")) {
-    return {
-      id: `log-${index + 1}`,
-      kind: "event",
-      indicator,
-      recordId,
-      status,
-      title: title ?? nonRepeatedMessage(message, indicator) ?? "Item started",
-      body: toYaml(payload ?? displayRecord(record)),
-      bodyFormat: "yaml",
-      tokens,
-    };
-  }
-
-  if (event.includes("item_completed")) {
-    const text =
-      stringValue(record.text) ??
-      stringValue(record.output) ??
-      stringValue(record.result) ??
-      stringValue(payload?.text) ??
-      stringValue(payload?.output) ??
-      stringValue(payload?.result) ??
-      nonRepeatedMessage(message, indicator);
-    return {
-      id: `log-${index + 1}`,
-      kind: "event",
-      indicator,
-      recordId,
-      status,
-      title: title ?? "Item completed",
-      body: text,
-      bodyFormat: "markdown",
-      tokens,
-    };
-  }
-
-  if (toolName || event.includes("tool")) {
-    return {
-      id: `log-${index + 1}`,
-      kind: "tool",
-      indicator,
-      recordId,
-      status,
-      title: toolName ?? nonRepeatedMessage(message, indicator) ?? "Tool call",
-      subtitle: message && toolName ? nonRepeatedMessage(message, indicator) : undefined,
-      body: truncate(
-        stringValue(record.result_markdown) ??
-          stringValue(record.result) ??
-          stringValue(record.output) ??
-          stringValue(record.preview) ??
-          "",
-        280,
-      ),
-      bodyFormat: "markdown",
-      tokens,
-    };
-  }
-
-  if (event.includes("decision") || event.includes("outcome") || record.outcome) {
-    return {
-      id: `log-${index + 1}`,
-      kind: "decision",
-      indicator,
-      recordId,
-      status,
-      title: nonRepeatedMessage(message, indicator) ?? stringValue(record.outcome) ?? "Decision",
-      body: truncate(stringValue(record.reason) ?? "", 280),
-      bodyFormat: "markdown",
-      tokens,
-    };
-  }
-
-  if (event.includes("action") || event.includes("state") || record.action) {
-    return {
-      id: `log-${index + 1}`,
-      kind: "action",
-      indicator,
-      recordId,
-      status,
-      title: nonRepeatedMessage(message, indicator) ?? stringValue(record.action) ?? "Action",
-      body: truncate(stringValue(record.detail) ?? stringValue(record.reason) ?? "", 280),
-      bodyFormat: "markdown",
-      tokens,
-    };
-  }
-
-  if (message) {
-    return {
-      id: `log-${index + 1}`,
-      kind: "event",
-      indicator,
-      recordId,
-      status,
-      title: nonRepeatedMessage(message, indicator) ?? message,
-      body: payload ? toYaml(payload) : undefined,
-      bodyFormat: payload ? "yaml" : undefined,
-      tokens,
-    };
-  }
-
-  return null;
-}
-
-function parseJsonRecords(text: string): JsonRecord[] {
-  const trimmed = text.trim();
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) return parsed.map(asRecord).filter(isPresent);
-    const record = asRecord(parsed);
-    if (!record) return [];
-    const entries = arrayValue(record.entries).map(asRecord).filter(isPresent);
-    return entries.length > 0 ? entries : [record];
-  } catch {
-    // Try JSONL below.
-  }
-
-  const records: JsonRecord[] = [];
-  for (const line of trimmed.split(/\r?\n/)) {
-    const part = line.trim();
-    if (!part) continue;
-    try {
-      const record = asRecord(JSON.parse(part));
-      if (record) records.push(record);
-    } catch {
-      return [];
-    }
-  }
-  return records;
-}
-
-function isInfrastructureLog(record: JsonRecord): boolean {
-  const eventName = `${stringValue(record.event) ?? ""} ${stringValue(record.type) ?? ""} ${stringValue(record.kind) ?? ""}`.toLowerCase();
-  if (eventName.includes("item_started") || eventName.includes("item_completed")) {
-    return false;
-  }
-  if (tokenFields(record).length > 0) {
-    return false;
-  }
-  const text = [
-    stringValue(record.message),
-    stringValue(record.event),
-    stringValue(record.type),
-    stringValue(record.component),
-  ]
-    .filter(isPresent)
-    .join(" ")
-    .toLowerCase();
-  if (/(cache|embed|embedding|token|usage|cost|retry|timing|latency|heartbeat|poll)/.test(text)) {
-    return true;
-  }
-  return Object.keys(record).some((key) => INFRA_KEYS.has(key.toLowerCase()));
-}
-
-function hiddenMetadataKeys(source: string): Set<string> {
-  const normalized = source.toLowerCase();
-  if (normalized === "gmail") {
-    return new Set([
-      "external_id",
-      "subject",
-      "from",
-      "sender",
-      "date",
-      "received_at",
-      "received_date",
-      "account",
-    ]);
-  }
-  if (normalized === "slack") {
-    return new Set(["external_id", "account"]);
-  }
-  return new Set();
 }
 
 function normalizeToolStatus(result: JsonRecord | undefined): ToolRow["status"] {
@@ -769,34 +439,6 @@ function sameString(values: Array<string | undefined>): string | undefined {
   return present.every((value) => value === present[0]) ? present[0] : undefined;
 }
 
-function tokenFields(record: JsonRecord): ProjectionField[] {
-  const usage = asRecord(record.usage) ?? asRecord(asRecord(record.payload)?.usage);
-  const input =
-    stringValue(record.input_tokens) ??
-    stringValue(record.prompt_tokens) ??
-    stringValue(usage?.input_tokens) ??
-    stringValue(usage?.prompt_tokens);
-  const output =
-    stringValue(record.output_tokens) ??
-    stringValue(record.completion_tokens) ??
-    stringValue(usage?.output_tokens) ??
-    stringValue(usage?.completion_tokens);
-  const fields: ProjectionField[] = [];
-  addField(fields, "Input tokens", input);
-  addField(fields, "Output tokens", output);
-  return fields;
-}
-
-function nonRepeatedMessage(message: string | undefined, indicator: string): string | undefined {
-  if (!message) return undefined;
-  return message.toLowerCase() === indicator.toLowerCase() ? undefined : message;
-}
-
-function displayRecord(record: JsonRecord): JsonRecord {
-  const hidden = new Set(["event", "type", "kind", "id", "record_id", "status", "level"]);
-  return Object.fromEntries(Object.entries(record).filter(([key]) => !hidden.has(key)));
-}
-
 function renderValue(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") return undefined;
   if (typeof value === "string") return value;
@@ -808,11 +450,9 @@ function renderValue(value: unknown): string | undefined {
   return truncate(toYaml(value), 240);
 }
 
-function senderDisplayName(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const match = value.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
-  const name = match ? match[1].trim() || match[2].trim() : value;
-  return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+function senderOf(record: JsonRecord): string | undefined {
+  const from = stringValue(record.sender) ?? stringValue(record.from);
+  return from ? displaySender(from) : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

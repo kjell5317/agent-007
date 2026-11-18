@@ -96,3 +96,14 @@ test("a thread the agent judged not a task has no task to reopen", () => {
   assert.equal(group.closedTask, null);
   assert.equal(group.liveTask, null);
 });
+
+test("sender and source labels read the same everywhere", () => {
+  assert.equal(exports.displaySender('"Alice" <alice@example.com>'), "Alice");
+  assert.equal(exports.displaySender("<bob@example.com>"), "bob@example.com");
+  assert.equal(exports.displaySender("carol (Acme)"), "carol");
+  assert.equal(exports.displaySender("web_search"), "Web Research");
+  assert.equal(exports.sourceLabel("web_search"), "Web Research");
+  assert.equal(exports.sourceLabel("gmail"), "Gmail");
+  assert.equal(exports.sourceLabel("recurrence"), "Repeat");
+  assert.equal(exports.senderName({ source: "web_search", source_metadata: {} }), "Web Research");
+});

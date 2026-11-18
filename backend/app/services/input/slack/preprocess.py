@@ -6,7 +6,8 @@ This module:
 
   1. Resolves user/channel/link refs into plain text (when names are known).
   2. Extracts URLs into structured metadata.
-  3. Collapses whitespace.
+  3. Strips `:emoji:` shortcodes.
+  4. Collapses whitespace.
 
 Pure functions only — no network, no DB, no global state — so unit-testable
 from fixture dicts.
@@ -18,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+from app.services.input.text import collapse_whitespace
 
 MAX_BODY_CHARS = 8000
 
@@ -46,7 +49,13 @@ _MARKDOWN_LINK_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
-_EMOJI_RE = re.compile(r"(?<!\w):[A-Za-z0-9_+\-]+:(?!\w)")
+# `:name:` shortcodes, chained ones included (`:+1::skin-tone-2:`, `:tada::tada:`),
+# plus the spaces after them. A name needs a letter (or is ±1) so clock times
+# like `10:30:00` never match, and a run may not touch a word or another colon,
+# so `std::vector::push` and `key:value:` survive. URLs are skipped wholesale.
+_EMOJI_NAME = r"(?:[+-]1|[a-z0-9_+-]*[a-z][a-z0-9_+-]*)"
+_EMOJI_RE = re.compile(rf"(?<![\w:])(?::{_EMOJI_NAME}:)+(?![\w:])[ \t]*")
+_URL_SPLIT_RE = re.compile(r"(https?://\S+)")
 _QUOTE_MARKER_RE = re.compile(r"(?m)^\s*>\s?")
 _CODE_DECORATOR_RE = re.compile(r"(`{1,3})(.*?)\1", re.DOTALL)
 _EMPHASIS_DECORATOR_RES = [
@@ -76,8 +85,9 @@ def preprocess_message(
 ) -> PreprocessResult:
     """Turn a Slack message into clean body text + metadata.
 
-    `user_names` maps user IDs to display names so mentions render as
-    `@alice` instead of `@U123`. Pass an empty dict for tests.
+    `user_names` maps user IDs to display names so mentions and the sender
+    render as `@alice` / `alice` instead of `U123`; the source resolves every
+    id `referenced_user_ids` lists before calling this.
 
     `authed_user_id` and `is_dm` feed the `directed_at_me` metadata flag.
     """
@@ -89,7 +99,7 @@ def preprocess_message(
     text, urls = _normalize_refs(raw_text, user_names)
     text = _strip_emoji_shortcodes(text)
     text = _strip_markdown_decorators(text)
-    text = _collapse_whitespace(text)
+    text = collapse_whitespace(text)
 
     truncated = False
     if len(text) > MAX_BODY_CHARS:
@@ -115,6 +125,16 @@ def preprocess_message(
         truncated=truncated,
         received_at=_received_at(raw_message),
     )
+
+
+def referenced_user_ids(raw_message: dict) -> set[str]:
+    """The user ids a message needs display names for: its sender and every
+    mention that carries no inline label."""
+    text = raw_message.get("text") or ""
+    ids = {m.group(1) for m in _USER_REF_RE.finditer(text) if not m.group(2)}
+    if raw_message.get("user"):
+        ids.add(str(raw_message["user"]))
+    return ids
 
 
 def _received_at(raw_message: dict) -> datetime | None:
@@ -208,7 +228,8 @@ def _normalize_refs(text: str, user_names: dict[str, str]) -> tuple[str, list[st
 
 
 def _strip_emoji_shortcodes(text: str) -> str:
-    return _EMOJI_RE.sub("", text)
+    parts = _URL_SPLIT_RE.split(text)
+    return "".join(part if i % 2 else _EMOJI_RE.sub("", part) for i, part in enumerate(parts))
 
 
 def _strip_markdown_decorators(text: str) -> str:
@@ -217,18 +238,3 @@ def _strip_markdown_decorators(text: str) -> str:
     for pattern in _EMPHASIS_DECORATOR_RES:
         text = pattern.sub(r"\2", text)
     return text
-
-
-def _collapse_whitespace(text: str) -> str:
-    lines = [line.rstrip() for line in text.splitlines()]
-    out: list[str] = []
-    blanks = 0
-    for line in lines:
-        if not line:
-            blanks += 1
-            if blanks <= 1:
-                out.append("")
-        else:
-            blanks = 0
-            out.append(line)
-    return "\n".join(out).strip()

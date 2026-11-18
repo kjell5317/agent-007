@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 from app import observability as obs
 from app.agent import retrieval
 from app.agent.helpers import jev
+from app.agent.helpers.precedents import candidate_title, truncate_inline
 from app.agent.input.runner import run_new_input_agent
 from app.agent.kotx.runner import run_kotx_transition
 from app.agent.retrieval import precedent_query_text, search_raw_inputs
@@ -360,8 +361,8 @@ def _evidence_ref(hit: SimilarInput, *, selected: bool = False) -> dict:
         "task_id": str(hit.task_id) if hit.task_id else None,
         "similarity": round(hit.similarity, 4),
         "decayed_similarity": round(hit.decayed_similarity, 4),
-        "title": _candidate_title(hit),
-        "snippet": _truncate_inline(hit.content_snippet or "", 300),
+        "title": candidate_title(hit),
+        "snippet": truncate_inline(hit.content_snippet or "", 300),
         "sender": hit.sender,
         "received_at": hit.received_at.isoformat() if hit.received_at else None,
         "selected": selected,
@@ -369,24 +370,3 @@ def _evidence_ref(hit: SimilarInput, *, selected: bool = False) -> dict:
     if hit.label:
         ref["label"] = hit.label
     return ref
-
-
-def _candidate_title(hit: SimilarInput) -> str:
-    subject = _truncate_inline(hit.subject or "", 120)
-    if subject:
-        return subject
-    for raw_line in (hit.content_snippet or "").splitlines():
-        line = _truncate_inline(raw_line, 120)
-        if line:
-            return line
-    sender = _truncate_inline(hit.sender or "", 80)
-    if sender:
-        return f"{hit.source} from {sender}"
-    return f"{hit.source} input"
-
-
-def _truncate_inline(value: str, limit: int) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)].rstrip() + "…"

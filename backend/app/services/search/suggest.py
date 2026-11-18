@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.clients import search as search_client
+from app.db.clients.search import TASK
 from app.db.models.raw_input import RawInput
 from app.db.schemas.search import SearchHit
 from app.services.search.filters import ALL_CORPORA, Filters, build_tsquery, corpus_restriction, parse_query
@@ -39,16 +40,19 @@ def run_suggest(
     exclude_source: str | None = None,
     source: str | None = None,
     label: str | None = None,
+    status: str | None = None,
+    recurring: bool = False,
 ) -> list[SearchHit]:
     """Stage-1 suggestions. `types` restricts the corpora searched (the task
     composer asks for tasks + documents only); it intersects with any corpus
-    restriction the filter tokens imply, so an empty intersection yields no hits."""
+    restriction the filter tokens imply, so an empty intersection yields no hits.
+    `recurring` keeps only tasks that repeat."""
     settings = get_settings()
     limit = limit or settings.search_suggest_limit
     types_key = ",".join(sorted(types)) if types else "all"
     key = "|".join(str(value).lower() for value in (
         query.strip(), limit, types_key, exclude_source or "",
-        source or "", label or "",
+        source or "", label or "", status or "", recurring,
     ))
 
     now = time.monotonic()
@@ -60,13 +64,15 @@ def run_suggest(
     filters = Filters(
         source=source or parsed.source,
         label=label or parsed.label,
-        status=parsed.status,
+        status=status or parsed.status,
         after=parsed.after,
         before=parsed.before,
     )
     branches = corpus_restriction(filters) or ALL_CORPORA
     if types is not None:
         branches = frozenset(branches & types)
+    if recurring:
+        branches = frozenset(branches & {TASK})
 
     if branches:
         hits = search_client.suggest(
@@ -82,6 +88,7 @@ def run_suggest(
             after=filters.after,
             exclude_source=exclude_source,
             exclude_calendar_id=settings.google_calendar_id,
+            recurring=recurring,
         )
         result = [SearchHit.build(h) for h in hits]
         result = drop_documents_shadowed_by_tasks(result)

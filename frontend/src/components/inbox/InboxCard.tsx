@@ -20,6 +20,7 @@ import {
   isDismissibleKotxRun,
   isKotxRun,
   senderName,
+  sourceLabel,
   badgeKindLabel,
 } from "@/lib/inbox";
 import {
@@ -47,7 +48,9 @@ interface Props {
   unseen: boolean;
   onVisible: (id: string) => void;
   onOpenTask: (id: string) => void;
-  onActivate?: () => void;
+  // Search lists messages among everything else, where "no task" is the
+  // usual case and says nothing; the inbox keeps it.
+  hideNotTaskBadge?: boolean;
 }
 
 export function InboxCard({
@@ -56,7 +59,7 @@ export function InboxCard({
   unseen,
   onVisible,
   onOpenTask,
-  onActivate,
+  hideNotTaskBadge = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -144,12 +147,10 @@ export function InboxCard({
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button,a,summary")) return;
           if (data.task_id) {
-            onActivate?.();
             onOpenTask(data.task_id);
             return;
           }
           if (!expandable) return;
-          onActivate?.();
           setOpen((v) => !v);
         }}
       >
@@ -170,9 +171,11 @@ export function InboxCard({
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
               <Badge variant="muted" className="shrink-0">{when}</Badge>
-              <span className="shrink-0">
-                <InputStatusBadge input={data} />
-              </span>
+              {!(hideNotTaskBadge && data.status === "not_task") && (
+                <span className="shrink-0">
+                  <InputStatusBadge input={data} />
+                </span>
+              )}
               <span className="min-w-0 flex-1 truncate font-medium">
                 {senderName(data)}
               </span>
@@ -408,7 +411,7 @@ function EvidenceItem({ row, onOpenTask }: { row: EvidenceRow; onOpenTask?: (id:
         {(row.sender || when) && row.label && <MetaDot />}
         {row.label && <span className="font-medium">{row.label}</span>}
         {(row.sender || when || row.label) && row.source && <MetaDot />}
-        {row.source && <span className="font-medium">{row.source}</span>}
+        {row.source && <span className="font-medium">{sourceLabel(row.source)}</span>}
         {row.similarity && (row.sender || when || row.label || row.source) && <MetaDot />}
         {row.similarity && (
           <span

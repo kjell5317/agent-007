@@ -43,14 +43,13 @@ from app.agent.helpers.text import (
     now_iso,
 )
 from app.agent.helpers.precedents import (
-    candidate_title,
     candidate_trace_ref as _candidate_trace_ref,
     load_task_candidates,
     not_task_candidate_lines as _not_task_candidate_lines,
     selected_candidate_ref as _selected_candidate_ref,
     task_candidate_lines as _task_candidate_lines,
-    truncate_inline as _truncate_inline,
 )
+from app.agent.helpers.tool_results import tool_result_entry
 from app.agent.tools import new_input_tools
 from app.config import get_settings
 from app.services.handoff.eligible import handoff_kinds, valid_answer, valid_handoff
@@ -176,6 +175,7 @@ async def run_new_input_agent(
                         end=str(tin.get("end")) if tin.get("end") else None,
                         description=str(tin.get("description")) if tin.get("description") else None,
                         location=str(tin.get("location")) if tin.get("location") else None,
+                        label=str(tin.get("label")) if tin.get("label") else None,
                     )
                     if event_id:
                         trace.setdefault("events_created", []).append(event_id)
@@ -206,7 +206,7 @@ async def run_new_input_agent(
                     or (tu.name == "update_event" and event_id in trace.get("events_updated", []))
                 )
                 iter_log.setdefault("tool_results", []).append(
-                    _tool_result_entry(
+                    tool_result_entry(
                         tu.name,
                         tin,
                         out,
@@ -287,7 +287,7 @@ async def run_new_input_agent(
             if saved:
                 trace["notes_saved"] = saved
             iter_log.setdefault("tool_results", []).append(
-                _tool_result_entry(
+                tool_result_entry(
                     tu.name,
                     tu_input,
                     f"created task {task.id}",
@@ -323,7 +323,7 @@ async def run_new_input_agent(
                 )
                 trace["outcome"] = "duplicate_target_missing"
                 iter_log.setdefault("tool_results", []).append(
-                    _tool_result_entry(
+                    tool_result_entry(
                         tu.name,
                         tu_input,
                         "existing task was missing or invalid",
@@ -344,7 +344,7 @@ async def run_new_input_agent(
             if selected_ref:
                 trace["selected_evidence_ref"] = selected_ref
             iter_log.setdefault("tool_results", []).append(
-                _tool_result_entry(
+                tool_result_entry(
                     tu.name,
                     tu_input,
                     str(frag.get("outcome") or "handled duplicate"),
@@ -365,7 +365,7 @@ async def run_new_input_agent(
             if saved:
                 trace["notes_saved"] = saved
             iter_log.setdefault("tool_results", []).append(
-                _tool_result_entry(
+                tool_result_entry(
                     tu.name,
                     tu_input,
                     str(trace.get("reason") or "marked not task"),
@@ -378,7 +378,7 @@ async def run_new_input_agent(
         # Unknown tool — surface and stop.
         trace["outcome"] = f"unknown_tool:{tu.name}"
         iter_log.setdefault("tool_results", []).append(
-            _tool_result_entry(
+            tool_result_entry(
                 tu.name,
                 tu_input,
                 "unknown terminal tool",
@@ -452,46 +452,3 @@ def _build_new_input_message(
     return "\n".join(lines)
 
 
-def _candidate_title(hit: SimilarInput) -> str:
-    return candidate_title(hit)
-
-
-def _tool_result_entry(
-    name: str,
-    tool_input: dict[str, Any],
-    summary: str,
-    *,
-    status: str = "success",
-    changed_state: bool = False,
-    artifact_refs: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "name": name,
-        "status": status,
-        "purpose": _tool_purpose(name, tool_input),
-        "result_markdown": str(summary or ""),
-        "preview": _truncate_inline(summary, 200),
-        "result_summary": _truncate_inline(summary, 500),
-        "changed_state": changed_state,
-        "artifact_refs": artifact_refs or [],
-    }
-
-
-def _tool_purpose(name: str, tool_input: dict[str, Any]) -> str:
-    if name == "search_notes":
-        return f"search notes for {_truncate_inline(str(tool_input.get('query') or ''), 80)}"
-    if name == "find_calendar_events":
-        return "find calendar conflicts"
-    if name == "create_event":
-        return f"create calendar event {_truncate_inline(str(tool_input.get('summary') or ''), 80)}"
-    if name == "update_event":
-        return f"update calendar event {_truncate_inline(str(tool_input.get('event_id') or ''), 80)}"
-    if name == "create_task":
-        return f"create task {_truncate_inline(str(tool_input.get('title') or ''), 80)}"
-    if name == "update_task":
-        return "update existing task"
-    if name == "mark_not_task":
-        return "mark input as not a task"
-    if name == "no_change":
-        return "leave existing task unchanged"
-    return name

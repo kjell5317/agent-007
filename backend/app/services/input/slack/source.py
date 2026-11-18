@@ -29,7 +29,7 @@ import httpx
 from app.config import get_settings
 from app.services.input.base import IngestionSource, register_source
 from app.services.input.slack.client import SlackAPIError, SlackAuthError, SlackClient
-from app.services.input.slack.preprocess import preprocess_message
+from app.services.input.slack.preprocess import preprocess_message, referenced_user_ids
 from app.db.schemas.raw_input import RawInputCreate
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,12 @@ SKIP_SUBTYPES = frozenset(
         "reminder_add", "file_comment",
     }
 )
+
+# Display names rarely change, so they outlive a poll: each user costs one
+# `users.info` call per workspace per TTL rather than one per poll. Misses
+# (deleted users, bots) are cached too so they aren't re-asked every message.
+USER_NAME_TTL = 24 * 3600.0
+_user_names: dict[tuple[str, str], tuple[float, str | None]] = {}
 
 
 @register_source("slack")
@@ -70,7 +76,7 @@ class SlackSource(IngestionSource):
         # Set instead of raising so the poller can pause the account and
         # notify once, rather than `drain` alerting on every poll.
         self.auth_error: str | None = None
-        self._user_cache: dict[str, str] = {}
+        self._user_names: dict[str, str] = {}
 
     async def fetch(self) -> AsyncIterator[RawInputCreate]:
         try:
@@ -89,7 +95,9 @@ class SlackSource(IngestionSource):
 
         async for conv in self.client.users_conversations():
             channel_id = conv["id"]
-            channel_name = conv.get("name") or _dm_label(conv)
+            if conv.get("is_im") and conv.get("user"):
+                await self._resolve_users({conv["user"]})
+            channel_name = conv.get("name") or _dm_label(conv, self._user_names)
             is_dm = bool(conv.get("is_im"))
             oldest = self.watermarks.get(channel_id) or bootstrap_oldest
             is_bootstrap = channel_id not in self.watermarks
@@ -113,23 +121,14 @@ class SlackSource(IngestionSource):
                     if self._should_skip(msg):
                         continue
 
-                    user_id = msg.get("user")
-                    if user_id and user_id not in self._user_cache:
-                        info = await self.client.users_info(user_id)
-                        if info:
-                            self._user_cache[user_id] = (
-                                info.get("profile", {}).get("display_name")
-                                or info.get("profile", {}).get("real_name")
-                                or info.get("name")
-                                or user_id
-                            )
+                    await self._resolve_users(referenced_user_ids(msg))
 
                     result = preprocess_message(
                         msg,
                         channel_id=channel_id,
                         channel_name=channel_name,
                         workspace_name=self.workspace_name,
-                        user_names=self._user_cache,
+                        user_names=self._user_names,
                         authed_user_id=self.authed_user_id,
                         is_dm=is_dm,
                     )
@@ -173,6 +172,18 @@ class SlackSource(IngestionSource):
                 )
             self.next_watermarks[channel_id] = new_max
 
+    async def _resolve_users(self, user_ids: set[str]) -> None:
+        now = time.monotonic()
+        for user_id in user_ids - self._user_names.keys():
+            key = (self.account_key, user_id)
+            cached = _user_names.get(key)
+            if cached is None or cached[0] <= now:
+                info = await self.client.users_info(user_id)
+                cached = (now + USER_NAME_TTL, _display_name(info) if info else None)
+                _user_names[key] = cached
+            if cached[1]:
+                self._user_names[user_id] = cached[1]
+
     def _should_skip(self, msg: dict) -> bool:
         if msg.get("subtype") in SKIP_SUBTYPES:
             return True
@@ -189,10 +200,16 @@ def _bootstrap_oldest() -> str:
     return f"{time.time() - days * 86400:.6f}"
 
 
-def _dm_label(conv: dict) -> str | None:
+def _display_name(info: dict) -> str | None:
+    profile = info.get("profile") or {}
+    return profile.get("display_name") or profile.get("real_name") or info.get("name")
+
+
+def _dm_label(conv: dict, user_names: dict[str, str]) -> str | None:
     """A best-effort label for DMs and MPDMs, which have no `name`."""
     if conv.get("is_im"):
-        return f"DM:{conv.get('user', '?')}"
+        user_id = conv.get("user", "?")
+        return f"DM:{user_names.get(user_id, user_id)}"
     if conv.get("is_mpim"):
         return conv.get("purpose", {}).get("value") or "(group DM)"
     return None

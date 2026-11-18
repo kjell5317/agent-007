@@ -70,7 +70,7 @@ class ChatMessageIn(BaseModel):
 
 
 class ChatSearchScope(BaseModel):
-    kind: Literal["tasks", "messages", "notes", "events", "files", "contacts"]
+    kind: Literal["tasks", "messages", "notes", "events", "files", "contacts", "github"]
     label: str | None = None
     source: str | None = None
     format: str | None = None

@@ -4,19 +4,22 @@ One list, sorted by relevance across every source the filter allows:
 
   * local matches from the hybrid search (pgvector + keyword FTS + pg_trgm
     typo tolerance) over tasks, messages, notes and documents;
-  * calendar events from the keyword suggest;
+  * calendar events from the keyword suggest (plus Google Calendar itself
+    under the events filter);
   * live Drive, Contacts and GitHub results.
 
 Their own scores aren't comparable, so `rank.rank` re-scores every candidate
 the same way — cosine similarity to the query (stored embeddings scored in
 SQL, the rest embedded in one batch) fused by rank with a typo-tolerant word
-match — and the list comes back in that order.
+match and the distance of the hit's date from now — and the list comes back
+in that order.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -26,10 +29,11 @@ from app.db.clients import search as search_client
 from app.db.schemas.search import SearchHit
 from app.services.github import search_hits as search_github_hits
 from app.services.input.embedding import embed, embed_many
+from app.services.search.calendar import search_calendar_live
 from app.services.search.contacts import search_contacts
 from app.services.search.drive import search_drive
 from app.services.search.filters import ALL_CORPORA, Filters, corpus_restriction, parse_query
-from app.services.search.rank import Candidate, cosine, rank
+from app.services.search.rank import Candidate, cosine, rank, time_distance
 from app.services.search.suggest import (
     attach_input_source_urls,
     drop_documents_shadowed_by_tasks,
@@ -49,8 +53,9 @@ KINDS: dict[str | None, tuple[frozenset[str], bool, tuple[str, ...]]] = {
     "messages": (frozenset({"input"}), False, ()),
     "notes": (frozenset({"note"}), False, ()),
     "files": (frozenset({"document"}), False, ("drive",)),
-    "events": (frozenset(), True, ()),
+    "events": (frozenset(), True, ("calendar",)),
     "contacts": (frozenset(), False, ("contact",)),
+    "github": (frozenset(), False, ("github",)),
 }
 
 
@@ -63,6 +68,8 @@ async def run_search(
     source: str | None = None,
     label: str | None = None,
     drive_format: str | None = None,
+    status: str | None = None,
+    recurring: bool = False,
 ) -> list[SearchHit]:
     text, parsed = parse_query(query)
     if not text:
@@ -70,12 +77,14 @@ async def run_search(
     filters = Filters(
         source=source or parsed.source,
         label=label or parsed.label,
-        status=parsed.status,
+        status=status or parsed.status,
         after=parsed.after,
         before=parsed.before,
     )
     corpora, with_events, providers = KINDS[kind]
     corpora = frozenset(corpora & (corpus_restriction(filters) or ALL_CORPORA))
+    if recurring:
+        corpora = frozenset(corpora & {"task"})
 
     live = asyncio.gather(*(_live(p, text, drive_format) for p in providers))
     try:
@@ -86,21 +95,39 @@ async def run_search(
 
     hits: list[SearchHit] = []
     if corpora:
-        hits += _local(session, text, filters, corpora, embedding)
+        hits += _local(session, text, filters, corpora, embedding, recurring)
     if with_events:
         hits += run_suggest(session, query, limit=SOURCE_LIMIT, types=frozenset({"document"}),
                             source="calendar")
     for provider_hits in await live:
         hits += provider_hits
 
-    candidates = [Candidate(hit, _candidate_text(hit)) for hit in hits]
+    now = datetime.now(timezone.utc)
+    candidates = [
+        Candidate(hit, _candidate_text(hit), distance=time_distance(hit, now, text))
+        for hit in drop_duplicate_events(hits)
+    ]
     if embedding is not None:
         await _score_semantic(session, embedding, candidates)
     return [c.hit for c in rank(text, candidates)][:limit]
 
 
+def drop_duplicate_events(hits: list[SearchHit]) -> list[SearchHit]:
+    """A cached event and its live copy are one occurrence with the same
+    Calendar link (the cache keys rows by its own id, Google by the event id)."""
+    seen: set[str] = set()
+    kept = []
+    for hit in hits:
+        if hit.type == "document" and hit.source == "calendar" and hit.url:
+            if hit.url in seen:
+                continue
+            seen.add(hit.url)
+        kept.append(hit)
+    return kept
+
+
 def _local(session: Session, text: str, filters: Filters, corpora: frozenset[str],
-           embedding: list[float] | None) -> list[SearchHit]:
+           embedding: list[float] | None, recurring: bool) -> list[SearchHit]:
     settings = get_settings()
     found = search_client.hybrid_search(
         session,
@@ -115,6 +142,7 @@ def _local(session: Session, text: str, filters: Filters, corpora: frozenset[str
         status=filters.status,
         before=filters.before,
         after=filters.after,
+        recurring=recurring,
         trigram=True,
         note_origin=True,
     )
@@ -130,6 +158,10 @@ async def _live(provider: str, text: str, drive_format: str | None) -> list[Sear
         if provider == "github":
             return await search_github_hits(text, limit=SOURCE_LIMIT)
         with SessionLocal() as session:
+            if provider == "calendar":
+                return await search_calendar_live(
+                    session, text, k=SOURCE_LIMIT, timeout=settings.search_calendar_timeout_seconds,
+                )
             if provider == "drive":
                 extra = {"mime_label": drive_format} if drive_format else {}
                 return await search_drive(

@@ -40,14 +40,7 @@ from app.db.schemas.task import (
     TaskRecurrence,
     TaskUpdate,
 )
-from app.events import publish_task, task_read
-from app.services.kotx import (
-    KotxConfigError,
-    KotxRunError,
-    KotxUnsupportedTaskError,
-    create_issue_run,
-    has_github_url,
-)
+from app.events import publish_task, read_task, task_read
 from app.services import handoff
 from app.services.email import draft as draft_svc
 from app.services.task.close import close_task as close_task_svc
@@ -67,6 +60,13 @@ from app.services.task.update import affected_tasks, sync_external, update_task 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 log = logging.getLogger(__name__)
+
+
+def task_or_404(session: Session, task_id: uuid.UUID):
+    row = tasks_store.get(session, task_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    return row
 
 
 async def _sync_task_changes(updates: list[tuple[uuid.UUID, set[str]]], parent_id: uuid.UUID | None = None) -> None:
@@ -190,41 +190,31 @@ def get_task(task_id: str, session: Session = Depends(get_session)) -> TaskRead:
     row = tasks_store.get(session, parsed_id) if parsed_id else tasks_store.get_by_public_id(session, task_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
-    status_ = tasks_store.latest_status_for(session, [row.id]).get(row.id, "open")
-    is_manual = tasks_store.is_manual_for(session, [row.id]).get(row.id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.post("/{task_id}/split", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
 async def split_task(
     task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
 ) -> TaskRead:
-    row = tasks_store.get(session, task_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    row = task_or_404(session, task_id)
     if row.parent_task_id or row.is_container:
         raise HTTPException(status.HTTP_409_CONFLICT, "This task cannot be split")
     background_tasks.add_task(_split_in_background, task_id)
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.post("/{task_id}/split_deterministic", response_model=TaskRead)
 async def split_task_deterministic(
     task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
 ) -> TaskRead:
-    row = tasks_store.get(session, task_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    row = task_or_404(session, task_id)
     try:
         split_deterministically(session, row)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     background_tasks.add_task(_place_split_in_background, task_id)
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.post("/{task_id}/subtasks", response_model=TaskRead)
@@ -232,9 +222,7 @@ async def add_subtask(
     task_id: uuid.UUID, payload: dict[str, str], background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> TaskRead:
-    parent = tasks_store.get(session, task_id)
-    if parent is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    parent = task_or_404(session, task_id)
     if parent.parent_task_id:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A subtask cannot have subtasks")
     try:
@@ -248,18 +236,14 @@ async def add_subtask(
         [(new_child.id, {"due_date", "estimation"})],
         task_id if not children else None,
     )
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, parent, status_, is_manual)
+    return read_task(session, parent)
 
 
 @router.post("/{task_id}/collapse", response_model=TaskRead)
 async def collapse_task(
     task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session),
 ) -> TaskRead:
-    row = tasks_store.get(session, task_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    row = task_or_404(session, task_id)
     try:
         removed = collapse_subtasks(session, row)
     except ValueError as exc:
@@ -274,9 +258,7 @@ async def reorder_subtasks(
     task_id: uuid.UUID, order: list[uuid.UUID], background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> TaskRead:
-    parent = tasks_store.get(session, task_id)
-    if parent is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    parent = task_or_404(session, task_id)
     children = tasks_store.children(session, task_id)
     by_id = {child.id: child for child in children}
     if len(order) != len(children) or set(order) != set(by_id):
@@ -285,9 +267,7 @@ async def reorder_subtasks(
     background_tasks.add_task(
         _sync_task_changes, [(child_id, {"due_date"}) for child_id in order]
     )
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, parent, status_, is_manual)
+    return read_task(session, parent)
 
 
 @router.post(
@@ -296,6 +276,8 @@ async def reorder_subtasks(
 async def create_task(
     payload: TaskPromote, session: Session = Depends(get_session)
 ) -> TaskCreationAccepted:
+    if payload.label and not labels_store.exists(session, payload.label):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unknown label")
     user_fields = {k: v for k, v in payload.model_dump().items() if v is not None}
     try:
         raw = await create_manual_task(session, user_fields)
@@ -354,9 +336,7 @@ async def update_task(
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     background_tasks.add_task(_sync_task_changes, affected_tasks(session, row, set(fields)))
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.put("/{task_id}/recurrence", response_model=TaskRead)
@@ -371,9 +351,7 @@ async def set_task_recurrence(
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     background_tasks.add_task(_refresh_series_in_background, row.recurrence_series_id, stale)
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.delete("/{task_id}/recurrence", response_model=TaskRead)
@@ -385,51 +363,17 @@ async def remove_task_recurrence(
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     background_tasks.add_task(_refresh_series_in_background, None, stale)
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.post("/{task_id}/reschedule", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
 async def reschedule_task(
     task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
 ) -> TaskRead:
-    row = tasks_store.get(session, task_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    row = task_or_404(session, task_id)
 
     background_tasks.add_task(_reschedule_in_background, task_id)
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
-
-
-@router.post("/{task_id}/github_issue", response_model=TaskRead)
-async def create_github_issue(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
-    row = tasks_store.get(session, task_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
-    if has_github_url(row.link):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Task already has a GitHub URL")
-
-    repo = labels_store.repos_by_name(session).get(row.label or "")
-    if not repo:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Connect the task's label to a GitHub repo first")
-    try:
-        run = await create_issue_run(row, repo=repo)
-    except KotxUnsupportedTaskError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    except KotxConfigError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-    except KotxRunError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
-
-    row.link = run.issue_url
-    session.commit()
-    publish_task(session, task_id)
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.post("/{task_id}/close", status_code=status.HTTP_204_NO_CONTENT)
@@ -470,18 +414,11 @@ async def reopen_task(
     return TaskCreationAccepted(raw_input_id=raw.id, status="processing")
 
 
-def _task_or_404(session: Session, task_id: uuid.UUID):
-    row = tasks_store.get(session, task_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
-    return row
-
-
 @router.post("/{task_id}/handoff", response_model=TaskRead)
 async def start_handoff(
     task_id: uuid.UUID, body: HandoffStart | None = None, session: Session = Depends(get_session),
 ) -> TaskRead:
-    row = _task_or_404(session, task_id)
+    row = task_or_404(session, task_id)
     try:
         if body is not None and body.kind is not None:
             await handoff.start_manual(session, row, body.kind, body.brief)
@@ -489,15 +426,13 @@ async def start_handoff(
             await handoff.accept(session, row)
     except (LookupError, ValueError) as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    status_ = tasks_store.latest_status_for(session, [task_id]).get(task_id, "open")
-    is_manual = tasks_store.is_manual_for(session, [task_id]).get(task_id, False)
-    return task_read(session, row, status_, is_manual)
+    return read_task(session, row)
 
 
 @router.post("/{task_id}/handoff/decline", status_code=status.HTTP_204_NO_CONTENT)
 async def decline_handoff(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
     try:
-        await handoff.decline(session, _task_or_404(session, task_id))
+        await handoff.decline(session, task_or_404(session, task_id))
     except LookupError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
@@ -506,13 +441,13 @@ async def decline_handoff(task_id: uuid.UUID, session: Session = Depends(get_ses
 async def regenerate_draft(
     task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session),
 ) -> None:
-    _task_or_404(session, task_id)
+    task_or_404(session, task_id)
     background_tasks.add_task(draft_svc.regenerate_in_background, task_id)
 
 
 @router.post("/{task_id}/draft/discard", status_code=status.HTTP_204_NO_CONTENT)
 async def discard_draft(task_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
-    row = _task_or_404(session, task_id)
+    row = task_or_404(session, task_id)
     try:
         await draft_svc.discard(session, row)
     except LookupError as exc:

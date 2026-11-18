@@ -173,26 +173,29 @@ def _attribute_props(*, on_create: bool) -> dict:
     }
 
 
-def _label_schema(labels: Mapping[str, str], *, required: bool) -> dict:
-    """Build the `label` property from a `{name: description}` catalog.
+# `create_task` requires a label (the agent picks one or falls back to
+# `mark_not_task`); on `update_task` omitting it means "don't change it";
+# `create_event` requires one so every agent-made event carries its label.
+_CREATE_LABEL_LEAD = (
+    "Pick the single best-fitting label for this task. "
+    "If none of these labels plausibly fits, call `mark_not_task` "
+    "instead — an input that doesn't match any label is unlikely "
+    "to be a real task for the user.\n\n"
+)
+_UPDATE_LABEL_LEAD = "Change the label. Pick one that better fits the task.\n\n"
+_EVENT_LABEL_LEAD = (
+    "The calendar label the event is filed under. Pick the one that best fits "
+    "the event.\n\n"
+)
 
-    `required=True` → the label is part of `create_task.required`; the agent
-    must pick one or fall back to `mark_not_task`. `required=False` is used
-    by `update_task` where omitting the field just means "don't change it".
-    """
+
+def _label_schema(labels: Mapping[str, str], lead: str) -> dict:
+    """Build the `label` property from a `{name: description}` catalog."""
     lines = [f"- {name}: {description}" for name, description in labels.items()]
     return {
         "type": "string",
         "enum": list(labels.keys()),
-        "description": (
-            ("Pick the single best-fitting label for this task. "
-             "If none of these labels plausibly fits, call `mark_not_task` "
-             "instead — an input that doesn't match any label is unlikely "
-             "to be a real task for the user.\n\n"
-             if required else
-             "Change the label. Pick one that better fits the task.\n\n")
-            + "Available labels:\n" + "\n".join(lines)
-        ),
+        "description": lead + "Available labels:\n" + "\n".join(lines),
     }
 
 
@@ -408,7 +411,8 @@ _NEW_INPUT_TOOLS = [
             "appointments, talks, or announcements the user should see on their "
             "calendar but that are not themselves tasks. Check "
             "`find_calendar_events` first so you don't duplicate an event that "
-            "already exists. Non-terminal: creating the event does NOT finish "
+            "already exists. Always give it the `label` that fits the event. "
+            "Non-terminal: creating the event does NOT finish "
             "the run. If attending requires no action from the user, follow up "
             "with `mark_not_task`; if it needs registration or preparation, also "
             "call `create_task` for that work."
@@ -915,13 +919,18 @@ def _with_label_field(
     # Always a fresh list: callers append their own optional tools to it.
     if not labels:
         return list(tools)
-    on_create = _label_schema(labels, required=require_on_create)
-    on_update = _label_schema(labels, required=False)
+    on_create = _label_schema(
+        labels, _CREATE_LABEL_LEAD if require_on_create else _UPDATE_LABEL_LEAD
+    )
+    on_update = _label_schema(labels, _UPDATE_LABEL_LEAD)
+    on_event = _label_schema(labels, _EVENT_LABEL_LEAD)
     return [
         _with_property(tool, on_create, required=require_on_create)
         if tool["name"] == "create_task"
         else _with_property(tool, on_update, required=False)
         if tool["name"] == "update_task"
+        else _with_property(tool, on_event, required=True)
+        if tool["name"] == "create_event"
         else tool
         for tool in tools
     ]

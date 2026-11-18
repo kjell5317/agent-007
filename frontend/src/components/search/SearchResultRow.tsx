@@ -1,14 +1,17 @@
-import { CalendarDays, FileText, GitPullRequest, Inbox, ListTodo, NotebookPen, UserRound } from "lucide-react";
-import { useCallback, useState, type ComponentType } from "react";
+import { CalendarDays, FileText, Github, Inbox, ListTodo, NotebookPen, UserRound } from "lucide-react";
+import { useCallback, useEffect, useState, type ComponentType } from "react";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { InboxCard } from "@/components/inbox/InboxCard";
+import { NoteCard } from "@/components/notes/NoteCard";
 import { ContactCard, DocCard, EventCard } from "@/components/search/AssistantContent";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { useLabels } from "@/hooks/useLabels";
 import { fmtWhen } from "@/lib/dates";
 import { api } from "@/lib/api";
-import { badgeKindLabel } from "@/lib/inbox";
+import { badgeKindLabel, displaySender, sourceLabel } from "@/lib/inbox";
+import { labelChipStyle } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import type { ChatCitation, RawInput, SearchHit, SearchHitType, Task } from "@/lib/types";
+import type { ChatCitation, Note, RawInput, SearchHit, SearchHitType, Task } from "@/lib/types";
 
 const TYPE_ICON: Record<
   SearchHitType,
@@ -20,7 +23,7 @@ const TYPE_ICON: Record<
   document: FileText,
   drive: FileText,
   contact: UserRound,
-  github: GitPullRequest,
+  github: Github,
 };
 
 function hitIcon(hit: SearchHit): ComponentType<{ className?: string }> {
@@ -42,30 +45,19 @@ const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
   processing: "muted",
 };
 
-// "Alice <a@x.com>" → "Alice" (mirrors lib/inbox senderName, which needs a
-// RawInput; here we only have the raw `from` string).
-function displaySender(from: string): string {
-  const m = from.match(/^"?([^"<]*?)"?\s*<([^>]+)>$/);
-  const name = m ? m[1].trim() || m[2].trim() : from;
-  return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
-}
-
-function capitalize(s: string): string {
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-}
-
 // Second line under the title follows the task card's compact pill layout.
 function metaPills(hit: SearchHit): string[] {
-  if (hit.type === "contact") {
-    return [hit.meta?.org, hit.meta?.emails?.[0], hit.meta?.phones?.[0]]
-      .filter((value): value is string => Boolean(value));
-  }
   return [
     hit.meta?.start || hit.ts ? fmtWhen(hit.meta?.start ?? hit.ts) : null,
     hit.sender ? displaySender(hit.sender) : null,
-    hit.meta?.location ?? hit.meta?.mime ?? (hit.source ? capitalize(hit.source) : null),
+    hit.meta?.location ?? hit.meta?.mime ?? (hit.source ? sourceLabel(hit.source) : null),
   ]
     .filter((value): value is string => Boolean(value));
+}
+
+// Almost every message is "no task", so in search that badge is just noise.
+function showsStatus(hit: SearchHit): hit is SearchHit & { status: string } {
+  return Boolean(hit.status) && !(hit.type === "input" && hit.status === "not_task");
 }
 
 export function SearchResultRow({
@@ -74,7 +66,6 @@ export function SearchResultRow({
   input,
   onChanged,
   onOpenTask,
-  onActivate,
   onShowContent,
   preventBlur = false,
 }: {
@@ -83,8 +74,6 @@ export function SearchResultRow({
   input?: RawInput;
   onChanged?: () => Promise<void> | void;
   onOpenTask: (taskId: string) => void;
-  // Fired after activation when embedded in another view.
-  onActivate?: () => void;
   // Optional fallback for hits with no task or URL, used by chat citation cards.
   onShowContent?: () => void;
   // Keep focus in an embedding input when a row is clicked.
@@ -92,8 +81,7 @@ export function SearchResultRow({
 }) {
   if (hit.type === "task") {
     return <TaskSuggestionCard
-      hit={hit} initialTask={task} onOpenTask={onOpenTask} onActivate={onActivate}
-      preventBlur={preventBlur}
+      hit={hit} initialTask={task} onOpenTask={onOpenTask} preventBlur={preventBlur}
     />;
   }
   if (hit.type === "input" && input) {
@@ -104,8 +92,13 @@ export function SearchResultRow({
         unseen={false}
         onVisible={() => {}}
         onOpenTask={onOpenTask}
-        onActivate={onActivate}
+        hideNotTaskBadge
       />
+    </div>;
+  }
+  if (hit.type === "note") {
+    return <div onMouseDown={preventBlur ? (event) => event.preventDefault() : undefined}>
+      <NoteSuggestionCard noteId={hit.id} />
     </div>;
   }
   if (hit.type === "contact" || hit.type === "drive"
@@ -120,26 +113,24 @@ export function SearchResultRow({
     return (
       <div onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}>
         {hit.type === "contact"
-          ? <ContactCard cite={cite} onOpened={onActivate} />
+          ? <ContactCard cite={cite} />
           : hit.source === "calendar"
-            ? <EventCard cite={cite} onShowContent={onShowContent} onOpened={onActivate} />
-            : <DocCard cite={cite} onShowContent={onShowContent} onOpened={onActivate} />}
+            ? <EventCard cite={cite} onShowContent={onShowContent} />
+            : <DocCard cite={cite} onShowContent={onShowContent} />}
       </div>
     );
   }
   return <CompactResultRow
-    hit={hit} onOpenTask={onOpenTask} onActivate={onActivate}
-    onShowContent={onShowContent} preventBlur={preventBlur}
+    hit={hit} onOpenTask={onOpenTask} onShowContent={onShowContent} preventBlur={preventBlur}
   />;
 }
 
 function TaskSuggestionCard({
-  hit, initialTask, onOpenTask, onActivate, preventBlur,
+  hit, initialTask, onOpenTask, preventBlur,
 }: {
   hit: SearchHit;
   initialTask?: Task;
   onOpenTask: (taskId: string) => void;
-  onActivate?: () => void;
   preventBlur: boolean;
 }) {
   const [task, setTask] = useState<Task | null>(initialTask ?? null);
@@ -157,22 +148,39 @@ function TaskSuggestionCard({
         kotxTask={null}
         onChanged={refresh}
         onKotxChanged={refresh}
-        onOpen={(id) => { onOpenTask(id); onActivate?.(); }}
+        onOpen={onOpenTask}
       />
     </div>
   );
 }
 
+// The same note card the notes list shows. A hit carries only a snippet and
+// editing needs the full text, so the note is fetched before it renders.
+function NoteSuggestionCard({ noteId }: { noteId: string }) {
+  const [note, setNote] = useState<Note | null>(null);
+  const [gone, setGone] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getNote(noteId)
+      .then((loaded) => { if (!cancelled) setNote(loaded); })
+      .catch(() => { if (!cancelled) setGone(true); });
+    return () => { cancelled = true; };
+  }, [noteId]);
+
+  if (gone) return null;
+  if (!note) return <div className="h-[76px] animate-pulse rounded-xl border bg-muted/40" />;
+  return <NoteCard note={note} onSaved={setNote} onDeleted={() => setGone(true)} />;
+}
+
 function CompactResultRow({
   hit,
   onOpenTask,
-  onActivate,
   onShowContent,
   preventBlur = false,
 }: {
   hit: SearchHit;
   onOpenTask: (taskId: string) => void;
-  onActivate?: () => void;
   onShowContent?: () => void;
   preventBlur?: boolean;
 }) {
@@ -185,12 +193,14 @@ function CompactResultRow({
     : null;
   const clickable = Boolean(openTask || openUrl || onShowContent);
   const pills = metaPills(hit);
+  const labels = useLabels();
+  const repoLabel = hit.type === "github" && typeof hit.meta?.label === "string" ? hit.meta.label : null;
+  const repoLabelMeta = repoLabel ? labels.find((label) => label.name === repoLabel) : undefined;
 
   const activate = () => {
     if (openTask) onOpenTask(openTask);
     else if (openUrl) window.open(openUrl, "_blank", "noopener,noreferrer");
     else onShowContent?.();
-    onActivate?.();
   };
 
   return (
@@ -200,10 +210,8 @@ function CompactResultRow({
       onMouseDown={preventBlur ? (e) => e.preventDefault() : undefined}
       onClick={clickable ? activate : undefined}
       className={cn(
-        "flex h-[76px] w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm transition-colors",
-        clickable
-          ? "cursor-pointer hover:bg-accent hover:text-accent-foreground"
-          : "cursor-default",
+        "flex h-[76px] w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm",
+        clickable ? "cursor-pointer" : "cursor-default",
       )}
     >
       <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
@@ -214,10 +222,19 @@ function CompactResultRow({
           {hit.title || "Untitled"}
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
-          {hit.status && (
+          {showsStatus(hit) && (
             <Badge variant={STATUS_VARIANT[hit.status] ?? "muted"} className="shrink-0">
               {badgeKindLabel(hit.status)}
             </Badge>
+          )}
+          {repoLabel && (
+            <span
+              title={repoLabelMeta?.description || repoLabel}
+              className="inline-flex shrink-0 items-center rounded-full border border-transparent bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+              style={labelChipStyle(repoLabelMeta?.color)}
+            >
+              {repoLabel}
+            </span>
           )}
           {pills.map((pill, index) => (
             <span key={`${pill}:${index}`} title={pill} className="max-w-[50%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">

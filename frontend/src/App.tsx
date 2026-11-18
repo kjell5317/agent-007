@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { LabelsPanel } from "@/components/labels/LabelsPanel";
@@ -7,29 +7,30 @@ import { NotesPanel } from "@/components/notes/NotesPanel";
 import { PointsPanel } from "@/components/points/PointsPanel";
 import { ChatComposer } from "@/components/search/ChatComposer";
 import { ChatPanel } from "@/components/search/ChatPanel";
-import { PopularSearchResults } from "@/components/search/PopularSearchResults";
+import { LatestSearchResults } from "@/components/search/LatestSearchResults";
+import { RecurringWeekSummary } from "@/components/search/RecurringWeekSummary";
 import { EMPTY_SEARCH_FILTERS, SearchFilters, type SearchFiltersState } from "@/components/search/SearchFilters";
 import { SearchResults } from "@/components/search/SearchResults";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
-import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { FocusPanel } from "@/components/work/FocusPanel";
+import { FocusOverlay } from "@/components/work/FocusOverlay";
 import { useAppData } from "@/hooks/useAppData";
+import { useFocusOverlay } from "@/hooks/useFocusOverlay";
+import { useOnForeground } from "@/hooks/useOnForeground";
 import { useRuns } from "@/hooks/useRuns";
 import { useSearchChat } from "@/hooks/useSearchChat";
 import { api } from "@/lib/api";
 import { getUserTimezone, setUserTimezone } from "@/lib/dates";
-import { inputTitle, senderName } from "@/lib/inbox";
 import { backFromDeepLink, clearDeepLink, parseDeepLink, pushDeepLink, rewindToTask } from "@/lib/deepLinks";
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
-import { compareTasksByDue } from "@/lib/tasks";
+import { compareTasksByDue, taskRecurrence } from "@/lib/tasks";
 import { setQuietToasts, toast } from "@/lib/toast";
 import { runningSince } from "@/lib/work";
-import type { RawInput, SearchHit, Task } from "@/lib/types";
+import type { Task } from "@/lib/types";
 
 export function App() {
   const [timeZone, setTimeZone] = useState(getUserTimezone);
@@ -72,14 +73,12 @@ export function App() {
   const pendingClearInputIdsRef = useRef(new Set<string>());
   const tasksActive = view === "tasks" || (view === "chat" && !searchQuery.trim() && searchFilters.kind === "tasks");
   const inboxActive = inboxOpen;
-  // While a task runs the main view shows only it, the rest behind a toggle.
   const runningTask = useMemo(() => tasks.find((task) => runningSince(task)) ?? null, [tasks]);
   const runningTaskId = runningTask?.id ?? null;
-  const [showEverything, setShowEverything] = useState(false);
+  const focus = useFocusOverlay(runningTask);
 
   useEffect(() => {
     setQuietToasts(runningTaskId !== null);
-    setShowEverything(false);
   }, [runningTaskId]);
 
   const closeSearchTo = useCallback(() => {
@@ -115,7 +114,7 @@ export function App() {
       setSearchEntered(false);
     }
     setSearchQuery(next);
-    if (!next.trim() && (searchFilters.kind === "contacts" || searchFilters.kind === "events" || searchFilters.kind === "files")) {
+    if (!next.trim() && (searchFilters.kind === "contacts" || searchFilters.kind === "events" || searchFilters.kind === "files" || searchFilters.kind === "github")) {
       setSearchFilters(EMPTY_SEARCH_FILTERS);
     }
   };
@@ -270,17 +269,7 @@ export function App() {
   // Refresh the unread badge when the app comes back to the foreground. The
   // input list itself is already refreshed by useAppData on visibilitychange /
   // focus; the badge is owned here, so it needs its own listener.
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") loadInboxUnread();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", loadInboxUnread);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", loadInboxUnread);
-    };
-  }, [loadInboxUnread]);
+  useOnForeground(loadInboxUnread);
 
   useEffect(() => {
     if (loading) return;
@@ -403,7 +392,6 @@ export function App() {
     const finish = (loadedTask?: Task) => {
       if (requestId !== taskNavigationRequestRef.current) return;
       const openedTask = loadedTask ?? listedTask;
-      if (openedTask) void api.recordSearchClick(taskSearchHit(openedTask)).catch(() => {});
       pushDeepLink({ kind: "task", id });
       if (loadedTask) setFetchedTask(loadedTask);
       if (openedTask) taskCacheRef.current.set(id, openedTask);
@@ -414,10 +402,6 @@ export function App() {
       if (requestId === taskNavigationRequestRef.current) toast.error((error as Error).message);
     });
   }, [selectedTaskId, tasks]);
-
-  const recordInputClick = useCallback((input: RawInput) => {
-    void api.recordSearchClick(inputSearchHit(input)).catch(() => {});
-  }, []);
 
   const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
   const closeSelectedModal = useCallback(() => {
@@ -488,15 +472,16 @@ export function App() {
       unseenInputIds={unseenInputIds}
       onInputsVisible={markInputsVisible}
       onOpenTask={openTask}
-      onActivate={recordInputClick}
     />
   );
 
-  const renderFlatTasks = (label: string) => {
+  const renderFlatTasks = ({ label, recurring }: SearchFiltersState) => {
     const filtered = tasks.filter((task) => !task.is_container &&
-      (!label || task.label?.toLowerCase() === label.toLowerCase())).sort(compareTasksByDue);
+      (!label || task.label?.toLowerCase() === label.toLowerCase()) &&
+      (!recurring || taskRecurrence(task))).sort(compareTasksByDue);
     return filtered.length ? (
       <div className="space-y-2">
+        {recurring && <RecurringWeekSummary tasks={filtered} />}
         {filtered.map((task) => (
           <TaskCard
             key={task.id}
@@ -552,30 +537,15 @@ export function App() {
         ) : view === "labels" ? (
           <LabelsPanel />
         ) : view === "tasks" ? (
-          loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : runningTask ? (
-            <div className="space-y-4">
-              <FocusPanel task={runningTask} onChanged={refresh} onOpen={openTask} />
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-expanded={showEverything}
-                onClick={() => setShowEverything((open) => !open)}
-                className="w-full text-muted-foreground"
-              >
-                {showEverything ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                {showEverything ? "Hide everything else" : "Show everything"}
-              </Button>
-              {showEverything && renderTasks()}
-            </div>
-          ) : renderTasks()
+          loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
         ) : (
           <div>
             {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={changeSearchFilters} />}
             <div className={searchQuery.trim() || chat.messages.length === 0 ? "pt-3" : undefined}>
-            {searchQuery.trim() ? (
+            {searchQuery.trim() || (searchFilters.kind === "tasks" && searchFilters.closed) ? (
               <SearchResults query={searchQuery} filters={searchFilters} tasks={tasks} inputs={inputs} submitted={searchSubmitted} autoAiSearch={searchEntered && searchFilters.kind === null} onAiSearch={runAiSearch} onOpenTask={openTask} onChanged={refresh} />
             ) : searchFilters.kind === "tasks" ? (
-              loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters.label)
+              loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderFlatTasks(searchFilters)
             ) : searchFilters.kind === "messages" ? (
               loading || inputsSource !== searchFilters.source ? <div className="flex justify-center py-12" role="status" aria-label="Loading messages"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderInbox()
             ) : searchFilters.kind === "notes" ? (
@@ -587,9 +557,10 @@ export function App() {
                 onOpenTask={openTask}
                 recent={chat.recent}
                 onLoadChat={chat.loadChat}
+                onFollowUp={chat.send}
               />
             ) : searchFilters.kind === null ? (
-              <PopularSearchResults tasks={tasks} inputs={inputs} onOpenTask={openTask} onChanged={refresh} />
+              <LatestSearchResults tasks={tasks} inputs={inputs} onOpenTask={openTask} onChanged={refresh} />
             ) : (
               null
             )}
@@ -613,7 +584,19 @@ export function App() {
       {view === "tasks" ? (
         <Composer onCreated={refresh} />
       ) : null}
-      <Toaster />
+      {runningTask && focus.open && (
+        <FocusOverlay
+          task={runningTask}
+          onChanged={refresh}
+          onClose={focus.close}
+          onOpen={(id) => {
+            focus.close();
+            openTask(id);
+          }}
+        />
+      )}
+      {/* Over the focus overlay too: a tap there that fails must still be seen. */}
+      <Toaster style={{ zIndex: focus.open ? 70 : 30 }} />
     </div>
   );
 }
@@ -626,22 +609,6 @@ function newestTimestamp(values: string[]): number | null {
     if (newest == null || time > newest) newest = time;
   }
   return newest;
-}
-
-function taskSearchHit(task: Task): SearchHit {
-  return {
-    type: "task", id: task.id, title: task.title, snippet: task.description,
-    url: task.link, task_id: task.id, source: null, sender: null,
-    status: task.status, ts: task.updated_at, score: 0,
-  };
-}
-
-function inputSearchHit(input: RawInput): SearchHit {
-  return {
-    type: "input", id: input.id, title: inputTitle(input), snippet: input.content,
-    url: null, task_id: input.task_id, source: input.source,
-    sender: senderName(input), status: input.status, ts: input.received_at, score: 0,
-  };
 }
 
 function addAll<T>(source: ReadonlySet<T>, values: T[]): Set<T> {

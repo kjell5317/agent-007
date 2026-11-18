@@ -424,7 +424,7 @@ two-provider branches in the adapter.
 | Subtask planner (`services/task/split.py`) | Flash (whenever `GEMINI_API_KEY` is set) |
 | Attribute classifier fallback | Flash (deleted in step 2) |
 | Chat (`agent/chat/runner.py`) | Flash (`chat_llm_*`) |
-| Link research (`agent/helpers/web.py`) | Flash with Search grounding; replaced by the hand-off research executor (`docs/handoff-plan.md`, W-steps) |
+| Link research (`agent/helpers/web.py`) | Flash with Search grounding; replaced by the hand-off research executor (`services/handoff/`) |
 
 Steps:
 
@@ -486,8 +486,7 @@ Steps:
 
 - `test_attribute_classifier_jev.py`: the fallback test becomes "outage
   leaves the batch pending".
-- The parse/tool tests in `test_calendar_event_attributes.py` and
-  `test_backfill_task_attributes.py`.
+- The parse/tool tests in `test_calendar_event_attributes.py`.
 - `test_task_split.py` conjunction tests.
 - `test_manual_task_creation.py` event-cue tests.
 - `test_kotx_consolidation.py` extract-fields stubs.

@@ -68,18 +68,6 @@ def is_google_maps_url(location: str | None) -> bool:
     return False
 
 
-def resolve_google_maps_url_sync(location: str | None) -> str | None:
-    """Parse a direct Google Maps URL into a Distance Matrix-friendly value.
-
-    This intentionally does not follow redirects, so callers that must stay
-    cache-only can use it without hidden network I/O.
-    """
-    clean = (location or "").strip()
-    if not is_google_maps_url(clean):
-        return None
-    return _routable_from_google_maps_url(clean)
-
-
 async def resolve_google_maps_url(location: str | None) -> str | None:
     """Resolve a Google Maps URL into an address/search string or lat,lng."""
     clean = (location or "").strip()
@@ -120,22 +108,6 @@ def _unwrap_consent_url(url: str) -> str:
     for value in parse_qs(parsed.query).get("continue", []):
         return value
     return url
-
-
-def resolve_routable_location_sync(location: str | None) -> str | None:
-    """Cache-only physical-location normalization.
-
-    Google Maps URLs are used only when their routable value is available
-    without redirects; short links return None instead of blocking on I/O.
-    """
-    clean = resolve_location_alias(location)
-    if not clean or is_online_location(clean):
-        return None
-    if is_google_maps_url(clean):
-        return resolve_google_maps_url_sync(clean)
-    if tum_room_id(clean):
-        return None
-    return clean
 
 
 async def resolve_routable_location(location: str | None) -> str | None:

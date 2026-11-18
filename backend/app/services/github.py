@@ -23,6 +23,8 @@ from datetime import datetime
 import httpx
 
 from app.config import get_settings
+from app.db import SessionLocal
+from app.db.clients import labels as labels_store
 from app.db.schemas.search import SearchHit
 
 log = logging.getLogger(__name__)
@@ -102,6 +104,7 @@ async def search_hits(query: str, *, limit: int = 10) -> list[SearchHit]:
     except (RuntimeError, httpx.HTTPError) as exc:
         log.info("github search skipped · %s: %s", type(exc).__name__, exc)
         return []
+    labels = _labels_by_repo()
     hits = []
     for item in items:
         repo = _repo_name(str(item.get("repository_url") or ""))
@@ -111,17 +114,38 @@ async def search_hits(query: str, *, limit: int = 10) -> list[SearchHit]:
             modified = datetime.fromisoformat(updated.replace("Z", "+00:00")) if updated else None
         except ValueError:
             modified = None
+        meta = {"repo": repo}
+        if label := labels.get(repo.lower()):
+            meta["label"] = label
         hits.append(SearchHit(
             type="github", id=f"{repo}#{item.get('number')}",
-            title=str(item.get("title") or "(untitled)"),
+            title=strip_repo_prefix(str(item.get("title") or ""), repo) or "(untitled)",
             snippet=str(item.get("body") or "")[:200] or None,
             url=item.get("html_url"), source="github", status=kind,
-            ts=modified, score=0.0,
+            ts=modified, score=0.0, meta=meta,
         ))
     if len(_hits_cache) >= _HITS_MAX:
         _hits_cache.clear()
     _hits_cache[key] = (now + _HITS_TTL, hits)
     return hits
+
+
+def _labels_by_repo() -> dict[str, str]:
+    """`{owner/repo (lowercased): label name}` for repos connected to a label."""
+    with SessionLocal() as session:
+        return {
+            repo.strip().lower(): name
+            for name, repo in labels_store.repos_by_name(session).items()
+        }
+
+
+def strip_repo_prefix(title: str, repo: str) -> str:
+    """Drop a leading reference to the hit's own repo (`owner/repo#12 …`,
+    `[owner/repo] …`, `owner/repo: …`); the hit already carries its repo."""
+    if not repo:
+        return title.strip()
+    prefix = re.compile(rf"^\s*\[?{re.escape(repo)}(?:#\d+)?\]?(?:\s*:\s*|\s+[-–—]\s+|\s+|$)", re.I)
+    return prefix.sub("", title, count=1).strip()
 
 
 async def my_work() -> str:

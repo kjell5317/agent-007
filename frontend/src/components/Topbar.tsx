@@ -11,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
+import { useOnForeground } from "@/hooks/useOnForeground";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";
 import type { ThemePreference } from "@/lib/theme";
@@ -107,26 +108,7 @@ export function Topbar({
     refreshPoints({ clearOnError: true });
   }, [refreshPoints]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const safeRefreshPoints = () => {
-      if (!cancelled) void refreshPoints();
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") safeRefreshPoints();
-    };
-
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", safeRefreshPoints);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", safeRefreshPoints);
-    };
-  }, [refreshPoints]);
+  useOnForeground(refreshPoints);
 
   // Live points: the backend pushes a `points` event whenever the total
   // changes (task crossed off, manual adjust, Home Assistant). Animate the

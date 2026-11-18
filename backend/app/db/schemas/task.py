@@ -113,7 +113,7 @@ class TaskPromote(BaseModel):
     description: str | None = None
     link: str | None = None
     due_date: datetime | None = None
-    estimation: int | None = None
+    estimation: int | None = Field(None, ge=1)
     location: str | None = None
     label: str | None = None
     related_event_id: str | None = None
@@ -189,6 +189,8 @@ class TaskRead(TaskBase):
     status: str  # derived from latest linked raw_input
     is_manual: bool  # true if every linked raw_input has source='manual'
     kotx_task_id: int | None = None
+    # Shared by every instance of a repeating task.
+    recurrence_series_id: uuid.UUID | None = None
     placed_by: str = "planner"
     schedule_state: ScheduleState = "placed"
     running_since: datetime | None = None
@@ -267,6 +269,7 @@ class TaskRead(TaskBase):
                 "subtask_order": getattr(task, "subtask_order", None),
                 "recurrence_unit": getattr(task, "recurrence_unit", None),
                 "recurrence_interval": getattr(task, "recurrence_interval", None),
+                "recurrence_series_id": getattr(task, "recurrence_series_id", None),
                 "status": status_,
                 "is_manual": is_manual,
                 "kotx_task_id": getattr(task, "kotx_task_id", None),

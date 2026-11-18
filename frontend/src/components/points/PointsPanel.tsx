@@ -5,6 +5,7 @@ import { MetaDot } from "@/components/inbox/InboxCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api, type PointsLogEntry } from "@/lib/api";
+import { fmtWhen } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
@@ -179,7 +180,7 @@ function PointsCard({
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground">
               <span className="shrink-0 font-medium">
-                {formatLogTime(entry.created_at)}
+                {fmtWhen(entry.created_at)}
               </span>
               {entry.caller && (
                 <>
@@ -208,15 +209,4 @@ function PointsCard({
 function formatSignedPoints(n: number): string {
   if (n === 0) return "0";
   return `${n > 0 ? "+" : "-"}${Math.round(Math.abs(n))}`;
-}
-
-function formatLogTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
 }

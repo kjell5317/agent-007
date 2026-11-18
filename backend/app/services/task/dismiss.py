@@ -28,6 +28,7 @@ async def dismiss_task(
     from app.services.kotx.notify import clear_kotx_prompt
     from app.services.task.work import stop_running
 
+    parent_id = getattr(task, "parent_task_id", None)
     vacated = vacated_commute_window(task)
     stop_running(session, task, reason="dismissed")
     # Best-effort calendar cleanup first, while task.calendar_event_id is
@@ -60,6 +61,10 @@ async def dismiss_task(
         publish_input(session, latest_id)
     else:
         publish_task_removed(task_id)
+    if parent_id:
+        from app.services.task.close import settle_parent
+
+        await settle_parent(session, parent_id)
 
 
 def dismiss_container(session: Session, task_id: uuid.UUID) -> list[uuid.UUID]:

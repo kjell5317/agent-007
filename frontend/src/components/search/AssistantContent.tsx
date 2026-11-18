@@ -370,7 +370,6 @@ function WidgetShell({
   title,
   href,
   onActivate,
-  onOpened,
   when,
   pills = [],
   label,
@@ -379,7 +378,6 @@ function WidgetShell({
   title: string;
   href?: string | null;
   onActivate?: () => void;
-  onOpened?: () => void;
   // Leads the pill row so dates line up with task and inbox cards.
   when?: string | null;
   pills?: string[];
@@ -389,7 +387,6 @@ function WidgetShell({
   const activate = () => {
     if (href) window.open(href, "_blank", "noopener,noreferrer");
     else onActivate?.();
-    onOpened?.();
   };
   return (
     <div
@@ -408,8 +405,8 @@ function WidgetShell({
           : undefined
       }
       className={cn(
-        "flex h-[76px] max-w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm transition-colors",
-        clickable && "cursor-pointer hover:bg-accent",
+        "flex h-[76px] max-w-full items-center gap-2 overflow-hidden rounded-xl border bg-card p-3 pl-2 text-left shadow-sm",
+        clickable && "cursor-pointer",
       )}
     >
       <span
@@ -455,30 +452,16 @@ function WidgetShell({
   );
 }
 
-export function ContactCard({
-  cite,
-  onOpened,
-}: {
-  cite: ChatCitation;
-  onOpened?: () => void;
-}) {
+export function ContactCard({ cite }: { cite: ChatCitation }) {
   const meta = citeMeta(cite);
-  const emails = meta.emails ?? [];
-  const phones = meta.phones ?? [];
-  const details = [
-    meta.org,
-    emails[0],
-    phones[0],
-    meta.birthday,
-    meta.addresses?.[0],
-  ].filter((value): value is string => Boolean(value));
+  const reach = [meta.phones?.[0], meta.emails?.[0]]
+    .filter((value): value is string => Boolean(value));
   return (
     <WidgetShell
       Icon={UserRound}
       title={cite.title || "Contact"}
       href={cite.url}
-      onOpened={onOpened}
-      pills={details.slice(0, 2)}
+      pills={reach}
     />
   );
 }
@@ -486,11 +469,9 @@ export function ContactCard({
 export function EventCard({
   cite,
   onShowContent,
-  onOpened,
 }: {
   cite: ChatCitation;
   onShowContent?: () => void;
-  onOpened?: () => void;
 }) {
   const labels = useLabels();
   const meta = citeMeta(cite);
@@ -504,9 +485,8 @@ export function EventCard({
       title={cite.title || "Event"}
       href={cite.url}
       onActivate={onActivate}
-      onOpened={onOpened}
       when={when}
-      label={{ text: eventLabel?.name ?? "Event", color: eventLabel?.color }}
+      label={eventLabel ? { text: eventLabel.name, color: eventLabel.color } : undefined}
       pills={location ? [location] : []}
     />
   );
@@ -515,11 +495,9 @@ export function EventCard({
 export function DocCard({
   cite,
   onShowContent,
-  onOpened,
 }: {
   cite: ChatCitation;
   onShowContent?: () => void;
-  onOpened?: () => void;
 }) {
   const meta = citeMeta(cite);
   const onActivate = cite.url ? undefined : onShowContent;
@@ -529,7 +507,6 @@ export function DocCard({
       title={cite.title || "Document"}
       href={cite.url}
       onActivate={onActivate}
-      onOpened={onOpened}
       when={cite.ts ? fmtWhen(cite.ts) : null}
       pills={meta.mime ? [meta.mime] : []}
     />

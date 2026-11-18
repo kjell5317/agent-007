@@ -6,6 +6,7 @@ import { isOverdue, isToday, isTomorrow } from "@/lib/dates";
 import type { KotxTask } from "@/lib/kotx";
 import { compareTasks, taskGroupDate } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
+import { runningSince } from "@/lib/work";
 
 interface Props {
   tasks: Task[];
@@ -31,15 +32,20 @@ export function TasksPanel({
   const [laterOpen, setLaterOpen] = useState(false);
   const kotxFor = (task: Task) =>
     task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
-  const [today, tomorrow, later, waiting] = useMemo(() => {
+  const [running, today, tomorrow, later, waiting] = useMemo(() => {
     const sorted = tasks
       .filter((task) => !task.is_container)
       .sort((a, b) => compareTasks(a, b, "scheduled"));
+    const r: Task[] = [];
     const t: Task[] = [];
     const tm: Task[] = [];
     const l: Task[] = [];
     const w: Task[] = [];
     for (const task of sorted) {
+      if (runningSince(task) != null) {
+        r.push(task);
+        continue;
+      }
       // Off the calendar until resumed, so no day to group it under.
       if (task.schedule_state === "waiting") {
         w.push(task);
@@ -54,7 +60,7 @@ export function TasksPanel({
         l.push(task);
       }
     }
-    return [t, tm, l, w];
+    return [r, t, tm, l, w];
   }, [tasks, timeZone]);
 
   const groups = [
@@ -79,7 +85,8 @@ export function TasksPanel({
 
   return (
     <div className="space-y-6">
-      {groups.length === 0 && (
+      {running.length > 0 && <div className="space-y-2">{running.map(renderTask)}</div>}
+      {groups.length === 0 && running.length === 0 && (
         <section>
           <SectionHeader title="Today" />
           <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">

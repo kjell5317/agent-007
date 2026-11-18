@@ -11,17 +11,6 @@ from app.db.models.task import Task
 
 EMBEDDING_DIM = 1536
 
-# Single source of truth for the lifecycle enum. Mirrored by a CHECK constraint
-# in 0003_reshape — keep in sync.
-RawInputStatus = (
-    "processing",  # in flight
-    "not_task",    # not actionable
-    "duplicate",   # matched an existing task (see task_id)
-    "open",        # produced a task that is still open (see task_id)
-    "closed",      # produced a task that is now done (see task_id)
-    "event",       # created or updated a calendar event, without a task
-)
-
 
 class RawInput(Base):
     """Normalized envelope around any incoming message.

@@ -210,3 +210,54 @@ def test_message_source_filter_counts_generated_inputs_as_their_origin():
     assert f"({ORIGIN_SOURCE_SQL}) = :source" in captured["sql"]
     assert "r.source = :source" not in captured["sql"]
     assert captured["params"]["source"] == "gmail"
+
+
+def _capture_suggest(**kwargs) -> str:
+    captured = {}
+
+    class Session:
+        def execute(self, statement, params):
+            captured["sql"] = statement.text
+            return SimpleNamespace(all=lambda: [])
+
+    search_client.suggest(Session(), limit=10, half_life_days=100, **kwargs)
+    return captured["sql"]
+
+
+def test_tasks_decay_with_the_distance_of_their_due_date_either_way():
+    sql = _capture_suggest(tsquery="dentist:*", branches=frozenset({TASK, INPUT}))
+    assert "exp(- abs(extract(epoch from (now() - t.due_date))) / (:half_life * 86400.0))" in sql
+    assert "exp(- abs(extract(epoch from (now() - r.received_at))) / (:half_life * 86400.0))" in sql
+
+
+def test_recurring_keeps_tasks_that_repeat_or_belong_to_a_repeating_occurrence():
+    plain = _capture_suggest(tsquery="", branches=frozenset({TASK}))
+    recurring = _capture_suggest(tsquery="", branches=frozenset({TASK}), recurring=True, status="closed")
+    assert search_client._TASK_RECURRING_CLAUSE not in plain
+    assert search_client._TASK_RECURRING_CLAUSE in recurring
+    assert "rp.id = t.parent_task_id" in recurring
+    assert "coalesce(li.status, 'open') = :status" in recurring
+
+
+def test_run_suggest_passes_closed_and_recurring_and_keeps_to_tasks(monkeypatch):
+    from app.services.search import suggest as suggest_mod
+
+    calls = []
+    monkeypatch.setattr(suggest_mod.search_client, "suggest", lambda _s, **kw: calls.append(kw) or [])
+    monkeypatch.setattr(suggest_mod, "get_settings", lambda: SimpleNamespace(
+        search_suggest_limit=8, search_recency_half_life_days=100,
+        google_calendar_id="007", search_suggest_cache_ttl_seconds=0,
+    ))
+    suggest_mod.invalidate()
+
+    suggest_mod.run_suggest(SimpleNamespace(), "", status="closed", recurring=True)
+
+    assert calls[0]["branches"] == frozenset({TASK})
+    assert calls[0]["status"] == "closed"
+    assert calls[0]["recurring"] is True
+
+
+def test_enter_search_filters_tasks_by_derived_status_and_recurrence():
+    sql = str(search_client._hybrid_sql(frozenset({TASK})))
+    assert "ORDER BY ri.received_at DESC LIMIT 1), 'open') = :f_status" in sql
+    assert ":f_recurring IS NOT TRUE OR" in sql

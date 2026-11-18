@@ -172,27 +172,23 @@ def test_log_rows_to_training_rows():
     rows = [
         LogRow(a, "moved_by_user", start, end,
                {"slot": {"h_start:15": 1.0}, "prev": {"h_start:10": 1.0}}, NOW),
-        LogRow(b, "checkin_sent", start, end, snap, end + timedelta(minutes=15)),
-        LogRow(b, "done_confirmed", start, end, snap, end + timedelta(minutes=20)),
-        LogRow(b, "closed", start, end, snap, end + timedelta(minutes=20)),
-        LogRow(c, "checkin_sent", start, end, snap, end + timedelta(minutes=15)),
-        LogRow(c, "still_working", start, end, snap, end + timedelta(minutes=16)),
-        LogRow(c, "closed", start, end, snap, start + timedelta(minutes=95)),
-        LogRow(d, "checkin_sent", start, end, snap, end + timedelta(minutes=15)),
-        LogRow(d, "no_response", start, end, None, end + timedelta(hours=3)),
+        LogRow(b, "cue_sent", start, end, snap, start),
+        LogRow(b, "started", start, end, snap, start + timedelta(minutes=2)),
+        LogRow(b, "closed", start, end, snap, start + timedelta(minutes=50)),
+        LogRow(c, "closed", start, end, snap, end + timedelta(minutes=10)),
+        LogRow(d, "cue_sent", start, end, snap, start),
+        LogRow(d, "abandoned", start, end, None, end + timedelta(hours=3)),
     ]
     pref = data.preference_rows(rows, NOW)
     pairwise = [r for r in pref if "bias" not in r.x]
     pointwise = [r for r in pref if "bias" in r.x]
     assert pairwise[0].x == {"h_start:15": 1.0, "h_start:10": -1.0}
-    assert sorted(r.y for r in pointwise) == [1.0, 1.0]  # no_response is excluded
+    assert sorted(r.y for r in pointwise) == [1.0, 1.0]  # abandoned is excluded
 
     obs = data.duration_observations(rows, NOW)
-    exact = [o for o in obs if not o.upper_bound]
-    upper = [o for o in obs if o.upper_bound]
-    assert [round(o.actual) for o in exact] == [95]
-    assert [round(o.actual) for o in upper] == [60]
-    assert exact[0].group == "Uni|-"
+    assert all(o.upper_bound for o in obs)
+    assert sorted(round(o.actual) for o in obs) == [50, 70]
+    assert obs[0].group == "Uni|-"
 
 
 def test_closed_outside_the_slot_is_not_an_observation():
@@ -214,7 +210,7 @@ def test_a_rescheduled_slot_is_a_negative_outcome():
         LogRow(tapped, "rescheduled", start, end, snap, start - timedelta(hours=2)),
         # Put back there by hand and done after all: the outcome wins.
         LogRow(redone, "rescheduled", start, end, snap, start - timedelta(hours=2)),
-        LogRow(redone, "done_confirmed", start, end, snap, end + timedelta(minutes=20)),
+        LogRow(redone, "started", start, end, snap, start + timedelta(minutes=5)),
     ]
     assert sorted(r.y for r in data.preference_rows(rows, NOW)) == [0.0, 1.0]
 

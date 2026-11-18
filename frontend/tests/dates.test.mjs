@@ -60,3 +60,14 @@ test("datetime-local values are wall time in the configured zone", () => {
   assert.equal(dates.fromZonedInputValue("2026-01-15T09:05"), "2026-01-15T08:05:00.000Z");
   assert.equal(dates.fromZonedInputValue(""), null);
 });
+
+test("only an open task's due date signals urgency", () => {
+  const overdue = "2020-01-15T08:00:00Z";
+  const soon = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  assert.equal(dates.dueDateBadgeVariant(overdue, 30), "overdue");
+  assert.equal(dates.dueDateBadgeVariant(soon, 30, "open"), "urgent");
+  for (const status of ["closed", "not_task", "duplicate"]) {
+    assert.equal(dates.dueDateBadgeVariant(overdue, 30, status), "closed");
+    assert.equal(dates.dueDateBadgeVariant(soon, 30, status), "closed");
+  }
+});

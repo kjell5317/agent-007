@@ -77,7 +77,7 @@ export function RecurrencePicker({ unit, interval, busy = false, onChange }: Pro
   );
 }
 
-function StepButton({
+export function StepButton({
   label,
   onClick,
   disabled,
