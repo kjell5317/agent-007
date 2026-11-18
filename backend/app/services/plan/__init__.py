@@ -12,6 +12,7 @@ Public surface:
   * `reschedule_event(session, event_id, ...)` — discover dispatcher: task
     event → schedule_task; commute event → a fresh solve.
   * `update_task_to_calendar(session, task, *, changed_fields=None)`
+  * `pin_running(session, task, start=…, minutes=…)` — a started task's slot.
   * `refresh_commutes_for_weather(session)` — hourly weather-driven re-solve.
 
 The one explicit exception to "only plan touches calendar": when a task
@@ -28,6 +29,8 @@ from app.services.plan.commute import (
 )
 from app.services.plan.schedule import (
     Interval,
+    pin_running,
+    remaining_minutes,
     reschedule_event,
     schedule_task,
     scheduled_interval_for,
@@ -37,7 +40,9 @@ from app.services.plan.update import update_task_to_calendar
 __all__ = [
     "Interval",
     "cleanup_stray_commute_legs",
+    "pin_running",
     "refresh_commutes_for_weather",
+    "remaining_minutes",
     "replan_commutes",
     "reschedule_event",
     "schedule_task",

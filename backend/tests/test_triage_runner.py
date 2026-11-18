@@ -47,7 +47,7 @@ def _answers(**overrides) -> dict[str, Answer]:
         "effort": _a("medium", 0.9),
         "estimate": _a("3", 0.7),
         "urgency": _a("tomorrow", 0.8),
-        "deadline_stakes": _a("firm", 0.8),
+        "deadline_stakes": _a("hard", 0.8),
         "at_home": _noul(0.1),
         "names_place": _noul(0.1),
         "title_ok": _noul(0.97),

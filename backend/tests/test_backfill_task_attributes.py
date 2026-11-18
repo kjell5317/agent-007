@@ -17,7 +17,7 @@ def test_parse_classification_keeps_valid_entries_for_listed_numbers():
     tool_input = {"tasks": [
         {"n": 1, "work_type": "physical", "effort": "low", "deadline_kind": "soft"},
         {"n": "2", "work_type": "Cognitive", "effort": "extreme", "deadline_kind": "hard"},
-        {"n": 7, "work_type": "social", "effort": "low", "deadline_kind": "firm"},
+        {"n": 7, "work_type": "social", "effort": "low", "deadline_kind": "hard"},
         {"n": "x", "work_type": "social"},
         {"n": 3, "work_type": "nope"},
         "garbage",
@@ -38,26 +38,29 @@ def test_label_defaults_beat_the_model_and_only_missing_fields_fill():
     suggested = {"work_type": "cognitive", "effort": "high", "deadline_kind": "soft"}
 
     assert planned_update(
-        {"work_type": None, "effort": None, "deadline_kind": "firm"},
+        {"work_type": None, "effort": None, "deadline_kind": "hard"},
         suggested, ("physical", None), deadline_kind_overridden=False,
     ) == {"work_type": "physical", "effort": "high", "deadline_kind": "soft"}
     assert planned_update(
-        {"work_type": "social", "effort": None, "deadline_kind": "firm"},
+        {"work_type": "social", "effort": None, "deadline_kind": "hard"},
         suggested, (None, None), deadline_kind_overridden=False,
     ) == {"effort": "high", "deadline_kind": "soft"}
 
 
 def test_deadline_kind_changes_only_while_it_is_the_untouched_default():
-    suggested = {"deadline_kind": "hard"}
-    current = {"work_type": "social", "effort": "low", "deadline_kind": "firm"}
+    suggested = {"deadline_kind": "soft"}
+    current = {"work_type": "social", "effort": "low", "deadline_kind": "hard"}
 
+    assert planned_update(current, suggested, (None, None), deadline_kind_overridden=False) == {
+        "deadline_kind": "soft"
+    }
     assert planned_update(current, suggested, (None, None), deadline_kind_overridden=True) == {}
     assert planned_update(
-        {**current, "deadline_kind": "soft"}, suggested, (None, None),
+        {**current, "deadline_kind": "soft"}, {"deadline_kind": "hard"}, (None, None),
         deadline_kind_overridden=False,
     ) == {}
     assert planned_update(
-        current, {"deadline_kind": "firm"}, (None, None), deadline_kind_overridden=False
+        current, {"deadline_kind": "hard"}, (None, None), deadline_kind_overridden=False
     ) == {}
 
 
@@ -87,4 +90,4 @@ def test_classify_tool_requires_every_field_per_task():
     item = CLASSIFY_TOOL["parameters"]["properties"]["tasks"]["items"]
 
     assert item["required"] == ["n", "work_type", "effort", "deadline_kind"]
-    assert item["properties"]["deadline_kind"]["enum"] == ["hard", "firm", "soft"]
+    assert item["properties"]["deadline_kind"]["enum"] == ["hard", "soft"]

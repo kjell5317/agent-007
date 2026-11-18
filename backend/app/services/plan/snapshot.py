@@ -114,7 +114,7 @@ def task_attrs(task: Task, label_defaults: dict[str, tuple[str | None, str | Non
     return TaskAttrs(
         task_id=task.id,
         due=to_user_tz(task.due_date),
-        deadline_kind=task.deadline_kind or "firm",
+        deadline_kind=task.deadline_kind or "hard",
         label=task.label,
         work_type=task.work_type or default_wt,
         effort=task.effort or default_eff,

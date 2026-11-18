@@ -5,6 +5,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
@@ -14,6 +15,8 @@ from app.agent.helpers.llm import LLMMessage, LLMResponse, ToolCall  # noqa: E40
 from app.agent.input import runner as input_runner  # noqa: E402
 from app.agent.manual import runner as manual_runner  # noqa: E402
 from app.agent.tools.schemas import new_input_tools, thread_followup_tools  # noqa: E402
+from app.db.models.task import Task  # noqa: E402
+from app.db.schemas.task import TaskCreate, TaskUpdate  # noqa: E402
 
 
 def _tool(tools: list[dict], name: str) -> dict:
@@ -31,11 +34,11 @@ def test_new_task_inherits_label_defaults_unless_the_agent_picked():
 
     assert new_task_attributes(
         {}, defaults, label="Sport", explicit_due=True, related_event=False
-    ) == {"work_type": "physical", "effort": "medium", "deadline_kind": "firm"}
+    ) == {"work_type": "physical", "effort": "medium", "deadline_kind": "hard"}
     assert new_task_attributes(
         {"effort": "low", "work_type": "nope"}, defaults,
         label="Sport", explicit_due=True, related_event=False,
-    ) == {"work_type": "physical", "effort": "low", "deadline_kind": "firm"}
+    ) == {"work_type": "physical", "effort": "low", "deadline_kind": "hard"}
     assert new_task_attributes(
         {}, defaults, label="Uni", explicit_due=True, related_event=False
     )["work_type"] is None
@@ -46,7 +49,7 @@ def test_new_task_inherits_label_defaults_unless_the_agent_picked():
 
 @pytest.mark.parametrize(
     "explicit_due,related_event,expected",
-    [(True, False, "firm"), (True, True, "firm"), (False, True, "hard"), (False, False, "soft")],
+    [(True, False, "hard"), (True, True, "hard"), (False, True, "hard"), (False, False, "soft")],
 )
 def test_deadline_kind_default(explicit_due, related_event, expected):
     attributes = new_task_attributes(
@@ -62,13 +65,25 @@ def test_agent_deadline_kind_wins_over_the_default():
     assert attributes["deadline_kind"] == "hard"
 
 
+def test_a_task_created_without_a_deadline_kind_is_hard():
+    assert TaskCreate(title="Renew passport").deadline_kind == "hard"
+    column = Task.__table__.c.deadline_kind
+    assert column.default.arg == "hard" and column.server_default.arg == "hard"
+
+
+def test_firm_is_no_longer_a_deadline_kind():
+    assert valid_attributes({"deadline_kind": "firm"}) == {}
+    with pytest.raises(ValidationError):
+        TaskUpdate(deadline_kind="firm")
+
+
 def test_task_tools_offer_optional_attribute_enums():
     tools = new_input_tools({"Uni": "coursework"})
     for name in ("create_task", "update_task"):
         params = _tool(tools, name)["parameters"]
         assert params["properties"]["work_type"]["enum"] == ["physical", "cognitive", "social"]
         assert params["properties"]["effort"]["enum"] == ["low", "medium", "high"]
-        assert params["properties"]["deadline_kind"]["enum"] == ["hard", "firm", "soft"]
+        assert params["properties"]["deadline_kind"]["enum"] == ["hard", "soft"]
         assert not {"work_type", "effort", "deadline_kind"} & set(params.get("required", []))
     create_props = _tool(tools, "create_task")["parameters"]["properties"]
     assert "label's default" in create_props["work_type"]["description"]
@@ -137,6 +152,7 @@ async def test_new_input_create_task_fills_attributes_from_label_defaults(monkey
     monkeypatch.setattr(input_runner.tasks, "create", fake_create)
     monkeypatch.setattr(input_runner, "schedule_task", noop)
     monkeypatch.setattr(input_runner, "maybe_split_task", noop)
+    monkeypatch.setattr(input_runner, "notify_new_task", noop)
     monkeypatch.setattr(input_runner.raw_inputs, "finalize", lambda *_a, **_k: None)
     monkeypatch.setattr(
         input_runner.labels_store, "defaults_by_name", lambda _s: {"Sport": ("physical", "low")}
@@ -172,6 +188,6 @@ async def test_manual_extraction_validates_and_defaults_attributes(monkeypatch):
     payload = await manual_runner.extract_task_fields(SimpleNamespace(), raw)
 
     assert payload["work_type"] == "cognitive"
-    assert payload["deadline_kind"] == "firm"
+    assert payload["deadline_kind"] == "hard"
     assert "effort" not in payload
     assert "due_date_is_explicit" not in payload

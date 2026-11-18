@@ -16,7 +16,8 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.events import publish_input, publish_points, publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
 from app.services.kotx import client as kotx_client
-from app.services.notify import clear_task_notification
+from app.services.kotx.notify import clear_kotx_prompt
+from app.services.notifications.notify import clear_task_notifications
 from app.services.points import award_for_task
 from app.services.task.recur import plan_recurring_tasks
 from app.services.task.vacate import vacated_commute_window, replan_vacated_window
@@ -46,6 +47,14 @@ async def close_task(
     kotx_task_id = task.kotx_task_id
     series_id = getattr(task, "recurrence_series_id", None)
     vacated = vacated_commute_window(task)
+    from app.services.task.work import stop_running
+
+    # Closing a running task completes its session.
+    stop_running(session, task, reason="completed")
+    # Before the orphan delete below, which takes the ledger rows with it.
+    await clear_task_notifications(session, task_id)
+    if kotx_task_id is not None:
+        await clear_kotx_prompt(task_id)
     await _log_close(session, task)
     latest = raw_inputs_store.latest_for_task(session, task_id)
     # Award completion points before any status flip / orphan delete, so we
@@ -74,7 +83,6 @@ async def close_task(
         session.commit()
         publish_task_removed(task_id)
     await delete_task_event(session, task)
-    await clear_task_notification(task_id)
     await replan_vacated_window(session, vacated)
     if discard_kotx and kotx_task_id is not None:
         try:
@@ -103,7 +111,7 @@ async def _log_close(session: Session, task) -> None:
     observation for check-ins and closes inside the slot."""
     from app.db.clients import schedule_log as log_store
     from app.services.learn.jobs import refit_soon
-    from app.services.plan.checkin import booked_slot
+    from app.services.plan.cue import booked_slot
     from app.services.plan.snapshot import features_snapshot
 
     try:

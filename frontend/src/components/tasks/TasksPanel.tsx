@@ -31,14 +31,20 @@ export function TasksPanel({
   const [laterOpen, setLaterOpen] = useState(false);
   const kotxFor = (task: Task) =>
     task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
-  const [today, tomorrow, later] = useMemo(() => {
+  const [today, tomorrow, later, waiting] = useMemo(() => {
     const sorted = tasks
       .filter((task) => !task.is_container)
       .sort((a, b) => compareTasks(a, b, "scheduled"));
     const t: Task[] = [];
     const tm: Task[] = [];
     const l: Task[] = [];
+    const w: Task[] = [];
     for (const task of sorted) {
+      // Off the calendar until resumed, so no day to group it under.
+      if (task.schedule_state === "waiting") {
+        w.push(task);
+        continue;
+      }
       const groupDate = taskGroupDate(task, "scheduled");
       if (groupDate && (isToday(groupDate) || isOverdue(groupDate))) {
         t.push(task);
@@ -48,13 +54,14 @@ export function TasksPanel({
         l.push(task);
       }
     }
-    return [t, tm, l];
+    return [t, tm, l, w];
   }, [tasks, timeZone]);
 
   const groups = [
     { key: "today", title: "Today", tasks: today },
     { key: "tomorrow", title: "Tomorrow", tasks: tomorrow },
     { key: "later", title: "Later", tasks: later },
+    { key: "waiting", title: "Waiting", tasks: waiting },
   ].filter((group) => group.tasks.length > 0);
 
   const renderTask = (task: Task) => (
@@ -80,9 +87,9 @@ export function TasksPanel({
           </div>
         </section>
       )}
-      {groups.map((group) => {
+      {groups.map((group, index) => {
         // Later stays collapsible only when a section sits above it.
-        if (group.key === "later" && groups.length > 1) {
+        if (group.key === "later" && index > 0) {
           return (
             <CollapsibleSection
               key={group.key}

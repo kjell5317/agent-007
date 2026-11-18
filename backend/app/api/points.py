@@ -193,6 +193,8 @@ def _caller_for(entry: PointsEntry) -> str | None:
 
 
 def _penalty_reason(action: str, period_key: str | None) -> str:
+    if action == "missed_deadline":
+        return "Hard deadline missed"
     if action == "scheduled_overdue_reschedule":
         return "Scheduled task overdue"
     if action == "due_overdue_hour":

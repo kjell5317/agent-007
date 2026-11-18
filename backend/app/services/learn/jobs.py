@@ -85,7 +85,7 @@ def refit_preferences(session: Session, now: datetime) -> preference.Posterior:
     metrics: dict = {"rows": len(rows)}
     if len(rows) >= 5:
         # Chronological split: the newest 20 % measure how well older data
-        # predicts new behaviour. A metric, not a gate.
+        # predicts new behaviour.
         cut = int(len(rows) * (1 - HELD_OUT_SHARE))
         held_out = preference.fit(rows[:cut])
         metrics["held_out_log_likelihood"] = preference.log_likelihood(held_out, rows[cut:])
@@ -93,6 +93,13 @@ def refit_preferences(session: Session, now: datetime) -> preference.Posterior:
             preference.prior(), rows[cut:]
         )
     post = preference.fit(rows)
+    metrics["converged"] = post.converged
+    reason = fit_rejection(metrics)
+    if reason is not None:
+        # The prior, not the previous model: the previous one may be the bad fit.
+        metrics["rejected"] = reason
+        log.warning("learn · slot preference fit rejected (%s), publishing the prior", reason)
+        post = preference.prior()
     models_store.publish(
         session, kind=SLOT_PREFERENCE, params=post.to_params(),
         n_samples=len(rows), metrics=metrics,
@@ -102,14 +109,46 @@ def refit_preferences(session: Session, now: datetime) -> preference.Posterior:
     return post
 
 
+def fit_rejection(metrics: dict) -> str | None:
+    if not metrics.get("converged", True):
+        return "not converged"
+    held_out = metrics.get("held_out_log_likelihood")
+    if held_out is not None and held_out < metrics["held_out_prior_log_likelihood"]:
+        return "predicts new rows worse than the prior"
+    return None
+
+
 def refit_duration(session: Session, now: datetime) -> dict:
+    observations = _session_observations(session, now)
+    measured = {o.task_id for o in observations}
     log_rows = log_store.since(session, now - LOG_WINDOW)
-    observations = data.duration_observations(log_rows, now)
+    observations += [
+        o for o in data.duration_observations(log_rows, now) if o.task_id not in measured
+    ]
     params = duration.fit(observations)
     models_store.publish(session, kind=DURATION, params=params, n_samples=len(observations))
     session.commit()
     log.info("learn · duration refit observations=%d b=%.3f", len(observations), params["b"])
     return params
+
+
+def _session_observations(session: Session, now: datetime) -> list[duration.Observation]:
+    from app.db.clients import labels as labels_store
+    from app.db.clients import tasks as tasks_store
+    from app.db.clients import work as work_store
+    from app.services.plan.snapshot import task_attrs
+
+    task_ids = list({row.task_id for row in work_store.since(session, now - LOG_WINDOW)})
+    if not task_ids:
+        return []
+    statuses = tasks_store.latest_status_for(session, task_ids)
+    closed = [tid for tid in task_ids if statuses.get(tid) == "closed"]
+    defaults = labels_store.defaults_by_name(session)
+    tasks = [
+        (task, task_attrs(task, defaults))
+        for tid in closed if (task := tasks_store.get(session, tid)) is not None
+    ]
+    return data.session_observations(tasks, work_store.for_tasks(session, closed), now)
 
 
 def duration_params(session: Session) -> dict | None:
@@ -249,7 +288,7 @@ def scheduling_stats(session: Session, *, now: datetime, weeks: int = 8) -> dict
         if row.slot_start is not None:
             key = (row.task_id, row.slot_start)
             slots[key].add(row.kind)
-            if row.kind in {"checkin_sent", "closed"}:
+            if row.kind in {"cue_sent", "checkin_sent", "closed"}:
                 slot_week.setdefault(key, week)
                 if row.kind == "closed" and row.slot_end is not None and not (
                     row.slot_start <= row.created_at <= row.slot_end + data.CLOSE_GRACE
@@ -261,13 +300,13 @@ def scheduling_stats(session: Session, *, now: datetime, weeks: int = 8) -> dict
             continue
         counts = per_week[week]
         counts["slots"] += 1
-        if "checkin_sent" in kinds:
-            counts["checkins"] += 1
-        if "not_done" in kinds:
-            counts["not_done"] += 1
-        if "no_response" in kinds:
-            counts["no_response"] += 1
-        if kinds & {"done_confirmed", "still_working"} or (
+        if "cue_sent" in kinds:
+            counts["cues"] += 1
+            if "started" in kinds:
+                counts["started"] += 1
+            if kinds & {"cue_snoozed", "cue_declined"}:
+                counts["pushed_away"] += 1
+        if kinds & {"done_confirmed", "still_working", "started"} or (
             "closed" in kinds and "closed_outside" not in kinds and "not_done" not in kinds
         ):
             counts["completed_in_slot"] += 1
@@ -284,8 +323,10 @@ def scheduling_stats(session: Session, *, now: datetime, weeks: int = 8) -> dict
             "slots": c.get("slots", 0),
             "completed_in_slot_share": rate(c.get("completed_in_slot", 0), c.get("slots", 0)),
             "user_moves": c.get("user_moves", 0),
-            "not_done_rate": rate(c.get("not_done", 0), c.get("checkins", 0)),
-            "no_response_rate": rate(c.get("no_response", 0), c.get("checkins", 0)),
+            # Follow-through: of the slots a start cue went out for, the share
+            # started, and the share pushed away (In 30 min / Not today).
+            "start_rate": rate(c.get("started", 0), c.get("cues", 0)),
+            "pushed_away_rate": rate(c.get("pushed_away", 0), c.get("cues", 0)),
         })
     model = models_store.active(session, SLOT_PREFERENCE)
     return {

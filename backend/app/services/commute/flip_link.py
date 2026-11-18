@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from app.config import get_settings
-from app.services.ntfy import action_secret
+from app.services.notifications.ntfy import action_secret
 
 if TYPE_CHECKING:
     from app.services.commute.flip import FlipRequest

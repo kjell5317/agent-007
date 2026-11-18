@@ -16,7 +16,8 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 from app.agent.kotx import runner as kotx_runner  # noqa: E402
 from app.api import notifications as notif  # noqa: E402
 from app.api.webhooks import _verify_signature  # noqa: E402
-from app.services import notify as notify_svc  # noqa: E402
+from app.services.kotx import notify as notify_svc  # noqa: E402
+from app.services.notifications import messages, push  # noqa: E402
 from app.services.kotx import client as kotx_client  # noqa: E402
 from app.services.kotx import discard as kotx_discard  # noqa: E402
 from app.services.input.kotx import poll as kotx_poll  # noqa: E402
@@ -329,7 +330,11 @@ def kotx_prompts(monkeypatch):
     async def _noop_clear(task_id):
         pass
 
-    monkeypatch.setattr(kotx_runner, "clear_task_notification", _noop_clear)
+    async def _new_task(session, task):
+        calls.append({"prompt": "new_task", "task_id": task.id})
+
+    monkeypatch.setattr(kotx_runner, "clear_kotx_prompt", _noop_clear)
+    monkeypatch.setattr(kotx_runner, "notify_new_task", _new_task)
     return calls
 
 
@@ -688,7 +693,7 @@ async def test_actionable_transition_reopens_closed_task(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
+async def test_new_actionable_transition_creates_task_via_agent(monkeypatch, kotx_prompts):
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
     monkeypatch.setattr(
         kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None
@@ -716,9 +721,8 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
             id=uuid.uuid4(), title=payload.title, kotx_task_id=None, link=payload.link
         )
 
-    async def fake_schedule(session, task, *, primary_action=None, **kwargs):
+    async def fake_schedule(session, task, **kwargs):
         created["scheduled"] = True
-        created["primary_action"] = primary_action
 
     finalized = {}
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
@@ -748,11 +752,11 @@ async def test_new_actionable_transition_creates_task_via_agent(monkeypatch):
     assert payload.label == "SocialAI"
     # A brief is coding work; with no label default the type falls back to cognitive.
     assert (payload.work_type, payload.effort, payload.deadline_kind) == (
-        "cognitive", None, "firm",
+        "cognitive", None, "hard",
     )
     assert created["scheduled"] is True
-    # The first notification for a draft implement task swaps "Done" for "Start".
-    assert created["primary_action"] == {"action": "KOTX_START", "title": "Start"}
+    # A draft implement task announces itself with the Start prompt.
+    assert [call["prompt"] for call in kotx_prompts] == ["start"]
     # kotx briefs are coding detail — the extractor runs with note-harvesting off
     # so it can't spam long-term memory.
     assert extract_kwargs.get("harvest_notes") is False
@@ -969,7 +973,7 @@ async def test_non_prompt_transition_clears_stale_prompt(monkeypatch, kotx_promp
     async def fake_clear(task_id):
         cleared.append(task_id)
 
-    monkeypatch.setattr(kotx_runner, "clear_task_notification", fake_clear)
+    monkeypatch.setattr(kotx_runner, "clear_kotx_prompt", fake_clear)
 
     session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
     trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="running")))
@@ -993,7 +997,7 @@ async def test_resolve_conflict_transition_leaves_prompt_untouched(monkeypatch, 
     async def fake_clear(task_id):
         cleared.append(task_id)
 
-    monkeypatch.setattr(kotx_runner, "clear_task_notification", fake_clear)
+    monkeypatch.setattr(kotx_runner, "clear_kotx_prompt", fake_clear)
 
     session = SimpleNamespace(commit=lambda: None, flush=lambda: None)
     trace = await kotx_runner.run_kotx_transition(
@@ -1005,11 +1009,9 @@ async def test_resolve_conflict_transition_leaves_prompt_untouched(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_task_creation_does_not_add_prompt_over_scheduled(
-    monkeypatch, kotx_prompts
-):
-    # Creating the 007 task schedules it, which fires the "Scheduled"
-    # notification — a start/review prompt on top would be a duplicate.
+async def test_task_creation_announces_with_the_run_prompt(monkeypatch, kotx_prompts):
+    # There is no "Scheduled" push any more: the run's prompt is the task's
+    # first notification.
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
     monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
     monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
@@ -1017,10 +1019,7 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
     async def fake_extract(session, raw, **kwargs):
         return {"estimation": 20, "due_date": None, "label": None}
 
-    scheduled = {}
-
-    async def fake_schedule(session, task, *, primary_action=None, **kwargs):
-        scheduled["primary_action"] = primary_action
+    async def fake_schedule(session, task, **kwargs):
         return None
 
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
@@ -1038,15 +1037,11 @@ async def test_task_creation_does_not_add_prompt_over_scheduled(
     trace = await kotx_runner.run_kotx_transition(session, _raw(_meta(state="draft")))
 
     assert trace["outcome"] == "task_created"
-    # No standalone prompt — the action rides on the scheduled notification.
-    assert kotx_prompts == []
-    assert scheduled["primary_action"] == {"action": "KOTX_START", "title": "Start"}
+    assert [call["prompt"] for call in kotx_prompts] == ["start"]
 
 
 @pytest.mark.asyncio
-async def test_review_task_creation_drops_done_from_scheduled_notification(
-    monkeypatch, kotx_prompts
-):
+async def test_review_task_creation_announces_with_review_prompt(monkeypatch, kotx_prompts):
     monkeypatch.setattr(kotx_runner.tasks, "get_by_kotx_id", lambda s, i: None)
     monkeypatch.setattr(kotx_runner.raw_inputs, "find_by_thread", lambda s, src, t: None)
     monkeypatch.setattr(kotx_runner.tasks, "github_link_candidates", lambda s, r, n: [])
@@ -1054,10 +1049,7 @@ async def test_review_task_creation_drops_done_from_scheduled_notification(
     async def fake_extract(session, raw, **kwargs):
         return {"estimation": 20, "due_date": None, "label": None}
 
-    scheduled = {}
-
-    async def fake_schedule(session, task, *, primary_action=None, **kwargs):
-        scheduled["primary_action"] = primary_action
+    async def fake_schedule(session, task, **kwargs):
         return None
 
     monkeypatch.setattr(kotx_runner, "extract_task_fields", fake_extract)
@@ -1077,10 +1069,7 @@ async def test_review_task_creation_drops_done_from_scheduled_notification(
     )
 
     assert trace["outcome"] == "task_created"
-    assert kotx_prompts == []
-    # Review has no meaningful "Done", so its scheduled notification drops the
-    # leading button rather than swapping it (implement) or keeping "Done".
-    assert scheduled["primary_action"] is kotx_runner.DROP_LEADING_ACTION
+    assert [call["prompt"] for call in kotx_prompts] == ["review_ready"]
 
 
 @pytest.mark.asyncio
@@ -1154,10 +1143,10 @@ async def test_notify_action_dispatches_to_kotx_and_clears(monkeypatch, action, 
         cleared.append(task_id)
 
     monkeypatch.setattr(notif.kotx_client, fn_name, fake_fn)
-    monkeypatch.setattr(notif, "clear_task_notification", fake_clear)
+    monkeypatch.setattr(notif, "clear_kotx_prompt", fake_clear)
 
     monkeypatch.setattr(notif, "_check_secret", lambda request, payload: None)
-    payload = notif.ActionPayload(action=action, tag=f"task-{task.id}")
+    payload = notif.ActionPayload(action=action, tag=f"task-{task.id}-kotx")
     result = await notif.handle_action(payload, request=SimpleNamespace(), session=object())
 
     assert result == {"ok": True, "action": action, "task_id": str(task.id)}
@@ -1201,62 +1190,13 @@ async def test_notify_action_reports_an_unreachable_kotx(monkeypatch):
 def _capture_notify(monkeypatch) -> dict:
     captured: dict = {}
 
-    async def fake_notify(title, message, **kw):
-        captured.update({"title": title, "message": message, **kw})
+    async def fake_send(message):
+        captured.update({
+            "title": message.title, "message": message.body, "actions": message.action_items,
+        })
 
-    monkeypatch.setattr(notify_svc, "notify", fake_notify)
+    monkeypatch.setattr(push, "send", fake_send)
     return captured
-
-
-@pytest.mark.asyncio
-async def test_scheduled_notification_swaps_only_done_for_the_action(monkeypatch):
-    captured = _capture_notify(monkeypatch)
-    task = SimpleNamespace(id=uuid.uuid4(), title="#31 Add index", due_date=None)
-    start = datetime(2026, 7, 4, 14, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
-
-    await notify_svc.notify_task_created(
-        task, start=start, end=end, primary_action={"action": "KOTX_START", "title": "Start"}
-    )
-
-    actions = captured["actions"]
-    assert actions[0] == {"action": "KOTX_START", "title": "Start"}
-    # Dismiss + Reschedule are preserved; only Done was replaced.
-    assert [a["action"] for a in actions[1:]] == [
-        notify_svc.ACTION_DISMISS_TASK,
-        notify_svc.ACTION_RESCHEDULE_TASK,
-    ]
-    assert "Scheduled" in captured["message"]
-
-
-@pytest.mark.asyncio
-async def test_scheduled_notification_keeps_done_without_action(monkeypatch):
-    captured = _capture_notify(monkeypatch)
-    task = SimpleNamespace(id=uuid.uuid4(), title="t", due_date=None)
-    start = datetime(2026, 7, 4, 14, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
-
-    await notify_svc.notify_task_created(task, start=start, end=end)
-
-    assert captured["actions"][0]["action"] == notify_svc.ACTION_CLOSE_TASK
-
-
-@pytest.mark.asyncio
-async def test_scheduled_notification_drops_done_for_review(monkeypatch):
-    captured = _capture_notify(monkeypatch)
-    task = SimpleNamespace(id=uuid.uuid4(), title="#31 Review", due_date=None)
-    start = datetime(2026, 7, 4, 14, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc)
-
-    await notify_svc.notify_task_created(
-        task, start=start, end=end, primary_action=notify_svc.DROP_LEADING_ACTION
-    )
-
-    # "Done" is gone (it aliased "Dismiss" for a review); Dismiss + Reschedule stay.
-    assert [a["action"] for a in captured["actions"]] == [
-        notify_svc.ACTION_DISMISS_TASK,
-        notify_svc.ACTION_RESCHEDULE_TASK,
-    ]
 
 
 @pytest.mark.asyncio
@@ -1267,7 +1207,7 @@ async def test_open_pr_notification_title_message_and_buttons(monkeypatch):
     assert captured["message"] == "Open Pull Request"
     assert [a["action"] for a in captured["actions"]] == [
         notify_svc.ACTION_KOTX_APPROVE,
-        notify_svc.ACTION_DISMISS_TASK,
+        messages.ACTION_DISMISS_TASK,
     ]
 
 
@@ -1284,7 +1224,7 @@ async def test_review_ready_notification_names_assignee_without_comment_button(
     assert captured["title"] == "#31 Review index"
     assert captured["message"] == "Comment PR of octocat"
     assert captured["actions"] == [
-        {"action": notify_svc.ACTION_DISMISS_TASK, "title": "Dismiss"}
+        {"action": messages.ACTION_DISMISS_TASK, "title": "Dismiss"}
     ]
 
 

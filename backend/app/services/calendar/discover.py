@@ -66,8 +66,8 @@ from app.services.home_assistant import (
     next_event_datetime_configured,
     set_next_event_datetime,
 )
-from app.services.notify import task_url
-from app.services.plan.checkin import booked_slot
+from app.services.notifications.messages import task_url
+from app.services.plan.cue import booked_slot
 from app.services.plan.schedule import (
     _duration_minutes,
     reschedule_event,
@@ -689,7 +689,7 @@ def _synced_field_updates(event: CalendarEvent, task: Task) -> dict:
     if event.location != resolve_location_alias(task.location):
         updates["location"] = event.location
 
-    # A running "Still working" extension grows the event on purpose.
+    # A running work session grows the event on purpose.
     if not event.all_day and getattr(task, "running_since", None) is None:
         expected = _duration_minutes(task, get_settings())
         actual = round((event.end - event.start).total_seconds() / 60)

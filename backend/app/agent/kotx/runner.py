@@ -30,17 +30,14 @@ from app.db.schemas.task import TaskCreate
 from app.services.learn.jobs import with_learned_estimate
 from app.services.input.kotx.normalize import ACTIONABLE, DONE_STATES, parse_github_subject
 from app.services.kotx import client as kotx_client
-from app.services.notify import (
-    ACTION_KOTX_APPROVE,
-    ACTION_KOTX_MERGE,
-    ACTION_KOTX_START,
-    DROP_LEADING_ACTION,
-    clear_task_notification,
+from app.services.kotx.notify import (
+    clear_kotx_prompt,
     notify_kotx_confirm_merge,
     notify_kotx_open_pr,
     notify_kotx_review_ready,
     notify_kotx_start,
 )
+from app.services.notifications.notify import notify_new_task
 from app.services.plan import schedule_task
 from app.services.task.close import close_task
 from app.services.task.reopen import reopen_task
@@ -213,27 +210,15 @@ async def _sync_kotx_prompt(task: Task, kind: str, state: str, meta: dict) -> No
             task, assignee=str(meta.get("assignee") or "unassigned")
         )
     elif kind in ("implement", "review"):
-        await clear_task_notification(task.id)
+        await clear_kotx_prompt(task.id)
 
 
-def _kotx_primary_action(meta: dict) -> dict[str, str] | None:
-    """The leading button on a kotx task's first (scheduled) notification,
-    chosen by the current transition: a run action that replaces "Done", or
-    `DROP_LEADING_ACTION` to drop it (review, which has no meaningful "Done")."""
-    kind = meta.get("kotx_kind")
-    state = meta.get("kotx_state")
-    if kind == "implement" and state == "draft":
-        return {"action": ACTION_KOTX_START, "title": "Start"}
-    if kind == "implement" and state == "awaiting_approval":
-        if meta.get("kotx_proposes") == "merge":
-            return {"action": ACTION_KOTX_MERGE, "title": "Merge"}
-        return {"action": ACTION_KOTX_APPROVE, "title": "Open PR"}
-    if kind == "review" and state == "awaiting_approval":
-        # A review completes by posting the review (comment/approve) in the app,
-        # so a notification "Done" — which closes the task, discards the run, and
-        # awards points — is just a confusing alias for "Dismiss". Drop it.
-        return DROP_LEADING_ACTION
-    return None
+def _has_prompt(meta: dict) -> bool:
+    """Whether the run's current transition asks for a tap (see `_sync_kotx_prompt`)."""
+    kind, state = meta.get("kotx_kind"), meta.get("kotx_state")
+    return (kind == "implement" and state in ("draft", "awaiting_approval")) or (
+        kind == "review" and state == "awaiting_approval"
+    )
 
 
 def _match_task(
@@ -316,14 +301,17 @@ async def _create_task_from_brief(
             label=label,
             work_type=default_work_type or "cognitive",
             effort=default_effort or payload.get("effort"),
-            deadline_kind=payload.get("deadline_kind") or "firm",
+            deadline_kind=payload.get("deadline_kind") or "hard",
         )),
     )
     task.kotx_task_id = kotx_id
     session.flush()
-    # The first notification for this task is the normal "Scheduled" one, but
-    # with its "Done" button swapped for the kotx action for this state.
-    await schedule_task(session, task, primary_action=_kotx_primary_action(meta))
+    await schedule_task(session, task)
+    # The run's prompt announces the task; without one it is a plain new task.
+    if _has_prompt(meta):
+        await _sync_kotx_prompt(task, str(meta.get("kotx_kind")), str(meta.get("kotx_state")), meta)
+    else:
+        await notify_new_task(session, task)
     return task
 
 

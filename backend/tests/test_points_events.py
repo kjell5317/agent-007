@@ -17,6 +17,7 @@ from app.db.clients import points as points_store  # noqa: E402
 from app.db.models.points_entry import PointsEntry  # noqa: E402
 from app.db.models.task import Task  # noqa: E402
 from app.events import publish as publish_events  # noqa: E402
+from app.db.models.work import WorkSession  # noqa: E402
 from app.services import points as points_service  # noqa: E402
 from app.services.task import close as close_service  # noqa: E402
 from app.services.task import reopen as reopen_service  # noqa: E402
@@ -26,6 +27,7 @@ def _sqlite_session():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Task.__table__.create(engine)
     PointsEntry.__table__.create(engine)
+    WorkSession.__table__.create(engine)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
 
 
@@ -191,14 +193,13 @@ def test_penalty_log_keeps_task_title_after_task_is_deleted(monkeypatch):
     session.add(task)
     session.commit()
 
-    assert points_service.subtract_scheduled_overdue_penalty(
-        session, task, scheduled_date=task.scheduled_date,
-    )
+    assert points_service.subtract_missed_deadline_penalty(session, task)
+    assert not points_service.subtract_missed_deadline_penalty(session, task)
     session.delete(task)
     session.commit()
 
     log = points_api.get_points_log(SimpleNamespace(session={}), session=session)
-    assert log.entries[0].reason == "Scheduled task overdue · Write report"
+    assert log.entries[0].reason == "Hard deadline missed · Write report"
     assert log.entries[0].task_id == task.id
 
 
@@ -213,9 +214,7 @@ def test_parent_task_does_not_earn_or_lose_points(monkeypatch):
         lambda: SimpleNamespace(points_task_done_factor=-0.5),
     )
 
-    assert not points_service.subtract_scheduled_overdue_penalty(
-        session, task, scheduled_date=task.scheduled_date,
-    )
+    assert not points_service.subtract_missed_deadline_penalty(session, task)
     assert not points_service.award_for_task(session, task)
     assert points_store.total(session) == 0
 
@@ -300,7 +299,7 @@ async def test_close_task_awards_points_and_publishes_new_total(monkeypatch):
         return None
 
     monkeypatch.setattr(close_service, "delete_task_event", fake_delete_task_event)
-    monkeypatch.setattr(close_service, "clear_task_notification", fake_clear_task_notification)
+    monkeypatch.setattr(close_service, "clear_task_notifications", fake_clear_task_notification)
 
     await close_service.close_task(session, task.id)
 
@@ -333,7 +332,7 @@ async def test_reopened_task_earns_points_again_once(monkeypatch):
         return None
 
     monkeypatch.setattr(close_service, "delete_task_event", no_side_effect)
-    monkeypatch.setattr(close_service, "clear_task_notification", no_side_effect)
+    monkeypatch.setattr(close_service, "clear_task_notifications", no_side_effect)
     monkeypatch.setattr(reopen_service, "schedule_task", no_side_effect)
 
     await close_service.close_task(session, task.id)
@@ -379,7 +378,7 @@ async def test_close_kotx_task_awards_fixed_factor(monkeypatch):
         return True
 
     monkeypatch.setattr(close_service, "delete_task_event", fake_delete_task_event)
-    monkeypatch.setattr(close_service, "clear_task_notification", fake_clear_task_notification)
+    monkeypatch.setattr(close_service, "clear_task_notifications", fake_clear_task_notification)
     monkeypatch.setattr(close_service.kotx_client, "discard_task", fake_discard_task)
 
     await close_service.close_task(session, task.id)
@@ -429,7 +428,7 @@ async def test_close_task_without_award_does_not_publish_points(monkeypatch):
         return None
 
     monkeypatch.setattr(close_service, "delete_task_event", fake_delete_task_event)
-    monkeypatch.setattr(close_service, "clear_task_notification", fake_clear_task_notification)
+    monkeypatch.setattr(close_service, "clear_task_notifications", fake_clear_task_notification)
 
     await close_service.close_task(session, task.id)
 

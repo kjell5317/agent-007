@@ -158,7 +158,7 @@ async def test_mark_sent_closes_the_reply_task_and_removes_the_leftover_draft(mo
 
     monkeypatch.setattr(draft_svc.drafts_store, "live_for_threads", lambda *_: [draft])
     monkeypatch.setattr(close_svc, "close_task", fake_close)
-    monkeypatch.setattr(draft_svc, "clear_notification_tag", fake_clear)
+    monkeypatch.setattr(draft_svc.push, "clear", fake_clear)
 
     count = await draft_svc.mark_sent(SimpleNamespace(commit=lambda: None), FakeClient(), {"t1"})
 

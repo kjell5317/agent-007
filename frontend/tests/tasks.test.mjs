@@ -10,14 +10,6 @@ const { outputText } = ts.transpileModule(
 );
 const exports = {};
 vm.runInNewContext(outputText, { exports });
-const now = Date.parse("2026-09-23T12:00:00Z");
-const task = {
-  status: "open",
-  schedule_status: "scheduled",
-  scheduled_date: "2026-09-23T10:00:00Z",
-  due_date: "2026-09-24T12:00:00Z",
-  estimation: 30,
-};
 
 test("repeat labels read naturally for one and many units", () => {
   assert.equal(exports.fmtRecurrence("day", 1), "Daily");
@@ -37,20 +29,4 @@ test("subtasks of a split occurrence show the occurrence's repeat", () => {
     { label: "Weekly", unit: "week", inherited: true },
   );
   assert.equal(exports.taskRecurrence({ recurrence_unit: null, recurrence_interval: null, parent_card: null }), null);
-});
-
-test("a running task counts the minutes past its booked slot", () => {
-  const running = { ...task, scheduled_date: "2026-09-23T11:00:00Z", running_since: "2026-09-23T11:47:00Z" };
-  assert.equal(exports.runningOvertime(running, now), 30);
-  assert.equal(exports.runningOvertime({ ...running, estimation_corrected: 45 }, now), 15);
-  assert.equal(exports.runningOvertime({ ...running, scheduled_date: "2026-09-23T11:45:00Z" }, now), 0);
-  assert.equal(exports.runningOvertime({ ...running, running_since: null }, now), null);
-  assert.equal(exports.runningOvertime({ ...running, status: "closed" }, now), null);
-});
-
-test("only open tasks count as running", () => {
-  const since = "2026-09-23T10:30:00Z";
-  assert.equal(exports.taskRunningSince({ status: "open", running_since: since }), since);
-  assert.equal(exports.taskRunningSince({ status: "closed", running_since: since }), null);
-  assert.equal(exports.taskRunningSince({ status: "open", running_since: null }), null);
 });

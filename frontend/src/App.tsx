@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { LabelsPanel } from "@/components/labels/LabelsPanel";
@@ -15,7 +14,9 @@ import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
 import { Topbar } from "@/components/Topbar";
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { FocusPanel } from "@/components/work/FocusPanel";
 import { useAppData } from "@/hooks/useAppData";
 import { useRuns } from "@/hooks/useRuns";
 import { useSearchChat } from "@/hooks/useSearchChat";
@@ -26,6 +27,8 @@ import { backFromDeepLink, clearDeepLink, parseDeepLink, pushDeepLink, rewindToT
 import type { KotxTask } from "@/lib/kotx";
 import { useThemePreference } from "@/lib/theme";
 import { compareTasksByDue } from "@/lib/tasks";
+import { setQuietToasts, toast } from "@/lib/toast";
+import { runningSince } from "@/lib/work";
 import type { RawInput, SearchHit, Task } from "@/lib/types";
 
 export function App() {
@@ -69,6 +72,15 @@ export function App() {
   const pendingClearInputIdsRef = useRef(new Set<string>());
   const tasksActive = view === "tasks" || (view === "chat" && !searchQuery.trim() && searchFilters.kind === "tasks");
   const inboxActive = inboxOpen;
+  // While a task runs the main view shows only it, the rest behind a toggle.
+  const runningTask = useMemo(() => tasks.find((task) => runningSince(task)) ?? null, [tasks]);
+  const runningTaskId = runningTask?.id ?? null;
+  const [showEverything, setShowEverything] = useState(false);
+
+  useEffect(() => {
+    setQuietToasts(runningTaskId !== null);
+    setShowEverything(false);
+  }, [runningTaskId]);
 
   const closeSearchTo = useCallback(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -540,7 +552,22 @@ export function App() {
         ) : view === "labels" ? (
           <LabelsPanel />
         ) : view === "tasks" ? (
-          loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
+          loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : runningTask ? (
+            <div className="space-y-4">
+              <FocusPanel task={runningTask} onChanged={refresh} onOpen={openTask} />
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={showEverything}
+                onClick={() => setShowEverything((open) => !open)}
+                className="w-full text-muted-foreground"
+              >
+                {showEverything ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showEverything ? "Hide everything else" : "Show everything"}
+              </Button>
+              {showEverything && renderTasks()}
+            </div>
+          ) : renderTasks()
         ) : (
           <div>
             {(searchQuery.trim() || chat.messages.length === 0) && <SearchFilters filters={searchFilters} query={searchQuery} onChange={changeSearchFilters} />}

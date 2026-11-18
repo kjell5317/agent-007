@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 
 WORK_TYPES = ("physical", "cognitive", "social")
 EFFORTS = ("low", "medium", "high")
-DEADLINE_KINDS = ("hard", "firm", "soft")
+DEADLINE_KINDS = ("hard", "soft")
 SIDES = ("prev", "next")
 
 # A neighbour further away than this counts as "none".
@@ -54,7 +54,7 @@ class SlotContext:
     end: datetime
     now: datetime
     due: datetime
-    deadline_kind: str = "firm"
+    deadline_kind: str = "hard"
     label: str | None = None
     work_type: str | None = None
     effort: str | None = None
@@ -319,8 +319,6 @@ _GAP_PRIOR = {"0": -3.0, "5": -2.0, "10": -1.0, "15+": 0.0}
 _LATE_PRIOR = {
     late_flag_key("hard"): -1000.0,
     late_hours_key("hard"): -0.5,
-    late_flag_key("firm"): -10.0,
-    late_hours_key("firm"): -0.5,
     late_flag_key("soft"): 0.0,
     late_hours_key("soft"): -0.05,
 }

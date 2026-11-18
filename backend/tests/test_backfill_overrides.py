@@ -90,7 +90,7 @@ def _task(**overrides) -> dict:
         "label": "Uni",
         "work_type": None,
         "effort": None,
-        "deadline_kind": "firm",
+        "deadline_kind": "hard",
         "related_event_due_derived": False,
         "due_date_derived": False,
         "is_container": False,

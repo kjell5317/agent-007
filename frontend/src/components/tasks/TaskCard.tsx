@@ -2,27 +2,29 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Circle,
   CircleCheckBig,
+  Hourglass,
   ListTodo,
   MapPin,
+  Pause,
+  Play,
   Repeat,
   RotateCcw,
-  Timer,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Badge } from "@/components/ui/badge";
 import { HandoffChip } from "@/components/tasks/HandoffSection";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { actionHint } from "@/components/runs/runLabels";
+import { useWorkActions } from "@/components/work/useWorkActions";
 import { useLabels } from "@/hooks/useLabels";
-import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { api } from "@/lib/api";
-import { dueDateBadgeVariant, fmtDue } from "@/lib/dates";
+import { dueDateBadgeVariant, fmtClock, fmtDue } from "@/lib/dates";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { runningOvertime, taskRecurrence } from "@/lib/tasks";
+import { taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -62,7 +64,6 @@ export function TaskCard({
   compact = false,
 }: Props) {
   const [busy, setBusy] = useState(false);
-  const now = useMinuteClock();
   const [crossing, setCrossing] = useState(false);
   const [locationVisible, setLocationVisible] = useState(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
@@ -73,6 +74,10 @@ export function TaskCard({
   const lastMeasuredWidthRef = useRef<number | null>(null);
   const lastProbeKeyRef = useRef<string | null>(null);
   const labels = useLabels();
+  const work = useWorkActions(task, { onChanged });
+  // Parents are worked on through their subtasks; kotx runs through kotx.
+  const workable = task.status === "open" && !task.is_container && !kotxTask;
+  const crossed = crossing || work.completing;
 
   const kotxAction = kotxTask ? actionHint(kotxTask) : null;
   const canReopen = task.status !== "open" && task.kotx_task_id == null;
@@ -80,25 +85,23 @@ export function TaskCard({
   const displayDateVariant = dueDateBadgeVariant(displayDate, task.estimation);
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
-  const overtime = runningOvertime(task, now);
   const deferred = task.schedule_status === "deferred";
   const recurrence = taskRecurrence(task);
   const recurrenceTitle = recurrence
     ? `${recurrence.inherited ? "Part of a task that repeats" : "Repeats"} ${recurrence.label.toLowerCase()}`
     : null;
   const cardBorderClass =
-    task.is_container ? null : task.schedule_status === "pending"
-      ? "border-emerald-500/70"
-      : task.kotx_task_id != null
-        ? "border-primary/50"
-        : unseen
-          ? "border-emerald-500/70"
-          : null;
+    task.is_container ? null
+      : work.running ? "border-primary/50"
+      : task.schedule_status === "pending" && !work.waiting ? "border-emerald-500/70"
+      : task.kotx_task_id != null ? "border-primary/50"
+      : unseen ? "border-emerald-500/70"
+      : null;
   const locationProbeKey = [
-    overtime ?? "",
+    work.running,
+    work.waiting,
     deferred,
     displayDate ?? "",
-    task.estimation ?? "",
     task.label ?? "",
     displayLocation ?? "",
     measurementVersion,
@@ -216,25 +219,25 @@ export function TaskCard({
   // On kotx cards the check-off dismisses (discards the run — done is handled
   // through kotx), but keeps the same icon and animation as every other task.
   const crossOff = () => {
-    if (task.status !== "open" || crossing || busy) return;
+    if (task.status !== "open" || crossed || busy) return;
     if (task.is_container) {
       void withBusy(() => api.markNotTask(task.id), "Deleted parent and dismissed subtasks");
       return;
     }
+    if (!kotxTask) {
+      work.complete();
+      return;
+    }
     setCrossing(true);
     setTimeout(() => {
-      if (kotxTask) {
-        if (kotxTask.canDiscard) {
-          withBusy(
-            () => kotx.discard(kotxTask.id),
-            "Run discarded",
-            onKotxChanged,
-          );
-        } else {
-          withBusy(() => api.markNotTask(task.id), "Marked not a task");
-        }
+      if (kotxTask.canDiscard) {
+        withBusy(
+          () => kotx.discard(kotxTask.id),
+          "Run discarded",
+          onKotxChanged,
+        );
       } else {
-        withBusy(() => api.closeTask(task.id), "Marked done");
+        withBusy(() => api.markNotTask(task.id), "Marked not a task");
       }
     }, CROSS_OFF_MS);
   };
@@ -293,7 +296,7 @@ export function TaskCard({
         compact ? "h-[76px] overflow-hidden" : "min-h-[76px]",
         "transition-opacity duration-300",
         cardBorderClass,
-        crossing && "pointer-events-none opacity-40",
+        crossed && "pointer-events-none opacity-40",
       )}
     >
       <CardContent
@@ -311,13 +314,13 @@ export function TaskCard({
                   ? kotxTask.canDiscard
                     ? "Dismiss run"
                     : "Mark not a task"
-                  : task.is_container ? "Delete parent and dismiss subtasks" : "Mark done"
+                  : task.is_container ? "Delete parent and dismiss subtasks" : "Complete"
               }
-              disabled={busy || crossing}
+              disabled={busy || crossed || work.busy}
               onClick={crossOff}
               className={task.is_container ? "text-muted-foreground hover:text-destructive" : "text-muted-foreground hover:text-primary"}
             >
-              {crossing ? (
+              {crossed ? (
                 <CircleCheckBig className="h-5 w-5 text-primary" />
               ) : task.is_container ? (
                 <Trash2 className="h-5 w-5" />
@@ -345,7 +348,7 @@ export function TaskCard({
               <span
                 className={cn(
                   "min-w-0 truncate text-base font-medium leading-snug transition-all duration-300",
-                  crossing && "line-through opacity-60",
+                  crossed && "line-through opacity-60",
                 )}
               >
                 {task.title}
@@ -360,6 +363,20 @@ export function TaskCard({
               ref={metadataRef}
               className={cn("mt-1 flex items-center gap-x-2 gap-y-1 text-xs text-muted-foreground", compact ? "overflow-hidden whitespace-nowrap" : "flex-wrap")}
             >
+              {work.running && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+                  Working
+                </span>
+              )}
+
+              {work.waiting && task.waiting_since && (
+                <Badge variant="muted" className="gap-1">
+                  <Hourglass className="h-3 w-3" />
+                  Waiting since {fmtClock(task.waiting_since)}
+                </Badge>
+              )}
+
               {displayDate && (
                 <Badge variant={displayDateVariant}>
                   {fmtDue(displayDate)}
@@ -384,18 +401,6 @@ export function TaskCard({
                 </span>
               )}
 
-              {(task.estimation != null || overtime != null) && (
-                <span className="inline-flex items-center gap-1">
-                  <Timer className="h-3 w-3" />
-                  {task.estimation}
-                  {overtime != null && (
-                    <span className="font-semibold tabular-nums" title="Still working past the booked slot">
-                      + {overtime}
-                    </span>
-                  )}
-                  {" min"}
-                </span>
-              )}
               {displayLocation && locationVisible && (
                 <span
                   ref={locationRef}
@@ -417,16 +422,32 @@ export function TaskCard({
               <Button
                 size="sm"
                 className="shrink-0"
-                disabled={busy || crossing}
+                disabled={busy || crossed}
                 onClick={() => onOpen(task.id)}
               >
                 {kotxAction}
               </Button>
             )
+          ) : workable ? (
+            <div className="flex shrink-0 items-center gap-1">
+              {work.waiting && (
+                <Button size="sm" variant="secondary" disabled={work.busy || crossed} onClick={work.resume}>
+                  Resume
+                </Button>
+              )}
+              <IconButton
+                label={work.running ? "Pause" : "Start"}
+                disabled={work.busy || crossed}
+                onClick={work.running ? work.pause : work.start}
+                className={work.running ? "text-primary hover:bg-accent" : "text-muted-foreground hover:bg-accent hover:text-primary"}
+              >
+                {work.running ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
+              </IconButton>
+            </div>
           ) : null}
         </div>
       </CardContent>
-
+      {work.dialogs}
     </Card>
   );
 }

@@ -30,14 +30,10 @@ from app.services.handoff.eligible import (
     replyable,
 )
 from app.services.handoff.text import append_section
-from app.services.notify import (
-    clear_notification_tag,
-    handoff_tag,
-    notify_error,
-    notify_handoff_proposed,
-    notify_research_moved_due,
-    notify_task_answered,
-)
+from app.services.kotx.notify import notify_handoff_proposed
+from app.services.notifications import push
+from app.services.notifications.messages import handoff_tag
+from app.services.notifications.notify import notify_done_for_you, notify_error, notify_new_task
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +89,7 @@ async def accept(session: Session, task) -> TaskHandoff:
     row.state = "running"
     session.commit()
     publish_task(session, task.id)
-    await clear_notification_tag(handoff_tag(task.id))
+    await push.clear(handoff_tag(task.id))
     _spawn(row.id)
     return row
 
@@ -105,7 +101,7 @@ async def decline(session: Session, task) -> None:
     handoffs_store.finish(session, row, "declined")
     session.commit()
     publish_task(session, task.id)
-    await clear_notification_tag(handoff_tag(task.id))
+    await push.clear(handoff_tag(task.id))
 
 
 def _spawn(handoff_id: uuid.UUID) -> None:
@@ -130,6 +126,7 @@ async def execute(handoff_id: uuid.UUID) -> None:
             session.commit()
             publish_task(session, row.task_id)
             await notify_error(f"Agent hand-off failed ({row.kind})", exc, context=task.title)
+            await _announce_unfinished(session, task)
             return
         handoffs_store.finish(session, row, state, result, trace)
         session.commit()
@@ -174,9 +171,10 @@ async def _research(session: Session, task, row: TaskHandoff) -> Outcome:
     if report.completes_task:
         # The agent did the work, so no completion points.
         await close_task(session, task.id, award_points=False)
-        await notify_task_answered(task, report.findings)
-    elif "due_date" in fields:
-        await notify_research_moved_due(task)
+        await notify_done_for_you(task, headline="Answered", text=report.findings)
+    else:
+        session.refresh(task)
+        await _announce_unfinished(session, task)
     return "ready", {
         "summary": report.findings,
         "completed": report.completes_task,
@@ -194,6 +192,14 @@ async def _email_reply(session: Session, task, row: TaskHandoff) -> Outcome:
         "open_questions": draft.open_questions,
         "mail_url": draft_mail_url(session, draft),
     }, trace
+
+
+async def _announce_unfinished(session: Session, task) -> None:
+    """An agent-created task whose hand-off couldn't finish it is now the
+    user's: announce it like a task created without one. A typed-in task is
+    already known."""
+    if not tasks_store.created_manually(session, task):
+        await notify_new_task(session, task)
 
 
 _EXECUTORS: dict[str, Executor] = {

@@ -1,8 +1,9 @@
 """Scheduling metrics.
 
   * GET /stats/scheduling — per week: share of slots completed in their slot,
-    user moves, Not-done and no-response rates; plus the active preference
-    model's version and held-out fit, and the deferral capacity share.
+    user moves, and of the cued slots the share started and the share pushed
+    away; plus the active preference model's version and held-out fit, and
+    the deferral capacity share.
 """
 
 from datetime import datetime

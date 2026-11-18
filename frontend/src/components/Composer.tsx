@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Plus } from "lucide-react";
-import { toast } from "sonner";
+import { History, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LogWorkModal } from "@/components/work/LogWorkModal";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 
 export function Composer({ onCreated }: Props) {
   const [value, setValue] = useState("");
+  const [loggingWork, setLoggingWork] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const postingText = useRef<Set<string>>(new Set());
   // Stop in-flight polls when the component unmounts.
@@ -74,35 +76,49 @@ export function Composer({ onCreated }: Props) {
   };
 
   return (
-    // Same translucent bar as the Topbar, reaching into the bottom safe area.
-    <div className="fixed inset-x-0 bottom-0 z-40 bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/75">
-      <form onSubmit={submit} autoComplete="off">
-        <div className="mx-auto max-w-2xl px-4 py-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-12 min-w-0 flex-1 items-center rounded-full bg-secondary px-4 shadow-sm">
-              <Input
-                ref={inputRef}
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                placeholder="Add a task…"
-                enterKeyHint="send"
-                autoCapitalize="sentences"
-                autoComplete="off"
-                autoCorrect="off"
-                // Suppress browser + password-manager autofill overlays on this field.
-                name="task-title"
-                data-1p-ignore
-                data-lpignore="true"
-                data-form-type="other"
-                className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
+    <>
+      {/* Same translucent bar as the Topbar, reaching into the bottom safe area. */}
+      <div className="fixed inset-x-0 bottom-0 z-40 bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/75">
+        <form onSubmit={submit} autoComplete="off">
+          <div className="mx-auto max-w-2xl px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setLoggingWork(true)}
+                aria-label="Log work"
+                title="Log work you already did"
+                className="h-12 w-12 shrink-0 p-0 shadow-sm"
+              >
+                <History className="h-5 w-5" />
+              </Button>
+              <div className="flex h-12 min-w-0 flex-1 items-center rounded-full bg-secondary px-4 shadow-sm">
+                <Input
+                  ref={inputRef}
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="Add a task…"
+                  enterKeyHint="send"
+                  autoCapitalize="sentences"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  // Suppress browser + password-manager autofill overlays on this field.
+                  name="task-title"
+                  data-1p-ignore
+                  data-lpignore="true"
+                  data-form-type="other"
+                  className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+              </div>
+              <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 p-0 shadow-sm disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100">
+                <Plus className="h-5 w-5" />
+              </Button>
             </div>
-            <Button type="submit" disabled={!value.trim()} aria-label="Add task" title="Add task" className="h-12 w-12 shrink-0 p-0 shadow-sm disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100">
-              <Plus className="h-5 w-5" />
-            </Button>
           </div>
-        </div>
-      </form>
-    </div>
+        </form>
+      </div>
+      {/* Outside the bar: its backdrop-filter would contain a fixed modal. */}
+      {loggingWork && <LogWorkModal onClose={() => setLoggingWork(false)} onLogged={onCreated} />}
+    </>
   );
 }

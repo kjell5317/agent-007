@@ -446,7 +446,7 @@ DEADLINE_PREFIX = "Deadline: "
 def task_event_footer(task) -> str:
     """Generated tail of a task event body. Google renders the HTML anchor;
     the absolute date keeps the body stable between pushes."""
-    from app.services.notify import task_url
+    from app.services.notifications.messages import task_url
 
     lines = []
     if task.due_date:

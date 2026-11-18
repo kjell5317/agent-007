@@ -32,6 +32,7 @@ class Posterior:
     active: list[str] = field(default_factory=list)
     cov: list[list[float]] = field(default_factory=list)
     n_samples: int = 0
+    converged: bool = True
 
     def to_params(self) -> dict:
         return {"mean": self.mean, "active": self.active, "cov": self.cov}
@@ -64,8 +65,20 @@ def _design(rows: list[Row], names: list[str]) -> np.ndarray:
     return X
 
 
-def fit(rows: list[Row], *, max_iter: int = 50, tol: float = 1e-8) -> Posterior:
-    """MAP weights by Newton/IRLS; covariance = inverse Hessian at the MAP."""
+def _neg_log_posterior(
+    w: np.ndarray, X: np.ndarray, y: np.ndarray, s: np.ndarray,
+    mu0: np.ndarray, precision: np.ndarray,
+) -> float:
+    z = X @ w
+    nll = np.sum(s * (y * np.logaddexp(0.0, -z) + (1 - y) * np.logaddexp(0.0, z)))
+    d = w - mu0
+    return float(nll + 0.5 * d @ precision @ d)
+
+
+def fit(rows: list[Row], *, max_iter: int = 100, tol: float = 1e-8) -> Posterior:
+    """MAP weights by Newton with a backtracking line search; covariance =
+    inverse Hessian at the MAP. `converged` is False when the iteration ran
+    out before the Newton decrement fell below `tol`."""
     mean = F.prior_mean()
     mean[BIAS] = 0.0
     if not rows:
@@ -80,20 +93,37 @@ def fit(rows: list[Row], *, max_iter: int = 50, tol: float = 1e-8) -> Posterior:
     mu0 = np.array([mean[name] for name in active])
     precision = np.diag([1.0 / F.prior_sigma(name) ** 2 for name in active])
     w = mu0.copy()
-    hessian = precision
+    objective = _neg_log_posterior(w, X, y, s, mu0, precision)
+    converged = False
     for _ in range(max_iter):
         p = _sigmoid(X @ w)
         grad = X.T @ (s * (p - y)) + precision @ (w - mu0)
         hessian = (X.T * (s * p * (1 - p))) @ X + precision
         step = np.linalg.solve(hessian, grad)
-        w -= step
-        if float(np.max(np.abs(step))) < tol:
+        decrement = float(grad @ step)
+        if decrement < tol:
+            converged = True
             break
+        # Full steps overshoot once rows saturate: p(1 − p) → 0 leaves only the
+        # prior's curvature, and undamped Newton bounces instead of converging.
+        t = 1.0
+        while t > 1e-10:
+            candidate = w - t * step
+            value = _neg_log_posterior(candidate, X, y, s, mu0, precision)
+            if value <= objective - 1e-4 * t * decrement:
+                break
+            t *= 0.5
+        else:
+            converged = decrement < 1e-6
+            break
+        w, objective = candidate, value
     hessian = (X.T * (s * _sigmoid(X @ w) * (1 - _sigmoid(X @ w)))) @ X + precision
     cov = np.linalg.inv(hessian)
     for name, value in zip(active, w):
         mean[name] = float(value)
-    return Posterior(mean=mean, active=active, cov=cov.tolist(), n_samples=len(rows))
+    return Posterior(
+        mean=mean, active=active, cov=cov.tolist(), n_samples=len(rows), converged=converged,
+    )
 
 
 def log_likelihood(posterior: Posterior, rows: list[Row]) -> float:

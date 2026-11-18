@@ -61,6 +61,21 @@ export function zonedWallTimeToIso(parts: ZonedParts): string {
   return new Date(nextValid ?? instant).toISOString();
 }
 
+// `<input type="datetime-local">` values, read as wall time in USER_TIMEZONE
+// rather than the device's zone.
+export function toZonedInputValue(value: string | Date): string {
+  const p = zonedParts(value);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+export function fromZonedInputValue(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  return zonedWallTimeToIso({ year, month, day, hour, minute });
+}
+
 function sameZonedDay(a: ZonedParts, b: ZonedParts): boolean {
   return a.year === b.year && a.month === b.month && a.day === b.day;
 }
@@ -131,6 +146,10 @@ export function fmtDue(iso: string | null): string {
 
 export function fmtClock(iso: string): string {
   return isToday(iso) ? fmtTime(new Date(iso)) : fmtDue(iso);
+}
+
+export function fmtTimeOfDay(iso: string): string {
+  return fmtTime(new Date(iso));
 }
 
 export function fmtWhen(iso: string | null): string {

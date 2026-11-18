@@ -10,23 +10,23 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.agent.helpers import dispatch  # noqa: E402
 from app.api import notifications  # noqa: E402
-from app.services import notify as notify_service  # noqa: E402
+from app.services.notifications import messages, push  # noqa: E402
 
 
 @pytest.fixture
-def sent(monkeypatch) -> list[dict]:
-    calls: list[dict] = []
+def sent(monkeypatch) -> list[push.Message]:
+    calls: list[push.Message] = []
 
-    async def fake_notify(**kwargs):
-        calls.append(kwargs)
+    async def fake_send(message):
+        calls.append(message)
 
     async def fake_close(_session, _task_id):
         return None
 
     monkeypatch.setattr(
-        notify_service, "get_settings", lambda: SimpleNamespace(public_url="https://example.test/app")
+        messages, "get_settings", lambda: SimpleNamespace(public_url="https://example.test/app")
     )
-    monkeypatch.setattr(notify_service, "notify", fake_notify)
+    monkeypatch.setattr(push, "send", fake_send)
     monkeypatch.setattr(dispatch, "close_task_svc", fake_close)
     return calls
 
@@ -41,13 +41,13 @@ async def test_agent_close_notifies_with_reopen_button(sent):
     )
 
     assert result["outcome"] == "closed"
-    assert sent == [{
-        "title": "Auto-closed: Pay invoice",
-        "message": "Reply confirms the invoice was paid.",
-        "url": f"https://example.test/app#task/{task.id}",
-        "tag": f"task-{task.id}",
-        "actions": [{"action": notify_service.ACTION_REOPEN_TASK, "title": "Reopen"}],
-    }]
+    assert sent == [push.Message(
+        title="Auto-closed: Pay invoice",
+        body="Reply confirms the invoice was paid.",
+        url=f"https://example.test/app#task/{task.id}",
+        tag=f"task-{task.id}-done",
+        actions=((messages.ACTION_REOPEN_TASK, "Reopen"),),
+    )]
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_reopen_button_reopens_only_a_still_closed_task(monkeypatch):
     )
     monkeypatch.setattr(notifications, "reopen_task", fake_reopen)
     payload = notifications.ActionPayload(
-        action=notifications.ACTION_REOPEN_TASK, tag=f"task-{task.id}"
+        action=notifications.ACTION_REOPEN_TASK, tag=f"task-{task.id}-done"
     )
     request = SimpleNamespace(headers={}, query_params={})
 

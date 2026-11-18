@@ -131,7 +131,7 @@ async def test_reschedule_failure_notifies(monkeypatch):
     async def fake_notify(title, exc, *, context=None):
         notifications.append((title, str(exc), context))
 
-    from app.services import notify
+    from app.services.notifications import notify
     monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
     _patch_reschedule(monkeypatch, fake_schedule_task)
@@ -144,7 +144,7 @@ async def test_reschedule_failure_notifies(monkeypatch):
 async def test_reschedule_into_later_is_not_a_failure(monkeypatch):
     task = _task()
     session = FakeSession()
-    errors, deferred, published = [], [], []
+    errors, published = [], []
 
     class SessionContext:
         def __enter__(self): return session
@@ -158,18 +158,15 @@ async def test_reschedule_into_later_is_not_a_failure(monkeypatch):
     async def fake_error(title, exc, *, context=None):
         errors.append(title)
 
-    async def fake_deferred(row, **_kw):
-        deferred.append(row.id)
-
-    from app.services import notify
+    from app.services.notifications import notify
     monkeypatch.setattr(tasks_api, "SessionLocal", SessionContext)
     monkeypatch.setattr(tasks_api.tasks_store, "get", lambda *_args: task)
     _patch_reschedule(monkeypatch, fake_schedule_task)
     monkeypatch.setattr(tasks_api, "publish_task", lambda _session, task_id: published.append(task_id))
     monkeypatch.setattr(notify, "notify_error", fake_error)
-    monkeypatch.setattr(notify, "notify_task_deferred", fake_deferred)
     await tasks_api._reschedule_in_background(task.id)
-    assert errors == [] and deferred == [task.id] and published == [task.id]
+    # Later is a valid outcome: no error, and no push either.
+    assert errors == [] and published == [task.id]
 
 
 @pytest.mark.asyncio
@@ -253,12 +250,13 @@ async def test_dismiss_keeps_task_and_input_links_for_reopen(monkeypatch):
     monkeypatch.setattr(dismiss_svc.raw_inputs_store, "latest_for_task", lambda *_args: anchor)
     monkeypatch.setattr(dismiss_svc, "vacated_commute_window", lambda *_args: None)
     monkeypatch.setattr(dismiss_svc, "delete_task_event", noop)
-    monkeypatch.setattr(dismiss_svc, "clear_task_notification", noop)
+    monkeypatch.setattr(dismiss_svc, "clear_task_notifications", noop)
     monkeypatch.setattr(dismiss_svc, "replan_vacated_window", noop)
     monkeypatch.setattr(dismiss_svc, "publish_task", lambda _session, id: published.append(("task", id)))
     monkeypatch.setattr(dismiss_svc, "publish_input", lambda _session, id: published.append(("input", id)))
     monkeypatch.setattr(dismiss_svc, "publish_task_removed", lambda _id: pytest.fail("task was removed"))
 
+    monkeypatch.setattr("app.services.task.work.stop_running", lambda *_a, **_kw: None)
     await dismiss_svc.dismiss_task(session, task.id)
 
     assert anchor.status == "not_task"

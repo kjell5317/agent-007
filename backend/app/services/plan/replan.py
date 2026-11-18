@@ -14,9 +14,9 @@ because a request is satisfied by any solve that started after it.
 
 Task states for one solve:
 
-* running (a "Still working" extension) or started — fixed;
-* slot ended, check-in outcome still open — left alone;
-* slot ended and missed, deferred, unplaced, or a future slot — movable.
+* running (a work session) or under way — fixed, unless blocked;
+* waiting on someone — off the calendar, not planned;
+* slot ended without a session, deferred, unplaced, or a future slot — movable.
 """
 
 from __future__ import annotations
@@ -38,10 +38,11 @@ from app.db.clients import labels as labels_store
 from app.db.clients import schedule_log as log_store
 from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
+from app.services.commute.legs import RoutingIssues
 from app.services.plan import features as F
 from app.services.plan import routing
 from app.services.plan import solver as S
-from app.services.plan.checkin import awaiting_checkin, booked_slot, preempted, running_end
+from app.services.plan.cue import booked_slot, preempted, running_end
 from app.services.plan.snapshot import CONTEXT_MARGIN, calendar_items, task_attrs, task_item
 from app.services.plan.timeline import (
     Grid,
@@ -91,9 +92,9 @@ class ReplanResult:
     deferred: set[uuid.UUID] = field(default_factory=set)
     unplaced: set[uuid.UUID] = field(default_factory=set)
     moved: set[uuid.UUID] = field(default_factory=set)
-    newly_unplaced: set[uuid.UUID] = field(default_factory=set)
-    newly_late: set[uuid.UUID] = field(default_factory=set)
     routes: list | None = None
+    # Set when this solve wrote the commute legs.
+    routing_issues: RoutingIssues | None = None
 
 
 @dataclass
@@ -158,7 +159,21 @@ async def request_replan(
         )
         _completed = target
         _last_result = result
-        return result
+    from app.services.notifications import settle
+
+    settle.solve_finished(result.routing_issues)
+    return result
+
+
+def busy() -> bool:
+    """A solve is running or a request waits for one."""
+    from app.services.plan.schedule import _schedule_lock
+
+    return _schedule_lock.locked() or _requested > _completed
+
+
+def routing_retry_pending() -> bool:
+    return _routing_retry is not None and not _routing_retry.done()
 
 
 _batch: contextvars.ContextVar[list | None] = contextvars.ContextVar("replan_batch", default=None)
@@ -220,21 +235,24 @@ async def replan(
     blockers = [item for item in calendar if item.kind == "blocker"]
     weights = jobs.weights_for(session, grid.origin)
 
-    tasks = tasks_store.open_schedulable(session)
-    resolved = log_store.by_slot_for_tasks(
-        session, [t.id for t in tasks], log_store.RESOLUTION_KINDS | {"closed"}
-    )
+    # A task waiting on someone stays off the calendar until it's resumed.
+    tasks = [t for t in tasks_store.open_schedulable(session) if t.schedule_state != "waiting"]
     lead = timedelta(minutes=settings.slot_min_lead_minutes)
     earliest_now = grid.ceil(now + lead)
 
     # New rows carry a provisional `scheduled_date` (creation time) until
-    # a calendar event exists; only a mirrored slot is a real one.
+    # a calendar event exists; only a mirrored slot is a real one — or a
+    # running session's, whose mirror write may have failed.
     slots = {
-        t.id: booked_slot(t) if t.schedule_state == "placed" and t.calendar_event_id else None
+        t.id: booked_slot(t)
+        if t.schedule_state == "placed" and (t.calendar_event_id or t.running_since)
+        else None
         for t in tasks
     }
+    # A running session's whole span, overtime included: any other slot it
+    # overlaps isn't happening and must move, even once it has begun.
     overtime = [
-        (slot[1], running_end(slot[0], slot[1], now, t.running_since))
+        (slot[0], running_end(slot[0], slot[1], now, t.running_since))
         for t in tasks
         if t.running_since is not None and (slot := slots[t.id]) is not None
     ]
@@ -252,11 +270,11 @@ async def replan(
             fixed_tasks[task.id] = item
         elif slot is not None and slot[0] <= now and preempted(slot, overtime):
             candidates.append((task, attrs, None))
-        elif slot is not None and slot[0] <= now < slot[1]:
+        elif slot is not None and slot[0] <= now < slot[1] and task.id not in blocks:
+            # Under way: the user may still start it. A block (a pause, a
+            # Reschedule tap) moves it all the same.
             fixed_tasks[task.id] = task_item(task, attrs, *slot)
         elif slot is not None and slot[1] <= now:
-            if awaiting_checkin(slot[1], now, bool(resolved.get((task.id, task.scheduled_date)))):
-                continue
             candidates.append((task, attrs, None))
         else:
             candidates.append((task, attrs, slot[0] if slot else None))
@@ -446,12 +464,13 @@ def _movable(
     blocks: list[tuple[datetime, datetime]],
     pulled_in: bool = False,
 ) -> _Movable:
-    from app.services.plan.schedule import estimate_minutes
+    from app.services.plan.schedule import remaining_minutes
 
     settings = get_settings()
     # Booked exactly as set: the learned correction shapes a task's length
     # once, at creation (`with_learned_estimate`), never at planning time.
-    estimate = estimate_minutes(task, settings)
+    # Finished work sessions are subtracted.
+    estimate = remaining_minutes(task, settings)
     minutes = max(S.TASK_MINUTES, math.ceil(estimate / S.TASK_MINUTES) * S.TASK_MINUTES)
 
     earliest = earliest_now
@@ -716,8 +735,10 @@ async def _apply(
     # solve that edit queued — a stale length written now would come back from
     # the calendar sync as a resize by hand.
     estimations = tasks_store.schedulable_estimations(session)
+    # A session started (or a wait began) during the solve owns the slot now.
+    claimed = tasks_store.claimed_ids(session)
     for task_id, m in movable.items():
-        if task_id not in estimations or estimations[task_id] != m.estimation:
+        if task_id not in estimations or estimations[task_id] != m.estimation or task_id in claimed:
             continue
         task = m.task
         prior = booked_slot(task) if task.schedule_state == "placed" else None
@@ -765,9 +786,6 @@ async def _apply(
             )
             session.commit()
             changed.append(task_id)
-            due = m.attrs.due
-            if span[1] > due > now and (prior is None or prior[1] <= due):
-                result.newly_late.add(task_id)
             continue
 
         state = "deferred" if m.solver_task.deferrable else "unplaced"
@@ -787,21 +805,10 @@ async def _apply(
         )
         session.commit()
         changed.append(task_id)
-        if state == "unplaced":
-            result.newly_unplaced.add(task_id)
 
     session.commit()
     for task_id in changed:
         publish_task(session, task_id)
-    # Deadline warnings go out whoever triggered the solve — a repeat
-    # instance or a missed slot re-plan included.
-    from app.services.notify import notify_deadline_missed, notify_no_slot
-
-    for task_id in result.newly_unplaced:
-        await notify_no_slot(movable[task_id].task)
-    for task_id in result.newly_late:
-        start, end = result.placed[task_id]
-        await notify_deadline_missed(movable[task_id].task, start=start, end=end)
     if routing_ctx is not None and result.routes is not None:
         await _write_routes(session, routing_ctx, result, movable, grid=grid, now=now,
                             final_items=final_items)
@@ -821,7 +828,7 @@ async def _write_routes(session, ctx, result, movable, *, grid, now, final_items
             anchor = task.calendar_event_id if task is not None else item.event_id
             obstacles.append((anchor or item.ref, "task", item.start, item.end))
     try:
-        summary = await routing.write_legs(
+        summary, result.routing_issues = await routing.write_legs(
             session, ctx, legs, now=now, horizon_end=grid.at(grid.horizon), obstacles=obstacles,
         )
         log.info("replan · commute legs %s", summary)

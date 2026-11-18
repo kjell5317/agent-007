@@ -195,18 +195,6 @@ async def delete_stray_commute_legs(
     return deleted
 
 
-async def _notify_new_failures(legs: list[PlannedLeg]) -> None:
-    from app.services.notify import notify_unroutable_leg
-
-    for leg in legs:
-        await notify_unroutable_leg(
-            origin=leg.origin,
-            destination=leg.destination,
-            depart=leg.depart,
-            tag=f"route-{leg.origin_anchor}-{leg.dest_anchor}",
-        )
-
-
 def _immovable_conflicts(
     legs: list[PlannedLeg],
     obstacles: list[tuple[str, str, datetime, datetime]],
@@ -225,22 +213,6 @@ def _immovable_conflicts(
     return out
 
 
-def _conflict_tag(key: tuple[str, str]) -> str:
-    return f"conflict-{key[0]}-{key[1]}"
-
-
-async def _notify_new_conflicts(conflicts: list[tuple[PlannedLeg, str]]) -> None:
-    from app.services.notify import notify_leg_conflict
-
-    for leg, blocker_label in conflicts:
-        await notify_leg_conflict(
-            destination=leg.destination,
-            blocker=blocker_label,
-            depart=leg.depart,
-            tag=_conflict_tag(leg.key),
-        )
-
-
 async def _write_legs(
     session: Session,
     legs: list[PlannedLeg],
@@ -250,7 +222,7 @@ async def _write_legs(
     window: tuple[datetime, datetime],
     account_key: str | None,
     conflicts: dict[tuple[str, str], tuple[str, str]] | None = None,
-) -> tuple[int, list[PlannedLeg], list[tuple[PlannedLeg, str]]]:
+) -> int:
     conflicts = conflicts or {}
     desired = {leg.key: leg for leg in legs}
     existing_by_key: dict[tuple[str, str], CalendarEvent] = {}
@@ -303,8 +275,6 @@ async def _write_legs(
             log.warning("commute · stale delete failed event=%s err=%s", ev.id, exc)
 
     written = 0
-    new_failures: list[PlannedLeg] = []
-    new_conflicts: list[tuple[PlannedLeg, str]] = []
     for key, leg in desired.items():
         summary = _summary_for(leg)
         description = _description_for(leg)
@@ -314,18 +284,10 @@ async def _write_legs(
             dest_anchor=leg.dest_anchor,
             mode=leg.mode,
         )
-        # Conflict marker: persisted on the leg so replans that re-derive the
-        # same collision don't re-alert; cleared (empty) when it resolves.
+        # Conflict marker: the blocking event, empty once the collision resolves.
         props["conflict"] = blocker[0] if blocker is not None else ""
         reminders = _reminders_for_leg(leg)
         current = existing_by_key.get(key)
-        was_conflicting = bool(private_properties(current).get("conflict")) if current else False
-        # Notify only when a leg *becomes* failed/conflicting — a replan that
-        # re-writes the same state shouldn't re-alert on every pass.
-        newly_failed = leg.mode == FAILED_MODE and (
-            current is None or _commute_mode(current) != FAILED_MODE
-        )
-        newly_conflicting = blocker is not None and not was_conflicting
         try:
             if current is None:
                 await create_event(
@@ -355,14 +317,6 @@ async def _write_legs(
                     account_key=account_key,
                 )
             written += 1
-            if newly_failed:
-                new_failures.append(leg)
-            if newly_conflicting:
-                new_conflicts.append((leg, blocker[1]))
-            elif blocker is None and was_conflicting:
-                from app.services.notify import clear_notification_tag
-
-                await clear_notification_tag(_conflict_tag(key))
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "commute · upsert failed origin=%s dest=%s err=%s",
@@ -370,7 +324,7 @@ async def _write_legs(
                 leg.dest_anchor,
                 exc,
             )
-    return written, new_failures, new_conflicts
+    return written
 
 
 def _needs_patch(

@@ -26,7 +26,7 @@ from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
 from app.events import publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
-from app.services.notify import clear_task_notification
+from app.services.notifications.notify import clear_task_notifications
 from app.services.plan import schedule_task
 from app.services.plan.replan import batch as replan_batch
 from app.services.task.split import inherited_attributes
@@ -95,7 +95,7 @@ async def drop_instances(session: Session, task_ids: Iterable[uuid.UUID]) -> Non
             continue
         vacated = vacated_commute_window(task)
         await delete_task_event(session, task)
-        await clear_task_notification(task_id)
+        await clear_task_notifications(session, task_id)
         tasks_store.delete_with_inputs(session, task)
         session.commit()
         publish_task_removed(task_id)
@@ -111,7 +111,7 @@ async def plan_recurring_tasks(
     async with replan_batch(session):
         for task in created:
             try:
-                await schedule_task(session, task, notify=False)
+                await schedule_task(session, task)
             except Exception:  # noqa: BLE001 — the instance stays; the retry sweep places it
                 log.exception("repeat instance scheduling failed · task=%s", task.id)
     for task in created:

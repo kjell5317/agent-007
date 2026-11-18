@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models.scheduling import ScheduleLog
 
-RESOLUTION_KINDS = frozenset({"still_working", "not_done", "done_confirmed", "no_response"})
-
-
 def add(
     session: Session,
     *,
@@ -50,50 +47,6 @@ def for_slot(session: Session, task_id: uuid.UUID, slot_start: datetime) -> list
         .where(ScheduleLog.task_id == task_id, ScheduleLog.slot_start == slot_start)
         .order_by(ScheduleLog.created_at)
     ))
-
-
-def by_slot_for_tasks(
-    session: Session, task_ids: Iterable[uuid.UUID], kinds: Iterable[str]
-) -> dict[tuple[uuid.UUID, datetime], set[str]]:
-    """`{(task_id, slot_start): {kinds}}` for the given tasks — one query for
-    the check-in sweep and the solver's "awaiting check-in" filter."""
-    ids = list(task_ids)
-    if not ids:
-        return {}
-    rows = session.execute(
-        select(ScheduleLog.task_id, ScheduleLog.slot_start, ScheduleLog.kind)
-        .where(ScheduleLog.task_id.in_(ids), ScheduleLog.kind.in_(list(kinds)))
-    ).all()
-    out: dict[tuple[uuid.UUID, datetime], set[str]] = {}
-    for task_id, slot_start, kind in rows:
-        out.setdefault((task_id, slot_start), set()).add(kind)
-    return out
-
-
-def latest_of_kind(
-    session: Session, task_id: uuid.UUID, kind: str
-) -> ScheduleLog | None:
-    return session.scalars(
-        select(ScheduleLog)
-        .where(ScheduleLog.task_id == task_id, ScheduleLog.kind == kind)
-        .order_by(ScheduleLog.created_at.desc())
-        .limit(1)
-    ).first()
-
-
-def pending_checkins(session: Session, *, sent_before: datetime) -> list[ScheduleLog]:
-    """`checkin_sent` rows older than `sent_before` with no resolution for the
-    same slot — the "no answer" sweep."""
-    sent = list(session.scalars(
-        select(ScheduleLog)
-        .where(ScheduleLog.kind == "checkin_sent", ScheduleLog.created_at < sent_before)
-    ))
-    if not sent:
-        return []
-    resolved = by_slot_for_tasks(
-        session, {row.task_id for row in sent}, RESOLUTION_KINDS | {"closed"}
-    )
-    return [row for row in sent if not resolved.get((row.task_id, row.slot_start))]
 
 
 def since(

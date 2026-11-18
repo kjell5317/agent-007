@@ -12,7 +12,7 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.models.raw_input import RawInput
 from app.events import publish_input, publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
-from app.services.notify import clear_task_notification
+from app.services.notifications.notify import clear_task_notifications
 from app.services.task.vacate import vacated_commute_window, replan_vacated_window
 
 
@@ -25,11 +25,17 @@ async def dismiss_task(
     task = tasks_store.get(session, task_id)
     if task is None:
         raise LookupError("Task not found")
+    from app.services.kotx.notify import clear_kotx_prompt
+    from app.services.task.work import stop_running
+
     vacated = vacated_commute_window(task)
+    stop_running(session, task, reason="dismissed")
     # Best-effort calendar cleanup first, while task.calendar_event_id is
     # still readable. Errors are swallowed inside delete_task_event.
     await delete_task_event(session, task)
-    await clear_task_notification(task_id)
+    await clear_task_notifications(session, task_id)
+    if getattr(task, "kotx_task_id", None) is not None:
+        await clear_kotx_prompt(task_id)
     await replan_vacated_window(session, vacated)
     # Keep the task and every input backlink so follow-ups remain grouped and
     # the dismissed task can be reopened. Orphans have no lifecycle anchor and
@@ -89,7 +95,7 @@ def dismiss_container(session: Session, task_id: uuid.UUID) -> list[uuid.UUID]:
 
 async def cleanup_dismissed_container(task_ids: list[uuid.UUID]) -> None:
     """Remove calendar and notification side effects after the HTTP response."""
-    from app.services.notify import notify_error
+    from app.services.notifications.notify import notify_error
 
     with SessionLocal() as session:
         for task_id in task_ids:
@@ -103,7 +109,7 @@ async def cleanup_dismissed_container(task_ids: list[uuid.UUID]) -> None:
             except Exception as exc:  # noqa: BLE001
                 await notify_error("Task deletion cleanup failed", exc, context=str(task_id))
             try:
-                await clear_task_notification(task_id)
+                await clear_task_notifications(session, task_id)
             except Exception as exc:  # noqa: BLE001
                 await notify_error("Task deletion cleanup failed", exc, context=str(task_id))
             try:

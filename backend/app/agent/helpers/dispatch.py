@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.agent.helpers.attributes import ATTRIBUTE_FIELDS, valid_attributes
 from app.agent.helpers.text import normalize_agent_due_date
 from app.db.models.task import Task
-from app.services.notify import notify_task_auto_closed
+from app.services.notifications.notify import notify_done_for_you
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
@@ -86,7 +86,9 @@ async def apply_task_action(
                 pass
             else:
                 if not user_requested:
-                    await notify_task_auto_closed(task, reason=tu_input.get("reason"))
+                    await notify_done_for_you(
+                        task, headline="Auto-closed", text=tu_input.get("reason"),
+                    )
             outcome = "closed"
 
         return {

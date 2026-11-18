@@ -9,7 +9,7 @@ import {
   Tags,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { subscribeEvents } from "@/lib/events";

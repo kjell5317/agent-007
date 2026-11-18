@@ -1,5 +1,4 @@
 import { Minus, Plus } from "lucide-react";
-import { StepButton } from "@/components/ui/estimation-picker";
 import { RECURRENCE_MAX } from "@/lib/tasks";
 import type { RecurrenceUnit } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -75,5 +74,29 @@ export function RecurrencePicker({ unit, interval, busy = false, onChange }: Pro
         </div>
       </div>
     </div>
+  );
+}
+
+function StepButton({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-input text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {children}
+    </button>
   );
 }

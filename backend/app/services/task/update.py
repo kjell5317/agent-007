@@ -64,7 +64,7 @@ async def sync_external(session: Session, updates: list[tuple[uuid.UUID, set[str
                 await update_task_event(session, row, changed_fields=changed)
         except Exception as exc:  # noqa: BLE001 — the database edit remains saved
             log.exception("calendar sync failed · task=%s", task_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Task calendar update failed", exc, context=row.title)
 
 

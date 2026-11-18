@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, GitBranch, GitMerge, GitPullRequest, Pencil } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";

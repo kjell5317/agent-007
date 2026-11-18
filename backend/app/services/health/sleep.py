@@ -70,6 +70,32 @@ async def request_awake_minutes(
     return minutes
 
 
+async def record_last_night(session: Session, *, now: datetime | None = None) -> bool:
+    """Store last night's sleep as today's day context, once per day — an
+    input for when work gets done. False while nothing is recorded yet."""
+    from app.db.clients import work as work_store
+
+    reference = now if now is not None else datetime.now(timezone.utc)
+    day = reference.astimezone(user_tz()).date()
+    existing = work_store.day_context(session, day)
+    if existing is not None and existing.wake_at is not None:
+        return False
+    interval = await request_todays_sleep_interval(session, now=reference)
+    if interval is None:
+        return False
+    work_store.record_sleep(
+        session, day, sleep_start=interval.start, wake_at=interval.end,
+        sleep_minutes=asleep_minutes(interval),
+    )
+    session.commit()
+    return True
+
+
+def asleep_minutes(interval: SleepInterval) -> int:
+    """Minutes inside the sleep sessions; the gaps between them were awake."""
+    return round(sum((s.end - s.start).total_seconds() for s in interval.segments) / 60)
+
+
 def normalize_sleep_interval(payload: dict[str, Any]) -> SleepInterval | None:
     segments: list[SleepSegment] = []
     for point in payload.get("dataPoints", []):

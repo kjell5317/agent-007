@@ -49,10 +49,10 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(slack_poll.oauth_tokens, "set_extra", set_extra)
 
-    async def notify(**kwargs):
-        state.notifications.append(kwargs)
+    async def send(message):
+        state.notifications.append(message)
 
-    monkeypatch.setattr(slack_poll, "notify", notify)
+    monkeypatch.setattr(slack_poll.push, "send", send)
 
     def make_source(**kwargs):
         source = SlackSource(**kwargs)
@@ -74,7 +74,7 @@ async def test_dead_token_pauses_account_and_notifies_once(harness):
     assert {"auth_error": "token_revoked"} in harness.patches
     assert first["errors"] == [{"auth": "token_revoked"}]
     assert len(harness.notifications) == 1
-    assert "CSEE" in harness.notifications[0]["title"]
+    assert "CSEE" in harness.notifications[0].title
     assert second["errors"] == []
     assert len(harness.sources) == 1
 

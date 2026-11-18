@@ -41,6 +41,9 @@ class _Session:
     def commit(self):
         self.commits += 1
 
+    def refresh(self, _row):
+        pass
+
 
 def test_kinds_offered_depend_on_the_source_and_repo_labels():
     assert handoff_kinds(_raw(), REPOS) == ["research", "email_reply", "code_change"]
@@ -161,17 +164,18 @@ def _patch_research(monkeypatch, report):
     async def fake_close(_session, task_id, **kwargs):
         calls["close"].append((task_id, kwargs))
 
-    async def fake_answered(task, answer):
-        calls["answered"].append(answer)
+    async def fake_answered(task, *, headline, text, **_kw):
+        calls["answered"].append(text)
 
-    async def fake_moved(task):
+    async def fake_moved(_session, task):
         calls["moved"].append(task)
 
     monkeypatch.setattr(research_agent, "run_research", fake_run)
     monkeypatch.setattr(update_svc, "update_task", fake_update)
     monkeypatch.setattr(close_svc, "close_task", fake_close)
-    monkeypatch.setattr(run, "notify_task_answered", fake_answered)
-    monkeypatch.setattr(run, "notify_research_moved_due", fake_moved)
+    monkeypatch.setattr(run, "notify_done_for_you", fake_answered)
+    monkeypatch.setattr(run, "notify_new_task", fake_moved)
+    monkeypatch.setattr(run.tasks_store, "created_manually", lambda *_: False)
     monkeypatch.setattr(run.raw_inputs_store, "latest_for_task", lambda *_: _raw(
         content="Invoice from https://example.org/invoice",
     ))
@@ -313,8 +317,8 @@ async def test_an_answer_saves_the_task_as_done_and_notifies(monkeypatch):
     async def unexpected(*_args, **_kwargs):
         raise AssertionError("an answered task is neither scheduled nor handed off")
 
-    async def fake_answered(task, answer):
-        answered.append(answer)
+    async def fake_answered(task, *, headline, text, **_kw):
+        answered.append(text)
 
     monkeypatch.setattr(input_runner, "get_settings", lambda: SimpleNamespace(user_timezone="UTC"))
     monkeypatch.setattr(input_runner, "chat", fake_chat)
@@ -322,7 +326,7 @@ async def test_an_answer_saves_the_task_as_done_and_notifies(monkeypatch):
     monkeypatch.setattr(input_runner, "schedule_task", unexpected)
     monkeypatch.setattr(input_runner, "maybe_split_task", unexpected)
     monkeypatch.setattr(input_runner, "start_handoff", unexpected)
-    monkeypatch.setattr(input_runner, "notify_task_answered", fake_answered)
+    monkeypatch.setattr(input_runner, "notify_done_for_you", fake_answered)
     monkeypatch.setattr(input_runner.raw_inputs, "finalize", lambda _s, _id, **kw: finalized.update(kw))
 
     raw = SimpleNamespace(

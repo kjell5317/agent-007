@@ -56,7 +56,7 @@ from app.config import get_settings
 from app.services.handoff.eligible import handoff_kinds, valid_answer, valid_handoff
 from app.services.handoff.run import start as start_handoff
 from app.services.handoff.text import append_section
-from app.services.notify import notify_task_answered
+from app.services.notifications.notify import notify_done_for_you, notify_new_task
 from app.services.learn.jobs import with_learned_estimate
 from app.services.plan import schedule_task
 from app.services.task.build import task_create_from_fields
@@ -118,6 +118,7 @@ async def run_new_input_agent(
         labels_store.agent_descriptions(session), handoff_kinds(raw, repo_labels), list(repo_labels),
     )
     answered_task = None
+    created_task = None
     done = False
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await chat(
@@ -301,6 +302,7 @@ async def run_new_input_agent(
                 answered_task = task
             else:
                 final_status = "open"
+                created_task = task
                 # A task handed to an agent stays whole (see `maybe_split_task`).
                 children = [] if handoff else await maybe_split_task(session, task)
                 if not children:
@@ -404,9 +406,12 @@ async def run_new_input_agent(
     )
     session.commit()
     if answered_task is not None:
-        await notify_task_answered(answered_task, trace["answer"])
+        await notify_done_for_you(answered_task, headline="Answered", text=trace["answer"])
     elif final_task_id is not None and trace.get("handoff"):
+        # The hand-off's outcome announces the task (see `handoff.run`).
         await start_handoff(session, final_task_id, trace["handoff"])
+    elif created_task is not None:
+        await notify_new_task(session, created_task)
     return trace
 
 

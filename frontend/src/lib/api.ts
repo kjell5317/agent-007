@@ -8,12 +8,14 @@ import type {
   LinkPreview,
   Note,
   NoteAudit,
+  PauseReason,
   RawInput,
   RecurrenceUnit,
   SearchHit,
   SearchHitType,
   Task,
   HandoffKind,
+  WorkSession,
 } from "./types";
 
 class ApiError extends Error {
@@ -115,6 +117,19 @@ export const api = {
     request<void>(`/tasks/${id}/draft/discard`, { method: "POST" }),
   reopenTask: (id: string) =>
     request<TaskCreationAccepted>(`/tasks/${id}/reopen`, { method: "POST" }),
+
+  // Starting pauses whichever other task is running.
+  startTask: (id: string) => request<Task>(`/tasks/${id}/start`, { method: "POST" }),
+  pauseTask: (id: string, reason: PauseReason) =>
+    request<Task>(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify({ reason }) }),
+  resumeTask: (id: string) => request<Task>(`/tasks/${id}/resume`, { method: "POST" }),
+  completeTask: (id: string) => request<Task>(`/tasks/${id}/complete`, { method: "POST" }),
+  logWork: (id: string, span: WorkSpan & { complete: boolean }) =>
+    request<Task>(`/tasks/${id}/sessions`, { method: "POST", body: JSON.stringify(span) }),
+  listWorkSessions: (id: string) => request<WorkSession[]>(`/tasks/${id}/sessions`),
+  // Spontaneous work: creates the task, logs the span and closes it.
+  logSpontaneousWork: (body: WorkSpan & { title: string; label?: string }) =>
+    request<Task>("/tasks/logged", { method: "POST", body: JSON.stringify(body) }),
 
   listInputs: (
     params: { limit?: number; status?: string; source?: string } = {},
@@ -328,6 +343,11 @@ function dispatchFrame(frame: string, h: ChatStreamHandlers): void {
 export interface AppSettings {
   auto_poll_enabled: boolean;
   user_timezone: string;
+}
+
+export interface WorkSpan {
+  started_at: string;
+  ended_at: string;
 }
 
 export interface TaskCreationAccepted {

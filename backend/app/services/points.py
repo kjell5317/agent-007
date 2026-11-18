@@ -22,10 +22,7 @@ log = logging.getLogger(__name__)
 
 PENALTY_POINTS = 10
 KOTX_TASK_DONE_FACTOR = 0.1
-# TODO: the name is from the legacy planner's overdue reschedule; check-ins
-# still write it and it is a unique-index dedupe key, so a rename needs a
-# migration of the stored rows.
-SCHEDULED_OVERDUE_ACTION = "scheduled_overdue_reschedule"
+MISSED_DEADLINE_ACTION = "missed_deadline"
 
 
 def adjust_points(
@@ -92,26 +89,21 @@ def award_for_task(
     return True
 
 
-def subtract_scheduled_overdue_penalty(session: Session, task, *, scheduled_date: datetime) -> bool:
-    if getattr(task, "is_container", False):
+def subtract_missed_deadline_penalty(session: Session, task) -> bool:
+    """Once per task and deadline: a hard deadline passed with the task open."""
+    if getattr(task, "is_container", False) or task.due_date is None:
         return False
-    period_key = "scheduled:" + _utc_key(scheduled_date)
     entry = points_store.add_penalty_entry_once(
         session,
         task_id=task.id,
-        action_name=SCHEDULED_OVERDUE_ACTION,
-        period_key=period_key,
+        action_name=MISSED_DEADLINE_ACTION,
+        period_key="deadline:" + _utc_key(task.due_date),
         amount=-float(PENALTY_POINTS),
         task_title=task.title,
     )
     if entry is None:
         return False
-    log.info(
-        "points · overdue scheduled penalty task=%s (%s) points=%s",
-        task.id,
-        task.title,
-        PENALTY_POINTS,
-    )
+    log.info("points · missed deadline penalty task=%s (%s) points=%s", task.id, task.title, PENALTY_POINTS)
     return True
 
 

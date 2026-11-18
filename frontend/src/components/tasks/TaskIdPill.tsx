@@ -1,4 +1,4 @@
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 export function TaskIdPill({ id }: { id: string | null }) {
   if (!id) return null;

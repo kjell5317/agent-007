@@ -23,7 +23,7 @@ from app.services.calendar.client import CalendarEvent  # noqa: E402
 from app.services.calendar import discover  # noqa: E402
 from app.services.calendar import events as calendar_events  # noqa: E402
 from app.services import home_assistant as home_assistant_service  # noqa: E402
-from app.services import notify as notify_service  # noqa: E402
+from app.services.notifications import messages as notify_messages  # noqa: E402
 from app.services.plan import schedule as schedule_service  # noqa: E402
 from app.services.plan.schedule import Interval  # noqa: E402
 
@@ -701,45 +701,36 @@ async def test_task_notifications_deep_link_and_actions(monkeypatch):
         id=task_id,
         title="Write report",
         due_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        deadline_kind="soft",
         estimation=45,
     )
-    calls: list[dict] = []
-
-    async def fake_notify(**kwargs):
-        calls.append(kwargs)
-
     monkeypatch.setattr(
-        notify_service,
-        "get_settings",
-        lambda: SimpleNamespace(public_url="https://example.test/app"),
+        notify_messages, "get_settings", lambda: SimpleNamespace(public_url="https://example.test/app"),
     )
-    monkeypatch.setattr(notify_service, "notify", fake_notify)
 
-    await notify_service.notify_task_created(
-        task,
-        start=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
-        end=datetime(2026, 7, 1, 10, 45, tzinfo=timezone.utc),
+    created = notify_messages.new_task(task)
+    hard = notify_messages.past_deadline(
+        task_id=task_id, title=task.title, due=task.due_date, deadline_kind="hard",
+        case="unplaced", slot=None,
     )
-    await notify_service.notify_no_slot(task)
+    soft = notify_messages.past_deadline(
+        task_id=task_id, title=task.title, due=task.due_date, deadline_kind="soft",
+        case="passed", slot=None,
+    )
 
-    created, warning = calls
-    # Both deep-link to the task's modal anchor.
-    assert created["url"] == f"https://example.test/app#task/{task_id}"
-    assert warning["url"] == f"https://example.test/app#task/{task_id}"
-
-    # "Task created" keeps all three buttons.
-    assert created["actions"] == [
-        {"action": notify_service.ACTION_CLOSE_TASK, "title": "Done"},
-        {"action": notify_service.ACTION_DISMISS_TASK, "title": "Dismiss"},
-        {"action": notify_service.ACTION_RESCHEDULE_TASK, "title": "Reschedule"},
-    ]
-    # The escalated warning drops Reschedule and is undismissable.
-    assert warning["actions"] == [
-        {"action": notify_service.ACTION_CLOSE_TASK, "title": "Done"},
-        {"action": notify_service.ACTION_DISMISS_TASK, "title": "Dismiss"},
-    ]
-    assert warning["persistent"] is True
-    assert warning["importance"] == "high"
+    # All deep-link to the task's modal anchor.
+    assert {created.url, hard.url, soft.url} == {f"https://example.test/app#task/{task_id}"}
+    # A new task shows its deadline but no slot, and only Dismiss.
+    assert created.title == "Write report"
+    assert created.body.endswith("· soft deadline")
+    assert "Scheduled" not in created.body
+    assert created.action_items == [{"action": notify_messages.ACTION_DISMISS_TASK, "title": "Dismiss"}]
+    # A hard deadline warns; a soft one only informs.
+    assert hard.importance == "high" and hard.title.startswith("⚠️ ")
+    assert soft.importance is None and not soft.title.startswith("⚠️")
+    # One tag per kind, so clearing a warning never removes the new-task push.
+    assert len({created.tag, hard.tag}) == 2
+    assert notify_messages.task_id_from_tag(hard.tag) == task_id
 
 
 @pytest.mark.asyncio
@@ -953,40 +944,9 @@ def test_created_manually_follows_the_parent(monkeypatch):
     assert asked == [parent_id]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("manual", "due_in", "end_in", "expected"),
-    [
-        (False, timedelta(days=2), timedelta(days=1), "created"),
-        (True, timedelta(days=2), timedelta(days=1), "cleared"),
-        # The solver's `newly_late` already warned about a deadline still ahead.
-        (True, timedelta(days=1), timedelta(days=2), None),
-        (True, -timedelta(hours=1), timedelta(hours=1), "missed"),
-    ],
-)
-async def test_announce_placement_keeps_manual_tasks_quiet(monkeypatch, manual, due_in, end_in, expected):
-    now = datetime.now(timezone.utc)
-    task = SimpleNamespace(id=uuid.uuid4(), due_date=now + due_in)
-    calls: list[str] = []
-
-    async def record(kind, *_args, **_kwargs):
-        calls.append(kind)
-
-    monkeypatch.setattr(schedule_service.tasks_store, "created_manually", lambda _s, _t: manual)
-    monkeypatch.setattr(notify_service, "notify_task_created", lambda *a, **k: record("created"))
-    monkeypatch.setattr(notify_service, "clear_task_notification", lambda *a, **k: record("cleared"))
-    monkeypatch.setattr(notify_service, "notify_deadline_missed", lambda *a, **k: record("missed"))
-
-    await schedule_service.announce_placement(
-        None, task, start=now + end_in - timedelta(minutes=30), end=now + end_in,
-    )
-
-    assert calls == ([expected] if expected else [])
-
-
 def test_task_event_body_carries_deadline_and_modal_link(monkeypatch):
     monkeypatch.setattr(
-        notify_service, "get_settings", lambda: SimpleNamespace(public_url="https://example.test/app"),
+        notify_messages, "get_settings", lambda: SimpleNamespace(public_url="https://example.test/app"),
     )
     task = SimpleNamespace(
         id=uuid.uuid4(), description="Body", link="https://example.com/pr/1",

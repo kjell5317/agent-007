@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import type { ComponentType, ReactNode } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   BookOpen,
   CalendarDays,

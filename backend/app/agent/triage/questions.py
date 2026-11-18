@@ -29,18 +29,21 @@ EFFORT_CRITERIA = {
 }
 DEADLINE_KIND_CRITERIA = {
     "hard": (
-        "Missing the due date makes the task pointless or has external consequences: "
-        "submissions, exams, appointments, preparing for a linked event."
+        "The default: a real deadline that must be met — an external commitment, "
+        "a submission, an exam, an appointment, a due date someone set, preparing for "
+        "a linked event."
     ),
-    "firm": "Any other deadline the source states explicitly.",
-    "soft": "A guessed or derived due date, or 'sometime' phrasing.",
+    "soft": (
+        "A flexible target date that can slip without real consequence: a guessed or "
+        "derived due date, or 'sometime' phrasing."
+    ),
 }
 DEADLINE_STAKES_CRITERIA = {
-    "firm": "The stated deadline matters, but missing it has no hard consequence.",
     "hard": (
-        "Missing the stated deadline makes the task pointless or has external "
-        "consequences: a submission, an exam, an appointment, a payment, a booking."
+        "The default: a real deadline that must be met — an external commitment, a "
+        "submission, an exam, an appointment, a payment, a due date someone set."
     ),
+    "soft": "Only a flexible target date: it can slip without real consequence.",
 }
 
 ESTIMATE_MINUTES = (15, 30, 45, 60, 90, 120, 180, 240)

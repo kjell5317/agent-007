@@ -42,7 +42,7 @@ from app.db.clients import raw_inputs as raw_inputs_store, tasks as tasks_store
 from app.db.clients.raw_inputs import SimilarInput
 from app.services.handoff.text import append_section
 from app.services.input.embedding import candidate_query_text, embed
-from app.services.notify import notify_task_answered
+from app.services.notifications.notify import notify_done_for_you
 
 log = logging.getLogger(__name__)
 
@@ -297,7 +297,7 @@ async def _process(
         publish_task(session, task.id)
         publish_input(session, raw_input_id)
         if answer:
-            await notify_task_answered(task, answer)
+            await notify_done_for_you(task, headline="Answered", text=answer)
         else:
             await _place_new_task(session, task, user_fields, agent_trace, manual_trace)
         if is_override:

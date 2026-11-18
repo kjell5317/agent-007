@@ -35,11 +35,11 @@ describes what makes a good note; skip ephemeral content).
 
 Also set work_type and effort — inherit the label's defaults (listed with the
 labels) unless this task clearly differs — and deadline_kind:
-    * hard — missing the deadline makes the task pointless or has external
-        consequences: submissions, exams, appointments, preparing for a
-        linked event.
-    * firm — any other explicit deadline.
-    * soft — a guessed or derived due date, or "sometime" phrasing.
+    * hard — the default: a real deadline that must be met (an external
+        commitment, submissions, exams, appointments, a due date someone
+        set, preparing for a linked event).
+    * soft — a flexible target date that can slip without real consequence:
+        a guessed or derived due date, or "sometime" phrasing.
 
 You also have non-terminal lookup tools:
 

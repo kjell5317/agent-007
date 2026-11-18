@@ -27,33 +27,38 @@ from app.db import SessionLocal, get_session
 from app.db.clients import tasks as tasks_store
 from app.events import publish_task
 from app.services.home_assistant import minutes_until_next_event_prep, schedule_day_action
+from app.services import handoff
+from app.services.email import draft as draft_svc
 from app.services.kotx import client as kotx_client
-from app.services.notify import (
-    ACTION_CLOSE_TASK,
-    ACTION_DAY,
-    ACTION_DISMISS_TASK,
-    ACTION_DRAFT_DISCARD,
-    ACTION_DRAFT_REGENERATE,
+from app.services.kotx.notify import (
     ACTION_HANDOFF_ACCEPT,
     ACTION_HANDOFF_DECLINE,
     ACTION_KOTX_APPROVE,
     ACTION_KOTX_COMMENT,
     ACTION_KOTX_MERGE,
     ACTION_KOTX_START,
+    clear_kotx_prompt,
+)
+from app.services.notifications.messages import (
+    ACTION_CLOSE_TASK,
+    ACTION_DAY,
+    ACTION_DISMISS_TASK,
+    ACTION_DRAFT_DISCARD,
+    ACTION_DRAFT_REGENERATE,
     ACTION_NIGHT,
     ACTION_REOPEN_TASK,
     ACTION_RESCHEDULE_TASK,
-    clear_task_notification,
+    ACTION_START_TASK,
+    task_id_from_tag,
 )
-from app.services import handoff
-from app.services.email import draft as draft_svc
-from app.services.ntfy import action_secret, verify_action
-from app.services.plan.checkin import CHECKIN_ACTIONS, handle_checkin_action
+from app.services.notifications.ntfy import action_secret, verify_action
+from app.services.plan.cue import CUE_ACTIONS, handle_cue_action
 from app.services.points import adjust_points
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.dismiss import dismiss_task
 from app.services.task.reopen import reopen_task
 from app.services.task.reschedule import reschedule_task
+from app.services.task.work import start_task
 
 log = logging.getLogger(__name__)
 
@@ -103,20 +108,18 @@ def _check_secret(request: Request, payload: ActionPayload) -> None:
 
 
 def _resolve_task_id(payload: ActionPayload) -> uuid.UUID:
-    raw = payload.task_id
-    # Hand-off pushes use their own tag so they don't replace the task's push.
-    for prefix in ("task-", "handoff-"):
-        if not raw and payload.tag and payload.tag.startswith(prefix):
-            raw = payload.tag[len(prefix) :]
-    if not raw:
+    if payload.task_id:
+        try:
+            return uuid.UUID(payload.task_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid task id") from exc
+    task_id = task_id_from_tag(payload.tag)
+    if task_id is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "task_id or tag=task-<uuid> required",
+            "task_id or tag=task-<uuid>-<kind> required",
         )
-    try:
-        return uuid.UUID(raw)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid task id") from exc
+    return task_id
 
 
 def _ntfy_cors_origin(request: Request) -> str | None:
@@ -196,14 +199,14 @@ async def handle_action(
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
 
-    if payload.action in CHECKIN_ACTIONS:
-        log.info("notify action · check-in %s task=%s", payload.action, task.id)
-        # "Not done" re-plans, which can take the solver's whole time limit —
-        # answer the tap right away.
+    if payload.action == ACTION_START_TASK or payload.action in CUE_ACTIONS:
+        log.info("notify action · cue %s task=%s", payload.action, task.id)
+        # Each re-plans, which can take the solver's whole time limit — answer
+        # the tap right away.
         if background_tasks is not None:
-            background_tasks.add_task(_checkin_in_background, task.id, payload.action)
+            background_tasks.add_task(_cue_in_background, task.id, payload.action)
         else:
-            await handle_checkin_action(session, task, payload.action)
+            await _cue(session, task, payload.action)
         return {"ok": True, "action": payload.action, "task_id": str(task.id)}
 
     if payload.action == ACTION_CLOSE_TASK:
@@ -274,7 +277,7 @@ async def handle_action(
             ) from exc
         # The prompt proposed this action; once it's kicked off, clear it so a
         # stale button doesn't linger until the next transition replaces it.
-        await clear_task_notification(task.id)
+        await clear_kotx_prompt(task.id)
         log.info(
             "notify action · kotx %s task=%s kotx_id=%s ok=%s",
             payload.action,
@@ -290,12 +293,19 @@ async def handle_action(
     )
 
 
-async def _checkin_in_background(task_id: uuid.UUID, action: str) -> None:
+async def _cue(session: Session, task, action: str) -> None:
+    if action == ACTION_START_TASK:
+        await start_task(session, task)
+    else:
+        await handle_cue_action(session, task, action)
+
+
+async def _cue_in_background(task_id: uuid.UUID, action: str) -> None:
     with SessionLocal() as session:
         task = tasks_store.get(session, task_id)
         if task is None:
             return
         try:
-            await handle_checkin_action(session, task, action)
+            await _cue(session, task, action)
         except Exception:  # noqa: BLE001
-            log.exception("check-in action failed · task=%s action=%s", task_id, action)
+            log.exception("cue action failed · task=%s action=%s", task_id, action)

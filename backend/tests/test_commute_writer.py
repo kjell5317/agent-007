@@ -173,9 +173,13 @@ async def test_stray_leg_cleanup_removes_past_and_beyond_horizon(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
+async def test_leg_conflict_is_marked_on_the_leg_and_cleared(monkeypatch):
+    # The writer only records the collision on the leg; the push comes from
+    # the reconciler once scheduling has settled.
+    writes = []
+
     async def fake_write(session, **kwargs):
-        return None
+        writes.append(kwargs["private_properties"]["conflict"])
 
     monkeypatch.setattr(commute_planner, "create_event", fake_write)
     monkeypatch.setattr(commute_planner, "patch_event", fake_write)
@@ -187,17 +191,12 @@ async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
         origin_anchor="home", dest_anchor="ev-1", origin="Home", destination=GYM,
         mode="transit", depart=_day_at(18, 20), arrive=_day_at(18, 55),
     )
-    blocker = ("ev-fixed", "Dinner")
     window = (_day_at(8), _day_at(23))
 
-    # Fresh leg with a blocker → conflict reported once.
-    _, _, conflicts = await commute_planner._write_legs(
+    written = await commute_planner._write_legs(
         None, [leg], calendar_id="primary", existing=[], window=window,
-        account_key=None, conflicts={leg.key: blocker},
+        account_key=None, conflicts={leg.key: ("ev-fixed", "Dinner")},
     )
-    assert conflicts == [(leg, "Dinner")]
-
-    # Same conflict already marked on the existing leg → no re-alert.
     marked = _calendar_event(
         "leg-ev", leg.depart, leg.arrive,
         props={
@@ -206,25 +205,13 @@ async def test_leg_conflict_alerts_once_and_clears(monkeypatch):
             "mode": "transit", "conflict": "ev-fixed",
         },
     )
-    _, _, conflicts = await commute_planner._write_legs(
-        None, [leg], calendar_id="primary", existing=[marked], window=window,
-        account_key=None, conflicts={leg.key: blocker},
-    )
-    assert conflicts == []
-
-    # Conflict resolved → notification tag cleared.
-    cleared = []
-
-    async def fake_clear(tag):
-        cleared.append(tag)
-
-    monkeypatch.setattr("app.services.notify.clear_notification_tag", fake_clear)
-    _, _, conflicts = await commute_planner._write_legs(
+    await commute_planner._write_legs(
         None, [leg], calendar_id="primary", existing=[marked], window=window,
         account_key=None, conflicts={},
     )
-    assert conflicts == []
-    assert cleared == ["conflict-home-ev-1"]
+
+    assert written == 1
+    assert writes == ["ev-fixed", ""]
 
 
 @pytest.mark.asyncio
@@ -303,15 +290,13 @@ async def test_legs_departing_past_the_horizon_are_not_written(monkeypatch):
 
     async def fake_write(_session, legs, **_kw):
         written.extend(legs)
-        return len(legs), [], []
+        return len(legs)
 
     async def nothing(*_args, **_kw):
         return None
 
     monkeypatch.setattr(routing, "get_settings", lambda: SimpleNamespace(google_calendar_id="primary"))
     monkeypatch.setattr(commute_planner, "_write_legs", fake_write)
-    monkeypatch.setattr(commute_planner, "_notify_new_failures", nothing)
-    monkeypatch.setattr(commute_planner, "_notify_new_conflicts", nothing)
     monkeypatch.setattr(commute_planner, "_sync_anchor_reminders", nothing)
     ctx = SimpleNamespace(calendar_events=[], commute=SimpleNamespace(buffer=1))
 

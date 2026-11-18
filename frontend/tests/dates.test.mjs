@@ -53,3 +53,10 @@ test("clock times drop the date only for today", () => {
   assert.equal(dates.fmtClock("2020-01-15T08:00:00Z"), dates.fmtDue("2020-01-15T08:00:00Z"));
   assert.match(dates.fmtClock("2020-01-15T08:00:00Z"), /09:00/);
 });
+
+test("datetime-local values are wall time in the configured zone", () => {
+  assert.equal(dates.toZonedInputValue("2026-07-15T07:05:30Z"), "2026-07-15T09:05");
+  assert.equal(dates.fromZonedInputValue("2026-07-15T09:05"), "2026-07-15T07:05:00.000Z");
+  assert.equal(dates.fromZonedInputValue("2026-01-15T09:05"), "2026-01-15T08:05:00.000Z");
+  assert.equal(dates.fromZonedInputValue(""), null);
+});

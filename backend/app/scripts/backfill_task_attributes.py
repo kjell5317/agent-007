@@ -4,7 +4,7 @@ Covers tasks due at most 7 days ago (open or done, not dismissed) that lack
 a work type or effort, 20 tasks per call on the cheap background model. Only
 missing values are filled, and a label's defaults beat the model for work
 type and effort. `deadline_kind` is replaced only while it is still the
-untouched default (`firm`, never overridden in the UI). A task the model
+untouched default (`hard`, never overridden in the UI). A task the model
 leaves out stays empty and is picked up by the next run.
 
     python -m app.scripts.backfill_task_attributes [--dry-run] [--limit N]
@@ -100,8 +100,8 @@ def planned_update(
     kind = suggested.get("deadline_kind")
     if (
         kind
-        and kind != "firm"
-        and (current.get("deadline_kind") or "firm") == "firm"
+        and kind != "hard"
+        and (current.get("deadline_kind") or "hard") == "hard"
         and not deadline_kind_overridden
     ):
         update["deadline_kind"] = kind

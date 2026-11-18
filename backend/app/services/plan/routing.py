@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.services.commute.legs import HOME, PlannedLeg, _norm
+from app.services.commute.legs import FAILED_MODE, HOME, PlannedLeg, RoutingIssues, _norm
 from app.services.commute.state import CommuteState
 from app.services.plan import features as F
 from app.services.plan import solver as S
@@ -398,10 +398,10 @@ async def write_legs(
     now: datetime,
     horizon_end: datetime,
     obstacles: list[tuple[str, str, datetime, datetime]],
-) -> dict:
+) -> tuple[dict, RoutingIssues]:
     """Fit transit legs to real connections, then diff the legs against the
     not-yet-started commute events and write them; started legs are history
-    and stay untouched."""
+    and stay untouched. Returns a summary and what the user must resolve."""
     from app.services.calendar import is_commute_event
     from app.services.commute import planner, transit
 
@@ -418,17 +418,20 @@ async def write_legs(
     # replan. It's planned once the horizon rolls over it.
     legs = [leg for leg in legs if leg.depart < horizon_end]
     conflicts = planner._immovable_conflicts(legs, obstacles)
-    written, failures, new_conflicts = await planner._write_legs(
+    written = await planner._write_legs(
         session, legs, calendar_id=calendar_id, existing=existing,
         window=(now, horizon_end), account_key=None, conflicts=conflicts,
     )
-    await planner._notify_new_failures(failures)
-    await planner._notify_new_conflicts(new_conflicts)
     await planner._sync_anchor_reminders(
         session, events=write_events, legs=legs, window=(now, horizon_end),
         calendar_id=calendar_id, settings=settings, account_key=None,
     )
-    return {"written": written, "conflicts": len(conflicts), "failures": len(failures)}
+    issues = RoutingIssues(
+        unroutable=[leg for leg in legs if leg.mode == FAILED_MODE],
+        conflicts=[(leg, *conflicts[leg.key]) for leg in legs if leg.key in conflicts],
+    )
+    summary = {"written": written, "conflicts": len(issues.conflicts), "failures": len(issues.unroutable)}
+    return summary, issues
 
 
 __all__ = ["HOME", "RoutingContext", "build", "planned_legs", "rain_snapshot", "routing_enabled", "write_legs"]

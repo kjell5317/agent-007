@@ -10,8 +10,8 @@ TaskScheduleStatus = Literal["scheduled", "pending", "unscheduled", "deferred"]
 RecurrenceUnit = Literal["day", "week", "month"]
 WorkType = Literal["physical", "cognitive", "social"]
 Effort = Literal["low", "medium", "high"]
-DeadlineKind = Literal["hard", "firm", "soft"]
-ScheduleState = Literal["placed", "deferred", "unplaced"]
+DeadlineKind = Literal["hard", "soft"]
+ScheduleState = Literal["placed", "deferred", "unplaced", "waiting"]
 
 
 HandoffKind = Literal["research", "email_reply", "code_change"]
@@ -67,7 +67,7 @@ class TaskBase(BaseModel):
     recurrence_interval: int | None = None
     work_type: WorkType | None = None
     effort: Effort | None = None
-    deadline_kind: DeadlineKind = "firm"
+    deadline_kind: DeadlineKind = "hard"
 
 
 class TaskCreate(TaskBase):
@@ -192,6 +192,9 @@ class TaskRead(TaskBase):
     placed_by: str = "planner"
     schedule_state: ScheduleState = "placed"
     running_since: datetime | None = None
+    waiting_since: datetime | None = None
+    # Finished work sessions; a running one counts from `running_since`.
+    worked_minutes: int = 0
     # The slot length the planner booked when it differs from the estimate
     # (rounded up to the solver's grid). Null means the estimate itself.
     estimation_corrected: int | None = None
@@ -269,10 +272,12 @@ class TaskRead(TaskBase):
                 "kotx_task_id": getattr(task, "kotx_task_id", None),
                 "work_type": getattr(task, "work_type", None),
                 "effort": getattr(task, "effort", None),
-                "deadline_kind": getattr(task, "deadline_kind", None) or "firm",
+                "deadline_kind": getattr(task, "deadline_kind", None) or "hard",
                 "placed_by": getattr(task, "placed_by", None) or "planner",
                 "schedule_state": getattr(task, "schedule_state", None) or "placed",
                 "running_since": getattr(task, "running_since", None),
+                "waiting_since": getattr(task, "waiting_since", None),
+                "worked_minutes": getattr(task, "worked_minutes", None) or 0,
                 "estimation_corrected": (
                     booked
                     if status_ == "open"

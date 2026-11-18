@@ -7,7 +7,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost/
 
 from app.api import oauth as oauth_api  # noqa: E402
 from app.config.settings import Settings  # noqa: E402
-from app.services import ntfy  # noqa: E402
+from app.services.notifications import ntfy  # noqa: E402
 
 
 def _settings(**kw) -> Settings:

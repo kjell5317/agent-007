@@ -23,7 +23,7 @@ def make_task(title, *, due, scheduled=None, minutes=60, **kw) -> Task:
         id=uuid.uuid4(), title=title, due_date=due, scheduled_date=scheduled, estimation=minutes,
         calendar_event_id=f"ev-{title}" if scheduled else None,
         schedule_state="placed" if scheduled else "unplaced",
-        deadline_kind=kw.pop("deadline_kind", "firm"), placed_by=kw.pop("placed_by", "planner"),
+        deadline_kind=kw.pop("deadline_kind", "hard"), placed_by=kw.pop("placed_by", "planner"),
         is_container=False, **kw,
     )
     return task
@@ -32,7 +32,7 @@ def make_task(title, *, due, scheduled=None, minutes=60, **kw) -> Task:
 @pytest.fixture
 def world(monkeypatch):
     state = SimpleNamespace(tasks=[], events=[], writes=[], deletes=[], logs=[], resolved={},
-                            pushed=[], closed=set())
+                            pushed=[], closed=set(), claimed=set())
 
     async def calendar_items(_session, _start, _end, account_key=None, blockers=False):
         return [e for e in state.events if blockers or e.kind != "blocker"]
@@ -52,20 +52,20 @@ def world(monkeypatch):
     monkeypatch.setattr(replan.tasks_store, "open_schedulable", lambda _s: state.tasks)
     monkeypatch.setattr(replan.tasks_store, "schedulable_estimations",
                         lambda _s: {t.id: t.estimation for t in state.tasks})
+    monkeypatch.setattr(replan.tasks_store, "claimed_ids", lambda _s: set(state.claimed))
     monkeypatch.setattr(replan.tasks_store, "latest_status_for",
                         lambda _s, ids: {i: "closed" for i in ids if i in state.closed})
     monkeypatch.setattr(replan.tasks_store, "get", lambda _s, _id: None)
-    monkeypatch.setattr(replan.log_store, "by_slot_for_tasks", lambda _s, _ids, _kinds: state.resolved)
     monkeypatch.setattr(replan.log_store, "add", lambda _s, **kw: state.logs.append(kw))
     monkeypatch.setattr("app.services.learn.jobs.weights_for", lambda _s, _d: F.prior_mean())
     monkeypatch.setattr("app.services.learn.jobs.rho", lambda _s: 0.5)
     monkeypatch.setattr("app.events.publish_task", lambda _s, _id: None)
 
-    async def no_push(*_args, **_kw):
-        state.pushed.append(_kw.get("title") or (_args[0] if _args else None))
+    async def no_push(message):
+        state.pushed.append(message.title)
 
     # Never reach a real phone from a test.
-    monkeypatch.setattr("app.services.notify.notify", no_push)
+    monkeypatch.setattr("app.services.notifications.push.send", no_push)
     return state
 
 
@@ -81,20 +81,21 @@ async def test_replan_places_moves_and_leaves_alone(world):
     clash = make_task("clash", due=NOW + timedelta(days=3), scheduled=NOW.replace(hour=11))
     steady = make_task("steady", due=NOW + timedelta(days=5),
                        scheduled=(NOW + timedelta(days=1)).replace(hour=14))
-    waiting = make_task("waiting", due=NOW + timedelta(days=1),
-                        scheduled=NOW - timedelta(hours=1, minutes=30))
-    world.tasks = [fresh, clash, steady, waiting]
+    missed = make_task("missed", due=NOW + timedelta(days=1),
+                       scheduled=NOW - timedelta(hours=1, minutes=30))
+    world.tasks = [fresh, clash, steady, missed]
 
     result = await replan.replan(session(), reason="test", now=NOW, time_limit=5)
 
     assert result.ok
     written = {title: (start, end) for title, start, end in world.writes}
-    assert set(written) == {"fresh", "clash"}
+    assert set(written) == {"fresh", "clash", "missed"}
     for start, end in written.values():
         assert end <= lecture.start or start >= lecture.end
         assert 10 <= start.hour and end.hour <= 19 or (end.hour == 19 and end.minute == 0)
     assert steady.title not in written  # stability: no gratuitous move
-    assert waiting.id not in result.placed  # check-in outcome still open
+    # Its slot ended unstarted: no check-in to wait for, it moves on.
+    assert result.placed[missed.id][0] >= NOW
     assert all(log["kind"] == "placed" and log["features"]["slot"] for log in world.logs)
     assert fresh.schedule_state == "placed"
 
@@ -220,7 +221,7 @@ def routed(world, monkeypatch):
 
     async def write_legs(_session, legs, **kw):
         world.legs = legs
-        return len(legs), [], []
+        return len(legs)
 
     async def nothing(*_args, **_kw):
         return None
@@ -233,8 +234,6 @@ def routed(world, monkeypatch):
     monkeypatch.setattr(routing, "_weather", no_weather)
     monkeypatch.setattr("app.db.clients.commute_log.active_pins", lambda _s, _now: {})
     monkeypatch.setattr(planner, "_write_legs", write_legs)
-    monkeypatch.setattr(planner, "_notify_new_failures", nothing)
-    monkeypatch.setattr(planner, "_notify_new_conflicts", nothing)
     monkeypatch.setattr(planner, "_sync_anchor_reminders", nothing)
     monkeypatch.setattr("app.services.commute.transit.lookup", nothing)
     return world
@@ -486,7 +485,7 @@ async def test_released_hand_placed_task_gives_way_to_a_deadline(world, monkeypa
     mine = make_task("mine", due=NOW + timedelta(days=3), scheduled=NOW.replace(hour=14),
                      placed_by="user", placed_at=NOW - timedelta(hours=1),
                      created_at=NOW - timedelta(days=2))
-    urgent = make_task("urgent", due=NOW.replace(hour=23), created_at=NOW, deadline_kind="firm")
+    urgent = make_task("urgent", due=NOW.replace(hour=23), created_at=NOW, deadline_kind="hard")
     world.tasks = [mine, urgent]
     await replan.replan(session(), reason="test", now=NOW, time_limit=5)
     written = {title: start for title, start, _ in world.writes}
@@ -495,19 +494,32 @@ async def test_released_hand_placed_task_gives_way_to_a_deadline(world, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_late_placement_warns(world, monkeypatch):
-    warned = []
-
-    async def deadline_missed(task, *, start, end):
-        warned.append(task.title)
-
-    monkeypatch.setattr("app.services.notify.notify_deadline_missed", deadline_missed)
-    # Booked solid until tomorrow evening; the task is due tomorrow noon.
+async def test_late_placement_is_left_to_the_settled_reconcile(world):
+    # Booked solid until tomorrow evening; the task is due tomorrow noon. The
+    # solve itself pushes nothing: warnings wait until scheduling settles.
     world.events = [Item(NOW.replace(minute=15), (NOW + timedelta(days=1)).replace(hour=20),
                          "event", event_id="e1")]
-    world.tasks = [make_task("squeezed", due=(NOW + timedelta(days=1)).replace(hour=12))]
+    task = make_task("squeezed", due=(NOW + timedelta(days=1)).replace(hour=12))
+    world.tasks = [task]
     await replan.replan(session(), reason="test", now=NOW, time_limit=5)
-    assert warned == ["squeezed"]
+    assert world.pushed == []
+    assert task.scheduled_date is not None and task.scheduled_date > task.due_date
+
+
+@pytest.mark.asyncio
+async def test_a_task_started_during_the_solve_keeps_its_session_slot(world, monkeypatch):
+    task = make_task("started", due=NOW + timedelta(days=2))
+    world.tasks = [task]
+    real_solve = replan.S.solve
+
+    def solve_then_start(*args, **kwargs):
+        result = real_solve(*args, **kwargs)
+        world.claimed.add(task.id)  # a Start tap while the solver ran
+        return result
+
+    monkeypatch.setattr(replan.S, "solve", solve_then_start)
+    await replan.replan(session(), reason="test", now=NOW, time_limit=5)
+    assert world.writes == [] and world.logs == []
 
 
 @pytest.mark.asyncio

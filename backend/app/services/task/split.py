@@ -21,7 +21,8 @@ from app.db.models.task import Task
 from app.db.schemas.task import TaskCreate
 from app.events import publish_task, publish_task_removed
 from app.services.calendar import delete_task_event
-from app.services.notify import clear_task_notification
+from app.db.clients import notification_ledger
+from app.services.notifications import push
 from app.services.plan import schedule_task
 from app.services.plan.replan import batch as replan_batch
 
@@ -195,11 +196,13 @@ def reflow_children(session: Session, parent: Task, children: list[Task] | None 
 @dataclass
 class RemovedMirror:
     """What `delete_task_event` needs of a deleted subtask: its calendar event
-    and slot (the slot locates its commute legs)."""
+    and slot (the slot locates its commute legs) — plus the tags of its pushes
+    still showing, whose ledger rows go with the row."""
 
     id: uuid.UUID
     calendar_event_id: str | None
     scheduled_date: datetime | None
+    notification_tags: tuple[str, ...] = ()
 
 
 def collapse_subtasks(session: Session, parent: Task) -> list[RemovedMirror]:
@@ -216,7 +219,11 @@ def collapse_subtasks(session: Session, parent: Task) -> list[RemovedMirror]:
         child.estimation or 30 for child in children if statuses.get(child.id, "open") == "open"
     )
     removed = [
-        RemovedMirror(child.id, child.calendar_event_id, child.scheduled_date) for child in children
+        RemovedMirror(
+            child.id, child.calendar_event_id, child.scheduled_date,
+            tuple(row.tag for row in notification_ledger.showing_for_task(session, child.id)),
+        )
+        for child in children
     ]
     for child in children:
         # Subtask rows and their generated `subtask` inputs carry no history.
@@ -235,7 +242,8 @@ async def finish_collapse(session: Session, parent_id: uuid.UUID, removed: list[
     place the parent; that solve also rewrites the commute legs."""
     for mirror in removed:
         await delete_task_event(session, mirror)
-        await clear_task_notification(mirror.id)
+        for tag in mirror.notification_tags:
+            await push.clear(tag)
     parent = tasks_store.get(session, parent_id)
     if parent is not None:
         await schedule_task(session, parent)
@@ -258,7 +266,7 @@ def inherited_attributes(parent: Task) -> dict:
     return {
         "work_type": getattr(parent, "work_type", None),
         "effort": getattr(parent, "effort", None),
-        "deadline_kind": getattr(parent, "deadline_kind", None) or "firm",
+        "deadline_kind": getattr(parent, "deadline_kind", None) or "hard",
     }
 
 

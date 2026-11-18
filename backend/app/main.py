@@ -33,6 +33,7 @@ from app.api import (
     stats,
     tasks,
     webhooks,
+    work,
 )
 from app import observability
 from app.auth.middleware import AuthMiddleware
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(kotx.router)
     app.include_router(labels.router)
     app.include_router(notes.router)
+    app.include_router(work.router)
     app.include_router(tasks.router)
     app.include_router(notifications.router)
     app.include_router(oauth.router)

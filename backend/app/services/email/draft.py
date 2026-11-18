@@ -31,12 +31,9 @@ from app.services.email.compose import (
 )
 from app.services.input.gmail.client import GmailClient
 from app.services.input.gmail.preprocess import preprocess_message
-from app.services.notify import (
-    clear_notification_tag,
-    handoff_tag,
-    notify_draft_ready,
-    notify_draft_stale,
-)
+from app.services.notifications import push
+from app.services.notifications.messages import handoff_tag
+from app.services.notifications.notify import notify_draft_ready, notify_draft_stale
 
 log = logging.getLogger(__name__)
 
@@ -217,7 +214,7 @@ async def regenerate_in_background(task_id) -> None:
     from app.db import SessionLocal
     from app.db.clients import tasks as tasks_store
     from app.events import publish_task
-    from app.services.notify import notify_error
+    from app.services.notifications.notify import notify_error
 
     with SessionLocal() as session:
         task = tasks_store.get(session, task_id)
@@ -246,7 +243,7 @@ async def discard(session: Session, task) -> None:
     if handoff is not None and handoff.kind == "email_reply":
         handoff.state = "declined"
     session.commit()
-    await clear_notification_tag(handoff_tag(task.id))
+    await push.clear(handoff_tag(task.id))
 
 
 async def mark_stale(session: Session, task, raw) -> None:
@@ -278,5 +275,5 @@ async def mark_sent(session: Session, client: GmailClient, thread_ids: set[str])
             await close_task(session, draft.task_id)
         except (LookupError, ValueError):
             pass
-        await clear_notification_tag(handoff_tag(draft.task_id))
+        await push.clear(handoff_tag(draft.task_id))
     return len(drafts)

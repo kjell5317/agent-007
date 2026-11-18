@@ -11,11 +11,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.db.clients import oauth_tokens
 from app.services.input.create import drain
 from app.services.input.slack.source import SlackSource
-from app.services.notify import notify
+from app.services.notifications import messages, push
 
 log = logging.getLogger(__name__)
 
@@ -27,15 +26,12 @@ async def _pause_account(
         session, provider="slack", account_key=account_key, patch={"auth_error": error}
     )
     session.commit()
-    await notify(
-        title=f"Slack needs re-auth ({workspace_name or account_key})",
-        message=(
-            f"{account_key}: {error}. Polling for this account is paused. "
-            "Re-authorize it signed in as that Slack user, or disconnect it "
-            "if the user was deactivated."
-        ),
-        url=get_settings().public_url,
-    )
+    await push.send(messages.plain_error(
+        f"Slack needs re-auth ({workspace_name or account_key})",
+        f"{account_key}: {error}. Polling for this account is paused. "
+        "Re-authorize it signed in as that Slack user, or disconnect it "
+        "if the user was deactivated.",
+    ))
 
 
 def _empty_setup(error: str) -> dict:

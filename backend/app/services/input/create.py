@@ -33,7 +33,7 @@ from app.db.models.raw_input import RawInput
 from app.db.schemas.raw_input import RawInputCreate
 from app.events import publish_input, publish_task
 from app.services.input.embedding import candidate_query_text, embed
-from app.services.notify import notify_error
+from app.services.notifications.notify import notify_error
 
 log = logging.getLogger(__name__)
 

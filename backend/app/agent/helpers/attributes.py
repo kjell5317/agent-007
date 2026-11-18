@@ -27,11 +27,9 @@ def valid_attributes(tool_input: Mapping[str, Any]) -> dict[str, str]:
 
 
 def default_deadline_kind(*, explicit_due: bool, related_event: bool) -> str:
-    if explicit_due:
-        return "firm"
     # Preparation for a linked event is pointless once the event has started,
     # even when the agent's own guess sits earlier than the event.
-    return "hard" if related_event else "soft"
+    return "hard" if explicit_due or related_event else "soft"
 
 
 def new_task_attributes(

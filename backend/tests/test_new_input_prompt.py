@@ -214,6 +214,7 @@ def test_new_input_prompt_guides_calendar_corrections_to_update_event():
 def test_prompts_carry_the_deadline_kind_rules():
     for prompt in (NEW_INPUT_SYSTEM_PROMPT, EXTRACT_FIELDS_SYSTEM_PROMPT):
         assert "inherit the label's defaults" in prompt
-        assert "hard — missing the deadline makes the task pointless" in prompt
-        assert "firm — any other explicit deadline" in prompt
+        assert "hard — the default: a real deadline that must be met" in prompt
+        assert "soft — a flexible target date that can slip" in prompt
         assert '"sometime" phrasing' in prompt
+        assert "firm —" not in prompt

@@ -181,6 +181,18 @@ def test_stated_deadline_is_assembled_and_keeps_its_stakes():
     assert "due_date" not in draft.writer_needs()
 
 
+def test_stated_deadline_judged_flexible_is_soft():
+    answers = _answers(
+        due_mode=_a("relative"),
+        due_anchor=_a("tomorrow"),
+        deadline_stakes=_a("soft", 0.8),
+    )
+    draft = draft_fields(answers, StateRefs(title="Tidy the garage"), now=NOW, th=TH)
+
+    assert draft.due_date_is_explicit is True
+    assert draft.deadline_kind == "soft"
+
+
 def test_unreadable_deadline_goes_to_the_writer():
     answers = _answers(due_mode=_a("relative", 0.5), due_anchor=_a("weekday", 0.5))
     draft = draft_fields(answers, StateRefs(title="Pay rent"), now=NOW, th=TH)

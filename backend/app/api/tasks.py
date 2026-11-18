@@ -79,7 +79,7 @@ async def _sync_task_changes(updates: list[tuple[uuid.UUID, set[str]]], parent_i
                     from app.config import get_settings
                     await delete_task_event(session, parent)
                     if parent.calendar_event_id and get_settings().google_calendar_id:
-                        from app.services.notify import notify_error
+                        from app.services.notifications.notify import notify_error
                         await notify_error(
                             "Task calendar update failed",
                             RuntimeError("Could not remove the parent calendar event"),
@@ -88,7 +88,7 @@ async def _sync_task_changes(updates: list[tuple[uuid.UUID, set[str]]], parent_i
             await sync_external(session, updates)
         except Exception as exc:  # noqa: BLE001
             log.exception("task calendar update failed · parent=%s", parent_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Task calendar update failed", exc)
 
 
@@ -99,16 +99,13 @@ async def _reschedule_in_background(task_id: uuid.UUID) -> None:
             return
         try:
             result = await reschedule_task_svc(session, row)
-            if result is None and row.schedule_state == "deferred":
-                # Due past the horizon, and waiting beat every other slot this week.
-                from app.services.notify import notify_task_deferred
-                await notify_task_deferred(row)
-            elif result is None:
+            # Deferred: due past the horizon, and waiting beat every slot this week.
+            if result is None and row.schedule_state != "deferred":
                 raise RuntimeError("Task could not be scheduled")
             publish_task(session, task_id)
         except Exception as exc:  # noqa: BLE001
             log.exception("task rescheduling failed · task=%s", task_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Task rescheduling failed", exc, context=row.title)
 
 
@@ -123,7 +120,7 @@ async def _split_in_background(task_id: uuid.UUID) -> None:
                 raise ValueError("This task could not be split")
         except Exception as exc:  # noqa: BLE001
             log.exception("task split failed · task=%s", task_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Task split failed", exc, context=row.title)
 
 
@@ -136,7 +133,7 @@ async def _place_split_in_background(parent_id: uuid.UUID) -> None:
             await place_subtasks(session, parent, tasks_store.children(session, parent_id))
         except Exception as exc:  # noqa: BLE001
             log.exception("subtask placement failed · parent=%s", parent_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Subtask scheduling failed", exc, context=parent.title)
 
 
@@ -146,7 +143,7 @@ async def _finish_collapse_in_background(parent_id: uuid.UUID, removed: list[Rem
             await finish_collapse(session, parent_id, removed)
         except Exception as exc:  # noqa: BLE001
             log.exception("collapse calendar cleanup failed · parent=%s", parent_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Collapse calendar update failed", exc)
 
 
@@ -160,7 +157,7 @@ async def _refresh_series_in_background(
                 await plan_recurring_tasks(session, [series_id])
         except Exception as exc:  # noqa: BLE001
             log.exception("repeat planning failed · series=%s", series_id)
-            from app.services.notify import notify_error
+            from app.services.notifications.notify import notify_error
             await notify_error("Repeat planning failed", exc)
 
 

@@ -193,7 +193,6 @@ async def test_update_event_preserves_duration_and_patches_selected_fields(monke
 
     monkeypatch.setattr(calendar_lookup, "get_event", fake_get_event)
     monkeypatch.setattr(calendar_lookup, "patch_event", fake_patch_event)
-    monkeypatch.setattr(calendar_lookup, "notify_calendar_event_updated", fake_notify)
 
     out, event_id = await calendar_lookup.run_update_event(
         SimpleNamespace(),
@@ -211,7 +210,8 @@ async def test_update_event_preserves_duration_and_patches_selected_fields(monke
     assert patch_kwargs["start"].isoformat() == "2026-07-11T10:00:00+00:00"
     assert patch_kwargs["end"].isoformat() == "2026-07-11T11:30:00+00:00"
     assert "description" not in patch_kwargs
-    assert notifications == ["evt_123"]
+    # A corrected event is visible in the calendar; it needs no push.
+    assert notifications == []
 
 
 @pytest.mark.asyncio

@@ -147,10 +147,10 @@ WORK_TYPE_DOC = (
 )
 EFFORT_DOC = "How demanding the task is."
 DEADLINE_KIND_DOC = (
-    "hard: missing the due date makes the task pointless or has external "
-    "consequences (submissions, exams, appointments, preparing for a linked "
-    "event). firm: any other explicit deadline. soft: a guessed or derived due "
-    "date, or 'sometime' phrasing."
+    "hard (the default): a real deadline that must be met (an external "
+    "commitment, submissions, exams, appointments, a due date someone set, "
+    "preparing for a linked event). soft: a flexible target date that can slip "
+    "without real consequence — a guessed or derived due date, or 'sometime' phrasing."
 )
 _INHERIT_LABEL_DEFAULT = (
     " Inherit the label's default (listed with the labels) unless this task "

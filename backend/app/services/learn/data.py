@@ -12,6 +12,10 @@ from app.services.learn.preference import BIAS, Row
 HALF_LIFE = timedelta(days=90)
 # A close this soon after the slot ended still counts as "inside the slot".
 CLOSE_GRACE = timedelta(minutes=15)
+# A cued slot with no answer this long after it ended was not started.
+CUE_SETTLED = timedelta(minutes=15)
+# Remembered times are less exact than a live session.
+RETRO_WEIGHT = 0.5
 
 
 def decay(created_at: datetime, now: datetime) -> float:
@@ -61,9 +65,10 @@ def preference_rows(log_rows, now: datetime) -> list[Row]:
         if snapshot is None:
             continue
         closed = next((r for r in slot_rows if r.kind == "closed"), None)
-        if "not_done" in kinds:
+        cue = next((r for r in slot_rows if r.kind == "cue_sent"), None)
+        if kinds & {"not_done", "cue_snoozed", "cue_declined"}:
             outcome = 0.0
-        elif kinds & {"done_confirmed", "still_working"}:
+        elif kinds & {"done_confirmed", "still_working", "started"}:
             outcome = 1.0
         elif closed is not None and closed.slot_end is not None and _closed_in_slot(
             closed, closed.slot_start, closed.slot_end
@@ -71,6 +76,9 @@ def preference_rows(log_rows, now: datetime) -> list[Row]:
             outcome = 1.0
         elif "rescheduled" in kinds:
             # Tapped away from: the task wasn't going to happen there.
+            outcome = 0.0
+        elif cue is not None and cue.slot_end is not None and cue.slot_end + CUE_SETTLED <= now:
+            # Cued, and nothing came of it.
             outcome = 0.0
         else:
             continue
@@ -113,6 +121,38 @@ def duration_observations(log_rows, now: datetime) -> list[Observation]:
         ):
             bound = max(5.0, (closed.created_at - slot_start).total_seconds() / 60)
             out.append(Observation(meta["estimate"], bound, group, True, weight, task_id))
+    return out
+
+
+def session_observations(tasks, sessions_by_task, now: datetime) -> list[Observation]:
+    """Closed tasks whose work was all recorded in sessions — the last one
+    ended with Complete — so the worked minutes are the exact duration. A
+    plain close after a paused session may hide unrecorded work, and a task
+    created from logged work has no real estimate. `tasks` are `(task,
+    attrs)` pairs with the label defaults applied, as in the feature
+    snapshots."""
+    out: list[Observation] = []
+    for task, attrs in tasks:
+        rows = sessions_by_task.get(task.id) or []
+        if not rows or task.estimation_source == "logged":
+            continue
+        if any(r.ended_at is None or r.end_reason == "abandoned" for r in rows):
+            continue
+        if max(rows, key=lambda r: r.ended_at).end_reason != "completed":
+            continue
+        estimate = task.agent_estimation or task.estimation
+        if not estimate:
+            continue
+        actual = sum(r.minutes for r in rows)
+        if actual <= 0:
+            continue
+        weight = decay(max(r.ended_at for r in rows), now)
+        if any(r.source == "retro" for r in rows):
+            weight *= RETRO_WEIGHT
+        estimator = task.estimation_source if task.agent_estimation else None
+        out.append(Observation(
+            estimate, actual, group_key(attrs.label, attrs.work_type, estimator), False, weight, task.id,
+        ))
     return out
 
 

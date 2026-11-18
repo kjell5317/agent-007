@@ -422,6 +422,10 @@ def test_collapse_deletes_subtasks_in_the_db_and_keeps_the_open_work(monkeypatch
     monkeypatch.setattr(split.tasks_store, "delete_with_inputs", lambda _s, t: deleted.append(t.id))
     monkeypatch.setattr(split, "publish_task_removed", removed.append)
     monkeypatch.setattr(split, "publish_task", lambda _s, task_id: published.append(task_id))
+    monkeypatch.setattr(
+        split.notification_ledger, "showing_for_task",
+        lambda _s, task_id: [SimpleNamespace(tag=f"task-{task_id}-cue")] if task_id == left[0].id else [],
+    )
 
     mirrors = split.collapse_subtasks(SimpleNamespace(commit=lambda: None), parent)
 
@@ -430,25 +434,30 @@ def test_collapse_deletes_subtasks_in_the_db_and_keeps_the_open_work(monkeypatch
     assert [(m.id, m.calendar_event_id) for m in mirrors] == [(c.id, c.calendar_event_id) for c in children]
     # 45 + the 30-minute default for an unestimated subtask; the done one drops out.
     assert (parent.is_container, parent.estimation) == (False, 75)
+    # Pushes still showing are remembered before the rows (and their ledger) go.
+    assert [m.notification_tags for m in mirrors] == [(), (f"task-{left[0].id}-cue",), ()]
 
 
 @pytest.mark.asyncio
 async def test_finish_collapse_drops_the_old_events_then_places_the_parent(monkeypatch):
     parent = SimpleNamespace(id=uuid.uuid4(), is_container=False)
-    mirrors = [split.RemovedMirror(uuid.uuid4(), "e1", None), split.RemovedMirror(uuid.uuid4(), None, None)]
+    mirrors = [
+        split.RemovedMirror(uuid.uuid4(), "e1", None, ("task-a-cue",)),
+        split.RemovedMirror(uuid.uuid4(), None, None),
+    ]
     order = []
 
     async def delete_event(_session, task):
         order.append(("delete", task.id))
 
-    async def clear(task_id):
-        order.append(("clear", task_id))
+    async def clear(tag):
+        order.append(("clear", tag))
 
     async def schedule(_session, task):
         order.append(("schedule", task.id))
 
     monkeypatch.setattr(split, "delete_task_event", delete_event)
-    monkeypatch.setattr(split, "clear_task_notification", clear)
+    monkeypatch.setattr(split.push, "clear", clear)
     monkeypatch.setattr(split, "schedule_task", schedule)
     monkeypatch.setattr(split, "publish_task", lambda *_: None)
     monkeypatch.setattr(split.tasks_store, "get", lambda *_: parent)
@@ -456,6 +465,7 @@ async def test_finish_collapse_drops_the_old_events_then_places_the_parent(monke
     await split.finish_collapse(None, parent.id, mirrors)
 
     assert order[-1] == ("schedule", parent.id)
+    assert ("clear", "task-a-cue") in order
     assert [step for step in order if step[0] == "delete"] == [("delete", m.id) for m in mirrors]
 
 

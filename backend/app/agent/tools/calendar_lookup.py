@@ -40,7 +40,6 @@ from app.services.calendar.events import (
     patch_event,
 )
 from app.services.input.embedding import embed
-from app.services.notify import notify_calendar_event_updated
 
 KIND_INVITATION = "invitation"
 PROP_CREATED_BY = "created_by"
@@ -325,7 +324,6 @@ async def run_update_event(
         event_id=event_id,
         **patch_kwargs,
     )
-    await notify_calendar_event_updated(updated)
     return (
         (
             "update_event: updated "

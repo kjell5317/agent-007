@@ -16,10 +16,11 @@ required fields must be present (omitting any is a bug — double-check):
   Set location "home" when the task can only be done at home (chores, laundry).
   Also set work_type and effort — inherit the label's defaults (listed with the
   labels) unless this task clearly differs — and deadline_kind:
-    * hard — missing the deadline makes the task pointless or has external
-      consequences: submissions, exams, appointments, preparing for a linked event.
-    * firm — any other explicit deadline.
-    * soft — a guessed or derived due date, or "sometime" phrasing.
+    * hard — the default: a real deadline that must be met (an external
+      commitment, submissions, exams, appointments, a due date someone set,
+      preparing for a linked event).
+    * soft — a flexible target date that can slip without real consequence:
+      a guessed or derived due date, or "sometime" phrasing.
 
 The user message may list the most similar past items by status: OPEN/CLOSED
 tasks are candidates you can act on; NOT_TASK items are precedents (a strong

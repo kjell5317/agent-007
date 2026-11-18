@@ -178,7 +178,6 @@ function currentTaskFields(trace: JsonRecord): ProjectionField[] {
   addField(fields, "description", stringValue(task.description));
   addField(fields, "due_date", stringValue(task.due_date));
   addField(fields, "scheduled_date", stringValue(task.scheduled_date));
-  addField(fields, "estimation", estimationValue(task.estimation));
   addField(fields, "location", stringValue(task.location));
   addField(fields, "link", stringValue(task.link));
   addField(fields, "label", stringValue(task.label));
@@ -671,6 +670,8 @@ function genericInputFields(input: JsonRecord | null | undefined): ProjectionFie
   if (!input) return undefined;
   const fields: ProjectionField[] = [];
   for (const [key, entry] of Object.entries(input)) {
+    // Estimates stay out of the UI; seeing them made planned work stressful.
+    if (key === "estimation") continue;
     const value = /(token|secret|password|key|credential)/i.test(key)
       ? "[redacted]"
       : renderValue(entry);
@@ -684,7 +685,6 @@ function createTaskFields(input: JsonRecord): ProjectionField[] {
   const fields: ProjectionField[] = [];
   addField(fields, "title", stringValue(input.title));
   addField(fields, "description", stringValue(input.description));
-  addField(fields, "estimation", estimationValue(input.estimation));
   addField(fields, "due_date", stringValue(input.due_date));
   addField(fields, "location", stringValue(input.location));
   addField(fields, "link", stringValue(input.link));
@@ -707,7 +707,6 @@ function updateTaskFields(input: JsonRecord): ProjectionField[] {
   addField(fields, "status", stringValue(input.status));
   addField(fields, "title", stringValue(input.title));
   addField(fields, "description", stringValue(input.description));
-  addField(fields, "estimation", estimationValue(input.estimation));
   addField(fields, "due_date", stringValue(input.due_date));
   addField(fields, "location", stringValue(input.location));
   addField(fields, "link", stringValue(input.link));
@@ -807,12 +806,6 @@ function renderValue(value: unknown): string | undefined {
     return rendered.length > 0 ? rendered.join(", ") : undefined;
   }
   return truncate(toYaml(value), 240);
-}
-
-function estimationValue(value: unknown): string | undefined {
-  if (typeof value === "number") return `${value} min`;
-  const text = stringValue(value);
-  return text ? `${text}${/min\b/i.test(text) ? "" : " min"}` : undefined;
 }
 
 function senderDisplayName(value: string | undefined): string | undefined {

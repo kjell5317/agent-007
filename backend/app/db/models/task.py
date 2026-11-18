@@ -31,7 +31,7 @@ class Task(Base):
     # + the retry cron sweep keep re-planning these. New rows default to now()
     # so a fresh task holds a provisional slot until the planner assigns a real one.
     # TODO: the provisional now() is a legacy-planner leftover the solver
-    # ignores (checkin.py works around it). Drop the server default and derive
+    # ignores (cue.py skips unmirrored slots). Drop the server default and derive
     # TaskRead.schedule_status (and the frontend's) from `schedule_state` — a
     # migration plus a frontend change.
     scheduled_date: Mapped[datetime | None] = mapped_column(
@@ -91,19 +91,23 @@ class Task(Base):
     # slot until its surroundings change.
     work_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     effort: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    deadline_kind: Mapped[str] = mapped_column(String(8), default="firm", server_default="firm")
+    deadline_kind: Mapped[str] = mapped_column(String(8), default="hard", server_default="hard")
     placed_by: Mapped[str] = mapped_column(String(16), default="planner", server_default="planner")
     placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     placed_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # Set while a "Still working" extension runs; the slot then stays fixed and
-    # its calendar event grows in 15-minute steps until the task is closed.
+    # Set while a work session runs; the slot then stays fixed and its calendar
+    # event grows in 15-minute steps once the session outlasts it.
     running_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Minutes of finished work sessions; the planner books only what remains.
+    worked_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Paused while waiting on someone: off the calendar until resumed.
+    waiting_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Length the current slot was booked with when it differs from the
     # estimate (the solver rounds slots up to its 15-minute grid). Null means
     # the estimate itself. Calendar sync compares event lengths against this,
     # so such a booking doesn't read as a user resize.
     booked_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # placed | deferred | unplaced — `scheduled_date` is null for the last two.
+    # placed | deferred | unplaced | waiting — `scheduled_date` is null for all but placed.
     schedule_state: Mapped[str] = mapped_column(
         String(16), default="placed", server_default="placed"
     )

@@ -5,7 +5,7 @@ import secrets
 import string
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, case, func, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy import delete as sa_delete, update as sa_update
 from sqlalchemy.orm import Session
 
@@ -480,6 +480,15 @@ def schedulable_estimations(session: Session) -> dict[uuid.UUID, int | None]:
         .where(func.coalesce(latest.c.status, "open") == "open")
     )
     return dict(session.execute(stmt).tuples().all())
+
+
+def claimed_ids(session: Session) -> set[uuid.UUID]:
+    """Tasks a work session runs on or that wait on someone, read from the
+    DB: row objects loaded before a long solve still hold their old values."""
+    stmt = select(Task.id).where(
+        or_(Task.running_since.is_not(None), Task.schedule_state == "waiting")
+    )
+    return set(session.execute(stmt).scalars())
 
 
 def running_open(session: Session) -> list[Task]:

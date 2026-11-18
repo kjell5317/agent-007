@@ -94,7 +94,7 @@ class SolverTask:
     dur: int
     earliest: int
     due: int
-    deadline_kind: str = "firm"
+    deadline_kind: str = "hard"
     label: str | None = None
     work_type: str | None = None
     effort: str | None = None

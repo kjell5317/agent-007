@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from app.api import notifications
 from app.db import get_session
-from app.services import ntfy, notify
+from app.services.kotx import notify as kotx_notify
+from app.services.notifications import messages, ntfy, push
 
 
 def _settings():
@@ -28,9 +29,9 @@ def test_ntfy_action_buttons_target_existing_callback_with_scoped_signatures():
     settings = _settings()
     tag = f"task-{uuid.uuid4()}"
     actions = [
-        {"action": notify.ACTION_CLOSE_TASK, "title": "Done"},
-        {"action": notify.ACTION_DISMISS_TASK, "title": "Dismiss"},
-        {"action": notify.ACTION_RESCHEDULE_TASK, "title": "Reschedule"},
+        {"action": messages.ACTION_CLOSE_TASK, "title": "Done"},
+        {"action": messages.ACTION_DISMISS_TASK, "title": "Dismiss"},
+        {"action": messages.ACTION_RESCHEDULE_TASK, "title": "Reschedule"},
     ]
     payload = ntfy.message_payload(
         settings, "Task", "Scheduled", url="https://007.example.org/#task/123",
@@ -55,9 +56,9 @@ def test_ntfy_action_buttons_target_existing_callback_with_scoped_signatures():
 
     kotx = ntfy.message_payload(
         settings, "PR", "Merge Pull Request", url=None, tag=tag,
-        actions=[{"action": notify.ACTION_KOTX_MERGE, "title": "Merge"}], importance=None,
+        actions=[{"action": kotx_notify.ACTION_KOTX_MERGE, "title": "Merge"}], importance=None,
     )
-    assert json.loads(kotx["actions"][0]["body"])["action"] == notify.ACTION_KOTX_MERGE
+    assert json.loads(kotx["actions"][0]["body"])["action"] == kotx_notify.ACTION_KOTX_MERGE
 
 
 def test_ntfy_callback_rejects_tampering_and_expired_signatures(monkeypatch):
@@ -94,7 +95,7 @@ async def test_ntfy_signed_done_button_uses_existing_action_handler(monkeypatch)
         closed.append(received_id)
 
     monkeypatch.setattr(notifications, "close_task_svc", fake_close)
-    body = ntfy.signed_action(notify.ACTION_CLOSE_TASK, f"task-{task_id}", settings.notify_action_secret)
+    body = ntfy.signed_action(messages.ACTION_CLOSE_TASK, f"task-{task_id}", settings.notify_action_secret)
     request = SimpleNamespace(headers={"origin": "https://ntfy.sh"}, query_params={})
     response = Response()
 
@@ -130,7 +131,7 @@ def test_ntfy_http_action_preflight_and_callback(monkeypatch):
     app = FastAPI()
     app.include_router(notifications.router)
     app.dependency_overrides[get_session] = lambda: object()
-    body = ntfy.signed_action(notify.ACTION_DISMISS_TASK, f"task-{task_id}", settings.notify_action_secret)
+    body = ntfy.signed_action(messages.ACTION_DISMISS_TASK, f"task-{task_id}", settings.notify_action_secret)
 
     with TestClient(app) as client:
         preflight = client.options(
@@ -202,14 +203,14 @@ async def test_notify_routes_only_to_selected_provider(monkeypatch):
     async def fake_send(*args, **kwargs):
         sent.append((args, kwargs))
 
-    monkeypatch.setattr(notify, "get_settings", lambda: settings)
+    monkeypatch.setattr(push, "get_settings", lambda: settings)
     monkeypatch.setattr(ntfy, "send", fake_send)
-    await notify.notify("Task", "Scheduled", tag="task-1")
+    await push.send(push.Message("Task", "Due soon", tag="task-1-created"))
     assert len(sent) == 1
-    assert sent[0][0][:3] == (settings, "Task", "Scheduled")
+    assert sent[0][0][:3] == (settings, "Task", "Due soon")
 
     settings.notification_provider = "none"
-    await notify.notify("Task", "Scheduled", tag="task-1")
+    await push.send(push.Message("Task", "Due soon", tag="task-1-created"))
     assert len(sent) == 1
 
 
@@ -228,9 +229,9 @@ async def test_home_assistant_transport_remains_available(monkeypatch):
         requests.append(request)
         return httpx.Response(200, json={}, request=request)
 
-    monkeypatch.setattr(notify, "get_settings", lambda: settings)
-    monkeypatch.setattr(notify.httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(capture), **kwargs))
-    await notify.notify("Task", "Scheduled", tag="task-1", actions=[{"action": "CLOSE_TASK", "title": "Done"}])
+    monkeypatch.setattr(push, "get_settings", lambda: settings)
+    monkeypatch.setattr(push.httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(capture), **kwargs))
+    await push.send(push.Message("Task", "Due soon", tag="task-1-created", actions=(("DISMISS_TASK", "Dismiss"),)))
 
     assert str(requests[0].url) == "https://ha.example.org/api/services/notify/mobile_app_phone"
-    assert json.loads(requests[0].content)["data"]["actions"][0]["action"] == "CLOSE_TASK"
+    assert json.loads(requests[0].content)["data"]["actions"][0]["action"] == "DISMISS_TASK"

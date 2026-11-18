@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { ChoiceChips } from "@/components/ui/choice-chips";
 import { Input } from "@/components/ui/input";

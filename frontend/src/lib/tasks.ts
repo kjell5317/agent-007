@@ -45,34 +45,13 @@ export const EFFORT_LABEL: Record<Effort, string> = {
 
 export const DEADLINE_KIND_LABEL: Record<DeadlineKind, string> = {
   hard: "Hard",
-  firm: "Firm",
   soft: "Soft",
 };
 
 export const DEADLINE_KIND_HINT: Record<DeadlineKind, string> = {
-  hard: "Missing it makes the task pointless",
-  firm: "An explicit deadline",
+  hard: "Must be met, lateness has consequences",
   soft: "A target, lateness is cheap",
 };
-
-export function taskRunningSince(task: Pick<Task, "status" | "running_since">): string | null {
-  return task.status === "open" ? task.running_since : null;
-}
-
-// Whole minutes a running task has gone past its booked slot; null when it
-// isn't running.
-export function runningOvertime(
-  task: Pick<Task, "status" | "running_since" | "scheduled_date" | "estimation" | "estimation_corrected">,
-  now = Date.now(),
-): number | null {
-  const scheduled = timeOrNull(task.scheduled_date);
-  if (!taskRunningSince(task) || scheduled == null) return null;
-  return Math.max(0, Math.floor((now - scheduled) / 60_000) - bookedMinutes(task));
-}
-
-function bookedMinutes(task: Pick<Task, "estimation" | "estimation_corrected">): number {
-  return Math.max(5, task.estimation_corrected || task.estimation || 30);
-}
 
 function timeOrNull(iso: string | null): number | null {
   if (!iso) return null;

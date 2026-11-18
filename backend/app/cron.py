@@ -27,8 +27,7 @@ from app.services.calendar.discover import discover_updated_events
 from app.services.calendar.labels import sync as sync_labels
 from app.services.input.poll import poll_sources
 from app.services.plan import cleanup_stray_commute_legs, refresh_commutes_for_weather
-from app.services.plan.checkin import checkin_overdue_slots_once
-from app.services.plan.schedule import announce_placement
+from app.services.plan.cue import sweep_once as cue_sweep_once
 from app.services.task.recur import plan_recurring_tasks
 
 log = logging.getLogger(__name__)
@@ -38,7 +37,12 @@ AUTO_POLL_INTERVAL_S = 300
 # what changed since the last poll), so it can run tight without hammering the
 # Google API — and a near-real-time reschedule around external edits is worth it.
 DISCOVER_INTERVAL_S = 60
-CHECKIN_SWEEP_INTERVAL_S = 300
+# Start cues go out when a slot begins, so this runs about once a minute.
+CUE_SWEEP_INTERVAL_S = 60
+# State notifications settle after every solve; the hourly tick catches
+# deadlines that come closer with the clock alone.
+NOTIFICATION_RECONCILE_INTERVAL_S = int(timedelta(hours=1).total_seconds())
+SLEEP_CONTEXT_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 WEATHER_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 NIGHTLY_CHECK_INTERVAL_S = 600
 COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
@@ -130,8 +134,7 @@ async def _calendar_discover() -> None:
 async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[str, int]:
     """One solve for the open due-dated tasks that currently have no slot
     (their stale slot was cleared after a failed placement). Failures stay
-    silent — the original "could not schedule" notification stands until
-    either a retry succeeds or the user intervenes. `respect_backoff=False` is
+    silent — the settled past-deadline notification covers them. `respect_backoff=False` is
     for discover-triggered sweeps: the calendar actually changed, so waiting
     out the hourly backoff would sit on fresh room."""
     from app.services.plan.replan import request_replan
@@ -139,10 +142,11 @@ async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[
     global _no_slot_until
     now = datetime.now(timezone.utc)
     with SessionLocal() as session:
-        # Deferred tasks wait on purpose; every solve reconsiders them.
+        # Deferred tasks wait on purpose (every solve reconsiders them), and
+        # one waiting on someone isn't planned until it's resumed.
         pending = [
             task for task in tasks_store.open_unscheduled_due(session)
-            if task.schedule_state != "deferred"
+            if task.schedule_state not in ("deferred", "waiting")
         ]
         if not pending:
             return {"attempted": 0, "scheduled": 0}
@@ -155,37 +159,70 @@ async def retry_unscheduled_tasks_once(*, respect_backoff: bool = True) -> dict[
             span = result.placed.get(task.id)
             if task.schedule_state == "placed" and span is not None:
                 scheduled += 1
-                await announce_placement(session, task, start=span[0], end=span[1])
                 publish_task(session, task.id)
         _no_slot_until = now + NO_SLOT_RETRY if scheduled < len(pending) else None
     return {"attempted": len(pending), "scheduled": scheduled}
 
 
-async def _checkin_sweep() -> None:
-    log.info("checkin-sweep loop started · interval=%ds", CHECKIN_SWEEP_INTERVAL_S)
+async def _cue_sweep() -> None:
+    log.info("cue-sweep loop started · interval=%ds", CUE_SWEEP_INTERVAL_S)
     while True:
         try:
-            await asyncio.sleep(CHECKIN_SWEEP_INTERVAL_S)
+            await asyncio.sleep(CUE_SWEEP_INTERVAL_S)
             if not state.auto_poll_enabled:
-                log.debug("checkin-sweep skipped (disabled)")
+                log.debug("cue-sweep skipped (disabled)")
                 continue
-            summary = await checkin_overdue_slots_once()
+            summary = await cue_sweep_once()
             retry = await retry_unscheduled_tasks_once()
-            log.info(
-                "check-in sweep done · sent=%d no_response=%d extended=%d abandoned=%d"
-                " retry_attempted=%d retry_scheduled=%d",
-                summary["sent"],
-                summary["no_response"],
-                summary["extended"],
-                summary["abandoned"],
-                retry["attempted"],
-                retry["scheduled"],
-            )
+            if any(summary.values()) or retry["attempted"]:
+                log.info(
+                    "cue sweep done · %s retry_attempted=%d retry_scheduled=%d",
+                    " ".join(f"{k}={v}" for k, v in summary.items()),
+                    retry["attempted"],
+                    retry["scheduled"],
+                )
         except asyncio.CancelledError:
-            log.info("checkin-sweep loop cancelled")
+            log.info("cue-sweep loop cancelled")
             raise
         except Exception:  # noqa: BLE001 — best-effort background loop
-            log.exception("checkin-sweep iteration failed")
+            log.exception("cue-sweep iteration failed")
+
+
+async def _notification_reconcile() -> None:
+    from app.services.notifications import settle
+
+    log.info("notification-reconcile loop started · interval=%ds", NOTIFICATION_RECONCILE_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(NOTIFICATION_RECONCILE_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                continue
+            log.info("notification-reconcile done · %s", await settle.reconcile_now())
+        except asyncio.CancelledError:
+            log.info("notification-reconcile loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("notification-reconcile iteration failed")
+
+
+async def _sleep_context() -> None:
+    """Last night's sleep, once per day, as soon as Google Health has it."""
+    from app.services.health import record_last_night
+
+    log.info("sleep-context loop started · interval=%ds", SLEEP_CONTEXT_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(SLEEP_CONTEXT_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                continue
+            with SessionLocal() as session:
+                if await record_last_night(session):
+                    log.info("sleep-context recorded")
+        except asyncio.CancelledError:
+            log.info("sleep-context loop cancelled")
+            raise
+        except Exception as exc:  # noqa: BLE001 — Health not connected, or a flaky API
+            log.info("sleep-context skipped err=%s", exc)
 
 
 async def _weather_commute_refresh() -> None:
@@ -322,7 +359,9 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("auto-poll", _auto_poll),
     ("label-sync", _label_sync),
     ("calendar-discover", _calendar_discover),
-    ("checkin-sweep", _checkin_sweep),
+    ("cue-sweep", _cue_sweep),
+    ("notification-reconcile", _notification_reconcile),
+    ("sleep-context", _sleep_context),
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-cleanup", _commute_cleanup),
     ("recurring-tasks", _recurring_tasks),

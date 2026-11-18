@@ -21,7 +21,7 @@ class ScheduleLog(Base):
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), index=True
     )
     kind: Mapped[str] = mapped_column(String(24))
-    actor: Mapped[str] = mapped_column(String(16))  # planner | user | checkin | system
+    actor: Mapped[str] = mapped_column(String(16))  # planner | user | checkin (legacy) | system
     slot_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     slot_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     prev_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

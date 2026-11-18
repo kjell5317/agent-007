@@ -6,6 +6,9 @@ import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
+from app.services.learn import preference
 from app.services.plan import features as F
 from app.services.plan import timeline as T
 
@@ -19,7 +22,7 @@ def dt(day: int, hour: int, minute: int = 0) -> datetime:
 def ctx(**kw) -> F.SlotContext:
     base = dict(
         start=dt(20, 14), end=dt(20, 15), now=dt(19, 9), due=dt(23, 18),
-        deadline_kind="firm", label="Uni", work_type="cognitive", effort="high",
+        deadline_kind="hard", label="Uni", work_type="cognitive", effort="high",
     )
     base.update(kw)
     return F.SlotContext(**base)
@@ -56,6 +59,19 @@ def test_lateness_per_deadline_kind():
     assert feats["late:hard"] == 1 and feats["late_h:hard"] == 3
     # A late slot also falls in the closest hours-to-deadline bucket.
     assert feats["htd:0-6"] == 1
+
+
+def test_stale_firm_weights_from_an_old_fit_are_harmless():
+    stale = {**F.prior_mean(), "late:firm": -10.0, "late_h:firm": -0.5}
+    post = preference.Posterior.from_params(
+        {"mean": stale, "active": ["late:firm"], "cov": [[0.25]]}
+    )
+    weights = preference.draw(post, np.random.default_rng(0))
+    late = F.features(ctx(start=dt(23, 19), end=dt(23, 21)))
+    assert late["late:hard"] == 1
+    assert F.utility(late, weights) < F.utility(F.features(ctx()), weights)
+    refit = preference.fit([preference.Row(x={"late:firm": 1.0, "h_start:14": 1.0}, y=1.0)])
+    assert refit.active == ["h_start:14"]
 
 
 def test_load_buckets():

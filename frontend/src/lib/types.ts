@@ -5,7 +5,21 @@ export type TaskScheduleStatus = "scheduled" | "pending" | "unscheduled" | "defe
 export type RecurrenceUnit = "day" | "week" | "month";
 export type WorkType = "physical" | "cognitive" | "social";
 export type Effort = "low" | "medium" | "high";
-export type DeadlineKind = "hard" | "firm" | "soft";
+export type DeadlineKind = "hard" | "soft";
+// "waiting": paused while waiting on someone, off the calendar until resumed.
+export type ScheduleState = "placed" | "deferred" | "unplaced" | "waiting";
+export type PauseReason = "break" | "waiting" | "interrupted";
+
+export interface WorkSession {
+  id: string;
+  task_id: string;
+  started_at: string;
+  ended_at: string | null;
+  // A pause reason, or "switched" / "completed" / "logged" / "abandoned".
+  end_reason: string | null;
+  // "retro": logged afterwards rather than tracked live.
+  source: "live" | "retro";
+}
 
 export interface SubtaskSummary {
   id: string;
@@ -65,10 +79,12 @@ export interface Task {
   effort: Effort | null;
   deadline_kind: DeadlineKind;
   placed_by: "planner" | "user";
-  schedule_state: "placed" | "deferred" | "unplaced";
-  // Set while the user is still working past the slot end; the calendar
-  // event keeps extending until the task is marked done.
+  schedule_state: ScheduleState;
+  // Set while a work session runs.
   running_since: string | null;
+  waiting_since: string | null;
+  // Finished sessions only; a running one adds `now - running_since`.
+  worked_minutes: number;
   // What the planner books after the learned estimate correction; null while
   // no correction is fitted.
   estimation_corrected: number | null;

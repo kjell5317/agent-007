@@ -89,7 +89,7 @@ def test_soft_deadline_trades_lateness_for_a_better_hour():
 
 def test_lateness_only_when_unavoidable():
     fixed = [S.FixedItem(at(0, 8), at(0, 23), "event")]
-    tasks = [task("a", 1, earliest=at(0, 8), due=at(0, 12), deadline_kind="firm")]
+    tasks = [task("a", 1, earliest=at(0, 8), due=at(0, 12), deadline_kind="hard")]
     start = solve(tasks, fixed=fixed).starts["a"]
     assert start >= at(0, 23)  # nothing fits before the deadline
 

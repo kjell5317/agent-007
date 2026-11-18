@@ -24,17 +24,15 @@ import {
   Repeat,
   RotateCcw,
   Shapes,
-  Timer,
   Trash2,
   X,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { ChoiceChips } from "@/components/ui/choice-chips";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import { DatePicker } from "@/components/ui/date-picker";
-import { EstimationPicker } from "@/components/ui/estimation-picker";
 import { Input } from "@/components/ui/input";
 import { LabelPicker } from "@/components/ui/label-picker";
 import { Markdown } from "@/components/ui/markdown";
@@ -53,10 +51,12 @@ import {
   InputStatusBadge,
   RunStatusBadge,
 } from "@/components/runs/RunStatusBadge";
+import { WorkControls } from "@/components/work/WorkControls";
+import { WorkHistory } from "@/components/work/WorkHistory";
+import { useWorkActions } from "@/components/work/useWorkActions";
 import { useLabels } from "@/hooks/useLabels";
-import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { api } from "@/lib/api";
-import { fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
+import { fmtClock, fmtDue, fmtWhen, isOverdue, isUrgent } from "@/lib/dates";
 import { inputTitle, senderName } from "@/lib/inbox";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
@@ -66,11 +66,11 @@ import {
   DEADLINE_KIND_LABEL,
   EFFORT_LABEL,
   fmtRecurrence,
-  runningOvertime,
   taskRecurrence,
   WORK_TYPE_LABEL,
 } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
+import { runningSince } from "@/lib/work";
 import type { Label, RecurrenceUnit, Task, TaskRawInput, WorkType } from "@/lib/types";
 
 interface Props {
@@ -86,7 +86,7 @@ interface Props {
 
 type TextField = "title" | "description" | "link" | "location";
 // "due_date" also edits the deadline kind, "work" both work type and effort.
-type PickerField = "due_date" | "estimation" | "work" | "label" | "recurrence";
+type PickerField = "due_date" | "work" | "label" | "recurrence";
 type AttributePatch = Partial<Pick<Task, "work_type" | "effort" | "deadline_kind">>;
 
 const TEXT_LABEL: Record<TextField, string> = {
@@ -140,7 +140,6 @@ export function TaskDetailModal({
   const [activePicker, setActivePicker] = useState<PickerField | null>(null);
   const [dateStep, setDateStep] = useState<"date" | "time">("date");
   const [pickerDue, setPickerDue] = useState(task.due_date);
-  const [pickerEstimation, setPickerEstimation] = useState(task.estimation);
   const [pickerLabel, setPickerLabel] = useState(task.label ?? "");
   const [textDraft, setTextDraft] = useState("");
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
@@ -194,7 +193,6 @@ export function TaskDetailModal({
     setActivePicker(null);
     setDateStep("date");
     setPickerDue(task.due_date);
-    setPickerEstimation(task.estimation);
     setPickerLabel(task.label ?? "");
     setKotxActionPending(false);
   }, [task.id]);
@@ -250,7 +248,6 @@ export function TaskDetailModal({
   const syncTaskState = (saved: Task) => {
     setCurrent(saved);
     setPickerDue(saved.due_date);
-    setPickerEstimation(saved.estimation);
     setPickerLabel(saved.label ?? "");
   };
 
@@ -423,9 +420,6 @@ export function TaskDetailModal({
     }
   }
 
-  const markDone = () =>
-    runClosingTaskAction(() => api.closeTask(current.id), "Marked done");
-
   const collapseCurrent = () =>
     runTaskAction(() => api.collapseTask(current.id), "Collapsed into one task");
 
@@ -543,7 +537,6 @@ export function TaskDetailModal({
     setActivePicker((prev) => (prev === field ? null : field));
     setDateStep("date");
     setPickerDue(current.due_date);
-    setPickerEstimation(current.estimation);
     setPickerLabel(current.label ?? "");
   };
 
@@ -554,6 +547,9 @@ export function TaskDetailModal({
 
   const canSplit =
     current.status === "open" && !current.is_container && !current.parent_task_id && !kotxTask;
+  // Parents are worked on through their subtasks; kotx runs through kotx.
+  const workable = current.status === "open" && !current.is_container && !kotxTask;
+  const work = useWorkActions(current, { onChanged, onSaved: syncTaskState, onClosed: onClose });
 
   const backFromModal = () => {
     if (editingText) { closeTextEdit(editingText); return; }
@@ -618,7 +614,7 @@ export function TaskDetailModal({
                 <Trash2 className="h-5 w-5" />
               </TopbarButton>
             )}
-            {current.status === "open" && !current.is_container && (
+            {current.status === "open" && !current.is_container && !work.running && !work.waiting && (
               <TopbarButton
                 label="Reschedule"
                 variant="ghost"
@@ -633,11 +629,11 @@ export function TaskDetailModal({
                 <RotateCcw className="h-5 w-5" />
               </TopbarButton>
             )}
-            {current.status === "open" && !current.is_container && (
+            {current.status === "open" && !current.is_container && kotxTask && (
               <TopbarButton
-                label={kotxTask ? (kotxTask.canDiscard ? "Dismiss run" : "Mark not a task") : "Mark done"}
+                label={kotxTask.canDiscard ? "Dismiss run" : "Mark not a task"}
                 disabled={busy}
-                onClick={kotxTask ? dismissRun : markDone}
+                onClick={dismissRun}
               >
                 <CircleCheckBig className="h-5 w-5" />
               </TopbarButton>
@@ -648,14 +644,17 @@ export function TaskDetailModal({
     >
       <TaskSummary
           title={
-            <TaskTitleHeader
-              task={current}
-              editing={editingText === "title"}
-              draft={textDraft}
-              busy={busy}
-              onEdit={() => openTextEditor("title")}
-              onChange={onTextDraftChange}
-            />
+            <>
+              <TaskTitleHeader
+                task={current}
+                editing={editingText === "title"}
+                draft={textDraft}
+                busy={busy}
+                onEdit={() => openTextEditor("title")}
+                onChange={onTextDraftChange}
+              />
+              {workable && <WorkControls work={work} />}
+            </>
           }
           task={current}
           knownTasks={knownTasks}
@@ -681,7 +680,6 @@ export function TaskDetailModal({
           activePicker={activePicker}
           dateStep={dateStep}
           pickerDue={pickerDue}
-          pickerEstimation={pickerEstimation}
           pickerLabel={pickerLabel}
           onEditText={openTextEditor}
           onChangeText={onTextDraftChange}
@@ -691,13 +689,13 @@ export function TaskDetailModal({
           onClosePicker={() => setActivePicker(null)}
           onDateStepChange={setDateStep}
           onPickerDueChange={(value) => { setPickerDue(value); autoSavePatch({ due_date: value }); }}
-          onPickerEstimationChange={(value) => { setPickerEstimation(value); autoSavePatch({ estimation: value }); }}
           onPickerLabelChange={(value) => { setPickerLabel(value); autoSavePatch({ label: value || null }); }}
           onAttributeChange={autoSavePatch}
           onSaveRecurrence={(unit, interval) => { void saveRecurrence(unit, interval); }}
           onRemoveRecurrence={() => { void removeRecurrence(); }}
           onKotxActionPendingChange={setKotxActionPending}
       />
+      {work.dialogs}
     </Modal>
   );
 }
@@ -754,6 +752,17 @@ function TaskTitleHeader({
 }
 
 function scheduleBadge(task: Task): { text: string; title: string; className: string } {
+  const since = runningSince(task);
+  if (since) {
+    return { text: `Working since ${fmtClock(since)}`, title: "Working on it now", className: SCHEDULE_PILL_TONE.scheduled };
+  }
+  if (task.status === "open" && task.schedule_state === "waiting") {
+    return {
+      text: task.waiting_since ? `Waiting since ${fmtClock(task.waiting_since)}` : "Waiting",
+      title: "Waiting on someone — off the calendar until resumed",
+      className: SCHEDULE_PILL_TONE.muted,
+    };
+  }
   if (task.schedule_status === "unscheduled") {
     return { text: "Not scheduled", title: "Not scheduled", className: SCHEDULE_PILL_TONE.unscheduled };
   }
@@ -801,7 +810,6 @@ function TaskSummary({
   activePicker,
   dateStep,
   pickerDue,
-  pickerEstimation,
   pickerLabel,
   onEditText,
   onChangeText,
@@ -811,7 +819,6 @@ function TaskSummary({
   onClosePicker,
   onDateStepChange,
   onPickerDueChange,
-  onPickerEstimationChange,
   onPickerLabelChange,
   onAttributeChange,
   onSaveRecurrence,
@@ -843,7 +850,6 @@ function TaskSummary({
   activePicker: PickerField | null;
   dateStep: "date" | "time";
   pickerDue: string | null;
-  pickerEstimation: number | null;
   pickerLabel: string;
   onEditText: (field: TextField) => void;
   onChangeText: (value: string) => void;
@@ -853,7 +859,6 @@ function TaskSummary({
   onClosePicker: () => void;
   onDateStepChange: (step: "date" | "time") => void;
   onPickerDueChange: (value: string | null) => void;
-  onPickerEstimationChange: (value: number | null) => void;
   onPickerLabelChange: (value: string) => void;
   onAttributeChange: (patch: AttributePatch) => void;
   onSaveRecurrence: (unit: RecurrenceUnit, interval: number) => void;
@@ -902,7 +907,6 @@ function TaskSummary({
     onDragSubtask(null);
     if (commit && order) onMoveSubtask(order);
   };
-  const now = useMinuteClock();
   const labelMeta = labels.find((l) => l.name === task.label);
   const repeat = taskRecurrence(task);
   const dueOverdue = isOverdue(task.due_date);
@@ -916,7 +920,6 @@ function TaskSummary({
     task.work_type && WORK_TYPE_LABEL[task.work_type],
     task.effort && `${EFFORT_LABEL[task.effort]} effort`,
   ].filter(Boolean).join(" · ");
-  const overtime = runningOvertime(task, now);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-4 sm:px-4">
@@ -1005,48 +1008,6 @@ function TaskSummary({
                 {task.due_date
                   ? `${fmtDue(task.due_date)} · ${DEADLINE_KIND_LABEL[task.deadline_kind]}`
                   : "No deadline"}
-              </span>
-            </button>
-          </PickerAnchor>
-
-          <PickerAnchor
-            open={!task.is_container && activePicker === "estimation"}
-            onClose={onClosePicker}
-            panel={
-              <InlinePickerPanel title="Estimate" onClose={onClosePicker}>
-                <EstimationPicker
-                  value={pickerEstimation}
-                  onChange={onPickerEstimationChange}
-                  allowNone={!task.parent_task_id}
-                />
-              </InlinePickerPanel>
-            }
-          >
-            <button
-              type="button"
-              onClick={() => onEditPicker("estimation")}
-              disabled={busy || task.is_container}
-              title={task.is_container ? "Duration is set by subtasks" : "Set duration"}
-              className={cn(
-                TASK_SUMMARY_BADGE_BUTTON_CLASS,
-                task.estimation != null ? TASK_SUMMARY_BLUE_BADGE_CLASS : TASK_SUMMARY_MUTED_BADGE_CLASS,
-              )}
-            >
-              <span className={TASK_SUMMARY_BADGE_CONTENT_CLASS}>
-                <Timer className="h-3 w-3" />
-                {task.estimation == null && overtime == null ? (
-                  "No estimate"
-                ) : (
-                  <>
-                    {task.estimation}
-                    {overtime != null && (
-                      <span className="font-semibold tabular-nums" title="Still working past the booked slot">
-                        + {overtime}
-                      </span>
-                    )}
-                    {" min"}
-                  </>
-                )}
               </span>
             </button>
           </PickerAnchor>
@@ -1299,6 +1260,8 @@ function TaskSummary({
         {task.kotx_task_id == null && !task.is_container && (
           <HandoffSection task={task} labels={labels} onChanged={onHandoffChanged} />
         )}
+
+        <WorkHistory task={task} />
 
         <LinkedInputsSection
           inputs={[

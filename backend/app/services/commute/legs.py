@@ -29,5 +29,15 @@ class PlannedLeg:
         return self.origin_anchor, self.dest_anchor
 
 
+@dataclass(frozen=True)
+class RoutingIssues:
+    """What the last written legs leave for the user to resolve: legs with no
+    route, and `(leg, blocker id, blocker label)` collisions with an event
+    nothing can move."""
+
+    unroutable: list[PlannedLeg]
+    conflicts: list[tuple[PlannedLeg, str, str]]
+
+
 def _norm(location: str) -> str:
     return " ".join(location.lower().split())
