@@ -49,9 +49,7 @@ export function FocusOverlay({
   };
 
   return (
-    // No body scroll lock: a task modal beneath may hold one, and the two
-    // would restore it out of order. touch-none keeps iOS from scrolling the
-    // page behind instead.
+    // touch-none keeps iOS from scrolling the page behind.
     <div
       role="dialog"
       aria-modal="true"

@@ -16,7 +16,7 @@ fresh, set means override.
 A single consumer keeps LLM call counts predictable and avoids concurrent
 writes to the same raw_input. Queue state is held in process memory — on
 restart anything still in flight stays `processing` until the user retries.
-Replacing this with a durable RQ-based queue is tracked in CLAUDE.md.
+A durable queue would need a broker (see CLAUDE.md).
 """
 
 from __future__ import annotations

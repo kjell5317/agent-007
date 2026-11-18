@@ -4,13 +4,16 @@ Context for Claude Code sessions in this repo. Read this first.
 
 ## Goal
 
-Personal task-extraction agent. Takes semi-structured input from multiple
-sources (Gmail today; Slack / manual / others later) and decides:
+Personal task agent. Takes semi-structured input from multiple sources
+(Gmail, Slack, kotx, manual entry) and decides:
 
 1. Is this a task for me?
 2. If yes — extract title, estimated duration, due date, location, source links.
 3. Avoid creating duplicates.
 4. Capture user feedback so future extractions improve.
+
+Tasks are then scheduled into Google Calendar, tracked through work
+sessions, and searchable alongside messages, notes, events and files.
 
 Personal use only, but keep the design open so any new source plugs in
 without touching the agent, storage, or API layers.
@@ -18,63 +21,105 @@ without touching the agent, storage, or API layers.
 ## Architecture
 
 ```md
-[Sources] → [Ingestion] → [Queue] → [Agent] → [Storage] → [API]
-            FastAPI       RQ +     Haystack  Postgres    FastAPI
-                          Redis    + tools  + pgvector   REST
+[Sources] → [Ingestion] → [Task queue] → [Agents] → [DB] → [API + SSE] → [SPA]
+ Gmail,      poll loop     in-process     Haystack   Postgres  FastAPI       React
+ Slack,      + webhooks    FIFO           + tools    + pgvector              + Vite
+ kotx, manual                                 ↓
+                                [Planner] CP-SAT solver → Google Calendar
 ```
 
-Stack: Python 3.11+, FastAPI, SQLAlchemy 2.x, Postgres + pgvector,
-RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
+Stack: Python 3.11+, FastAPI, SQLAlchemy 2.x + Alembic, Postgres + pgvector,
+Haystack LLM orchestration (Anthropic for extraction, Gemini for chat),
+httpx for every external API including OAuth, OR-Tools CP-SAT for
+scheduling, Langfuse tracing. Frontend: React 18 + TypeScript + Vite +
+Tailwind. Deployed with Docker Compose behind Caddy (`terraform/`).
+
+The app is one process by design. The task queue
+(`services/task/queue.py`) and the SSE bus (`events/bus.py`) live in
+memory, and the background loops run inside the FastAPI lifespan
+(`cron.py`). A second uvicorn worker or an out-of-process worker would
+need a broker for both.
 
 ### Layering rules
 
-- Every source normalizes into a `RawInputCreate` envelope before crossing
-  the ingestion boundary. Nothing source-specific exists in the agent,
-  storage, or API layers.
+- Every source normalizes into a `RawInputCreate` envelope
+  (`db/schemas/raw_input.py`) before crossing the ingestion boundary
+  (`services/input/create.py`). Nothing source-specific exists in the
+  agent, storage, or API layers.
 - Sources and OAuth providers register themselves via decorators
-  (`@register_source`, `@register_provider`). To add one, write the file
-  and add a side-effect import in [src/app/main.py](src/app/main.py).
-- DB access lives in `app.storage`. Both the API layer and the agent
-  runner call the same functions there — no logic in the routers.
+  (`@register_source`, `@register_provider`) and are loaded by
+  side-effect imports in [backend/app/main.py](backend/app/main.py).
+  Polling dispatches through `_POLLERS` in `services/input/poll.py`.
+- DB access lives in `app.db.clients`. Both the API layer and the agents
+  call the same functions there — no logic in the routers.
 - Tools the agent can call are declared in
-  [src/app/agent/tools.py](src/app/agent/tools.py) with explicit JSON
-  schemas. The runner dispatches by name into `app.storage`.
+  [backend/app/agent/tools/schemas.py](backend/app/agent/tools/schemas.py)
+  with explicit JSON schemas. Actions on existing tasks go through
+  `agent/helpers/dispatch.py`, which calls into `services/task/`.
 
 ### Directory map
 
-| Path                          | Responsibility                                  |
-|-------------------------------|-------------------------------------------------|
-| `src/app/config.py`           | Settings (`pydantic-settings`)                  |
-| `src/app/db.py`               | SQLAlchemy engine + session                     |
-| `src/app/models/`             | ORM models (`Task`, `RawInput`, `Feedback`, …)  |
-| `src/app/schemas/`            | Pydantic DTOs                                   |
-| `src/app/api/`                | FastAPI routers — thin, no business logic       |
-| `src/app/ingestion/`          | Source contract + per-source subpackages        |
-| `src/app/auth/`               | OAuth contract + per-provider + token crypto    |
-| `src/app/agent/`              | Prompt, tool schemas, runner                    |
-| `src/app/storage/`            | DB-facing CRUD + pgvector similarity            |
-| `src/app/queue/`              | RQ client, jobs, worker entry point             |
-| `migrations/`                 | Alembic                                         |
+All backend paths are under `backend/app/`.
+
+| Path                     | Responsibility                                                    |
+|--------------------------|-------------------------------------------------------------------|
+| `main.py`                | FastAPI app, routers, side-effect imports for sources/providers   |
+| `config/`                | Settings (`pydantic-settings`, reads `.env` then `.env.dev`)      |
+| `db/`                    | Engine + session; `models/` ORM, `schemas/` Pydantic DTOs         |
+| `db/clients/`            | All DB access: CRUD + pgvector similarity                         |
+| `api/`                   | FastAPI routers — thin, no business logic                         |
+| `auth/`                  | OAuth providers, token crypto, login + email-allowlist middleware |
+| `agent/`                 | LLM flows (`input/`, `thread/`, `manual/`, `chat/`, `draft/`, `handoff/`), `tools/`, `prompts/`, `helpers/`; `triage/` is Jev, parked |
+| `services/input/`        | Sources (`gmail/`, `slack/`, `kotx/`): source, poll, pure preprocess |
+| `services/task/`         | Task lifecycle: create, update, close, dismiss, reopen, split, recur, work sessions, the queue |
+| `services/plan/`         | Scheduler: snapshot → solver → calendar writes, start cues        |
+| `services/calendar/`     | Google Calendar client, event cache, label mirror, edit discovery |
+| `services/search/`       | Search + suggest over local data, Drive, Contacts, GitHub, live Calendar |
+| `services/learn/`        | Nightly learners: slot preferences, duration correction, capacity |
+| `services/notifications/`| Push notifications and their reconcile ledger                     |
+| `services/handoff/`      | Agent hand-offs started right after a task is created             |
+| `services/kotx/`         | kotx code-change runs (being sunset — don't invest)               |
+| `events/`                | In-process SSE bus + task publishing                              |
+| `cron.py`                | Background loops: polling, calendar discovery, cues, nightly learn |
+| `observability.py`       | Langfuse tracing seam                                             |
+| `backend/migrations/`    | Alembic, files `NNNN_slug.py`, revision id ≤ 32 chars             |
+| `backend/tests/`         | pytest; `conftest.py` stubs the DB-backed lookups                 |
+| `frontend/src/`          | SPA: `components/`, `hooks/`, `lib/` (pure logic + `api.ts`)      |
+| `frontend/tests/`        | `node:test` files that transpile `src/lib/*.ts`                   |
+
+## Running checks
+
+- Backend tests: `.venv/bin/python -m pytest backend/tests -q`. In a git
+  worktree, prefix `PYTHONPATH=backend` — the venv's editable install
+  points at the main checkout.
+- Lint: `.venv/bin/ruff check backend`
+- Frontend: `cd frontend && npx tsc -p tsconfig.app.json --noEmit && npm test`
+- Don't run `npm run build` just to check types: it writes the bundle
+  into `backend/app/static`.
+- Local dev: `scripts/dev.sh` (Postgres in Docker, migrations, uvicorn);
+  the frontend runs separately with `cd frontend && npm run dev`.
 
 ## Extension points
 
 ### Adding a source
 
-1. Create `src/app/ingestion/<name>/source.py` (or single file for simple
-   sources). Subclass `IngestionSource`, decorate with `@register_source("name")`.
-2. If preprocessing is non-trivial (parsing, cleaning, dedup keying),
-   put it in `src/app/ingestion/<name>/preprocess.py` as pure functions —
-   no I/O, no DB — so it's unit-testable from fixture dicts.
-3. If the source needs OAuth, also add an `OAuthProvider` (see below).
-4. Add the side-effect import to `src/app/main.py`.
+1. Create `backend/app/services/input/<name>/` with a `source.py`.
+   Subclass `IngestionSource`, decorate with `@register_source("name")`.
+2. Put preprocessing (parsing, cleaning, dedup keying) in
+   `<name>/preprocess.py` as pure functions — no I/O, no DB — so it's
+   unit-testable from fixture dicts.
+3. Implement `poll(session, account_key)` in `<name>/poll.py` and add it
+   to `_POLLERS` in `services/input/poll.py`.
+4. If the source needs OAuth, also add an `OAuthProvider` (see below).
+5. Add the side-effect import to `backend/app/main.py`.
 
 ### Adding an OAuth provider
 
-1. Create `src/app/auth/<name>.py`. Subclass `OAuthProvider`, decorate
+1. Create `backend/app/auth/<name>.py`. Subclass `OAuthProvider`, decorate
    with `@register_provider("name")`.
 2. Implement: `authorize_url`, `exchange_code`, `refresh`, `identify`.
 3. Add provider config fields to `app.config.Settings` and `.env.example`.
-4. Add the side-effect import to `src/app/main.py`.
+4. Add the side-effect import to `backend/app/main.py`.
 
 ## Best practices
 
@@ -89,8 +134,8 @@ RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
   when the module's role isn't obvious from its location.
 - Prefer pure functions for any logic that can be expressed as one
   (preprocessing, parsing, formatting). Reserve I/O for the edges.
-- Keep routers thin: validate → call storage/agent → return. Business
-  logic lives one layer down.
+- Keep routers thin: validate → call `db.clients`/services/agent →
+  return. Business logic lives one layer down.
 
 ### Dependencies
 
@@ -98,7 +143,7 @@ RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
   over heavyweight SDKs (e.g. Gmail client uses raw httpx, not the
   full `google-api-python-client`).
 - Pin major versions in `pyproject.toml`. Don't add a dep until at
-  least two places would need it.
+  least two places would need it. Run `uv lock` after changing deps.
 
 ### Security
 
@@ -107,14 +152,13 @@ RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
 - Scope OAuth requests to least-privilege (e.g. Gmail uses `.readonly`,
   plus `.compose` for reply drafts — that scope could send, so the Gmail
   client has no send method and a test guards it).
-- Verify webhook signatures before parsing payloads — every source's
-  `handle_webhook` should do its own signature check first.
+- Verify webhook signatures before parsing payloads (see
+  `api/webhooks.py`). Endpoints exempt from the login middleware
+  (`auth/middleware.py`) must check their own secret or signature.
 
 ### Building features
 
 - Build a walking skeleton end-to-end before deepening any layer.
-  Manual `POST /inputs` → sync agent call → DB → `GET /tasks` is
-  the right v1 shape; queue and webhooks come after.
 - Don't add error handling, fallbacks, or validation for scenarios
   that can't happen. Trust internal code. Only validate at boundaries
   (HTTP input, external APIs).
@@ -132,7 +176,7 @@ RQ + Redis, Haystack LLM orchestration, Authlib + httpx for OAuth.
 
 ## Out of scope (for now)
 
-- Multi-user / auth on the API itself (personal use, localhost).
+- Multi-user. One user, behind an email allowlist (`AUTH_ALLOWED_EMAILS`).
 - Real-time push (Gmail Pub/Sub, Slack Socket Mode) — polling is fine.
 - Fine-tuning. Feedback feeds few-shot examples in the prompt instead.
 - Self-hosted vector DB. pgvector stays in Postgres alongside tasks.

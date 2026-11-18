@@ -4,7 +4,7 @@ This works *because the app is a single process*: the API, the in-process
 task-creation worker, and the ingestion poller all share one event loop, so a
 plain set of `asyncio.Queue`s fans every mutation out to every connected
 browser with no broker. The moment a second uvicorn worker or an out-of-process
-RQ worker is introduced (see CLAUDE.md), this has to move behind Redis pub/sub —
+worker is introduced (see CLAUDE.md), this has to move behind a broker's pub/sub —
 publishers in another process would never reach these queues.
 
 Subscribers receive already-serialized JSON strings; see `app.events.publish`.
