@@ -3,7 +3,7 @@
 from alembic import op
 
 revision = "0050_drop_firm_deadline"
-down_revision = "0049_drop_note_moderation_checkpoint"
+down_revision = "0049_drop_note_mod_checkpoint"
 branch_labels = None
 depends_on = None
 

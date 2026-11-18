@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "0049_drop_note_moderation_checkpoint"
+revision = "0049_drop_note_mod_checkpoint"
 down_revision = "0048_handoff_research"
 branch_labels = None
 depends_on = None
