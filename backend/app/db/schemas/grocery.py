@@ -28,6 +28,7 @@ class GroceryItemRead(BaseModel):
     portion: float
     category: Category
     origin: Origin
+    recipe_titles: list[str]
     staple: bool
     created_at: datetime
 

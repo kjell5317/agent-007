@@ -1,11 +1,10 @@
-import { useState, type FormEvent } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { useState } from "react";
+import { Loader2 } from "lucide-react";
+import { GroceryComposer } from "@/components/grocery/GroceryComposer";
 import { GroceryItemModal } from "@/components/grocery/GroceryItemModal";
 import { ShoppingRow, StorageRow } from "@/components/grocery/GroceryRows";
 import { RecipesTab } from "@/components/grocery/RecipesTab";
 import { StorageItemModal } from "@/components/grocery/StorageItemModal";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useGrocery } from "@/hooks/useGrocery";
 import { api } from "@/lib/api";
 import { zonedDateIso } from "@/lib/dates";
@@ -32,8 +31,6 @@ export function GroceryPanel({
   onOpenSettings: () => void;
 }) {
   const { state, send } = useGrocery();
-  const [draft, setDraft] = useState("");
-  const [adding, setAdding] = useState(false);
   const [editingItem, setEditingItem] = useState<GroceryItem | null>(null);
   const [editingStorage, setEditingStorage] = useState<StorageItem | null>(null);
 
@@ -47,15 +44,6 @@ export function GroceryPanel({
 
   const today = zonedDateIso(new Date());
   const groups = groupByCategory(state.items);
-
-  const add = async (e: FormEvent) => {
-    e.preventDefault();
-    const text = draft.trim();
-    if (!text || adding) return;
-    setAdding(true);
-    if (await send(() => api.addGroceryItem(text))) setDraft("");
-    setAdding(false);
-  };
 
   const crossOff = (item: GroceryItem) => {
     void send(() => api.crossOffGroceryItem(item.id), (s) => withoutItem(s, item.id));
@@ -99,24 +87,7 @@ export function GroceryPanel({
 
       {tab === "list" ? (
         <>
-          <form onSubmit={add} className="flex gap-2">
-            <Input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Add an item, e.g. 2 kg rice"
-              aria-label="Add an item"
-              className="h-11 rounded-xl"
-            />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!draft.trim() || adding}
-              aria-label="Add to shopping list"
-              className="h-11 w-11 shrink-0 rounded-xl"
-            >
-              {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            </Button>
-          </form>
+          <GroceryComposer onAdd={(text) => send(() => api.addGroceryItem(text))} />
           {groups.length === 0 ? (
             <EmptyState>Your shopping list is empty.</EmptyState>
           ) : (

@@ -289,6 +289,8 @@ export interface GroceryItem {
   portion: number;
   category: GroceryCategory;
   origin: "manual" | "agent" | "staple";
+  // The planned recipes it's for; empty for anything else.
+  recipe_titles: string[];
   staple: boolean;
   created_at: string;
 }

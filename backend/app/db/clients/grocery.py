@@ -90,7 +90,12 @@ def open_item_for(session: Session, product_key: str) -> GroceryItem | None:
 
 
 def add_item(
-    session: Session, *, product: GroceryProduct, quantity: float, origin: str
+    session: Session,
+    *,
+    product: GroceryProduct,
+    quantity: float,
+    origin: str,
+    recipe_titles: list[str] | None = None,
 ) -> GroceryItem:
     row = GroceryItem(
         product_key=product.key,
@@ -100,6 +105,7 @@ def add_item(
         portion=product.portion,
         category=product.category,
         origin=origin,
+        recipe_titles=recipe_titles or [],
         product=product,
     )
     session.add(row)

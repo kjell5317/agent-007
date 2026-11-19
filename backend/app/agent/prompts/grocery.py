@@ -64,6 +64,8 @@ shopping — what to add to the list:
 * shelf_life_days — whole days it stays good from the day it is bought,
     stored the usual way.
 * category — the store section it is found in.
+* recipes — the titles of this week's recipes that need it, exactly as
+    written above; empty for a usual weekly purchase.
 
 Write recipes and names in the language of the user's entries below, English
 if there are none.

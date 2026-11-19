@@ -34,10 +34,11 @@ def store(monkeypatch):
 WEEK = date(2026, 11, 16)
 
 
-def _need(name, quantity, unit="g", **facts):
+def _need(name, quantity, unit="g", recipes=(), **facts):
     return ShoppingNeed(
         name=name, quantity=quantity, unit=unit, portion=facts.get("portion", 1),
         category=facts.get("category", "other"), shelf_life_days=facts.get("shelf_life_days", 7),
+        recipes=tuple(recipes),
     )
 
 
@@ -58,10 +59,11 @@ def test_a_replan_replaces_recipes_and_agent_entries_only(store):
     plan.apply_plan(FakeSession(), WEEK, 2, Plan(
         recipes=[_recipe("Risotto"), _recipe("Dal")],
         shopping=[
-            _need("Rice", 300),                      # rounds up to the 1 kg bag
+            _need("Rice", 300, recipes=["Risotto"]),  # rounds up to the 1 kg bag
             _need("Knoblauch", 6, unit="piece"),     # the user's entry stays as is
             _need("Milk", 500, unit="ml"),           # so does the starred one
-            _need("Linsen", 500, category="dry_goods"),
+            _need("Linsen", 500, category="dry_goods", recipes=["Dal"]),
+            _need("Oats", 500),                      # a usual purchase, no recipe
         ],
     ))
 
@@ -74,6 +76,10 @@ def test_a_replan_replaces_recipes_and_agent_entries_only(store):
         "Milk": (1000, "staple"),
         "Rice": (1000, "agent"),
         "Linsen": (500, "agent"),
+        "Oats": (500, "agent"),
+    }
+    assert {i.name: i.recipe_titles for i in store.items if i.origin == "agent"} == {
+        "Rice": ["Risotto"], "Linsen": ["Dal"], "Oats": [],
     }
     assert manual in store.items and staple in store.items
     assert store.products["linsen"].category == "dry_goods"
@@ -89,10 +95,13 @@ def test_a_planned_amount_in_another_unit_falls_back_to_the_usual_pack(store):
 
 def test_the_same_product_planned_twice_adds_up(store):
     plan.apply_plan(FakeSession(), WEEK, 1, Plan(recipes=[], shopping=[
-        _need("Tomatoes", 2, unit="piece"), _need("tomatoes", 3, unit="piece"),
+        _need("Tomatoes", 2, unit="piece", recipes=["Dal"]),
+        _need("tomatoes", 3, unit="piece", recipes=["Shakshuka", "Dal"]),
     ]))
 
-    assert [(i.name, i.quantity) for i in store.items] == [("Tomatoes", 5)]
+    assert [(i.name, i.quantity, i.recipe_titles) for i in store.items] == [
+        ("Tomatoes", 5, ["Dal", "Shakshuka"]),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -119,7 +128,8 @@ def test_parse_plan_keeps_usable_recipes_and_entries():
         ],
         "shopping": [
             {"name": "Linsen", "quantity": 500, "unit": "g", "portion": 100,
-             "category": "dry_goods", "shelf_life_days": 365},
+             "category": "dry_goods", "shelf_life_days": 365,
+             "recipes": ["Dal", "Extra", "Dal", "Unknown"]},
             {"name": "Mystery", "quantity": 1, "unit": "crate", "portion": 1,
              "category": "other", "shelf_life_days": 3},
         ],
@@ -127,6 +137,8 @@ def test_parse_plan_keeps_usable_recipes_and_entries():
 
     assert [r.title for r in parsed.recipes] == ["Dal"]
     assert [(n.name, n.quantity, n.unit) for n in parsed.shopping] == [("Linsen", 500, "g")]
+    # Only recipes in the plan, each once; "Extra" was cut to fit the count.
+    assert parsed.shopping[0].recipes == ("Dal",)
     with pytest.raises(PlanError):
         parse_plan({"recipes": [], "shopping": []}, recipes=3)
     assert parse_plan({"recipes": [], "shopping": []}, recipes=0) == Plan([], [])

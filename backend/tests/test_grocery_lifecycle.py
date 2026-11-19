@@ -136,13 +136,19 @@ async def test_a_unit_change_needs_the_portion_in_that_unit(store):
 
 
 @pytest.mark.asyncio
-async def test_using_less_than_bought_keeps_the_bar_full_length(store):
+async def test_a_new_amount_left_is_the_bars_new_full(store):
     rice = store.product("rice", unit="g", pack_quantity=1000, portion=150)
     stored = store.stored(rice)
+    lifecycle.use_portion(FakeSession(), stored.id)
+    assert (stored.quantity, stored.start_quantity) == (850, 1000)
 
     await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(quantity=400))
+    assert (stored.quantity, stored.start_quantity) == (400, 400)
 
-    assert (stored.quantity, stored.start_quantity) == (400, 1000)
+    # A new portion alone leaves the bar's full mark where it was.
+    lifecycle.use_portion(FakeSession(), stored.id)
+    await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(portion=100))
+    assert (stored.quantity, stored.start_quantity, stored.portion) == (250, 400, 100)
 
 
 @pytest.mark.asyncio

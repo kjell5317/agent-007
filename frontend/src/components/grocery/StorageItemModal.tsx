@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AmountFields, Field, useAmountDraft } from "@/components/grocery/AmountFields";
+import { AmountFields, useAmountDraft } from "@/components/grocery/AmountFields";
 import { ModalActions } from "@/components/grocery/ModalActions";
 import { Badge } from "@/components/ui/badge";
 import { DayPicker } from "@/components/ui/date-picker";
@@ -26,17 +26,21 @@ export function StorageItemModal({ item, today, onClose, onSave, onRemove }: Pro
     <Modal open onClose={onClose} title={item.name} className="max-h-[90dvh] overflow-y-auto">
       <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
         <AmountFields draft={draft} onChange={setDraft} amountLabel="Left" />
-        <Field label="Good until">
-          <button
-            type="button"
-            aria-expanded={picking}
-            onClick={() => setPicking((open) => !open)}
-            className="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Badge variant={expiryVariant(expiresOn, today)} className="px-2.5 py-1 text-sm">
-              {fmtExpiry(expiresOn, today)}
-            </Badge>
-          </button>
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium text-muted-foreground">Good until</span>
+            <button
+              type="button"
+              aria-expanded={picking}
+              aria-label={`Good until: ${fmtExpiry(expiresOn, today)}`}
+              onClick={() => setPicking((open) => !open)}
+              className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Badge variant={expiryVariant(expiresOn, today)} className="px-2.5 py-1 text-sm">
+                {fmtExpiry(expiresOn, today)}
+              </Badge>
+            </button>
+          </div>
           {picking && (
             <DayPicker
               value={expiresOn}
@@ -46,7 +50,7 @@ export function StorageItemModal({ item, today, onClose, onSave, onRemove }: Pro
               }}
             />
           )}
-        </Field>
+        </div>
         <ModalActions
           canSave={valid && Object.keys(full).length > 0}
           onSave={() => onSave(full)}

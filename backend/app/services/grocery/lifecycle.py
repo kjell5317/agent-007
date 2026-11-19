@@ -122,7 +122,8 @@ async def update_storage(
         unit=edit.unit,
         portion=edit.portion,
     )
-    if stored.unit != unit or stored.quantity > stored.start_quantity:
+    # A new amount left is the bar's new 100%.
+    if edit.quantity is not None or stored.unit != unit:
         stored.start_quantity = stored.quantity
     if edit.expires_on is not None:
         stored.expires_on = edit.expires_on

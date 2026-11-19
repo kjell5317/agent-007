@@ -69,11 +69,12 @@ class FakeStore:
             (i for i in self.open_items(session) if i.product_key == product_key), None
         )
 
-    def add_item(self, session, *, product, quantity, origin):
+    def add_item(self, session, *, product, quantity, origin, recipe_titles=None):
         row = SimpleNamespace(
             id=uuid.uuid4(), product_key=product.key, product=product, name=product.name,
             quantity=quantity, unit=product.unit, portion=product.portion,
             category=product.category, origin=origin, bought_at=None,
+            recipe_titles=recipe_titles or [],
         )
         self.items.append(row)
         return row

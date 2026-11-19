@@ -504,7 +504,14 @@ export function App() {
   };
 
   return (
-    <div className={view === "tasks" ? "min-h-dvh pb-28" : "min-h-dvh pb-8"}>
+    <div
+      className={
+        // Room for the add bar pinned to the bottom.
+        view === "tasks" || (view === "grocery" && groceryTab === "list")
+          ? "min-h-dvh pb-28"
+          : "min-h-dvh pb-8"
+      }
+    >
       <Topbar
         theme={theme}
         onThemeChange={setTheme}

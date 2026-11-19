@@ -123,9 +123,16 @@ def apply_plan(session: Session, week: date, servings: int, plan: Plan) -> None:
         quantity = _list_amount(need, product)
         listed = grocery_store.open_item_for(session, product.key)
         if listed is None:
-            grocery_store.add_item(session, product=product, quantity=quantity, origin="agent")
+            grocery_store.add_item(
+                session,
+                product=product,
+                quantity=quantity,
+                origin="agent",
+                recipe_titles=list(need.recipes),
+            )
         elif listed.origin == "agent":
             listed.quantity += quantity
+            listed.recipe_titles = list(dict.fromkeys([*listed.recipe_titles, *need.recipes]))
 
 
 def _new_product(session: Session, key: str, need: ShoppingNeed) -> GroceryProduct:

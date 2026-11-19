@@ -58,9 +58,11 @@ _TOOL = {
                         "portion": {"type": "number"},
                         "category": {"type": "string", "enum": list(CATEGORIES)},
                         "shelf_life_days": {"type": "integer"},
+                        "recipes": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": [
                         "name", "quantity", "unit", "portion", "category", "shelf_life_days",
+                        "recipes",
                     ],
                 },
             },
@@ -120,6 +122,8 @@ class ShoppingNeed:
     portion: float
     category: str
     shelf_life_days: int
+    # Titles of the planned recipes it's for; empty for a usual purchase.
+    recipes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -209,6 +213,7 @@ def parse_plan(raw: dict[str, Any], *, recipes: int) -> Plan:
     if recipes and not planned:
         raise PlanError("The planner returned no usable recipes")
 
+    titles = {recipe.title for recipe in planned[:recipes]}
     shopping: list[ShoppingNeed] = []
     for item in _list(raw.get("shopping")):
         try:
@@ -222,6 +227,10 @@ def parse_plan(raw: dict[str, Any], *, recipes: int) -> Plan:
             portion=facts.portion,
             category=facts.category,
             shelf_life_days=facts.shelf_life_days,
+            recipes=tuple(dict.fromkeys(
+                str(title).strip() for title in item.get("recipes") or []
+                if str(title).strip() in titles
+            )),
         ))
     return Plan(recipes=planned[:recipes], shopping=shopping)
 

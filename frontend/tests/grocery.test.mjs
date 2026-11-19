@@ -68,9 +68,11 @@ test("the portion bar counts portions left of what it started with", () => {
   assert.deepEqual(plain(grocery.portionSegments(3, 2, 1)), { filled: 3, total: 3 });
 });
 
-test("the use button shows a number; the icon carries the unit", () => {
-  assert.equal(grocery.fmtPortion(150, "g"), "150");
-  assert.equal(grocery.fmtPortion(1500, "ml"), "1.5k");
+test("the use button abbreviates metric units; an icon carries the others", () => {
+  assert.equal(grocery.fmtPortion(150, "g"), "150 g");
+  assert.equal(grocery.fmtPortion(1500, "ml"), "1.5 l");
+  assert.equal(grocery.isMetric("ml"), true);
+  assert.equal(grocery.isMetric("bottle"), false);
   assert.equal(grocery.fmtPortion(0.25, "bottle"), "¼");
   assert.equal(grocery.fmtPortion(1, "piece"), "1");
   assert.equal(grocery.amountInput(0.1 + 0.2), "0.3");
@@ -123,4 +125,21 @@ test("optimistic edits: a star covers every row of the product", () => {
     [["i", true], ["s", true], ["t", false]],
   );
   assert.deepEqual(plain(grocery.withoutItem(state, "i").items), []);
+});
+
+test("an edit sends only what changed; a new unit sends both amounts", () => {
+  const row = { name: "Rice", quantity: 850, unit: "g", portion: 150 };
+  const draft = { name: "Rice", amount: "850", unit: "g", portion: "150" };
+  assert.deepEqual(plain(grocery.amountPatch(row, draft)), {});
+  assert.deepEqual(plain(grocery.amountPatch(row, { ...draft, amount: "400" })), { quantity: 400 });
+  assert.deepEqual(plain(grocery.amountPatch(row, { ...draft, portion: "100" })), { portion: 100 });
+  assert.deepEqual(
+    plain(grocery.amountPatch(row, { ...draft, unit: "pack", amount: "1", portion: "0,25" })),
+    { quantity: 1, unit: "pack", portion: 0.25 },
+  );
+  assert.deepEqual(plain(grocery.amountPatch(row, { ...draft, name: " Reis " })), { name: "Reis" });
+  assert.equal(grocery.amountPatch(row, { ...draft, amount: "" }), null);
+  // Rounding in the field isn't an edit.
+  const third = { ...row, quantity: 1000 / 3 };
+  assert.deepEqual(plain(grocery.amountPatch(third, { ...draft, amount: "333.33" })), {});
 });

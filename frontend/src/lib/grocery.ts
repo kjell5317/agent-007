@@ -87,12 +87,38 @@ export function fmtAmount(quantity: number, unit: GroceryUnit): string {
   return `${fmtCount(quantity)} ${quantity > 1.005 ? many : one}`;
 }
 
-// The number on the "use one portion" button; an icon stands for the unit.
+// What an edit sheet sends: only the fields that changed, so a new portion
+// alone doesn't count as a new amount (which restarts the storage bar). A new
+// unit sends both amounts, which are only meaningful in it. Null while a field
+// is invalid.
+export function amountPatch(
+  row: { name: string; quantity: number; unit: GroceryUnit; portion: number },
+  draft: { name: string; amount: string; unit: GroceryUnit; portion: string },
+): { name?: string; quantity?: number; unit?: GroceryUnit; portion?: number } | null {
+  const name = draft.name.trim();
+  const quantity = parseAmount(draft.amount);
+  const portion = parseAmount(draft.portion);
+  if (!name || quantity === null || portion === null) return null;
+  const unitChanged = draft.unit !== row.unit;
+  // Compared as shown in the field, so rounding alone isn't an edit.
+  const shown = (value: number) => parseAmount(amountInput(value));
+  return {
+    ...(name !== row.name ? { name } : {}),
+    ...(unitChanged || quantity !== shown(row.quantity) ? { quantity } : {}),
+    ...(unitChanged ? { unit: draft.unit } : {}),
+    ...(unitChanged || portion !== shown(row.portion) ? { portion } : {}),
+  };
+}
+
+// Units written as their standard abbreviation; the others get an icon.
+export function isMetric(unit: GroceryUnit): unit is "g" | "ml" {
+  return unit === "g" || unit === "ml";
+}
+
+// The label on the "use one portion" button: "150 g", "1 l", or the bare
+// count next to the unit's icon.
 export function fmtPortion(portion: number, unit: GroceryUnit): string {
-  if (unit === "g" || unit === "ml") {
-    return portion >= 1000 ? `${Math.round(portion / 10) / 100}k` : String(Math.round(portion));
-  }
-  return fmtCount(portion);
+  return isMetric(unit) ? fmtAmount(portion, unit) : fmtCount(portion);
 }
 
 export function parseAmount(text: string): number | null {

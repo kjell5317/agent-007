@@ -50,6 +50,9 @@ class GroceryItem(Base):
     category: Mapped[str] = mapped_column(String(16))
     # manual | agent | staple
     origin: Mapped[str] = mapped_column(String(8))
+    # The planned recipes an agent entry is for; empty for everything else,
+    # including the usual weekly purchases the agent adds.
+    recipe_titles: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     bought_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
@@ -79,7 +82,7 @@ class StorageItem(Base):
     name: Mapped[str] = mapped_column(String(128))
     quantity: Mapped[float] = mapped_column(Float)
     # What the bar of portions counts from: the amount bought, or the amount
-    # set by hand when it was raised or the unit changed.
+    # left last set by hand.
     start_quantity: Mapped[float] = mapped_column(Float)
     unit: Mapped[str] = mapped_column(String(8))
     portion: Mapped[float] = mapped_column(Float)

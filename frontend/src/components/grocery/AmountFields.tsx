@@ -1,11 +1,19 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { amountInput, parseAmount, UNIT_LABEL } from "@/lib/grocery";
-import type { GroceryItemPatch } from "@/lib/api";
+import { amountInput, amountPatch, UNIT_LABEL } from "@/lib/grocery";
 import type { GroceryUnit } from "@/lib/types";
 
 const UNITS = Object.keys(UNIT_LABEL) as GroceryUnit[];
+
+// No browser autofill or password-manager overlay on the number fields.
+const NO_SUGGESTIONS = {
+  autoComplete: "off",
+  autoCorrect: "off",
+  "data-1p-ignore": true,
+  "data-lpignore": "true",
+  "data-form-type": "other",
+} as const;
 
 export interface AmountDraft {
   name: string;
@@ -14,26 +22,20 @@ export interface AmountDraft {
   portion: string;
 }
 
-export function useAmountDraft(row: { name: string; quantity: number; unit: GroceryUnit; portion: number }) {
+export function useAmountDraft(row: {
+  name: string;
+  quantity: number;
+  unit: GroceryUnit;
+  portion: number;
+}) {
   const [draft, setDraft] = useState<AmountDraft>({
     name: row.name,
     amount: amountInput(row.quantity),
     unit: row.unit,
     portion: amountInput(row.portion),
   });
-  const quantity = parseAmount(draft.amount);
-  const portion = parseAmount(draft.portion);
-  const name = draft.name.trim();
-  const valid = Boolean(name) && quantity !== null && portion !== null;
-  // Amount, unit and portion travel together: a portion only means something
-  // in its unit.
-  const amountsChanged =
-    quantity !== row.quantity || draft.unit !== row.unit || portion !== row.portion;
-  const patch: GroceryItemPatch = {
-    ...(name !== row.name ? { name } : {}),
-    ...(valid && amountsChanged ? { quantity: quantity!, unit: draft.unit, portion: portion! } : {}),
-  };
-  return { draft, setDraft, patch, valid };
+  const result = amountPatch(row, draft);
+  return { draft, setDraft, patch: result ?? {}, valid: result !== null };
 }
 
 export function AmountFields({
@@ -62,6 +64,7 @@ export function AmountFields({
             inputMode="decimal"
             value={draft.amount}
             onChange={(e) => onChange({ ...draft, amount: e.target.value })}
+            {...NO_SUGGESTIONS}
             className="h-10"
           />
         </Field>
@@ -69,24 +72,31 @@ export function AmountFields({
           <Select
             id="grocery-unit"
             value={draft.unit}
-            onChange={(e) => onChange({ ...draft, unit: e.target.value as GroceryUnit })}
+            onChange={(e) =>
+              onChange({ ...draft, unit: e.target.value as GroceryUnit })
+            }
           >
             {UNITS.map((unit) => (
-              <option key={unit} value={unit}>{UNIT_LABEL[unit]}</option>
+              <option key={unit} value={unit}>
+                {UNIT_LABEL[unit]}
+              </option>
             ))}
           </Select>
         </Field>
       </div>
-      <Field label="Portion — used at once" htmlFor="grocery-portion">
+      <Field label="Portion" htmlFor="grocery-portion">
         <div className="flex items-center gap-2">
           <Input
             id="grocery-portion"
             inputMode="decimal"
             value={draft.portion}
             onChange={(e) => onChange({ ...draft, portion: e.target.value })}
+            {...NO_SUGGESTIONS}
             className="h-10"
           />
-          <span className="w-16 shrink-0 text-sm text-muted-foreground">{UNIT_LABEL[draft.unit]}</span>
+          <span className="w-16 shrink-0 text-sm text-muted-foreground">
+            {UNIT_LABEL[draft.unit]}
+          </span>
         </div>
       </Field>
     </div>
@@ -104,7 +114,10 @@ export function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <label htmlFor={htmlFor} className="block text-xs font-medium text-muted-foreground">
+      <label
+        htmlFor={htmlFor}
+        className="block text-xs font-medium text-muted-foreground"
+      >
         {label}
       </label>
       {children}
