@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models.grocery import GroceryItem, GroceryProduct, StorageItem
+from app.db.models.grocery import (
+    GroceryItem,
+    GroceryProduct,
+    GroceryRecipe,
+    GrocerySettings,
+    StorageItem,
+)
+
+_SETTINGS_ID = 1
 
 
 def find_product(session: Session, key: str) -> GroceryProduct | None:
@@ -53,6 +62,13 @@ def add_alias(product: GroceryProduct, alias: str) -> None:
         product.aliases = [*product.aliases, alias]
 
 
+def remove_alias(session: Session, product: GroceryProduct, alias: str) -> None:
+    if alias in product.aliases:
+        product.aliases = [a for a in product.aliases if a != alias]
+        # The session doesn't autoflush; the next lookup must not find it.
+        session.flush()
+
+
 def open_items(session: Session) -> list[GroceryItem]:
     stmt = (
         select(GroceryItem)
@@ -91,7 +107,7 @@ def add_item(
     return row
 
 
-def delete(session: Session, row: GroceryItem | StorageItem) -> None:
+def delete(session: Session, row: GroceryItem | StorageItem | GroceryRecipe) -> None:
     session.delete(row)
     session.flush()
 
@@ -129,6 +145,7 @@ def add_storage(session: Session, *, item: GroceryItem, expires_on: date) -> Sto
         grocery_item_id=item.id,
         name=item.name,
         quantity=item.quantity,
+        start_quantity=item.quantity,
         unit=item.unit,
         portion=item.portion,
         category=item.category,
@@ -145,3 +162,78 @@ def expired_storage(session: Session, today: date) -> list[StorageItem]:
         StorageItem.removed_at.is_(None), StorageItem.expires_on < today
     )
     return list(session.execute(stmt).scalars())
+
+
+def bought_since(session: Session, since: datetime) -> list[GroceryItem]:
+    stmt = select(GroceryItem).where(GroceryItem.bought_at >= since)
+    return list(session.execute(stmt).scalars())
+
+
+def expired_since(session: Session, since: datetime) -> list[StorageItem]:
+    stmt = select(StorageItem).where(
+        StorageItem.removed_reason == "expired", StorageItem.removed_at >= since
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def settings(session: Session) -> GrocerySettings:
+    row = session.get(GrocerySettings, _SETTINGS_ID)
+    if row is None:
+        row = GrocerySettings(id=_SETTINGS_ID, diet="omnivore", recipes_per_week=0, servings=1)
+        session.add(row)
+        session.flush()
+    return row
+
+
+def recipes_for_week(session: Session, week_start: date) -> list[GroceryRecipe]:
+    stmt = (
+        select(GroceryRecipe)
+        .where(GroceryRecipe.week_start == week_start)
+        .order_by(GroceryRecipe.created_at, GroceryRecipe.title)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def recipes_before(session: Session, week_start: date, *, limit: int) -> list[GroceryRecipe]:
+    stmt = (
+        select(GroceryRecipe)
+        .where(GroceryRecipe.week_start < week_start)
+        .order_by(GroceryRecipe.week_start.desc(), GroceryRecipe.created_at)
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def rated_recipes(session: Session, rating: int, *, limit: int) -> list[GroceryRecipe]:
+    stmt = (
+        select(GroceryRecipe)
+        .where(GroceryRecipe.rating == rating)
+        .order_by(GroceryRecipe.week_start.desc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def get_recipe(session: Session, recipe_id: uuid.UUID) -> GroceryRecipe | None:
+    return session.get(GroceryRecipe, recipe_id)
+
+
+def add_recipe(
+    session: Session,
+    *,
+    week_start: date,
+    title: str,
+    servings: int,
+    ingredients: list[dict[str, Any]],
+    steps: list[str],
+) -> GroceryRecipe:
+    row = GroceryRecipe(
+        week_start=week_start,
+        title=title,
+        servings=servings,
+        ingredients=ingredients,
+        steps=steps,
+    )
+    session.add(row)
+    session.flush()
+    return row

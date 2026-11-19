@@ -298,6 +298,8 @@ export interface StorageItem {
   product_key: string;
   name: string;
   quantity: number;
+  // What the bar of portions counts from.
+  start_quantity: number;
   unit: GroceryUnit;
   portion: number;
   category: GroceryCategory;
@@ -310,4 +312,33 @@ export interface StorageItem {
 export interface GroceryState {
   items: GroceryItem[];
   storage: StorageItem[];
+}
+
+export type GroceryDiet = "vegan" | "vegetarian" | "omnivore";
+
+export interface GrocerySettings {
+  diet: GroceryDiet;
+  recipes_per_week: number;
+  servings: number;
+  store_location: string | null;
+}
+
+export interface Recipe {
+  id: string;
+  // YYYY-MM-DD, the Monday of the week it's planned for.
+  week_start: string;
+  title: string;
+  servings: number;
+  ingredients: Array<{ name: string; amount: string }>;
+  steps: string[];
+  rating: -1 | 1 | null;
+}
+
+export interface RecipesState {
+  week_start: string;
+  recipes_per_week: number;
+  planning: boolean;
+  error: string | null;
+  this_week: Recipe[];
+  archive: Recipe[];
 }

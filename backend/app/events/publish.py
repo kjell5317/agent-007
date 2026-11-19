@@ -15,6 +15,11 @@ Frontend contract — every event is `{"type": ..., ...}`:
                                                refetches /kotx/tasks (the run
                                                list lives upstream, so there is
                                                no payload to push)
+  * {"type": "grocery"}                      — the shopping list, storage or
+                                               recipes changed in the background
+                                               (a plan started or finished,
+                                               items expired); the client
+                                               refetches /grocery
 """
 
 from __future__ import annotations
@@ -117,3 +122,8 @@ def publish_points(session: Session) -> None:
 
 def publish_kotx() -> None:
     _emit({"type": "kotx"})
+
+
+def publish_grocery() -> None:
+    # Groceries aren't searchable, so no suggestion cache to drop (see _emit).
+    bus.publish(json.dumps({"type": "grocery"}))

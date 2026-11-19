@@ -44,14 +44,49 @@ test("the list groups in store order, names sorted inside a group", () => {
   );
 });
 
-test("expiry reads relative to today, then as a date", () => {
+test("expiry reads like a due date pill", () => {
   const today = "2026-11-18";
-  assert.equal(grocery.fmtExpiry("2026-11-17", today), "expired");
-  assert.equal(grocery.fmtExpiry("2026-11-18", today), "use today");
-  assert.equal(grocery.fmtExpiry("2026-11-19", today), "use by tomorrow");
-  assert.equal(grocery.fmtExpiry("2026-11-22", today), "4 days left");
-  assert.equal(grocery.fmtExpiry("2026-11-25", today), "good until Nov 25");
+  assert.equal(grocery.fmtExpiry("2026-11-17", today), "Expired");
+  assert.equal(grocery.fmtExpiry("2026-11-18", today), "Today");
+  assert.equal(grocery.fmtExpiry("2026-11-19", today), "Tomorrow");
+  assert.equal(grocery.fmtExpiry("2026-11-22", today), "In 4 days");
+  assert.equal(grocery.fmtExpiry("2026-11-25", today), "Nov 25");
+  assert.equal(grocery.expiryVariant("2026-11-17", today), "overdue");
+  assert.equal(grocery.expiryVariant("2026-11-19", today), "urgent");
+  assert.equal(grocery.expiryVariant("2026-11-25", today), "closed");
   assert.equal(grocery.daysLeft("2027-03-30", "2027-03-27"), 3); // across DST
+});
+
+test("the portion bar counts portions left of what it started with", () => {
+  // 1 bottle of juice, ¼ bottle a glass: four full segments.
+  assert.deepEqual(plain(grocery.portionSegments(1, 1, 0.25)), { filled: 4, total: 4 });
+  assert.deepEqual(plain(grocery.portionSegments(0.75, 1, 0.25)), { filled: 3, total: 4 });
+  // 1 kg rice in 150 g portions: the part portion at the end counts as one.
+  assert.deepEqual(plain(grocery.portionSegments(1000, 1000, 150)), { filled: 7, total: 7 });
+  assert.deepEqual(plain(grocery.portionSegments(100, 1000, 150)), { filled: 1, total: 7 });
+  // Raised above where it started: the bar grows with it.
+  assert.deepEqual(plain(grocery.portionSegments(3, 2, 1)), { filled: 3, total: 3 });
+});
+
+test("the use button shows a number; the icon carries the unit", () => {
+  assert.equal(grocery.fmtPortion(150, "g"), "150");
+  assert.equal(grocery.fmtPortion(1500, "ml"), "1.5k");
+  assert.equal(grocery.fmtPortion(0.25, "bottle"), "¼");
+  assert.equal(grocery.fmtPortion(1, "piece"), "1");
+  assert.equal(grocery.amountInput(0.1 + 0.2), "0.3");
+});
+
+test("archived recipes group by week, newest first as they come", () => {
+  const groups = grocery.groupByWeek([
+    { id: "a", week_start: "2026-11-09" },
+    { id: "b", week_start: "2026-11-09" },
+    { id: "c", week_start: "2026-11-02" },
+  ]);
+  assert.deepEqual(
+    plain(groups.map((g) => [g.weekStart, g.recipes.map((r) => r.id)])),
+    [["2026-11-09", ["a", "b"]], ["2026-11-02", ["c"]]],
+  );
+  assert.equal(grocery.fmtWeek("2026-11-09"), "Week of Nov 9");
 });
 
 test("typed amounts accept a decimal comma", () => {

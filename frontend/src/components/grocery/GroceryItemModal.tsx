@@ -1,90 +1,50 @@
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { ChoiceChips } from "@/components/ui/choice-chips";
-import { Input } from "@/components/ui/input";
+import { AmountFields, Field, useAmountDraft } from "@/components/grocery/AmountFields";
+import { ModalActions } from "@/components/grocery/ModalActions";
 import { Modal } from "@/components/ui/modal";
-import { CATEGORY_LABEL, parseAmount, unitLabel } from "@/lib/grocery";
+import { Select } from "@/components/ui/select";
+import type { GroceryItemPatch } from "@/lib/api";
+import { CATEGORY_LABEL } from "@/lib/grocery";
 import type { GroceryCategory, GroceryItem } from "@/lib/types";
+
+const CATEGORIES = Object.keys(CATEGORY_LABEL) as GroceryCategory[];
 
 interface Props {
   item: GroceryItem;
   onClose: () => void;
-  onSave: (patch: { quantity?: number; category?: GroceryCategory }) => Promise<boolean>;
+  onSave: (patch: GroceryItemPatch & { category?: GroceryCategory }) => Promise<boolean>;
   onDelete: () => Promise<boolean>;
 }
 
 export function GroceryItemModal({ item, onClose, onSave, onDelete }: Props) {
-  const [amount, setAmount] = useState(String(Math.round(item.quantity * 100) / 100));
+  const { draft, setDraft, patch, valid } = useAmountDraft(item);
   const [category, setCategory] = useState(item.category);
-  const [busy, setBusy] = useState(false);
-  const quantity = parseAmount(amount);
-  const patch = {
-    ...(quantity !== null && quantity !== item.quantity ? { quantity } : {}),
-    ...(category !== item.category ? { category } : {}),
-  };
-
-  const run = async (action: () => Promise<boolean>) => {
-    setBusy(true);
-    const ok = await action();
-    setBusy(false);
-    if (ok) onClose();
-  };
+  const full = { ...patch, ...(category !== item.category ? { category } : {}) };
 
   return (
-    <Modal open onClose={onClose} title={item.name}>
+    <Modal open onClose={onClose} title={item.name} className="max-h-[90dvh] overflow-y-auto">
       <form
         className="space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (Object.keys(patch).length > 0) void run(() => onSave(patch));
-        }}
+        onSubmit={(e) => e.preventDefault()}
       >
-        <div className="space-y-1.5">
-          <label htmlFor="grocery-amount" className="text-xs font-medium text-muted-foreground">
-            Amount
-          </label>
-          <div className="flex items-center gap-2">
-            <Input
-              id="grocery-amount"
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="h-10"
-            />
-            <span className="shrink-0 text-sm text-muted-foreground">{unitLabel(item.unit)}</span>
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <span className="text-xs font-medium text-muted-foreground">Category</span>
-          <ChoiceChips
+        <AmountFields draft={draft} onChange={setDraft} amountLabel="Amount" />
+        <Field label="Category" htmlFor="grocery-category">
+          <Select
+            id="grocery-category"
             value={category}
-            labels={CATEGORY_LABEL}
-            disabled={busy}
-            onChange={(next) => {
-              if (next) setCategory(next);
-            }}
-          />
-        </div>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => void run(onDelete)}
-            disabled={busy}
-            className="text-destructive hover:text-destructive"
+            onChange={(e) => setCategory(e.target.value as GroceryCategory)}
           >
-            <Trash2 className="h-4 w-4" />
-            Remove
-          </Button>
-          <Button
-            type="submit"
-            className="flex-1"
-            disabled={busy || quantity === null || Object.keys(patch).length === 0}
-          >
-            Save
-          </Button>
-        </div>
+            {CATEGORIES.map((value) => (
+              <option key={value} value={value}>{CATEGORY_LABEL[value]}</option>
+            ))}
+          </Select>
+        </Field>
+        <ModalActions
+          canSave={valid && Object.keys(full).length > 0}
+          onSave={() => onSave(full)}
+          onDelete={onDelete}
+          onDone={onClose}
+        />
       </form>
     </Modal>
   );

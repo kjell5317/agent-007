@@ -1,9 +1,10 @@
 """Pure text and number handling for grocery entries: the cache key a product
 name maps to, the amount a manual entry spells out ("2 kg rice", "3 tomatoes",
-"½ cabbage") and the date math of storage."""
+"½ cabbage"), amounts a store sells, and the date math of storage and weeks."""
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -87,3 +88,15 @@ def after_portion(quantity: float, portion: float) -> float | None:
     """What's left after using one portion; None once it's used up."""
     left = quantity - portion
     return left if left > _EPSILON else None
+
+
+def purchasable(quantity: float, *, unit: str, pack_quantity: float) -> float:
+    """Round a needed amount up to what a store sells: whole packs of a
+    weighed product (300 g of rice → one 1 kg bag), whole counts otherwise."""
+    if unit in ("g", "ml"):
+        return math.ceil(quantity / pack_quantity - _EPSILON) * pack_quantity
+    return float(math.ceil(quantity - _EPSILON))
+
+
+def week_start(day: date) -> date:
+    return day - timedelta(days=day.weekday())

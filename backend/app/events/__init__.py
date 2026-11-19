@@ -1,4 +1,5 @@
 from app.events.publish import (
+    publish_grocery,
     publish_input,
     publish_kotx,
     publish_points,
@@ -9,6 +10,7 @@ from app.events.publish import (
 )
 
 __all__ = [
+    "publish_grocery",
     "publish_input",
     "publish_kotx",
     "publish_points",

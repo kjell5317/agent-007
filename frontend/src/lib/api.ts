@@ -5,7 +5,10 @@ import type {
   ChatSummary,
   ChatToolTrace,
   GroceryCategory,
+  GrocerySettings,
   GroceryState,
+  GroceryUnit,
+  RecipesState,
   Label,
   LinkPreview,
   Note,
@@ -224,7 +227,7 @@ export const api = {
   grocery: () => request<GroceryState>("/grocery"),
   addGroceryItem: (text: string) =>
     request<GroceryState>("/grocery/items", { method: "POST", body: JSON.stringify({ text }) }),
-  updateGroceryItem: (id: string, patch: { quantity?: number; category?: GroceryCategory }) =>
+  updateGroceryItem: (id: string, patch: GroceryItemPatch & { category?: GroceryCategory }) =>
     request<GroceryState>(`/grocery/items/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteGroceryItem: (id: string) =>
     request<GroceryState>(`/grocery/items/${id}`, { method: "DELETE" }),
@@ -232,10 +235,8 @@ export const api = {
     request<GroceryState>(`/grocery/items/${id}/cross-off`, { method: "POST" }),
   uncrossGroceryItem: (id: string) =>
     request<GroceryState>(`/grocery/items/${id}/uncross`, { method: "POST" }),
-  setStorageExpiry: (id: string, expiresOn: string) =>
-    request<GroceryState>(`/grocery/storage/${id}`, {
-      method: "PATCH", body: JSON.stringify({ expires_on: expiresOn }),
-    }),
+  updateStorageItem: (id: string, patch: GroceryItemPatch & { expires_on?: string }) =>
+    request<GroceryState>(`/grocery/storage/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   useStoragePortion: (id: string) =>
     request<GroceryState>(`/grocery/storage/${id}/use`, { method: "POST" }),
   removeStorageItem: (id: string) =>
@@ -243,6 +244,16 @@ export const api = {
   setGroceryStaple: (productKey: string, staple: boolean) =>
     request<GroceryState>(`/grocery/products/${encodeURIComponent(productKey)}/staple`, {
       method: "PUT", body: JSON.stringify({ staple }),
+    }),
+  grocerySettings: () => request<GrocerySettings>("/grocery/settings"),
+  // An empty store_location clears it.
+  updateGrocerySettings: (patch: Partial<GrocerySettings>) =>
+    request<GrocerySettings>("/grocery/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  groceryRecipes: () => request<RecipesState>("/grocery/recipes"),
+  replanGroceries: () => request<RecipesState>("/grocery/plan", { method: "POST" }),
+  rateRecipe: (id: string, rating: -1 | 0 | 1) =>
+    request<RecipesState>(`/grocery/recipes/${id}/rating`, {
+      method: "PUT", body: JSON.stringify({ rating }),
     }),
 
   listNotes: (limit = 500, source = "", query = "") =>
@@ -378,6 +389,14 @@ export type TaskDraftFields = Partial<Pick<Task, "due_date" | "label" | "estimat
 export interface TaskCreationAccepted {
   raw_input_id: string;
   status: string;
+}
+
+// A unit change needs the portion in the new unit too.
+export interface GroceryItemPatch {
+  name?: string;
+  quantity?: number;
+  unit?: GroceryUnit;
+  portion?: number;
 }
 
 export interface LocationSuggestions {

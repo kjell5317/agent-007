@@ -1,57 +1,59 @@
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { AmountFields, Field, useAmountDraft } from "@/components/grocery/AmountFields";
+import { ModalActions } from "@/components/grocery/ModalActions";
+import { Badge } from "@/components/ui/badge";
 import { DayPicker } from "@/components/ui/date-picker";
 import { Modal } from "@/components/ui/modal";
-import { fmtAmount } from "@/lib/grocery";
+import type { GroceryItemPatch } from "@/lib/api";
+import { expiryVariant, fmtExpiry } from "@/lib/grocery";
 import type { StorageItem } from "@/lib/types";
 
 interface Props {
   item: StorageItem;
+  today: string;
   onClose: () => void;
-  onSave: (expiresOn: string) => Promise<boolean>;
+  onSave: (patch: GroceryItemPatch & { expires_on?: string }) => Promise<boolean>;
   onRemove: () => Promise<boolean>;
 }
 
-export function StorageItemModal({ item, onClose, onSave, onRemove }: Props) {
+export function StorageItemModal({ item, today, onClose, onSave, onRemove }: Props) {
+  const { draft, setDraft, patch, valid } = useAmountDraft(item);
   const [expiresOn, setExpiresOn] = useState(item.expires_on);
-  const [busy, setBusy] = useState(false);
-
-  const run = async (action: () => Promise<boolean>) => {
-    setBusy(true);
-    const ok = await action();
-    setBusy(false);
-    if (ok) onClose();
-  };
+  const [picking, setPicking] = useState(false);
+  const full = { ...patch, ...(expiresOn !== item.expires_on ? { expires_on: expiresOn } : {}) };
 
   return (
-    <Modal open onClose={onClose} title={item.name}>
-      <div className="space-y-4">
-        <p className="text-center text-xs text-muted-foreground">
-          {fmtAmount(item.quantity, item.unit)} left · good until
-        </p>
-        <DayPicker value={expiresOn} onChange={setExpiresOn} />
-        <div className="flex gap-2">
-          <Button
+    <Modal open onClose={onClose} title={item.name} className="max-h-[90dvh] overflow-y-auto">
+      <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
+        <AmountFields draft={draft} onChange={setDraft} amountLabel="Left" />
+        <Field label="Good until">
+          <button
             type="button"
-            variant="ghost"
-            onClick={() => void run(onRemove)}
-            disabled={busy}
-            className="text-destructive hover:text-destructive"
+            aria-expanded={picking}
+            onClick={() => setPicking((open) => !open)}
+            className="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <Trash2 className="h-4 w-4" />
-            Remove
-          </Button>
-          <Button
-            type="button"
-            className="flex-1"
-            onClick={() => void run(() => onSave(expiresOn))}
-            disabled={busy || expiresOn === item.expires_on}
-          >
-            Save
-          </Button>
-        </div>
-      </div>
+            <Badge variant={expiryVariant(expiresOn, today)} className="px-2.5 py-1 text-sm">
+              {fmtExpiry(expiresOn, today)}
+            </Badge>
+          </button>
+          {picking && (
+            <DayPicker
+              value={expiresOn}
+              onChange={(next) => {
+                setExpiresOn(next);
+                setPicking(false);
+              }}
+            />
+          )}
+        </Field>
+        <ModalActions
+          canSave={valid && Object.keys(full).length > 0}
+          onSave={() => onSave(full)}
+          onDelete={onRemove}
+          onDone={onClose}
+        />
+      </form>
     </Modal>
   );
 }

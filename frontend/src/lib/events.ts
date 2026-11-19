@@ -17,7 +17,10 @@ export type ServerEvent =
   | { type: "points"; total: number }
   // A kotx run changed upstream (webhook or reconciliation poll landed) —
   // no payload; subscribers refetch /kotx/tasks.
-  | { type: "kotx" };
+  | { type: "kotx" }
+  // The grocery list, storage or recipes changed in the background (a plan
+  // started or finished, items expired); subscribers refetch.
+  | { type: "grocery" };
 
 type Handler = (event: ServerEvent) => void;
 

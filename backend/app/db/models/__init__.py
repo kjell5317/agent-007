@@ -3,7 +3,13 @@ from app.db.models.chat_answer import ChatAnswer
 from app.db.models.document import Document
 from app.db.models.email_draft import EmailDraft
 from app.db.models.geocode_cache import GeocodeCache
-from app.db.models.grocery import GroceryItem, GroceryProduct, StorageItem
+from app.db.models.grocery import (
+    GroceryItem,
+    GroceryProduct,
+    GroceryRecipe,
+    GrocerySettings,
+    StorageItem,
+)
 from app.db.models.handoff import TaskHandoff
 from app.db.models.label import Label
 from app.db.models.note import Note
@@ -33,6 +39,8 @@ __all__ = [
     "GeocodeCache",
     "GroceryItem",
     "GroceryProduct",
+    "GroceryRecipe",
+    "GrocerySettings",
     "Label",
     "LearnedModel",
     "Note",

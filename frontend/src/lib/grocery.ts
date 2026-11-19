@@ -1,4 +1,10 @@
-import type { GroceryCategory, GroceryState, GroceryUnit } from "./types";
+import type {
+  GroceryCategory,
+  GroceryDiet,
+  GroceryState,
+  GroceryUnit,
+  Recipe,
+} from "./types";
 
 // Key order is the walk through a typical store; the list groups in it.
 export const CATEGORY_LABEL: Record<GroceryCategory, string> = {
@@ -14,6 +20,23 @@ export const CATEGORY_LABEL: Record<GroceryCategory, string> = {
   snacks: "Snacks",
   household: "Household",
   other: "Other",
+};
+
+export const UNIT_LABEL: Record<GroceryUnit, string> = {
+  g: "g",
+  ml: "ml",
+  piece: "pieces",
+  pack: "packs",
+  can: "cans",
+  jar: "jars",
+  bottle: "bottles",
+  bunch: "bunches",
+};
+
+export const DIET_LABEL: Record<GroceryDiet, string> = {
+  vegan: "Vegan",
+  vegetarian: "Vegetarian",
+  omnivore: "Omnivore",
 };
 
 const CATEGORY_ORDER = Object.keys(CATEGORY_LABEL) as GroceryCategory[];
@@ -64,9 +87,12 @@ export function fmtAmount(quantity: number, unit: GroceryUnit): string {
   return `${fmtCount(quantity)} ${quantity > 1.005 ? many : one}`;
 }
 
-// The unit an amount is typed in, next to the edit field.
-export function unitLabel(unit: GroceryUnit): string {
-  return unit === "g" || unit === "ml" ? unit : COUNT_UNIT[unit][1];
+// The number on the "use one portion" button; an icon stands for the unit.
+export function fmtPortion(portion: number, unit: GroceryUnit): string {
+  if (unit === "g" || unit === "ml") {
+    return portion >= 1000 ? `${Math.round(portion / 10) / 100}k` : String(Math.round(portion));
+  }
+  return fmtCount(portion);
 }
 
 export function parseAmount(text: string): number | null {
@@ -74,7 +100,31 @@ export function parseAmount(text: string): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+// Shown for an amount in an edit field: no float noise like 0.30000000000000004.
+export function amountInput(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+export const MAX_SEGMENTS = 12;
+
+// Portions left of the amount the bar started from; each used portion empties
+// one segment, a part portion counts as one.
+export function portionSegments(
+  quantity: number,
+  start: number,
+  portion: number,
+): { filled: number; total: number } {
+  const total = Math.max(1, Math.ceil(Math.max(start, quantity) / portion - 1e-6));
+  const filled = Math.min(total, Math.max(0, Math.ceil(quantity / portion - 1e-6)));
+  return { filled, total };
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function fmtDay(iso: string): string {
+  const [, month, day] = iso.split("-").map(Number);
+  return `${MONTHS[month - 1]} ${day}`;
+}
 
 // Both dates are YYYY-MM-DD; `today` is the user's local day.
 export function daysLeft(expiresOn: string, today: string): number {
@@ -85,12 +135,34 @@ export function daysLeft(expiresOn: string, today: string): number {
 
 export function fmtExpiry(expiresOn: string, today: string): string {
   const days = daysLeft(expiresOn, today);
-  if (days < 0) return "expired";
-  if (days === 0) return "use today";
-  if (days === 1) return "use by tomorrow";
-  if (days < 7) return `${days} days left`;
-  const [, month, day] = expiresOn.split("-").map(Number);
-  return `good until ${MONTHS[month - 1]} ${day}`;
+  if (days < 0) return "Expired";
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  if (days < 7) return `In ${days} days`;
+  return fmtDay(expiresOn);
+}
+
+// The due-date pill's colors: red once gone, orange for its last day or two.
+export function expiryVariant(expiresOn: string, today: string): "overdue" | "urgent" | "closed" {
+  const days = daysLeft(expiresOn, today);
+  if (days < 0) return "overdue";
+  if (days <= 1) return "urgent";
+  return "closed";
+}
+
+export function fmtWeek(weekStart: string): string {
+  return `Week of ${fmtDay(weekStart)}`;
+}
+
+// Recipes arrive newest week first; the order is kept.
+export function groupByWeek(recipes: Recipe[]): Array<{ weekStart: string; recipes: Recipe[] }> {
+  const groups: Array<{ weekStart: string; recipes: Recipe[] }> = [];
+  for (const recipe of recipes) {
+    const last = groups[groups.length - 1];
+    if (last?.weekStart === recipe.week_start) last.recipes.push(recipe);
+    else groups.push({ weekStart: recipe.week_start, recipes: [recipe] });
+  }
+  return groups;
 }
 
 // Optimistic edits, shown until the server's state arrives.

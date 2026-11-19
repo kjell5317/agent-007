@@ -36,3 +36,20 @@ async def resolve(session: Session, name: str) -> GroceryProduct:
         portion=facts.portion,
         shelf_life_days=facts.shelf_life_days,
     )
+
+
+async def create_named(session: Session, name: str) -> GroceryProduct:
+    """A new product under the user's own name: the facts come from a lookup,
+    the name is never replaced by the lookup's canonical one."""
+    facts = await lookup(name)
+    return grocery_store.add_product(
+        session,
+        key=product_key(name),
+        alias=None,
+        name=name,
+        category=facts.category,
+        unit=facts.unit,
+        pack_quantity=facts.pack_quantity,
+        portion=facts.portion,
+        shelf_life_days=facts.shelf_life_days,
+    )

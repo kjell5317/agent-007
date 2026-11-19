@@ -2,110 +2,21 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from app.db.clients import grocery as grocery_store
+from app.db.schemas.grocery import GroceryItemUpdate, StorageItemUpdate
 from app.services.grocery import lifecycle, products
 from app.timezones import to_user_tz
-
-
-class FakeSession:
-    def commit(self):
-        pass
-
-    def flush(self):
-        pass
-
-
-class FakeStore:
-    def __init__(self):
-        self.products: dict[str, SimpleNamespace] = {}
-        self.items: list[SimpleNamespace] = []
-        self.storage: list[SimpleNamespace] = []
-
-    def product(self, key, **fields):
-        row = SimpleNamespace(
-            key=key, name=key.title(), category="other", unit="piece",
-            pack_quantity=1, portion=1, shelf_life_days=7, staple=False, aliases=[],
-        )
-        row.__dict__.update(fields)
-        self.products[key] = row
-        return row
-
-    def stored(self, product, *, quantity=None, expires_on=None, added_at=None):
-        row = SimpleNamespace(
-            id=uuid.uuid4(), product_key=product.key, product=product, grocery_item_id=None,
-            quantity=quantity if quantity is not None else product.pack_quantity,
-            portion=product.portion, expires_on=expires_on or date(2099, 1, 1),
-            added_at=added_at or datetime.now(timezone.utc),
-            removed_at=None, removed_reason=None,
-        )
-        self.storage.append(row)
-        return row
-
-    def get_product(self, session, key):
-        return self.products.get(key)
-
-    def open_items(self, session):
-        return [i for i in self.items if i.bought_at is None]
-
-    def get_item(self, session, item_id):
-        return next((i for i in self.items if i.id == item_id), None)
-
-    def open_item_for(self, session, product_key):
-        return next(
-            (i for i in self.open_items(session) if i.product_key == product_key), None
-        )
-
-    def add_item(self, session, *, product, quantity, origin):
-        row = SimpleNamespace(
-            id=uuid.uuid4(), product_key=product.key, product=product, name=product.name,
-            quantity=quantity, unit=product.unit, portion=product.portion,
-            category=product.category, origin=origin, bought_at=None,
-        )
-        self.items.append(row)
-        return row
-
-    def delete(self, session, row):
-        if row in self.items:
-            self.items.remove(row)
-        else:
-            self.storage.remove(row)
-
-    def get_storage(self, session, storage_id):
-        return next((s for s in self.storage if s.id == storage_id), None)
-
-    def storage_for_item(self, session, item_id):
-        return next(
-            (s for s in self.storage if s.grocery_item_id == item_id and s.removed_at is None),
-            None,
-        )
-
-    def in_storage(self, session, product_key):
-        return any(s.product_key == product_key and s.removed_at is None for s in self.storage)
-
-    def add_storage(self, session, *, item, expires_on):
-        row = self.stored(item.product, quantity=item.quantity, expires_on=expires_on)
-        row.grocery_item_id = item.id
-        return row
-
-    def expired_storage(self, session, today):
-        return [s for s in self.storage if s.removed_at is None and s.expires_on < today]
+from grocery_fakes import FakeSession, patch_store
 
 
 @pytest.fixture
 def store(monkeypatch):
-    fake = FakeStore()
-    for name in (
-        "get_product", "open_items", "get_item", "open_item_for", "add_item", "delete",
-        "get_storage", "storage_for_item", "in_storage", "add_storage", "expired_storage",
-    ):
-        monkeypatch.setattr(grocery_store, name, getattr(fake, name))
-    return fake
+    return patch_store(monkeypatch)
 
 
 def _today():
@@ -187,14 +98,97 @@ def test_expired_items_leave_storage_and_staples_come_back(store):
     assert [i.product_key for i in store.items] == ["milk"]
 
 
-def test_a_new_expiry_date_becomes_the_products_shelf_life(store):
+@pytest.mark.asyncio
+async def test_a_new_expiry_date_becomes_the_products_shelf_life(store):
     milk = store.product("milk", shelf_life_days=10)
     added = datetime.now(timezone.utc)
     stored = store.stored(milk, added_at=added)
+    expires_on = to_user_tz(added).date() + timedelta(days=4)
 
-    lifecycle.set_expiry(FakeSession(), stored.id, to_user_tz(added).date() + timedelta(days=4))
+    await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(expires_on=expires_on))
 
+    assert stored.expires_on == expires_on
     assert milk.shelf_life_days == 4
+
+
+@pytest.mark.asyncio
+async def test_a_new_unit_and_portion_restart_the_bar_and_teach_the_cache(store):
+    juice = store.product("orangensaft", unit="bottle", pack_quantity=1, portion=0.25)
+    stored = store.stored(juice)
+
+    await lifecycle.update_storage(
+        FakeSession(), stored.id, StorageItemUpdate(quantity=1000, unit="ml", portion=200)
+    )
+
+    assert (stored.quantity, stored.start_quantity, stored.unit, stored.portion) == (
+        1000, 1000, "ml", 200,
+    )
+    assert (juice.unit, juice.pack_quantity, juice.portion) == ("ml", 1000, 200)
+
+
+@pytest.mark.asyncio
+async def test_a_unit_change_needs_the_portion_in_that_unit(store):
+    juice = store.product("orangensaft", unit="bottle", portion=0.25)
+    stored = store.stored(juice)
+
+    with pytest.raises(ValueError):
+        await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(unit="ml"))
+
+
+@pytest.mark.asyncio
+async def test_using_less_than_bought_keeps_the_bar_full_length(store):
+    rice = store.product("rice", unit="g", pack_quantity=1000, portion=150)
+    stored = store.stored(rice)
+
+    await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(quantity=400))
+
+    assert (stored.quantity, stored.start_quantity) == (400, 1000)
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_misread_word_gives_it_its_own_product(store, monkeypatch):
+    eggs = store.product("eggs", name="Eggs", category="dairy", unit="piece", aliases=["eis"])
+    item = store.add_item(None, product=eggs, quantity=10, origin="manual")
+
+    async def create_named(session, name):
+        return store.product("eis", name=name, category="frozen", unit="pack", pack_quantity=1)
+
+    monkeypatch.setattr(lifecycle, "create_named", create_named)
+
+    await lifecycle.update_item(FakeSession(), item.id, GroceryItemUpdate(name="Eis"))
+
+    assert eggs.aliases == []  # "eis" no longer resolves to eggs
+    assert (item.product_key, item.name, item.category, item.unit, item.quantity) == (
+        "eis", "Eis", "frozen", "pack", 1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_renaming_to_a_known_product_moves_the_entry_there(store, monkeypatch):
+    garlic = store.product("knoblauch", name="Knoblauch", unit="piece")
+    bulbs = store.product("knoblauchknolle", name="Knoblauchknolle", unit="piece", portion=0.25)
+    item = store.add_item(None, product=garlic, quantity=3, origin="manual")
+
+    async def create_named(session, name):
+        raise AssertionError("no lookup for a cached product")
+
+    monkeypatch.setattr(lifecycle, "create_named", create_named)
+
+    await lifecycle.update_item(FakeSession(), item.id, GroceryItemUpdate(name="Knoblauchknolle"))
+
+    assert (item.product, item.quantity, item.portion) == (bulbs, 3, 0.25)
+
+
+@pytest.mark.asyncio
+async def test_renaming_only_the_spelling_keeps_the_product(store):
+    eggs = store.product("eggs", name="eggs")
+    item = store.add_item(None, product=eggs, quantity=10, origin="manual")
+
+    await lifecycle.update_item(
+        FakeSession(), item.id, GroceryItemUpdate(name="Eggs", category="dairy")
+    )
+
+    assert (item.product, item.name, eggs.name, eggs.category) == (eggs, "Eggs", "Eggs", "dairy")
 
 
 @pytest.mark.asyncio

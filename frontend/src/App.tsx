@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Settings } from "lucide-react";
 import { Composer } from "@/components/Composer";
-import { GroceryPanel } from "@/components/grocery/GroceryPanel";
+import { Button } from "@/components/ui/button";
+import { GroceryPanel, type GroceryTab } from "@/components/grocery/GroceryPanel";
+import { GrocerySettingsPanel } from "@/components/grocery/GrocerySettingsPanel";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { LabelsPanel } from "@/components/labels/LabelsPanel";
 import { NotesPanel } from "@/components/notes/NotesPanel";
@@ -43,8 +45,9 @@ export function App() {
   }, []);
   const { theme, setTheme } = useThemePreference();
   const [view, setView] = useState<
-    "tasks" | "chat" | "points" | "labels" | "grocery"
+    "tasks" | "chat" | "points" | "labels" | "grocery" | "grocery_settings"
   >("tasks");
+  const [groceryTab, setGroceryTab] = useState<GroceryTab>("list");
   const searchCloseTimerRef = useRef<number | null>(null);
   const [searchClosing, setSearchClosing] = useState(false);
   const chat = useSearchChat();
@@ -145,6 +148,7 @@ export function App() {
       setSelectedTaskId(null);
     }
     if (view === "chat") closeSearchTo();
+    else if (view === "grocery_settings") setView("grocery");
     else setView("tasks");
   }, [closeSearchTo, selectedTaskId, view]);
 
@@ -507,12 +511,13 @@ export function App() {
         mode={
           view === "chat" || view === "points" || view === "labels" || view === "grocery"
             ? view
-            : "normal"
+            : view === "grocery_settings" ? "grocery" : "normal"
         }
         title={
           view === "points" ? "Points" :
           view === "labels" ? "Labels" :
           view === "grocery" ? "Groceries" :
+          view === "grocery_settings" ? "Grocery settings" :
           view === "chat" ? "Chat" : "Tasks"
         }
         onChatOpen={openChat}
@@ -532,6 +537,17 @@ export function App() {
         onPointsOpen={() => setView("points")}
         onLabelsOpen={() => setView("labels")}
         onGroceryOpen={() => setView("grocery")}
+        actions={view === "grocery" ? (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setView("grocery_settings")}
+            aria-label="Grocery settings"
+            title="Grocery settings"
+          >
+            <Settings className="h-5 w-5" />
+          </Button>
+        ) : undefined}
         onBack={leaveOverlay}
       />
       <main className={`mx-auto max-w-2xl px-4 pb-4 pt-2 ${view === "chat" ? searchClosing ? "animate-search-content-close" : "animate-search-content-open" : ""}`}>
@@ -540,7 +556,18 @@ export function App() {
         ) : view === "labels" ? (
           <LabelsPanel />
         ) : view === "grocery" ? (
-          <GroceryPanel />
+          <GroceryPanel
+            tab={groceryTab}
+            onTabChange={setGroceryTab}
+            onOpenSettings={() => setView("grocery_settings")}
+          />
+        ) : view === "grocery_settings" ? (
+          <GrocerySettingsPanel
+            onSaved={(replanned) => {
+              if (replanned) setGroceryTab("recipes");
+              setView("grocery");
+            }}
+          />
         ) : view === "tasks" ? (
           loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
         ) : (

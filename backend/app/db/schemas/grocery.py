@@ -14,6 +14,7 @@ CATEGORIES: tuple[str, ...] = get_args(Category)
 Unit = Literal["g", "ml", "piece", "pack", "can", "jar", "bottle", "bunch"]
 UNITS: tuple[str, ...] = get_args(Unit)
 Origin = Literal["manual", "agent", "staple"]
+Diet = Literal["vegan", "vegetarian", "omnivore"]
 
 
 class GroceryItemRead(BaseModel):
@@ -38,6 +39,7 @@ class StorageItemRead(BaseModel):
     product_key: str
     name: str
     quantity: float
+    start_quantity: float
     unit: Unit
     portion: float
     category: Category
@@ -56,13 +58,67 @@ class GroceryItemCreate(BaseModel):
 
 
 class GroceryItemUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
     quantity: float | None = Field(default=None, gt=0)
+    unit: Unit | None = None
+    portion: float | None = Field(default=None, gt=0)
     category: Category | None = None
 
 
 class StorageItemUpdate(BaseModel):
-    expires_on: date
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    quantity: float | None = Field(default=None, gt=0)
+    unit: Unit | None = None
+    portion: float | None = Field(default=None, gt=0)
+    expires_on: date | None = None
 
 
 class StapleUpdate(BaseModel):
     staple: bool
+
+
+class GrocerySettingsRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    diet: Diet
+    recipes_per_week: int
+    servings: int
+    store_location: str | None
+
+
+class GrocerySettingsUpdate(BaseModel):
+    diet: Diet | None = None
+    recipes_per_week: int | None = Field(default=None, ge=0, le=7)
+    servings: int | None = Field(default=None, ge=1, le=12)
+    # An empty string clears it.
+    store_location: str | None = Field(default=None, max_length=512)
+
+
+class RecipeIngredient(BaseModel):
+    name: str
+    amount: str
+
+
+class RecipeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    week_start: date
+    title: str
+    servings: int
+    ingredients: list[RecipeIngredient]
+    steps: list[str]
+    rating: int | None
+
+
+class RecipesState(BaseModel):
+    week_start: date
+    recipes_per_week: int
+    planning: bool
+    error: str | None
+    this_week: list[RecipeRead]
+    archive: list[RecipeRead]
+
+
+class RatingUpdate(BaseModel):
+    rating: Literal[-1, 0, 1]

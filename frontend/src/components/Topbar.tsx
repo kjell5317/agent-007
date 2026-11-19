@@ -47,6 +47,7 @@ export function Topbar({
   onLabelsOpen,
   onGroceryOpen,
   onBack,
+  actions,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
@@ -58,6 +59,8 @@ export function Topbar({
   onLabelsOpen?: () => void;
   onGroceryOpen?: () => void;
   onBack?: () => void;
+  // Buttons at the right end of a titled view's bar.
+  actions?: ReactNode;
 }) {
   const [email, setEmail] = useState<string | null>(null);
   const [autoPoll, setAutoPoll] = useState<boolean | null>(null);
@@ -184,6 +187,7 @@ export function Topbar({
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <h1 className="flex-1 text-lg font-semibold">{title}</h1>
+            {actions}
           </>
         ) : (
           <>

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Loader2, Plus } from "lucide-react";
 import { GroceryItemModal } from "@/components/grocery/GroceryItemModal";
 import { ShoppingRow, StorageRow } from "@/components/grocery/GroceryRows";
+import { RecipesTab } from "@/components/grocery/RecipesTab";
 import { StorageItemModal } from "@/components/grocery/StorageItemModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,11 +20,18 @@ import { toast } from "@/lib/toast";
 import type { GroceryItem, StorageItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Tab = "list" | "storage";
+export type GroceryTab = "list" | "storage" | "recipes";
 
-export function GroceryPanel() {
+export function GroceryPanel({
+  tab,
+  onTabChange,
+  onOpenSettings,
+}: {
+  tab: GroceryTab;
+  onTabChange: (tab: GroceryTab) => void;
+  onOpenSettings: () => void;
+}) {
   const { state, send } = useGrocery();
-  const [tab, setTab] = useState<Tab>("list");
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingItem, setEditingItem] = useState<GroceryItem | null>(null);
@@ -62,28 +70,29 @@ export function GroceryPanel() {
       (s) => withStaple(s, productKey, staple),
     );
 
-  const tabs: Array<[Tab, string, number]> = [
-    ["list", "Shopping list", state.items.length],
+  const tabs: Array<[GroceryTab, string, number | null]> = [
+    ["list", "List", state.items.length],
     ["storage", "Storage", state.storage.length],
+    ["recipes", "Recipes", null],
   ];
 
   return (
     <div className="space-y-3">
-      <div role="tablist" className="grid grid-cols-2 gap-1 rounded-full bg-secondary p-1">
+      <div role="tablist" className="grid grid-cols-3 gap-1 rounded-full bg-secondary p-1">
         {tabs.map(([id, label, count]) => (
           <button
             key={id}
             type="button"
             role="tab"
             aria-selected={tab === id}
-            onClick={() => setTab(id)}
+            onClick={() => onTabChange(id)}
             className={cn(
               "rounded-full py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               tab === id ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
             )}
           >
             {label}
-            {count > 0 && <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">{count}</span>}
+            {count ? <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">{count}</span> : null}
           </button>
         ))}
       </div>
@@ -131,6 +140,8 @@ export function GroceryPanel() {
             ))
           )}
         </>
+      ) : tab === "recipes" ? (
+        <RecipesTab onOpenSettings={onOpenSettings} />
       ) : state.storage.length === 0 ? (
         <EmptyState>Nothing in storage yet. Items you cross off land here.</EmptyState>
       ) : (
@@ -159,8 +170,9 @@ export function GroceryPanel() {
       {editingStorage && (
         <StorageItemModal
           item={editingStorage}
+          today={today}
           onClose={() => setEditingStorage(null)}
-          onSave={(expiresOn) => send(() => api.setStorageExpiry(editingStorage.id, expiresOn))}
+          onSave={(patch) => send(() => api.updateStorageItem(editingStorage.id, patch))}
           onRemove={() => send(() => api.removeStorageItem(editingStorage.id))}
         />
       )}
