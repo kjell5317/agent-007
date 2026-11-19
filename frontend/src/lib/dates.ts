@@ -38,6 +38,12 @@ export function zonedParts(value: string | Date): ZonedParts {
   };
 }
 
+// The user's local day as YYYY-MM-DD.
+export function zonedDateIso(value: string | Date): string {
+  const { year, month, day } = zonedParts(value);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 // Convert a wall-clock selection in USER_TIMEZONE back to an instant. Iteration
 // resolves the UTC offset on the selected date, including summer/winter DST.
 export function zonedWallTimeToIso(parts: ZonedParts): string {

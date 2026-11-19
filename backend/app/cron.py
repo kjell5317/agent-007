@@ -25,6 +25,7 @@ from app.db.clients import tasks as tasks_store
 from app.events import publish_task
 from app.services.calendar.discover import discover_updated_events
 from app.services.calendar.labels import sync as sync_labels
+from app.services.grocery.lifecycle import purge_expired as purge_expired_groceries
 from app.services.input.poll import poll_sources
 from app.services.plan import cleanup_stray_commute_legs, refresh_commutes_for_weather
 from app.services.plan.cue import sweep_once as cue_sweep_once
@@ -49,6 +50,9 @@ COMMUTE_CLEANUP_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # Repeat instances are materialized a week ahead, so hourly keeps the window
 # rolling without daily ones ever lagging.
 RECURRING_TASKS_INTERVAL_S = int(timedelta(hours=1).total_seconds())
+# Storage is checked on every read too; this catches staples that expire
+# while the grocery view stays closed, so they are back on the list.
+GROCERY_EXPIRY_INTERVAL_S = int(timedelta(hours=1).total_seconds())
 # Labels only change when the user edits them in Calendar, and the settings
 # page syncs on open — this loop just keeps the mirror from going stale (and
 # populates it on a fresh deploy, before anyone opens that page).
@@ -283,6 +287,24 @@ async def _recurring_tasks() -> None:
             log.exception("recurring-tasks iteration failed")
 
 
+async def _grocery_expiry() -> None:
+    log.info("grocery-expiry loop started · interval=%ds", GROCERY_EXPIRY_INTERVAL_S)
+    while True:
+        try:
+            await asyncio.sleep(GROCERY_EXPIRY_INTERVAL_S)
+            if not state.auto_poll_enabled:
+                log.debug("grocery-expiry skipped (disabled)")
+                continue
+            with SessionLocal() as session:
+                expired = purge_expired_groceries(session)
+            log.info("grocery-expiry done · expired=%d", expired)
+        except asyncio.CancelledError:
+            log.info("grocery-expiry loop cancelled")
+            raise
+        except Exception:  # noqa: BLE001 — best-effort background loop
+            log.exception("grocery-expiry iteration failed")
+
+
 async def nightly_scheduler_once() -> None:
     """Refit the learned models, then give the solver its long run: 60 s
     instead of the per-trigger 10 s, so the gap left during the day closes."""
@@ -365,6 +387,7 @@ _JOBS: list[tuple[str, Callable[[], Coroutine[Any, Any, None]]]] = [
     ("weather-commute-refresh", _weather_commute_refresh),
     ("commute-cleanup", _commute_cleanup),
     ("recurring-tasks", _recurring_tasks),
+    ("grocery-expiry", _grocery_expiry),
     ("nightly-scheduler", _nightly_scheduler),
 ]
 

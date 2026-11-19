@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Composer } from "@/components/Composer";
+import { GroceryPanel } from "@/components/grocery/GroceryPanel";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { LabelsPanel } from "@/components/labels/LabelsPanel";
 import { NotesPanel } from "@/components/notes/NotesPanel";
@@ -42,7 +43,7 @@ export function App() {
   }, []);
   const { theme, setTheme } = useThemePreference();
   const [view, setView] = useState<
-    "tasks" | "chat" | "points" | "labels"
+    "tasks" | "chat" | "points" | "labels" | "grocery"
   >("tasks");
   const searchCloseTimerRef = useRef<number | null>(null);
   const [searchClosing, setSearchClosing] = useState(false);
@@ -504,13 +505,14 @@ export function App() {
         theme={theme}
         onThemeChange={setTheme}
         mode={
-          view === "chat" || view === "points" || view === "labels"
+          view === "chat" || view === "points" || view === "labels" || view === "grocery"
             ? view
             : "normal"
         }
         title={
           view === "points" ? "Points" :
           view === "labels" ? "Labels" :
+          view === "grocery" ? "Groceries" :
           view === "chat" ? "Chat" : "Tasks"
         }
         onChatOpen={openChat}
@@ -529,6 +531,7 @@ export function App() {
         ) : undefined}
         onPointsOpen={() => setView("points")}
         onLabelsOpen={() => setView("labels")}
+        onGroceryOpen={() => setView("grocery")}
         onBack={leaveOverlay}
       />
       <main className={`mx-auto max-w-2xl px-4 pb-4 pt-2 ${view === "chat" ? searchClosing ? "animate-search-content-close" : "animate-search-content-open" : ""}`}>
@@ -536,6 +539,8 @@ export function App() {
           <PointsPanel onOpenTask={openTask} />
         ) : view === "labels" ? (
           <LabelsPanel />
+        ) : view === "grocery" ? (
+          <GroceryPanel />
         ) : view === "tasks" ? (
           loading ? <div className="flex justify-center py-12" role="status" aria-label="Loading tasks"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div> : renderTasks()
         ) : (

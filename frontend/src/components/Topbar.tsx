@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
-  CircleCheckBig,
   CircleUser,
   ExternalLink,
   LogOut,
   Search,
+  ShoppingBag,
   Tags,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -45,16 +45,18 @@ export function Topbar({
   chatSearch,
   onPointsOpen,
   onLabelsOpen,
+  onGroceryOpen,
   onBack,
 }: {
   theme: ThemePreference;
   onThemeChange: (next: ThemePreference) => void;
-  mode?: "normal" | "chat" | "points" | "labels";
+  mode?: "normal" | "chat" | "points" | "labels" | "grocery";
   title?: string;
   onChatOpen?: () => void;
   chatSearch?: ReactNode;
   onPointsOpen?: () => void;
   onLabelsOpen?: () => void;
+  onGroceryOpen?: () => void;
   onBack?: () => void;
 }) {
   const [email, setEmail] = useState<string | null>(null);
@@ -185,9 +187,16 @@ export function Topbar({
           </>
         ) : (
           <>
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center text-primary" aria-hidden="true">
-              <CircleCheckBig className="h-6 w-6" />
-            </span>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onGroceryOpen}
+              aria-label="Groceries"
+              title="Groceries"
+              className="h-12 w-12 shrink-0 text-primary hover:text-primary"
+            >
+              <ShoppingBag className="h-6 w-6" />
+            </Button>
             <button
               type="button"
               onClick={onChatOpen}

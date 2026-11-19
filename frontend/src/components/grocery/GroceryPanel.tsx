@@ -1,0 +1,177 @@
+import { useState, type FormEvent } from "react";
+import { Loader2, Plus } from "lucide-react";
+import { GroceryItemModal } from "@/components/grocery/GroceryItemModal";
+import { ShoppingRow, StorageRow } from "@/components/grocery/GroceryRows";
+import { StorageItemModal } from "@/components/grocery/StorageItemModal";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useGrocery } from "@/hooks/useGrocery";
+import { api } from "@/lib/api";
+import { zonedDateIso } from "@/lib/dates";
+import {
+  CATEGORY_LABEL,
+  groupByCategory,
+  withoutItem,
+  withPortionUsed,
+  withStaple,
+} from "@/lib/grocery";
+import { toast } from "@/lib/toast";
+import type { GroceryItem, StorageItem } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+type Tab = "list" | "storage";
+
+export function GroceryPanel() {
+  const { state, send } = useGrocery();
+  const [tab, setTab] = useState<Tab>("list");
+  const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editingItem, setEditingItem] = useState<GroceryItem | null>(null);
+  const [editingStorage, setEditingStorage] = useState<StorageItem | null>(null);
+
+  if (!state) {
+    return (
+      <div className="flex justify-center py-12" role="status" aria-label="Loading groceries">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const today = zonedDateIso(new Date());
+  const groups = groupByCategory(state.items);
+
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text || adding) return;
+    setAdding(true);
+    if (await send(() => api.addGroceryItem(text))) setDraft("");
+    setAdding(false);
+  };
+
+  const crossOff = (item: GroceryItem) => {
+    void send(() => api.crossOffGroceryItem(item.id), (s) => withoutItem(s, item.id));
+    toast.success(`${item.name} moved to storage`, {
+      action: { label: "Undo", onClick: () => void send(() => api.uncrossGroceryItem(item.id)) },
+    });
+  };
+
+  const toggleStaple = (productKey: string, staple: boolean) =>
+    void send(
+      () => api.setGroceryStaple(productKey, staple),
+      (s) => withStaple(s, productKey, staple),
+    );
+
+  const tabs: Array<[Tab, string, number]> = [
+    ["list", "Shopping list", state.items.length],
+    ["storage", "Storage", state.storage.length],
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div role="tablist" className="grid grid-cols-2 gap-1 rounded-full bg-secondary p-1">
+        {tabs.map(([id, label, count]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={cn(
+              "rounded-full py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              tab === id ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+            {count > 0 && <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">{count}</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab === "list" ? (
+        <>
+          <form onSubmit={add} className="flex gap-2">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Add an item, e.g. 2 kg rice"
+              aria-label="Add an item"
+              className="h-11 rounded-xl"
+            />
+            <Button
+              type="submit"
+              size="icon"
+              disabled={!draft.trim() || adding}
+              aria-label="Add to shopping list"
+              className="h-11 w-11 shrink-0 rounded-xl"
+            >
+              {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            </Button>
+          </form>
+          {groups.length === 0 ? (
+            <EmptyState>Your shopping list is empty.</EmptyState>
+          ) : (
+            groups.map((group) => (
+              <section key={group.category} aria-label={CATEGORY_LABEL[group.category]}>
+                <h2 className="px-1 pb-1.5 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {CATEGORY_LABEL[group.category]}
+                </h2>
+                <ul className="divide-y rounded-xl border bg-card">
+                  {group.items.map((item) => (
+                    <ShoppingRow
+                      key={item.id}
+                      item={item}
+                      onCrossOff={() => crossOff(item)}
+                      onEdit={() => setEditingItem(item)}
+                      onToggleStaple={() => toggleStaple(item.product_key, !item.staple)}
+                    />
+                  ))}
+                </ul>
+              </section>
+            ))
+          )}
+        </>
+      ) : state.storage.length === 0 ? (
+        <EmptyState>Nothing in storage yet. Items you cross off land here.</EmptyState>
+      ) : (
+        <ul className="divide-y rounded-xl border bg-card">
+          {state.storage.map((item) => (
+            <StorageRow
+              key={item.id}
+              item={item}
+              today={today}
+              onUse={() => void send(() => api.useStoragePortion(item.id), (s) => withPortionUsed(s, item.id))}
+              onEdit={() => setEditingStorage(item)}
+              onToggleStaple={() => toggleStaple(item.product_key, !item.staple)}
+            />
+          ))}
+        </ul>
+      )}
+
+      {editingItem && (
+        <GroceryItemModal
+          item={editingItem}
+          onClose={() => setEditingItem(null)}
+          onSave={(patch) => send(() => api.updateGroceryItem(editingItem.id, patch))}
+          onDelete={() => send(() => api.deleteGroceryItem(editingItem.id))}
+        />
+      )}
+      {editingStorage && (
+        <StorageItemModal
+          item={editingStorage}
+          onClose={() => setEditingStorage(null)}
+          onSave={(expiresOn) => send(() => api.setStorageExpiry(editingStorage.id, expiresOn))}
+          onRemove={() => send(() => api.removeStorageItem(editingStorage.id))}
+        />
+      )}
+    </div>
+  );
+}
+
+function EmptyState({ children }: { children: string }) {
+  return (
+    <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+      {children}
+    </div>
+  );
+}

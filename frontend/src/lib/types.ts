@@ -271,3 +271,43 @@ export interface RawInput {
   task_title: string | null;
   agent_trace: AgentTrace | null;
 }
+
+// In the order of a walk through a typical store.
+export type GroceryCategory =
+  | "produce" | "bakery" | "dairy" | "meat_fish" | "dry_goods" | "canned"
+  | "spices_baking" | "frozen" | "drinks" | "snacks" | "household" | "other";
+
+// Amount and portion share one unit.
+export type GroceryUnit = "g" | "ml" | "piece" | "pack" | "can" | "jar" | "bottle" | "bunch";
+
+export interface GroceryItem {
+  id: string;
+  product_key: string;
+  name: string;
+  quantity: number;
+  unit: GroceryUnit;
+  portion: number;
+  category: GroceryCategory;
+  origin: "manual" | "agent" | "staple";
+  staple: boolean;
+  created_at: string;
+}
+
+export interface StorageItem {
+  id: string;
+  product_key: string;
+  name: string;
+  quantity: number;
+  unit: GroceryUnit;
+  portion: number;
+  category: GroceryCategory;
+  // YYYY-MM-DD, the last day it's good.
+  expires_on: string;
+  added_at: string;
+  staple: boolean;
+}
+
+export interface GroceryState {
+  items: GroceryItem[];
+  storage: StorageItem[];
+}

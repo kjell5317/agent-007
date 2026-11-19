@@ -135,6 +135,37 @@ export function DatePicker({
   );
 }
 
+// The calendar alone, for values that are a plain day (YYYY-MM-DD) with no
+// time of day.
+export function DayPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (next: string) => void;
+}) {
+  const parsed = useMemo(() => (value ? new Date(`${value}T00:00:00Z`) : null), [value]);
+  const today = startOfDay(wallDate(new Date()));
+  const [viewMonth, setViewMonth] = useState<Date>(() => {
+    const start = parsed ?? today;
+    return new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  });
+
+  return (
+    <DateContent
+      parsed={parsed}
+      today={today}
+      viewMonth={viewMonth}
+      onShiftMonth={(d) =>
+        setViewMonth(
+          new Date(Date.UTC(viewMonth.getUTCFullYear(), viewMonth.getUTCMonth() + d, 1)),
+        )
+      }
+      onPickDay={(day) => onChange(day.toISOString().slice(0, 10))}
+    />
+  );
+}
+
 function DateContent({
   parsed,
   today,

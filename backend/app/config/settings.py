@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # path. Uses GEMINI_API_KEY for the google provider.
     chat_llm_provider: str = "google"
     chat_llm_model: str = "gemini-3.8-flash"
+    # Grocery product lookups are small, frequent facts (unit, portion, shelf
+    # life) — a fast model is plenty.
+    grocery_llm_provider: str = "anthropic"
+    grocery_llm_model: str = "claude-haiku-5-5"
     # Chat reasoning depth and optional isolated Google Search tool. Search runs
     # in its own grounded call so its server-side steps cannot corrupt chat's
     # custom tool and widget output.
@@ -307,12 +311,17 @@ class Settings(BaseSettings):
 
     def llm_target(self, agent: str) -> tuple[str, str]:
         """(provider, model) for a named agent flow, each field falling back to
-        the global default. Only `chat` overrides today; extraction and the
+        the global default. `chat` and `grocery` override; extraction and the
         other flows use the global LLM_PROVIDER/LLM_MODEL."""
         if agent == "chat":
             return (
                 self.chat_llm_provider.strip().lower() or self.effective_llm_provider,
                 self.chat_llm_model.strip() or self.effective_llm_model,
+            )
+        if agent == "grocery":
+            return (
+                self.grocery_llm_provider.strip().lower() or self.effective_llm_provider,
+                self.grocery_llm_model.strip() or self.effective_llm_model,
             )
         return self.effective_llm_provider, self.effective_llm_model
 

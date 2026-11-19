@@ -4,6 +4,8 @@ import type {
   ChatSearchScope,
   ChatSummary,
   ChatToolTrace,
+  GroceryCategory,
+  GroceryState,
   Label,
   LinkPreview,
   Note,
@@ -217,6 +219,30 @@ export const api = {
     request<Label>(`/labels/${encodeURIComponent(googleId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+
+  grocery: () => request<GroceryState>("/grocery"),
+  addGroceryItem: (text: string) =>
+    request<GroceryState>("/grocery/items", { method: "POST", body: JSON.stringify({ text }) }),
+  updateGroceryItem: (id: string, patch: { quantity?: number; category?: GroceryCategory }) =>
+    request<GroceryState>(`/grocery/items/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteGroceryItem: (id: string) =>
+    request<GroceryState>(`/grocery/items/${id}`, { method: "DELETE" }),
+  crossOffGroceryItem: (id: string) =>
+    request<GroceryState>(`/grocery/items/${id}/cross-off`, { method: "POST" }),
+  uncrossGroceryItem: (id: string) =>
+    request<GroceryState>(`/grocery/items/${id}/uncross`, { method: "POST" }),
+  setStorageExpiry: (id: string, expiresOn: string) =>
+    request<GroceryState>(`/grocery/storage/${id}`, {
+      method: "PATCH", body: JSON.stringify({ expires_on: expiresOn }),
+    }),
+  useStoragePortion: (id: string) =>
+    request<GroceryState>(`/grocery/storage/${id}/use`, { method: "POST" }),
+  removeStorageItem: (id: string) =>
+    request<GroceryState>(`/grocery/storage/${id}`, { method: "DELETE" }),
+  setGroceryStaple: (productKey: string, staple: boolean) =>
+    request<GroceryState>(`/grocery/products/${encodeURIComponent(productKey)}/staple`, {
+      method: "PUT", body: JSON.stringify({ staple }),
     }),
 
   listNotes: (limit = 500, source = "", query = "") =>
