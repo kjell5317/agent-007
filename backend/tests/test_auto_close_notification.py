@@ -14,7 +14,12 @@ from app.services.notifications import messages, push  # noqa: E402
 
 
 @pytest.fixture
-def sent(monkeypatch) -> list[push.Message]:
+def prior_status() -> dict[str, str]:
+    return {"value": "open"}
+
+
+@pytest.fixture
+def sent(monkeypatch, prior_status) -> list[push.Message]:
     calls: list[push.Message] = []
 
     async def fake_send(message):
@@ -28,7 +33,27 @@ def sent(monkeypatch) -> list[push.Message]:
     )
     monkeypatch.setattr(push, "send", fake_send)
     monkeypatch.setattr(dispatch, "close_task_svc", fake_close)
+    monkeypatch.setattr(
+        dispatch.tasks_store, "latest_status_for",
+        lambda _session, ids: {task_id: prior_status["value"] for task_id in ids},
+    )
     return calls
+
+
+@pytest.mark.parametrize("status", ["closed", "not_task"])
+@pytest.mark.asyncio
+async def test_agent_close_of_a_task_that_was_not_open_sends_no_notification(
+    sent, prior_status, status,
+):
+    prior_status["value"] = status
+
+    result = await dispatch.apply_task_action(
+        SimpleNamespace(), SimpleNamespace(id=uuid.uuid4(), title="Pay invoice"),
+        "update_task", {"status": "closed", "reason": "Reply confirms the invoice was paid."},
+    )
+
+    assert result["outcome"] == "closed"
+    assert sent == []
 
 
 @pytest.mark.asyncio

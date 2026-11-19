@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.agent.helpers.attributes import ATTRIBUTE_FIELDS, valid_attributes
 from app.agent.helpers.text import normalize_agent_due_date
+from app.db.clients import tasks as tasks_store
 from app.db.models.task import Task
 from app.services.notifications.notify import notify_done_for_you
 from app.services.task.close import close_task as close_task_svc
@@ -80,12 +81,15 @@ async def apply_task_action(
                 pass
 
         if status == "closed":
+            # A dismissed or already-closed task has nothing to undo; only
+            # announce closes that took an open task off the user's list.
+            was_open = tasks_store.latest_status_for(session, [task.id]).get(task.id, "open") == "open"
             try:
                 await close_task_svc(session, task.id)
             except LookupError:
                 pass
             else:
-                if not user_requested:
+                if was_open and not user_requested:
                     await notify_done_for_you(
                         task, headline="Auto-closed", text=tu_input.get("reason"),
                     )
