@@ -93,6 +93,9 @@ class FakeStore:
             None,
         )
 
+    def stock_of(self, session, product_key):
+        return [s for s in self.storage if s.product_key == product_key and s.removed_at is None]
+
     def in_storage(self, session, product_key):
         return any(s.product_key == product_key and s.removed_at is None for s in self.storage)
 
@@ -108,7 +111,7 @@ class FakeStore:
         return [r for r in self.recipes if r.week_start == week_start]
 
     def add_recipe(self, session, **fields):
-        row = SimpleNamespace(id=uuid.uuid4(), rating=None, **fields)
+        row = SimpleNamespace(id=uuid.uuid4(), rating=None, done_at=None, **fields)
         self.recipes.append(row)
         return row
 
@@ -118,7 +121,8 @@ def patch_store(monkeypatch) -> FakeStore:
     for name in (
         "get_product", "find_product", "add_product", "open_items", "get_item",
         "open_item_for", "add_item", "delete", "get_storage", "storage_for_item",
-        "in_storage", "add_storage", "expired_storage", "recipes_for_week", "add_recipe",
+        "in_storage", "stock_of", "add_storage", "expired_storage", "recipes_for_week",
+        "add_recipe",
     ):
         monkeypatch.setattr(grocery_store, name, getattr(fake, name))
     return fake

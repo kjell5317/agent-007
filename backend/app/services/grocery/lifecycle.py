@@ -1,10 +1,13 @@
 """Shopping list → storage → used up, removed or expired. A starred product
-goes straight back on the list once its last portion leaves storage."""
+goes straight back on the list once its last portion leaves storage, and the
+shopping task is due the next day. Using or removing something by hand starts
+the quick re-check (see `recheck.py`); crossing off the last list entry
+closes the shopping task."""
 
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -25,12 +28,13 @@ from app.services.grocery.normalize import (
     product_key,
     shelf_life_from,
 )
+from app.services.grocery import recheck, shopping
 from app.services.grocery.products import create_named, resolve
 from app.timezones import to_user_tz
 
 
-def state(session: Session) -> GroceryState:
-    purge_expired(session)
+async def state(session: Session) -> GroceryState:
+    await purge_expired(session)
     return GroceryState(
         items=[GroceryItemRead.model_validate(row) for row in grocery_store.open_items(session)],
         storage=[
@@ -71,7 +75,7 @@ def delete_item(session: Session, item_id: uuid.UUID) -> None:
     session.commit()
 
 
-def cross_off(session: Session, item_id: uuid.UUID) -> None:
+async def cross_off(session: Session, item_id: uuid.UUID) -> None:
     item = _open_item(session, item_id)
     now = datetime.now(timezone.utc)
     item.bought_at = now
@@ -81,6 +85,7 @@ def cross_off(session: Session, item_id: uuid.UUID) -> None:
         expires_on=expiry_date(_today(now), item.product.shelf_life_days),
     )
     session.commit()
+    await shopping.close_if_done(session)
 
 
 def uncross(session: Session, item_id: uuid.UUID) -> None:
@@ -94,19 +99,36 @@ def uncross(session: Session, item_id: uuid.UUID) -> None:
     session.commit()
 
 
-def use_portion(session: Session, storage_id: uuid.UUID) -> None:
+async def use_portion(session: Session, storage_id: uuid.UUID) -> None:
     stored = _active_storage(session, storage_id)
+    now = datetime.now(timezone.utc)
     left = after_portion(stored.quantity, stored.portion)
+    restocked = False
     if left is None:
-        _take_out(session, stored, "used_up", datetime.now(timezone.utc))
+        restocked = _take_out(session, stored, "used_up", now)
+        change = f"Used the last of {stored.name}"
     else:
         stored.quantity = left
+        change = (
+            f"Used {_amount(stored.portion, stored.unit)} of {stored.name}, "
+            f"{_amount(left, stored.unit)} left"
+        )
     session.commit()
+    recheck.note(change)
+    if restocked:
+        await _shop_tomorrow(session, now)
 
 
-def remove(session: Session, storage_id: uuid.UUID) -> None:
-    _take_out(session, _active_storage(session, storage_id), "removed", datetime.now(timezone.utc))
+async def remove(session: Session, storage_id: uuid.UUID) -> None:
+    stored = _active_storage(session, storage_id)
+    now = datetime.now(timezone.utc)
+    restocked = _take_out(session, stored, "removed", now)
     session.commit()
+    recheck.note(
+        f"Took {stored.name} out of storage with {_amount(stored.quantity, stored.unit)} left"
+    )
+    if restocked:
+        await _shop_tomorrow(session, now)
 
 
 async def update_storage(
@@ -142,33 +164,47 @@ def set_staple(session: Session, product_key: str, staple: bool) -> None:
     session.commit()
 
 
-def purge_expired(session: Session) -> int:
+async def purge_expired(session: Session) -> int:
     now = datetime.now(timezone.utc)
     expired = grocery_store.expired_storage(session, _today(now))
+    restocked = False
     for stored in expired:
-        _take_out(session, stored, "expired", now)
+        restocked = _take_out(session, stored, "expired", now) or restocked
     if expired:
         session.commit()
+    if restocked:
+        await _shop_tomorrow(session, now)
     return len(expired)
 
 
-def _take_out(session: Session, stored: StorageItem, reason: str, now: datetime) -> None:
+def _take_out(session: Session, stored: StorageItem, reason: str, now: datetime) -> bool:
+    """True when a starred product went back on the list."""
     stored.removed_at = now
     stored.removed_reason = reason
     session.flush()
-    _restock(session, stored.product)
+    return _restock(session, stored.product)
 
 
-def _restock(session: Session, product: GroceryProduct) -> None:
+def _restock(session: Session, product: GroceryProduct) -> bool:
     if not product.staple:
-        return
+        return False
     if grocery_store.in_storage(session, product.key):
-        return
+        return False
     if grocery_store.open_item_for(session, product.key) is not None:
-        return
+        return False
     grocery_store.add_item(
         session, product=product, quantity=product.pack_quantity, origin="staple"
     )
+    return True
+
+
+async def _shop_tomorrow(session: Session, now: datetime) -> None:
+    # A starred product ran out: it's needed, but not this very hour.
+    await shopping.ensure_task(session, _today(now) + timedelta(days=1))
+
+
+def _amount(quantity: float, unit: str) -> str:
+    return f"{round(quantity, 2):g} {unit}"
 
 
 async def _edit(

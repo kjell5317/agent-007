@@ -1,8 +1,19 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Time,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -113,6 +124,13 @@ class GrocerySettings(Base):
     recipes_per_week: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     servings: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     store_location: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # The store's time of day the shopping task is due by.
+    shop_by_time: Mapped[time] = mapped_column(Time, default=time(18), server_default="18:00")
+    # The shopping task the agent created last; open or not is the task's own
+    # status (see `services/grocery/shopping.py`).
+    shopping_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class GroceryRecipe(Base):
@@ -130,4 +148,6 @@ class GroceryRecipe(Base):
     ingredients: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     steps: Mapped[list[str]] = mapped_column(JSON)
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Cooked: it leaves this week's list for the archive, and a replan keeps it.
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

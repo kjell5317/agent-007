@@ -44,7 +44,7 @@ def get(session: Session, raw_input_id: uuid.UUID) -> RawInput | None:
 
 
 # Inputs the app generates itself rather than receives.
-GENERATED_SOURCES = ("subtask", "recurrence")
+GENERATED_SOURCES = ("subtask", "recurrence", "grocery")
 
 # The source a `raw_inputs r` row counts as for filtering: a generated input
 # takes the first received source of the task it derives from — a subtask its
@@ -97,7 +97,7 @@ _GROUPED_INPUT_IDS_SQL = text(
                 ELSE 'input:' || id::text
             END AS group_key
         FROM raw_inputs r
-        WHERE source NOT IN ('chat', 'recurrence')
+        WHERE source NOT IN ('chat', 'recurrence', 'grocery')
           AND (CAST(:status AS text) IS NULL OR status = :status)
           AND (CAST(:source AS text) IS NULL OR ({ORIGIN_SOURCE_SQL}) = :source)
     ),
@@ -166,7 +166,7 @@ def count_since(session: Session, ts: datetime) -> int:
     stmt = (
         select(func.count(RawInput.id))
         .where(RawInput.processed_at > ts,
-               RawInput.source.notin_(("manual", "recurrence")))
+               RawInput.source.notin_(("manual", "recurrence", "grocery")))
     )
     return int(session.execute(stmt).scalar_one() or 0)
 

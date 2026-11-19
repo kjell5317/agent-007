@@ -230,6 +230,17 @@ export function App() {
       if (window.history.state?.appDeepLink !== true) setView("tasks");
       return;
     }
+    if (link.kind === "grocery") {
+      // One-shot: the view is app state, so the hash would only reopen it on
+      // a reload after the user has moved on.
+      clearDeepLink();
+      setSelectedTaskId(null);
+      setFetchedTask(null);
+      setPendingRunId(null);
+      setGroceryTab("list");
+      setView("grocery");
+      return;
+    }
     setPendingRunId(link.id);
     setSelectedTaskId(null);
     setView("tasks");

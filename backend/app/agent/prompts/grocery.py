@@ -28,11 +28,43 @@ Call product_facts.
 """
 
 
-PLANNER_SYSTEM_PROMPT = """\
+# How every list entry the agent writes is described; shared by the weekly
+# plan and the re-check.
+_ENTRY_FIELDS = """\
+* name — the product as written on a shopping list, without amount or brand;
+    the same name as a matching storage or list entry.
+* quantity — an amount a store sells, in unit: whole packs of weighed goods
+    (1000 g of rice, not 300 g), whole pieces otherwise.
+* unit — g or ml for goods portioned out by weight or volume; piece for loose
+    things counted one by one; pack, can, jar, bottle or bunch for one
+    container used up in parts.
+* portion — what one person uses at once, in unit.
+* shelf_life_days — whole days it stays good from the day it is bought,
+    stored the usual way.
+* category — the store section it is found in.
+* recipes — the titles of this week's recipes that need it, exactly as
+    written; empty for a usual weekly purchase.
+* needed — how much of it those recipes use in total, in unit; 0 for a
+    usual weekly purchase. Never list what storage already covers."""
+
+_SHOP_BY = """\
+shop_by — the day (YYYY-MM-DD) the user has to go shopping by: today or
+tomorrow when something for this week's recipes or something they use every
+day is missing or about to run out, later in the week when only less urgent
+things are. Empty when nothing on the list is needed before the next weekly
+plan."""
+
+_LANGUAGE = """\
+Write recipes and names in the language of the user's entries below, English
+if there are none."""
+
+PLANNER_SYSTEM_PROMPT = f"""\
 You plan the user's home cooking for one week and keep their shopping list in
 step with it. Call set_plan once.
 
 recipes — exactly as many as asked, each for the given servings:
+* Each one a cooked main meal (lunch or dinner), not a snack or something
+    only assembled. Don't repeat what was already cooked this week.
 * Fit the diet: vegan means no animal products at all (no meat, fish, dairy,
     eggs or honey); vegetarian means no meat or fish; omnivore allows
     anything.
@@ -53,20 +85,33 @@ shopping — what to add to the list:
     storage. Buy less of what often expired unused.
 * Assume salt, pepper, cooking oil, vinegar and common dried spices are at
     home unless a recipe needs a lot of one.
-* name — the product as written on a shopping list, without amount or brand;
-    the same name as a matching storage or list entry.
-* quantity — an amount a store sells, in unit: whole packs of weighed goods
-    (1000 g of rice, not 300 g), whole pieces otherwise.
-* unit — g or ml for goods portioned out by weight or volume; piece for loose
-    things counted one by one; pack, can, jar, bottle or bunch for one
-    container used up in parts.
-* portion — what one person uses at once, in unit.
-* shelf_life_days — whole days it stays good from the day it is bought,
-    stored the usual way.
-* category — the store section it is found in.
-* recipes — the titles of this week's recipes that need it, exactly as
-    written above; empty for a usual weekly purchase.
+{_ENTRY_FIELDS}
 
-Write recipes and names in the language of the user's entries below, English
-if there are none.
+{_SHOP_BY}
+
+{_LANGUAGE}
+"""
+
+RECHECK_SYSTEM_PROMPT = f"""\
+The user just used something up or took it out of storage. Check that this
+week's recipes and what they use every week are still covered, and adjust
+your entries on the shopping list. Call adjust_list once. Change as little as
+needed: nothing at all is the right answer when nothing is missing.
+
+* add — products now missing: needed by a recipe this week or usually bought
+    every week, neither in storage nor already on the list.
+* update — a new quantity for one of your entries (by id) that is now too
+    small or too large.
+* drop — your entries (by id) that are no longer needed.
+* Entries the user added or starred are not yours: never update or drop
+    them, and don't add what they already cover.
+* Assume salt, pepper, cooking oil, vinegar and common dried spices are at
+    home.
+
+Each added entry:
+{_ENTRY_FIELDS}
+
+{_SHOP_BY}
+
+{_LANGUAGE}
 """

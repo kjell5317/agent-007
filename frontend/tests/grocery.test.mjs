@@ -125,6 +125,7 @@ test("optimistic edits: a star covers every row of the product", () => {
     [["i", true], ["s", true], ["t", false]],
   );
   assert.deepEqual(plain(grocery.withoutItem(state, "i").items), []);
+  assert.deepEqual(plain(grocery.withoutStored(state, "s").storage.map((r) => r.id)), ["t"]);
 });
 
 test("an edit sends only what changed; a new unit sends both amounts", () => {

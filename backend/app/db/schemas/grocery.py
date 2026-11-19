@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -85,6 +85,7 @@ class GrocerySettingsRead(BaseModel):
     recipes_per_week: int
     servings: int
     store_location: str | None
+    shop_by_time: time
 
 
 class GrocerySettingsUpdate(BaseModel):
@@ -93,6 +94,7 @@ class GrocerySettingsUpdate(BaseModel):
     servings: int | None = Field(default=None, ge=1, le=12)
     # An empty string clears it.
     store_location: str | None = Field(default=None, max_length=512)
+    shop_by_time: time | None = None
 
 
 class RecipeIngredient(BaseModel):
@@ -110,6 +112,7 @@ class RecipeRead(BaseModel):
     ingredients: list[RecipeIngredient]
     steps: list[str]
     rating: int | None
+    done_at: datetime | None
 
 
 class RecipesState(BaseModel):
@@ -123,3 +126,28 @@ class RecipesState(BaseModel):
 
 class RatingUpdate(BaseModel):
     rating: Literal[-1, 0, 1]
+
+
+class DoneUpdate(BaseModel):
+    done: bool
+
+
+class WeeklyAmountRead(BaseModel):
+    name: str
+    quantity: float
+    unit: Unit
+
+
+class GroceryPreferences(BaseModel):
+    """What the weekly plan learns from, exactly as it goes into the prompt,
+    with the limits that cut each part."""
+
+    liked: list[str]
+    disliked: list[str]
+    usual: list[WeeklyAmountRead]
+    expired: list[str]
+    rated_limit: int
+    usual_limit: int
+    usual_weeks: int
+    expired_limit: int
+    expired_weeks: int

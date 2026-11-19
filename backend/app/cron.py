@@ -299,7 +299,7 @@ async def _groceries() -> None:
                 log.debug("groceries skipped (disabled)")
                 continue
             with SessionLocal() as session:
-                expired = purge_expired_groceries(session)
+                expired = await purge_expired_groceries(session)
                 planned = grocery_plan.needs_plan(session) and grocery_plan.request_plan()
             if expired:
                 publish_grocery()

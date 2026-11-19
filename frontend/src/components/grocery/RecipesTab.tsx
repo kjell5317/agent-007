@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ChevronRight, Loader2, RefreshCw, ThumbsDown, ThumbsUp, type LucideIcon } from "lucide-react";
+import { Check, ChevronRight, Loader2, RefreshCw, ThumbsDown, ThumbsUp, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { useRecipes } from "@/hooks/useGrocery";
 import { api } from "@/lib/api";
 import { fmtWeek, groupByWeek } from "@/lib/grocery";
+import { toast } from "@/lib/toast";
 import type { Recipe, RecipesState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,13 @@ export function RecipesTab({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const rate = (recipe: Recipe, rating: -1 | 0 | 1) =>
     void send(() => api.rateRecipe(recipe.id, rating), (s) => withRating(s, recipe.id, rating));
+
+  const done = (recipe: Recipe) => {
+    void send(() => api.setRecipeDone(recipe.id, true), (s) => withDone(s, recipe));
+    toast.success(`${recipe.title} moved to the archive`, {
+      action: { label: "Undo", onClick: () => void send(() => api.setRecipeDone(recipe.id, false)) },
+    });
+  };
 
   return (
     <div className="space-y-5">
@@ -67,7 +75,7 @@ export function RecipesTab({ onOpenSettings }: { onOpenSettings: () => void }) {
         ) : (
           <ul className={cn("space-y-2", state.planning && "opacity-60")}>
             {state.this_week.map((recipe) => (
-              <RecipeCard key={recipe.id} recipe={recipe} />
+              <RecipeCard key={recipe.id} recipe={recipe} onDone={() => done(recipe)} />
             ))}
           </ul>
         )}
@@ -101,7 +109,24 @@ function withRating(state: RecipesState, id: string, rating: -1 | 0 | 1): Recipe
   };
 }
 
-function RecipeCard({ recipe, onRate }: { recipe: Recipe; onRate?: (rating: -1 | 0 | 1) => void }) {
+function withDone(state: RecipesState, recipe: Recipe): RecipesState {
+  return {
+    ...state,
+    this_week: state.this_week.filter((r) => r.id !== recipe.id),
+    archive: [{ ...recipe, done_at: new Date().toISOString() }, ...state.archive],
+  };
+}
+
+function RecipeCard({
+  recipe,
+  onRate,
+  onDone,
+}: {
+  recipe: Recipe;
+  // This week: cooked, into the archive. The archive: like or dislike.
+  onRate?: (rating: -1 | 0 | 1) => void;
+  onDone?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <li className="rounded-xl border bg-card">
@@ -123,6 +148,19 @@ function RecipeCard({ recipe, onRate }: { recipe: Recipe; onRate?: (rating: -1 |
             </span>
           </span>
         </button>
+        {onDone && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onDone}
+            aria-label={`${recipe.title} is cooked`}
+            title="Cooked — move it to the archive"
+            className="mr-1 gap-1"
+          >
+            <Check className="h-3.5 w-3.5" />
+            Done
+          </Button>
+        )}
         {onRate && (
           <>
             <RateButton

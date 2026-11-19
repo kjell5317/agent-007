@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, MapPin, Minus, Plus } from "lucide-react";
 import { Field } from "@/components/grocery/AmountFields";
+import { PlannerInputs } from "@/components/grocery/PlannerInputs";
 import { Button } from "@/components/ui/button";
 import { ChoiceChips } from "@/components/ui/choice-chips";
 import { Input } from "@/components/ui/input";
@@ -66,12 +67,21 @@ export function GrocerySettingsPanel({ onSaved }: { onSaved: (replanned: boolean
     draft.diet !== saved.diet ||
     draft.recipes_per_week !== saved.recipes_per_week ||
     draft.servings !== saved.servings;
-  const changed = cookingChanged || store.trim() !== (saved.store_location ?? "");
+  // The time input works in HH:MM; the API answers HH:MM:SS.
+  const shopBy = draft.shop_by_time.slice(0, 5);
+  const changed =
+    cookingChanged ||
+    store.trim() !== (saved.store_location ?? "") ||
+    shopBy !== saved.shop_by_time.slice(0, 5);
 
   const save = async () => {
     setBusy(true);
     try {
-      const next = await api.updateGrocerySettings({ ...draft, store_location: store.trim() });
+      const next = await api.updateGrocerySettings({
+        ...draft,
+        store_location: store.trim(),
+        shop_by_time: shopBy,
+      });
       setSaved(next);
       setDraft(next);
       onSaved(cookingChanged);
@@ -83,101 +93,118 @@ export function GrocerySettingsPanel({ onSaved }: { onSaved: (replanned: boolean
   };
 
   return (
-    <form
-      className="space-y-6"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (changed && !busy) void save();
-      }}
-    >
-      <Field label="Diet">
-        <ChoiceChips
-          value={draft.diet}
-          labels={DIET_LABEL}
-          onChange={(diet) => diet && setDraft({ ...draft, diet })}
-        />
-      </Field>
-
-      <Field label="Recipes per week">
-        <ChoiceChips
-          value={String(draft.recipes_per_week)}
-          labels={RECIPE_COUNTS}
-          onChange={(count) => count && setDraft({ ...draft, recipes_per_week: Number(count) })}
-        />
-        <p className="text-xs text-muted-foreground">How often you cook at home in a week.</p>
-      </Field>
-
-      <Field label="Servings">
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            size="icon"
-            variant="outline"
-            aria-label="Fewer servings"
-            disabled={draft.servings <= 1}
-            onClick={() => setDraft({ ...draft, servings: draft.servings - 1 })}
-          >
-            <Minus className="h-4 w-4" />
-          </Button>
-          <span className="w-6 text-center text-sm font-medium tabular-nums" aria-live="polite">
-            {draft.servings}
-          </span>
-          <Button
-            type="button"
-            size="icon"
-            variant="outline"
-            aria-label="More servings"
-            disabled={draft.servings >= MAX_SERVINGS}
-            onClick={() => setDraft({ ...draft, servings: draft.servings + 1 })}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-      </Field>
-
-      <Field label="Store" htmlFor="grocery-store">
-        <div className="relative">
-          <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            id="grocery-store"
-            value={store}
-            placeholder="Where you usually shop"
-            autoComplete="off"
-            onChange={(e) => setDraft({ ...draft, store_location: e.target.value })}
-            onFocus={() => setStoreFocused(true)}
-            onBlur={() => setStoreFocused(false)}
-            className="h-10 pl-9"
+    <div className="space-y-8">
+      <form
+        className="space-y-6"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (changed && !busy) void save();
+        }}
+      >
+        <Field label="Diet">
+          <ChoiceChips
+            value={draft.diet}
+            labels={DIET_LABEL}
+            onChange={(diet) => diet && setDraft({ ...draft, diet })}
           />
-        </div>
-        {suggestions.length > 0 && (
-          <ul className="overflow-hidden rounded-md border bg-card text-sm shadow-sm">
-            {suggestions.map((suggestion) => (
-              <li key={suggestion}>
-                <button
-                  type="button"
-                  // Before the input's blur clears the list.
-                  onPointerDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setDraft({ ...draft, store_location: suggestion });
-                    setSuggestions([]);
-                  }}
-                  className="block w-full truncate px-3 py-2 text-left hover:bg-accent"
-                >
-                  {suggestion}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="text-xs text-muted-foreground">
-          A shopping task gets this location, so the trip there is planned too.
-        </p>
-      </Field>
+        </Field>
 
-      <Button type="submit" className="w-full" disabled={!changed || busy}>
-        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-        {cookingChanged ? "Save and replan this week" : "Save"}
-      </Button>
-    </form>
+        <Field label="Recipes per week">
+          <ChoiceChips
+            value={String(draft.recipes_per_week)}
+            labels={RECIPE_COUNTS}
+            onChange={(count) => count && setDraft({ ...draft, recipes_per_week: Number(count) })}
+          />
+          <p className="text-xs text-muted-foreground">How often you cook at home in a week.</p>
+        </Field>
+
+        <Field label="Servings">
+          <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              aria-label="Fewer servings"
+              disabled={draft.servings <= 1}
+              onClick={() => setDraft({ ...draft, servings: draft.servings - 1 })}
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            <span className="w-6 text-center text-sm font-medium tabular-nums" aria-live="polite">
+              {draft.servings}
+            </span>
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              aria-label="More servings"
+              disabled={draft.servings >= MAX_SERVINGS}
+              onClick={() => setDraft({ ...draft, servings: draft.servings + 1 })}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </Field>
+
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-[1fr_7rem] gap-3">
+            <Field label="Store" htmlFor="grocery-store">
+              <div className="relative">
+                <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="grocery-store"
+                  value={store}
+                  placeholder="Where you usually shop"
+                  autoComplete="off"
+                  onChange={(e) => setDraft({ ...draft, store_location: e.target.value })}
+                  onFocus={() => setStoreFocused(true)}
+                  onBlur={() => setStoreFocused(false)}
+                  className="h-10 pl-9"
+                />
+              </div>
+            </Field>
+            <Field label="Shop by" htmlFor="grocery-shop-by">
+              <Input
+                id="grocery-shop-by"
+                type="time"
+                required
+                value={shopBy}
+                onChange={(e) => setDraft({ ...draft, shop_by_time: e.target.value })}
+                className="h-10"
+              />
+            </Field>
+          </div>
+          {suggestions.length > 0 && (
+            <ul className="overflow-hidden rounded-md border bg-card text-sm shadow-sm">
+              {suggestions.map((suggestion) => (
+                <li key={suggestion}>
+                  <button
+                    type="button"
+                    // Before the input's blur clears the list.
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setDraft({ ...draft, store_location: suggestion });
+                      setSuggestions([]);
+                    }}
+                    className="block w-full truncate px-3 py-2 text-left hover:bg-accent"
+                  >
+                    {suggestion}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-muted-foreground">
+            The shopping task goes to this store, due by this time on the day you need to shop.
+          </p>
+        </div>
+
+        <Button type="submit" className="w-full" disabled={!changed || busy || !shopBy}>
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {cookingChanged ? "Save and replan this week" : "Save"}
+        </Button>
+      </form>
+      <PlannerInputs />
+    </div>
   );
 }

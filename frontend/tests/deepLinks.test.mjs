@@ -87,6 +87,16 @@ test("an uppercase public task ID in the path opens its task", () => {
   assert.equal(exports.parseDeepLink({ pathname: "/app", search: "", hash: "" }), null);
 });
 
+test("the shopping task's #grocery link opens the grocery view", () => {
+  const exports = {};
+  vm.runInNewContext(outputText, { exports, window: {}, URLSearchParams });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(exports.parseDeepLink({ pathname: "/", search: "", hash: "#grocery" }))),
+    { kind: "grocery" },
+  );
+  assert.equal(exports.deepLinkHash({ kind: "grocery" }), "#grocery");
+});
+
 test("reopening a task already on the trail rewinds instead of looping", () => {
   const entries = [{ url: "/app", state: null }];
   let index = 0;

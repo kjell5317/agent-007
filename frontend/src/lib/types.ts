@@ -323,6 +323,8 @@ export interface GrocerySettings {
   recipes_per_week: number;
   servings: number;
   store_location: string | null;
+  // HH:MM:SS; the store's time of day the shopping task is due by.
+  shop_by_time: string;
 }
 
 export interface Recipe {
@@ -334,6 +336,21 @@ export interface Recipe {
   ingredients: Array<{ name: string; amount: string }>;
   steps: string[];
   rating: -1 | 1 | null;
+  // Set once cooked; it then shows in the archive.
+  done_at: string | null;
+}
+
+// What the weekly plan learns from, with the limits that cut each part.
+export interface GroceryPreferences {
+  liked: string[];
+  disliked: string[];
+  usual: Array<{ name: string; quantity: number; unit: GroceryUnit }>;
+  expired: string[];
+  rated_limit: number;
+  usual_limit: number;
+  usual_weeks: number;
+  expired_limit: number;
+  expired_weeks: number;
 }
 
 export interface RecipesState {

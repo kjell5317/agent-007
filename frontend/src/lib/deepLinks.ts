@@ -1,10 +1,13 @@
 export type DeepLink =
   | { kind: "task"; id: string }
-  | { kind: "run"; id: number };
+  | { kind: "run"; id: number }
+  // The grocery view; the shopping task links here.
+  | { kind: "grocery" };
 
 export function parseDeepLink(location: Location = window.location): DeepLink | null {
   const hash = location.hash.replace(/^#/, "").replace(/^\/+/, "");
   const [kind, rawId] = hash.split("/");
+  if (kind === "grocery") return { kind };
   if (kind === "task" && rawId) return { kind, id: decodeURIComponent(rawId) };
   if (kind === "run" && rawId) {
     const id = Number(rawId);
@@ -25,6 +28,7 @@ export function parseDeepLink(location: Location = window.location): DeepLink | 
 }
 
 export function deepLinkHash(link: DeepLink): string {
+  if (link.kind === "grocery") return "#grocery";
   return link.kind === "task"
     ? `#task/${encodeURIComponent(link.id)}`
     : `#run/${link.id}`;

@@ -5,6 +5,7 @@ import type {
   ChatSummary,
   ChatToolTrace,
   GroceryCategory,
+  GroceryPreferences,
   GrocerySettings,
   GroceryState,
   GroceryUnit,
@@ -251,6 +252,11 @@ export const api = {
     request<GrocerySettings>("/grocery/settings", { method: "PATCH", body: JSON.stringify(patch) }),
   groceryRecipes: () => request<RecipesState>("/grocery/recipes"),
   replanGroceries: () => request<RecipesState>("/grocery/plan", { method: "POST" }),
+  setRecipeDone: (id: string, done: boolean) =>
+    request<RecipesState>(`/grocery/recipes/${id}/done`, {
+      method: "PUT", body: JSON.stringify({ done }),
+    }),
+  groceryPreferences: () => request<GroceryPreferences>("/grocery/preferences"),
   rateRecipe: (id: string, rating: -1 | 0 | 1) =>
     request<RecipesState>(`/grocery/recipes/${id}/rating`, {
       method: "PUT", body: JSON.stringify({ rating }),

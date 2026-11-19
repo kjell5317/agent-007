@@ -3,7 +3,7 @@ answer lands on the shopping list without touching the user's own entries."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -21,8 +21,8 @@ from app.agent.grocery.planner import (
 )
 from app.db.clients import grocery as grocery_store
 from app.db.schemas.grocery import GrocerySettingsUpdate
-from app.services.grocery import plan
-from app.services.grocery.normalize import purchasable, week_start
+from app.services.grocery import plan, shopping
+from app.services.grocery.normalize import covered_by, purchasable, week_start
 from app.services.grocery.usage import Purchase, often_expired, weekly_usage, weeks_observed
 from grocery_fakes import FakeSession, patch_store
 
@@ -34,11 +34,11 @@ def store(monkeypatch):
 WEEK = date(2026, 11, 16)
 
 
-def _need(name, quantity, unit="g", recipes=(), **facts):
+def _need(name, quantity, unit="g", recipes=(), needed=0.0, **facts):
     return ShoppingNeed(
         name=name, quantity=quantity, unit=unit, portion=facts.get("portion", 1),
         category=facts.get("category", "other"), shelf_life_days=facts.get("shelf_life_days", 7),
-        recipes=tuple(recipes),
+        recipes=tuple(recipes), needed=needed,
     )
 
 
@@ -104,19 +104,38 @@ def test_the_same_product_planned_twice_adds_up(store):
     ]
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("changed", "replans"),
-    [({"servings": 2}, True), ({"diet": "vegan"}, True), ({"store_location": "Rewe"}, False)],
+    ("changed", "replans", "syncs"),
+    [
+        ({"servings": 2}, True, False),
+        ({"diet": "vegan"}, True, False),
+        ({"store_location": " Rewe "}, False, True),
+        ({"store_location": ""}, False, False),  # was empty already
+        ({"shop_by_time": "19:30"}, False, True),
+        ({"shop_by_time": "18:00"}, False, False),
+    ],
 )
-def test_only_cooking_settings_replan(monkeypatch, changed, replans):
-    row = SimpleNamespace(diet="omnivore", recipes_per_week=3, servings=1, store_location=None)
+async def test_cooking_settings_replan_and_store_settings_move_the_trip(
+    monkeypatch, changed, replans, syncs
+):
+    row = SimpleNamespace(
+        diet="omnivore", recipes_per_week=3, servings=1, store_location=None,
+        shop_by_time=time(18),
+    )
     monkeypatch.setattr(grocery_store, "settings", lambda session: row)
-    calls = []
+    calls, synced = [], []
     monkeypatch.setattr(plan, "request_plan", lambda: calls.append(True))
 
-    plan.update_settings(FakeSession(), GrocerySettingsUpdate(**changed))
+    async def sync_store(session):
+        synced.append((row.store_location, row.shop_by_time))
+
+    monkeypatch.setattr(shopping, "sync_store", sync_store)
+
+    await plan.update_settings(FakeSession(), GrocerySettingsUpdate(**changed))
 
     assert bool(calls) is replans
+    assert bool(synced) is syncs
 
 
 def test_parse_plan_keeps_usable_recipes_and_entries():
@@ -133,15 +152,19 @@ def test_parse_plan_keeps_usable_recipes_and_entries():
             {"name": "Mystery", "quantity": 1, "unit": "crate", "portion": 1,
              "category": "other", "shelf_life_days": 3},
         ],
-    }, recipes=1)
+        "shop_by": "2026-11-20",
+    }, recipes=1, today=date(2026, 11, 18))
 
     assert [r.title for r in parsed.recipes] == ["Dal"]
     assert [(n.name, n.quantity, n.unit) for n in parsed.shopping] == [("Linsen", 500, "g")]
     # Only recipes in the plan, each once; "Extra" was cut to fit the count.
     assert parsed.shopping[0].recipes == ("Dal",)
+    assert parsed.shop_by == date(2026, 11, 20)
     with pytest.raises(PlanError):
-        parse_plan({"recipes": [], "shopping": []}, recipes=3)
-    assert parse_plan({"recipes": [], "shopping": []}, recipes=0) == Plan([], [])
+        parse_plan({"recipes": [], "shopping": []}, recipes=3, today=WEEK)
+    assert parse_plan(
+        {"recipes": [], "shopping": [], "shop_by": ""}, recipes=0, today=WEEK
+    ) == Plan([], [])
 
 
 def test_the_planner_sees_storage_list_habits_and_ratings():
@@ -150,7 +173,7 @@ def test_the_planner_sees_storage_list_habits_and_ratings():
         storage=[Stock("Milch", 800, "ml", date(2026, 11, 25))],
         listed=[Listed("Knoblauch", 3, "piece", "manual")],
         usual=weekly_usage([Purchase("milch", "Milch", 2000, "ml")], weeks=1),
-        expired=["Spinat"], liked=["Dal"], disliked=["Tofu-Curry"],
+        expired=["Spinat"], liked=["Dal"], disliked=["Tofu-Curry"], cooked=["Risotto"],
     ))
 
     assert "Wednesday, 2026-11-18" in message
@@ -162,6 +185,7 @@ def test_the_planner_sees_storage_list_habits_and_ratings():
     assert "Often expired before it was used: Spinat" in message
     assert "Liked recipes: Dal" in message
     assert "Disliked recipes: Tofu-Curry" in message
+    assert "Already cooked this week: Risotto" in message
 
 
 def test_usual_amounts_average_over_the_weeks_seen():
@@ -194,3 +218,69 @@ def test_weeks_start_on_monday():
     assert week_start(date(2026, 11, 18)) == WEEK
     assert week_start(WEEK) == WEEK
     assert week_start(date(2026, 11, 22)) == WEEK
+
+
+def test_a_cooked_recipe_survives_a_replan(store):
+    cooked = store.add_recipe(None, week_start=WEEK, title="Dal")
+    cooked.done_at = datetime.now(timezone.utc)
+    store.add_recipe(None, week_start=WEEK, title="Old curry")
+
+    plan.apply_plan(FakeSession(), WEEK, 1, Plan(recipes=[_recipe("Risotto")], shopping=[]))
+
+    assert sorted(r.title for r in store.recipes) == ["Dal", "Risotto"]
+
+
+def test_what_storage_covers_for_a_recipe_is_not_bought_again(store):
+    rice = store.product("rice", name="Rice", unit="g", pack_quantity=1000)
+    milk = store.product("milk", name="Milk", unit="ml", pack_quantity=1000)
+    juice = store.product("orangensaft", name="Orangensaft", unit="bottle", pack_quantity=1)
+    oats = store.product("oats", name="Oats", unit="g", pack_quantity=500)
+    store.stored(rice, quantity=400)
+    store.stored(milk, quantity=100)
+    store.stored(juice, quantity=1)
+    store.stored(oats, quantity=100)
+
+    plan.add_needs(FakeSession(), [
+        _need("Rice", 300, recipes=["Risotto"], needed=300),            # 400 g at home
+        _need("Milk", 500, unit="ml", recipes=["Porridge"], needed=300),  # only 100 ml
+        _need("Orangensaft", 100, unit="ml", recipes=["Müsli"], needed=100),  # bottles: can't compare
+        _need("Oats", 500),                                               # a usual purchase
+    ])
+
+    assert sorted((i.name, i.quantity) for i in store.items) == [("Milk", 1000), ("Oats", 500)]
+
+
+def test_covered_by_compares_same_units_and_trusts_the_rest():
+    assert covered_by(300, "g", [(200, "g"), (150, "g")]) is True
+    assert covered_by(300, "g", [(200, "g")]) is False
+    assert covered_by(100, "ml", [(1, "bottle")]) is True
+    assert covered_by(0, "g", [(10, "g")]) is True  # needed unknown, but it's in stock
+    assert covered_by(300, "g", []) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gemini_key", "expected"),
+    [("key", ("google", "gemini-3.8-flash", "low")), ("", (None, None, None))],
+)
+async def test_recipes_are_planned_on_gemini_when_a_key_is_set(monkeypatch, gemini_key, expected):
+    from app.agent.grocery import planner as planner_mod
+    from app.config.settings import Settings
+
+    settings = Settings(gemini_api_key=gemini_key, chat_thinking_level="low")
+    monkeypatch.setattr(planner_mod, "get_settings", lambda: settings)
+    seen = {}
+
+    async def chat(messages, settings, **kwargs):
+        seen.update(kwargs)
+        call = SimpleNamespace(name="set_plan", input={"recipes": [], "shopping": [], "shop_by": ""})
+        return SimpleNamespace(tool_calls=[call], stop_reason="tool_use")
+
+    monkeypatch.setattr(planner_mod, "chat", chat)
+
+    await planner_mod.plan(PlannerContext(
+        today=date(2026, 11, 19), week_start=WEEK, diet="omnivore", recipes=0, servings=1,
+        storage=[], listed=[], usual=[], expired=[], liked=[], disliked=[], cooked=[],
+    ))
+
+    assert (seen["provider"], seen["model"], seen["thinking_level"]) == expected

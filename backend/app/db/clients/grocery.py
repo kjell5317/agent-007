@@ -138,6 +138,13 @@ def storage_for_item(session: Session, item_id: uuid.UUID) -> StorageItem | None
     return session.execute(stmt.limit(1)).scalars().first()
 
 
+def stock_of(session: Session, product_key: str) -> list[StorageItem]:
+    stmt = select(StorageItem).where(
+        StorageItem.product_key == product_key, StorageItem.removed_at.is_(None)
+    )
+    return list(session.execute(stmt).scalars())
+
+
 def in_storage(session: Session, product_key: str) -> bool:
     stmt = select(StorageItem.id).where(
         StorageItem.product_key == product_key, StorageItem.removed_at.is_(None)
@@ -200,11 +207,16 @@ def recipes_for_week(session: Session, week_start: date) -> list[GroceryRecipe]:
     return list(session.execute(stmt).scalars())
 
 
-def recipes_before(session: Session, week_start: date, *, limit: int) -> list[GroceryRecipe]:
+def archived_recipes(session: Session, week_start: date, *, limit: int) -> list[GroceryRecipe]:
+    """Past weeks, and this week's recipes already cooked; newest week first."""
     stmt = (
         select(GroceryRecipe)
-        .where(GroceryRecipe.week_start < week_start)
-        .order_by(GroceryRecipe.week_start.desc(), GroceryRecipe.created_at)
+        .where(or_(GroceryRecipe.week_start < week_start, GroceryRecipe.done_at.is_not(None)))
+        .order_by(
+            GroceryRecipe.week_start.desc(),
+            GroceryRecipe.done_at.desc().nulls_last(),
+            GroceryRecipe.created_at,
+        )
         .limit(limit)
     )
     return list(session.execute(stmt).scalars())

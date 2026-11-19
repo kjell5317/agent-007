@@ -196,6 +196,10 @@ export function withoutItem(state: GroceryState, id: string): GroceryState {
   return { ...state, items: state.items.filter((item) => item.id !== id) };
 }
 
+export function withoutStored(state: GroceryState, id: string): GroceryState {
+  return { ...state, storage: state.storage.filter((row) => row.id !== id) };
+}
+
 export function withPortionUsed(state: GroceryState, id: string): GroceryState {
   return {
     ...state,

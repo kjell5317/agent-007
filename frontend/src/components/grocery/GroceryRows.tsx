@@ -8,6 +8,7 @@ import {
   Package,
   Shapes,
   Star,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -117,18 +118,29 @@ export function StorageRow({
   item,
   today,
   onUse,
+  onRemove,
   onEdit,
   onToggleStaple,
 }: {
   item: StorageItem;
   today: string;
   onUse: () => void;
+  onRemove: () => void;
   onEdit: () => void;
   onToggleStaple: () => void;
 }) {
   const UnitIcon = isMetric(item.unit) ? null : UNIT_ICON[item.unit];
   return (
-    <li className="flex items-center gap-1 pl-3 pr-2">
+    <li className="flex items-center gap-1 pl-1 pr-2">
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${item.name} from storage`}
+        title="Remove from storage"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
       <button
         type="button"
         onClick={onEdit}

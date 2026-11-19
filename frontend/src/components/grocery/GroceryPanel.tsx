@@ -12,6 +12,7 @@ import {
   CATEGORY_LABEL,
   groupByCategory,
   withoutItem,
+  withoutStored,
   withPortionUsed,
   withStaple,
 } from "@/lib/grocery";
@@ -123,6 +124,7 @@ export function GroceryPanel({
               item={item}
               today={today}
               onUse={() => void send(() => api.useStoragePortion(item.id), (s) => withPortionUsed(s, item.id))}
+              onRemove={() => void send(() => api.removeStorageItem(item.id), (s) => withoutStored(s, item.id))}
               onEdit={() => setEditingStorage(item)}
               onToggleStaple={() => toggleStaple(item.product_key, !item.staple)}
             />

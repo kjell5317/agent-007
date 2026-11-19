@@ -164,7 +164,7 @@ async def test_message_facets_use_stored_sources_and_exclude_chat_and_generated(
 
     monkeypatch.setattr(search_api, "SessionLocal", Session)
     assert await search_api.search_facets("messages") == {"options": ["gmail", "slack"]}
-    assert "NOT IN ('chat', 'subtask', 'recurrence')" in captured["sql"]
+    assert "NOT IN ('chat', 'subtask', 'recurrence', 'grocery')" in captured["sql"]
     assert "DISTINCT" in captured["sql"]
 
 

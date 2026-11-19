@@ -98,5 +98,16 @@ def purchasable(quantity: float, *, unit: str, pack_quantity: float) -> float:
     return float(math.ceil(quantity - _EPSILON))
 
 
+def covered_by(needed: float, unit: str, stock: list[tuple[float, str]]) -> bool:
+    """Whether what's at home covers a recipe's need. Stock counted in another
+    unit can't be compared, so it counts as covering: whatever is in stock is
+    not bought again."""
+    if not stock:
+        return False
+    if any(stock_unit != unit for _, stock_unit in stock) or needed <= 0:
+        return True
+    return sum(quantity for quantity, _ in stock) + _EPSILON >= needed
+
+
 def week_start(day: date) -> date:
     return day - timedelta(days=day.weekday())

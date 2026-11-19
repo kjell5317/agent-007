@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # life) — a fast model is plenty.
     grocery_llm_provider: str = "anthropic"
     grocery_llm_model: str = "claude-haiku-5-5"
+    # The weekly recipe plan. Needs GEMINI_API_KEY for the google provider;
+    # without one it falls back to LLM_PROVIDER/LLM_MODEL.
+    grocery_plan_llm_provider: str = "google"
+    grocery_plan_llm_model: str = "gemini-3.8-flash"
     # Chat reasoning depth and optional isolated Google Search tool. Search runs
     # in its own grounded call so its server-side steps cannot corrupt chat's
     # custom tool and widget output.
@@ -311,8 +315,8 @@ class Settings(BaseSettings):
 
     def llm_target(self, agent: str) -> tuple[str, str]:
         """(provider, model) for a named agent flow, each field falling back to
-        the global default. `chat` and `grocery` override; extraction and the
-        other flows use the global LLM_PROVIDER/LLM_MODEL."""
+        the global default. `chat`, `grocery` and `grocery_plan` override;
+        extraction and the other flows use the global LLM_PROVIDER/LLM_MODEL."""
         if agent == "chat":
             return (
                 self.chat_llm_provider.strip().lower() or self.effective_llm_provider,
@@ -322,6 +326,11 @@ class Settings(BaseSettings):
             return (
                 self.grocery_llm_provider.strip().lower() or self.effective_llm_provider,
                 self.grocery_llm_model.strip() or self.effective_llm_model,
+            )
+        if agent == "grocery_plan":
+            return (
+                self.grocery_plan_llm_provider.strip().lower() or self.effective_llm_provider,
+                self.grocery_plan_llm_model.strip() or self.effective_llm_model,
             )
         return self.effective_llm_provider, self.effective_llm_model
 

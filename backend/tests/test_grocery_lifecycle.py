@@ -9,7 +9,7 @@ import pytest
 
 from app.db.clients import grocery as grocery_store
 from app.db.schemas.grocery import GroceryItemUpdate, StorageItemUpdate
-from app.services.grocery import lifecycle, products
+from app.services.grocery import lifecycle, products, recheck, shopping
 from app.timezones import to_user_tz
 from grocery_fakes import FakeSession, patch_store
 
@@ -19,15 +19,34 @@ def store(monkeypatch):
     return patch_store(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def handoffs(monkeypatch):
+    """What lifecycle hands on: storage changes for the re-check, shop-by
+    days for the shopping task, and whether the list ran empty."""
+    seen = SimpleNamespace(changes=[], shop_by=[], closes=0)
+
+    async def ensure_task(session, shop_by):
+        seen.shop_by.append(shop_by)
+
+    async def close_if_done(session):
+        seen.closes += 1
+
+    monkeypatch.setattr(recheck, "note", seen.changes.append)
+    monkeypatch.setattr(shopping, "ensure_task", ensure_task)
+    monkeypatch.setattr(shopping, "close_if_done", close_if_done)
+    return seen
+
+
 def _today():
     return to_user_tz(datetime.now(timezone.utc)).date()
 
 
-def test_cross_off_moves_the_item_into_storage(store):
+@pytest.mark.asyncio
+async def test_cross_off_moves_the_item_into_storage(store):
     rice = store.product("rice", unit="g", pack_quantity=1000, portion=150, shelf_life_days=365)
     item = store.add_item(None, product=rice, quantity=500, origin="manual")
 
-    lifecycle.cross_off(FakeSession(), item.id)
+    await lifecycle.cross_off(FakeSession(), item.id)
 
     assert item.bought_at is not None
     [stored] = store.storage
@@ -36,10 +55,11 @@ def test_cross_off_moves_the_item_into_storage(store):
     assert stored.expires_on == _today() + timedelta(days=365)
 
 
-def test_uncross_takes_it_back_out_of_storage(store):
+@pytest.mark.asyncio
+async def test_uncross_takes_it_back_out_of_storage(store):
     rice = store.product("rice")
     item = store.add_item(None, product=rice, quantity=1, origin="manual")
-    lifecycle.cross_off(FakeSession(), item.id)
+    await lifecycle.cross_off(FakeSession(), item.id)
 
     lifecycle.uncross(FakeSession(), item.id)
 
@@ -47,43 +67,47 @@ def test_uncross_takes_it_back_out_of_storage(store):
     assert store.storage == []
 
 
-def test_portions_count_down_until_used_up(store):
+@pytest.mark.asyncio
+async def test_portions_count_down_until_used_up(store):
     rice = store.product("rice", unit="g", pack_quantity=1000, portion=400)
     stored = store.stored(rice)
 
-    lifecycle.use_portion(FakeSession(), stored.id)
-    lifecycle.use_portion(FakeSession(), stored.id)
+    await lifecycle.use_portion(FakeSession(), stored.id)
+    await lifecycle.use_portion(FakeSession(), stored.id)
     assert stored.quantity == pytest.approx(200)
     assert stored.removed_at is None
 
-    lifecycle.use_portion(FakeSession(), stored.id)
+    await lifecycle.use_portion(FakeSession(), stored.id)
     assert stored.removed_reason == "used_up"
     assert store.items == []  # not a staple
 
 
-def test_a_staple_goes_back_on_the_list_once_the_last_one_is_used(store):
+@pytest.mark.asyncio
+async def test_a_staple_goes_back_on_the_list_once_the_last_one_is_used(store):
     milk = store.product("milk", unit="ml", pack_quantity=1000, portion=1000, staple=True)
     first, second = store.stored(milk), store.stored(milk)
 
-    lifecycle.use_portion(FakeSession(), first.id)
+    await lifecycle.use_portion(FakeSession(), first.id)
     assert store.items == []  # another carton is still at home
 
-    lifecycle.remove(FakeSession(), second.id)
+    await lifecycle.remove(FakeSession(), second.id)
     [item] = store.items
     assert (item.product_key, item.quantity, item.origin) == ("milk", 1000, "staple")
 
 
-def test_a_staple_already_on_the_list_is_not_added_twice(store):
+@pytest.mark.asyncio
+async def test_a_staple_already_on_the_list_is_not_added_twice(store):
     milk = store.product("milk", staple=True)
     store.add_item(None, product=milk, quantity=2, origin="manual")
     stored = store.stored(milk)
 
-    lifecycle.remove(FakeSession(), stored.id)
+    await lifecycle.remove(FakeSession(), stored.id)
 
     assert [(i.origin, i.quantity) for i in store.items] == [("manual", 2)]
 
 
-def test_expired_items_leave_storage_and_staples_come_back(store):
+@pytest.mark.asyncio
+async def test_expired_items_leave_storage_and_staples_come_back(store):
     yesterday = _today() - timedelta(days=1)
     milk = store.product("milk", staple=True)
     bread = store.product("bread")
@@ -91,7 +115,7 @@ def test_expired_items_leave_storage_and_staples_come_back(store):
     expired_bread = store.stored(bread, expires_on=yesterday)
     fresh = store.stored(bread, expires_on=_today())
 
-    assert lifecycle.purge_expired(FakeSession()) == 2
+    assert await lifecycle.purge_expired(FakeSession()) == 2
 
     assert expired_milk.removed_reason == expired_bread.removed_reason == "expired"
     assert fresh.removed_at is None
@@ -139,14 +163,14 @@ async def test_a_unit_change_needs_the_portion_in_that_unit(store):
 async def test_a_new_amount_left_is_the_bars_new_full(store):
     rice = store.product("rice", unit="g", pack_quantity=1000, portion=150)
     stored = store.stored(rice)
-    lifecycle.use_portion(FakeSession(), stored.id)
+    await lifecycle.use_portion(FakeSession(), stored.id)
     assert (stored.quantity, stored.start_quantity) == (850, 1000)
 
     await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(quantity=400))
     assert (stored.quantity, stored.start_quantity) == (400, 400)
 
     # A new portion alone leaves the bar's full mark where it was.
-    lifecycle.use_portion(FakeSession(), stored.id)
+    await lifecycle.use_portion(FakeSession(), stored.id)
     await lifecycle.update_storage(FakeSession(), stored.id, StorageItemUpdate(portion=100))
     assert (stored.quantity, stored.start_quantity, stored.portion) == (250, 400, 100)
 
@@ -262,3 +286,49 @@ async def test_spellings_of_one_product_share_its_cache_row(monkeypatch):
     assert first.key == "tomatoes"
     assert first.aliases == ["tomato", "tomaten"]
     assert lookups == ["tomato", "Tomaten"]
+
+
+@pytest.mark.asyncio
+async def test_using_or_removing_by_hand_starts_the_recheck(store, handoffs):
+    rice = store.product("rice", name="Reis", unit="g", pack_quantity=1000, portion=150)
+    bread = store.product("bread", name="Brot", unit="piece", pack_quantity=1, portion=1)
+    item = store.add_item(None, product=rice, quantity=1000, origin="manual")
+    used, removed = store.stored(rice), store.stored(bread)
+    store.stored(bread, expires_on=_today() - timedelta(days=1))
+
+    await lifecycle.cross_off(FakeSession(), item.id)
+    await lifecycle.purge_expired(FakeSession())
+    assert handoffs.changes == []  # neither counts
+
+    await lifecycle.use_portion(FakeSession(), used.id)
+    await lifecycle.remove(FakeSession(), removed.id)
+    assert handoffs.changes == [
+        "Used 150 g of Reis, 850 g left",
+        "Took Brot out of storage with 1 piece left",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_staple_running_out_means_shopping_tomorrow(store, handoffs):
+    milk = store.product("milk", unit="ml", pack_quantity=1000, portion=1000, staple=True)
+    bread = store.product("bread", portion=1)
+    await lifecycle.use_portion(FakeSession(), store.stored(bread).id)
+    assert handoffs.shop_by == []  # not starred
+
+    await lifecycle.use_portion(FakeSession(), store.stored(milk).id)
+    assert handoffs.shop_by == [_today() + timedelta(days=1)]
+
+    store.stored(milk, expires_on=_today() - timedelta(days=1))
+    store.items.clear()
+    await lifecycle.purge_expired(FakeSession())
+    assert handoffs.shop_by[-1] == _today() + timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_every_cross_off_checks_whether_the_trip_is_done(store, handoffs):
+    rice = store.product("rice")
+    item = store.add_item(None, product=rice, quantity=1, origin="manual")
+
+    await lifecycle.cross_off(FakeSession(), item.id)
+
+    assert handoffs.closes == 1
