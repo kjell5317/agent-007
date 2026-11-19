@@ -51,3 +51,14 @@ test("tasks planned for later sort after every other task", () => {
   assert.deepEqual(order("scheduled"), ["pending", "planned", "deferred-soon", "deferred-late"]);
   assert.deepEqual(order("due"), ["pending", "planned", "deferred-soon", "deferred-late"]);
 });
+
+test("only a new task awaiting its first solve shows as planning", () => {
+  const task = (fields) => ({ schedule_status: "pending", schedule_state: "placed", is_container: false, ...fields });
+
+  assert.equal(exports.isPlanning(task({})), true);
+  assert.equal(exports.isPlanning(task({ schedule_status: "scheduled" })), false);
+  assert.equal(exports.isPlanning(task({ schedule_status: "unscheduled" })), false);
+  assert.equal(exports.isPlanning(task({ schedule_status: "deferred", schedule_state: "deferred" })), false);
+  assert.equal(exports.isPlanning(task({ is_container: true })), false);
+  assert.equal(exports.isPlanning(task({ schedule_state: "waiting" })), false);
+});

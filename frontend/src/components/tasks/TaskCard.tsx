@@ -4,6 +4,7 @@ import {
   CircleCheckBig,
   Hourglass,
   ListTodo,
+  Loader2,
   MapPin,
   Pause,
   Play,
@@ -25,7 +26,7 @@ import { latestHandoff } from "@/lib/handoff";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { taskRecurrence } from "@/lib/tasks";
+import { isPlanning, taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -87,6 +88,7 @@ export function TaskCard({
   const labelMeta = labels.find((l) => l.name === task.label);
   const displayLocation = formatTaskCardLocation(task.location);
   const handoffRunning = latestHandoff(task)?.state === "running";
+  const planning = isPlanning(task);
   const recurrence = taskRecurrence(task);
   const recurrenceTitle = recurrence
     ? `${recurrence.inherited ? "Part of a task that repeats" : "Repeats"} ${recurrence.label.toLowerCase()}`
@@ -95,7 +97,7 @@ export function TaskCard({
     work.running ? "border-flow-primary"
       : handoffRunning ? "border-flow-sky"
       : task.is_container ? null
-      : task.schedule_status === "pending" && !work.waiting ? "border-emerald-500/70"
+      : planning ? "border-emerald-500/70"
       : task.kotx_task_id != null ? "border-primary/50"
       : unseen ? "border-emerald-500/70"
       : null;
@@ -414,6 +416,17 @@ export function TaskCard({
               )}
             </div>
           </div>
+
+          {planning && (
+            <span
+              role="status"
+              aria-label="Planning"
+              title="Finding a slot in your calendar"
+              className="shrink-0 text-muted-foreground"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+            </span>
+          )}
 
           {kotxTask ? (
             // The pending run action opens the modal (where the doc + action

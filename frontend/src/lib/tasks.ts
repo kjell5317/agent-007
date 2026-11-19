@@ -16,6 +16,14 @@ export function fmtRecurrence(unit: RecurrenceUnit, interval: number): string {
   return interval === 1 ? RECURRENCE_ADVERB[unit] : `Every ${interval} ${unit}s`;
 }
 
+// A new task reads "pending" from creation until its first solve places it
+// or gives up. Parents read "pending" for good, so they never count.
+export function isPlanning(
+  task: Pick<Task, "schedule_status" | "schedule_state" | "is_container">,
+): boolean {
+  return task.schedule_status === "pending" && !task.is_container && task.schedule_state !== "waiting";
+}
+
 // Splitting a repeating occurrence only splits that occurrence: its subtasks
 // don't repeat themselves, they show the rule of the occurrence they belong to.
 export function taskRecurrence(
