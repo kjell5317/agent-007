@@ -76,6 +76,32 @@ export function focusClosedFor(
   return Math.abs(Date.parse(closed.since) - Date.parse(since)) < SAME_SESSION_MS;
 }
 
+type FocusTask = Pick<Task, "id" | "status" | "running_since" | "schedule_state">;
+
+// The running task, or else the task on a break taken from the overlay.
+export function focusTarget<T extends FocusTask>(
+  tasks: T[],
+  closed: FocusSession | null,
+  onBreak: FocusSession | null,
+): { task: T; breakSince: string | null } | null {
+  const running = tasks.find((task) => runningSince(task));
+  if (running) return focusClosedFor(closed, running) ? null : { task: running, breakSince: null };
+  if (!onBreak) return null;
+  const task = tasks.find((candidate) => candidate.id === onBreak.taskId);
+  if (!task || task.status !== "open" || task.schedule_state === "waiting") return null;
+  return { task, breakSince: onBreak.since };
+}
+
+// A session started after the break began. The break's own session is
+// earlier, so a stale copy of the task still running doesn't end it.
+export function breakOver(onBreak: FocusSession, tasks: FocusTask[]): boolean {
+  const began = Date.parse(onBreak.since);
+  return tasks.some((task) => {
+    const since = runningSince(task);
+    return since !== null && Date.parse(since) > began;
+  });
+}
+
 export function sessionMinutes(
   session: Pick<WorkSession, "started_at" | "ended_at">,
   now: number,

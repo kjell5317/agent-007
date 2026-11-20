@@ -1,30 +1,43 @@
-import { useCallback, useSyncExternalStore } from "react";
-import { focusClosedFor, runningSince, type FocusSession } from "@/lib/work";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { breakOver, focusTarget, runningSince, type FocusSession } from "@/lib/work";
 import type { Task } from "@/lib/types";
 
-// The session the focus overlay was closed on, kept across reloads so a
-// closed overlay doesn't pop back up.
-const STORAGE_KEY = "focus-closed";
-const listeners = new Set<() => void>();
-let closed: FocusSession | null = read();
+// Kept across reloads: the session the overlay was closed on, so a closed
+// overlay doesn't pop back up, and a break taken from the overlay, so it
+// stays up through the break.
+const CLOSED_KEY = "focus-closed";
+const BREAK_KEY = "focus-break";
 
-function read(): FocusSession | null {
+interface FocusState {
+  closed: FocusSession | null;
+  onBreak: FocusSession | null;
+}
+
+const listeners = new Set<() => void>();
+let state: FocusState = { closed: load(CLOSED_KEY), onBreak: load(BREAK_KEY) };
+
+function load(key: string): FocusSession | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as FocusSession) : null;
   } catch {
     return null;
   }
 }
 
-function remember(next: FocusSession | null) {
-  closed = next;
+function save(key: string, value: FocusSession | null) {
   try {
-    if (next) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    else window.localStorage.removeItem(STORAGE_KEY);
+    if (value) window.localStorage.setItem(key, JSON.stringify(value));
+    else window.localStorage.removeItem(key);
   } catch {
-    // Without storage the overlay only forgets its closed state on reload.
+    // Without storage the overlay only forgets its state on reload.
   }
+}
+
+function update(next: Partial<FocusState>) {
+  if (next.closed !== undefined && next.closed !== state.closed) save(CLOSED_KEY, next.closed);
+  if (next.onBreak !== undefined && next.onBreak !== state.onBreak) save(BREAK_KEY, next.onBreak);
+  state = { ...state, ...next };
   listeners.forEach((listener) => listener());
 }
 
@@ -36,15 +49,33 @@ function subscribe(listener: () => void) {
 }
 
 export function showFocus(): void {
-  if (closed) remember(null);
+  if (state.closed || state.onBreak) update({ closed: null, onBreak: null });
 }
 
-export function useFocusOverlay(task: Task | null): { open: boolean; close: () => void } {
-  const current = useSyncExternalStore(subscribe, () => closed);
-  const since = task ? runningSince(task) : null;
+export function takeBreak(taskId: string): void {
+  update({ onBreak: { taskId, since: new Date().toISOString() } });
+}
+
+export function useFocusOverlay(tasks: Task[]): {
+  task: Task | null;
+  breakSince: string | null;
+  close: () => void;
+} {
+  const { closed, onBreak } = useSyncExternalStore(subscribe, () => state);
+  const target = useMemo(() => focusTarget(tasks, closed, onBreak), [tasks, closed, onBreak]);
+
+  // A start made anywhere else (another device, a notification) ends the break.
+  useEffect(() => {
+    if (onBreak && breakOver(onBreak, tasks)) update({ onBreak: null });
+  }, [onBreak, tasks]);
+
+  const task = target?.task ?? null;
   const taskId = task?.id ?? null;
+  const since = task ? runningSince(task) : null;
+  const breakSince = target?.breakSince ?? null;
   const close = useCallback(() => {
-    if (taskId && since) remember({ taskId, since });
-  }, [since, taskId]);
-  return { open: task !== null && since !== null && !focusClosedFor(current, task), close };
+    if (breakSince) update({ onBreak: null });
+    else if (taskId && since) update({ closed: { taskId, since } });
+  }, [breakSince, since, taskId]);
+  return { task, breakSince, close };
 }

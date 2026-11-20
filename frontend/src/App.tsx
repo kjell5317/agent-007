@@ -77,13 +77,13 @@ export function App() {
   const pendingClearInputIdsRef = useRef(new Set<string>());
   const tasksActive = view === "tasks" || (view === "chat" && !searchQuery.trim() && searchFilters.kind === "tasks");
   const inboxActive = inboxOpen;
-  const runningTask = useMemo(() => tasks.find((task) => runningSince(task)) ?? null, [tasks]);
-  const runningTaskId = runningTask?.id ?? null;
-  const focus = useFocusOverlay(runningTask);
+  const runningTaskId = useMemo(() => tasks.find((task) => runningSince(task))?.id ?? null, [tasks]);
+  const focus = useFocusOverlay(tasks);
+  const onBreak = focus.breakSince !== null;
 
   useEffect(() => {
-    setQuietToasts(runningTaskId !== null);
-  }, [runningTaskId]);
+    setQuietToasts(runningTaskId !== null || onBreak);
+  }, [onBreak, runningTaskId]);
 
   const closeSearchTo = useCallback(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -634,9 +634,10 @@ export function App() {
       {view === "tasks" ? (
         <Composer onCreated={refresh} />
       ) : null}
-      {runningTask && focus.open && (
+      {focus.task && (
         <FocusOverlay
-          task={runningTask}
+          task={focus.task}
+          breakSince={focus.breakSince}
           onChanged={refresh}
           onClose={focus.close}
           onOpen={(id) => {
@@ -646,7 +647,7 @@ export function App() {
         />
       )}
       {/* Over the focus overlay too: a tap there that fails must still be seen. */}
-      <Toaster style={{ zIndex: focus.open ? 70 : 30 }} />
+      <Toaster style={{ zIndex: focus.task ? 70 : 30 }} />
     </div>
   );
 }

@@ -111,3 +111,27 @@ test("a closed focus overlay stays closed for its session only", () => {
   assert.equal(work.focusClosedFor(null, runningTask), false);
   assert.equal(work.focusClosedFor(closed, idle), false);
 });
+
+test("the focus overlay shows the running task, or the one on a break taken there", () => {
+  const onBreak = { taskId: "a", since: "2026-11-17T11:50:00.000Z" };
+  const other = { ...runningTask, id: "b" };
+  const running = work.focusTarget([idle, other], null, onBreak);
+  assert.equal(running.task, other);
+  assert.equal(running.breakSince, null);
+  const resting = work.focusTarget([idle], null, onBreak);
+  assert.equal(resting.task, idle);
+  assert.equal(resting.breakSince, onBreak.since);
+  assert.equal(work.focusTarget([idle], null, null), null);
+  assert.equal(work.focusTarget([{ ...idle, status: "closed" }], null, onBreak), null);
+  assert.equal(work.focusTarget([{ ...idle, schedule_state: "waiting" }], null, onBreak), null);
+  const closed = { taskId: "b", since: other.running_since };
+  assert.equal(work.focusTarget([idle, other], closed, onBreak), null);
+});
+
+test("a break ends with a session started after it", () => {
+  const onBreak = { taskId: "a", since: "2026-11-17T11:50:00.000Z" };
+  assert.equal(work.breakOver(onBreak, [idle]), false);
+  // The session the break ended, still running in a stale copy.
+  assert.equal(work.breakOver(onBreak, [runningTask]), false);
+  assert.equal(work.breakOver(onBreak, [{ ...idle, id: "b", running_since: "2026-11-17T11:55:00Z" }]), true);
+});
