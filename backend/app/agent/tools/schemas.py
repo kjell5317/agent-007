@@ -12,7 +12,9 @@ Two contexts, two tool sets:
 
 `update_task` carries an optional `status` (`open` / `closed`) so a single
 tool both edits fields and drives the lifecycle: close a task that's done, or
-reopen a closed one. `no_change` is genuinely inert — it touches nothing.
+reopen a closed one. Its `waiting` flag puts an open task on hold while the
+user waits on someone, or resumes it. `no_change` is genuinely inert — it
+touches nothing.
 
 All tools are terminal — the runner stops after the first tool call.
 
@@ -268,6 +270,16 @@ _UPDATE_TASK_PROPS: dict = {
             "not change."
         ),
     },
+    "waiting": {
+        "type": "boolean",
+        "description": (
+            "`true` = the user can't go on until someone else acts (a reply, "
+            "a delivery, a decision, an approval): the task leaves the "
+            "calendar until it is resumed. `false` = resume a task that is "
+            "waiting (its fields show `waiting since`) because what it waited "
+            "on arrived: it goes back to the planner. Omit to leave it as is."
+        ),
+    },
     **_attribute_props(on_create=False),
     "location": {"type": "string"},
     "link": {
@@ -466,7 +478,8 @@ _NEW_INPUT_TOOLS = [
             "The current input refers to one of the CANDIDATE TASKS and changes "
             "it. Patch the fields that change and/or set `status` to drive the "
             "lifecycle: `closed` when it's done or cancelled, `open` to reopen a "
-            "CLOSED candidate the input revives. If reopening a closed task whose "
+            "CLOSED candidate the input revives. Set `waiting` to put an open "
+            "candidate on hold or resume it. If reopening a closed task whose "
             "current due_date or scheduled_date is in the past, include a new "
             "future due_date unless the input explicitly says the date should not "
             "change. Include only what changes."
@@ -510,6 +523,7 @@ _THREAD_FOLLOWUP_TOOLS = [
             "The follow-up changes the existing task. Patch the fields that "
             "change and/or set `status`: `closed` when the follow-up indicates "
             "completion or cancellation, `open` to reopen a task that was closed. "
+            "Set `waiting` to put the task on hold or resume it. "
             "If reopening a closed task whose current due_date or scheduled_date "
             "is in the past, include a new future due_date unless the follow-up "
             "explicitly says the date should not change. Include only what changes."

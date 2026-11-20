@@ -155,6 +155,7 @@ async def test_update_task_action_normalizes_agent_due_date(monkeypatch):
     assert result == {
         "outcome": "updated",
         "status_change": None,
+        "waiting": None,
         "reason": None,
         "confidence": None,
     }
@@ -191,6 +192,7 @@ async def test_reopen_action_reopens_then_applies_due_date(monkeypatch):
     assert result == {
         "outcome": "reopened",
         "status_change": "open",
+        "waiting": None,
         "reason": None,
         "confidence": None,
     }

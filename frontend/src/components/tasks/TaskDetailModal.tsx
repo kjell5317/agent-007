@@ -17,11 +17,11 @@ import {
   GitFork,
   GripVertical,
   History,
+  Hourglass,
   Link2,
   MapPin,
   Pause,
   Play,
-  RefreshCw,
   Repeat,
   RotateCcw,
   Shapes,
@@ -393,9 +393,6 @@ export function TaskDetailModal({
     }
   }
 
-  const rescheduleCurrent = () =>
-    runTaskAction(() => api.rescheduleTask(current.id), "Rescheduling started");
-
   const saveRecurrence = (unit: RecurrenceUnit, interval: number) =>
     runTaskAction(
       () => api.setRecurrence(current.id, unit, interval),
@@ -617,20 +614,16 @@ export function TaskDetailModal({
                 <Trash2 className="h-5 w-5" />
               </TopbarButton>
             )}
-            {current.status === "open" && !current.is_container && !work.running && !work.waiting && (
-              <TopbarButton
-                label="Reschedule"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => { void rescheduleCurrent(); }}
-              >
-                <RefreshCw className="h-5 w-5" />
-              </TopbarButton>
-            )}
-            {workable && work.waiting && (
-              <TopbarButton label="Resume" variant="ghost" disabled={busy} onClick={work.resume}>
-                <RotateCcw className="h-5 w-5" />
-              </TopbarButton>
+            {workable && !work.running && (
+              work.waiting ? (
+                <TopbarButton label="Resume" variant="ghost" disabled={busy} onClick={work.resume}>
+                  <RotateCcw className="h-5 w-5" />
+                </TopbarButton>
+              ) : (
+                <TopbarButton label="Waiting on someone" variant="ghost" disabled={busy} onClick={work.wait}>
+                  <Hourglass className="h-5 w-5" />
+                </TopbarButton>
+              )
             )}
             {current.status !== "open" && !kotxTask && (
               <TopbarButton label="Re-open task" variant="ghost" disabled={busy} onClick={reopenCurrentTask}>

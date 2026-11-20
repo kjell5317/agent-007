@@ -5,8 +5,9 @@ Starting pins the task's slot to now while the session runs and pauses any
 other running task ("switched"). A pause hands what's left of the estimate
 back to the planner — after a short block for a break, a longer one for an
 interruption — except "waiting", which takes the task off the calendar until
-it is resumed. Break time is never task time: finished sessions add their
-own minutes to `worked_minutes`, and the planner books only the remainder.
+it is resumed. A task can also wait before it was ever started. Break time is
+never task time: finished sessions add their own minutes to `worked_minutes`,
+and the planner books only the remainder.
 """
 
 from __future__ import annotations
@@ -185,6 +186,18 @@ def stop_running(session: Session, task: Task, *, reason: str, at: datetime | No
     row = work_store.open_for_task(session, task.id)
     if row is not None:
         _end(session, task, row, at or datetime.now(timezone.utc), reason)
+
+
+async def wait_task(session: Session, task: Task, *, now: datetime | None = None) -> None:
+    """Waiting on someone, running or not: off the calendar until resumed."""
+    if work_store.open_for_task(session, task.id) is not None:
+        await pause_task(session, task, "waiting", now=now)
+        return
+    _open(session, task)
+    if task.schedule_state == "waiting":
+        return
+    await _set_waiting(session, task, now or datetime.now(timezone.utc))
+    publish_task(session, task.id)
 
 
 async def _set_waiting(session: Session, task: Task, now: datetime) -> None:

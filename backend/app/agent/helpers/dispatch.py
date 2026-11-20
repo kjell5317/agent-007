@@ -1,10 +1,11 @@
 """Shared terminal-action dispatch for the agent flows.
 
 Both the thread-follow-up flow and the new-input duplicate-handling flow end
-by acting on an *existing* task: `update_task` (edit fields and/or drive the
-lifecycle via its `status`) or `no_change` (leave it alone). The side effects
-are identical — reschedule/notify on update, close/reopen on a status change —
-so they live here and both runners call the same function.
+by acting on an *existing* task: `update_task` (edit fields, drive the
+lifecycle via its `status`, put it on hold or resume it via `waiting`) or
+`no_change` (leave it alone). The side effects are identical — reschedule/notify
+on update, close/reopen on a status change, off/back onto the calendar on a
+waiting change — so they live here and both runners call the same function.
 """
 
 from __future__ import annotations
@@ -21,22 +22,24 @@ from app.services.notifications.notify import notify_done_for_you
 from app.services.task.close import close_task as close_task_svc
 from app.services.task.reopen import reopen_task as reopen_task_svc
 from app.services.task.update import update_task as update_task_svc
+from app.services.task.work import resume_task, wait_task
 from app.services.event_context import apply_event_context
 
 # Fields carried on the tool variants that aren't task columns and must be
-# stripped before patching (`status` drives the lifecycle, not a column;
-# `notes` is long-term memory the runners persist separately).
-_NON_PATCH_FIELDS = frozenset(
-    {"existing_task_id", "reason", "confidence", "status", "notes", "due_date_is_explicit", "manually_set_duration"}
-)
+# stripped before patching (`status` and `waiting` drive the lifecycle, not
+# columns; `notes` is long-term memory the runners persist separately).
+_NON_PATCH_FIELDS = frozenset({
+    "existing_task_id", "reason", "confidence", "status", "waiting", "notes",
+    "due_date_is_explicit", "manually_set_duration",
+})
 
 
 async def apply_task_action(
     session: Session, task: Task, tool_name: str, tu_input: dict[str, Any],
     *, user_requested: bool = False,
 ) -> dict[str, Any]:
-    """Apply `update_task` (fields and/or a `status` lifecycle change) or
-    `no_change` to `task`.
+    """Apply `update_task` (fields, a `status` lifecycle change and/or a
+    `waiting` change) or `no_change` to `task`.
 
     A close the user didn't ask for is the agent's own call, so it notifies
     with a Reopen button — a false close must not go unnoticed.
@@ -46,6 +49,7 @@ async def apply_task_action(
     """
     if tool_name == "update_task":
         status = tu_input.get("status")
+        waiting = tu_input.get("waiting")
         patch = {
             k: v for k, v in tu_input.items()
             if v is not None and k not in _NON_PATCH_FIELDS and k not in ATTRIBUTE_FIELDS
@@ -70,6 +74,14 @@ async def apply_task_action(
                 pass
             outcome = "reopened"
 
+        # On hold before the edits, so none of them plans it again; resumed
+        # after them, so its solve sees the new fields.
+        if waiting is True and status != "closed":
+            try:
+                await wait_task(session, task)
+            except ValueError:
+                waiting = None
+
         if patch:
             # Plan-relevant edits route through `schedule_task` inside the
             # update service, which owns the "Task created" / warning-clear
@@ -79,6 +91,9 @@ async def apply_task_action(
                 await update_task_svc(session, task.id, patch, **options)
             except LookupError:
                 pass
+
+        if waiting is False and status != "closed":
+            await resume_task(session, task)
 
         if status == "closed":
             # A dismissed or already-closed task has nothing to undo; only
@@ -98,6 +113,7 @@ async def apply_task_action(
         return {
             "outcome": outcome,
             "status_change": status,
+            "waiting": waiting,
             "reason": tu_input.get("reason"),
             "confidence": tu_input.get("confidence"),
         }

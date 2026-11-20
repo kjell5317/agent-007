@@ -2,6 +2,7 @@
 
   * POST /tasks/{id}/start            — start (pauses another running task)
   * POST /tasks/{id}/pause            — {reason: break | waiting | interrupted}
+  * POST /tasks/{id}/wait             — waiting on someone, also before a start
   * POST /tasks/{id}/resume           — a waiting task goes back to the planner
   * POST /tasks/{id}/complete         — end the running session and close
   * POST /tasks/{id}/sessions         — log a span afterwards, optionally completing
@@ -92,6 +93,16 @@ async def pause(
     try:
         await work.pause_task(session, task, body.reason)
     except LookupError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return read_task(session, task)
+
+
+@router.post("/{task_id}/wait", response_model=TaskRead)
+async def wait(task_id: uuid.UUID, session: Session = Depends(get_session)) -> TaskRead:
+    task = task_or_404(session, task_id)
+    try:
+        await work.wait_task(session, task)
+    except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return read_task(session, task)
 

@@ -51,7 +51,6 @@ from app.services.task.recur import (
     drop_instances, plan_recurring_tasks, remove_recurrence, set_recurrence,
 )
 from app.services.task.reopen import enqueue_reopen_task
-from app.services.task.reschedule import reschedule_task as reschedule_task_svc
 from app.services.task.split import (
     RemovedMirror, collapse_subtasks, create_subtask as create_subtask_svc, finish_collapse,
     place_subtasks, reflow_children, split_deterministically, split_task as split_task_svc,
@@ -90,23 +89,6 @@ async def _sync_task_changes(updates: list[tuple[uuid.UUID, set[str]]], parent_i
             log.exception("task calendar update failed · parent=%s", parent_id)
             from app.services.notifications.notify import notify_error
             await notify_error("Task calendar update failed", exc)
-
-
-async def _reschedule_in_background(task_id: uuid.UUID) -> None:
-    with SessionLocal() as session:
-        row = tasks_store.get(session, task_id)
-        if row is None:
-            return
-        try:
-            result = await reschedule_task_svc(session, row)
-            # Deferred: due past the horizon, and waiting beat every slot this week.
-            if result is None and row.schedule_state != "deferred":
-                raise RuntimeError("Task could not be scheduled")
-            publish_task(session, task_id)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("task rescheduling failed · task=%s", task_id)
-            from app.services.notifications.notify import notify_error
-            await notify_error("Task rescheduling failed", exc, context=row.title)
 
 
 async def _split_in_background(task_id: uuid.UUID) -> None:
@@ -363,16 +345,6 @@ async def remove_task_recurrence(
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     background_tasks.add_task(_refresh_series_in_background, None, stale)
-    return read_task(session, row)
-
-
-@router.post("/{task_id}/reschedule", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
-async def reschedule_task(
-    task_id: uuid.UUID, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
-) -> TaskRead:
-    row = task_or_404(session, task_id)
-
-    background_tasks.add_task(_reschedule_in_background, task_id)
     return read_task(session, row)
 
 

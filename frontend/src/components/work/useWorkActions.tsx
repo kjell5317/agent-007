@@ -18,6 +18,8 @@ export interface WorkActions {
   // Opens the pause chooser.
   pause: () => void;
   pauseFor: (reason: PauseReason) => void;
+  // Waiting on someone without a running session.
+  wait: () => void;
   resume: () => void;
   complete: () => void;
   logComplete: () => void;
@@ -27,6 +29,8 @@ export interface WorkActions {
   // render, so keep them out of click-to-open areas.
   dialogs: ReactNode;
 }
+
+const WAITING_MESSAGE = "Off the calendar until you resume";
 
 // Taps show at once, so their requests queue per task (a quick Start → Pause
 // must reach the server in that order) and only the newest tap's answer lands.
@@ -104,7 +108,7 @@ export function useWorkActions(
     act(
       reason,
       () => api.pauseTask(task.id, reason),
-      reason === "waiting" ? "Off the calendar until you resume" : "Paused",
+      reason === "waiting" ? WAITING_MESSAGE : "Paused",
     );
   };
 
@@ -125,6 +129,7 @@ export function useWorkActions(
     },
     pause: () => setDialog("pause"),
     pauseFor,
+    wait: () => act("waiting", () => api.waitTask(task.id), WAITING_MESSAGE),
     resume: () => act("resume", () => api.resumeTask(task.id), "Back in the planner"),
     complete,
     logComplete: () => setDialog("log"),

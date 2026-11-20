@@ -5,10 +5,11 @@ closing the task clears them with its other pushes."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.clients import notification_ledger as ledger
 from app.services.notifications import messages, push
 from app.services.notifications.push import Message
@@ -18,7 +19,23 @@ async def notify_error(title: str, exc: BaseException, *, context: str | None = 
     await push.send(messages.error(title, exc, context=context))
 
 
+# Slots start on the quarter hour, so a task planned for the next free one
+# has its popup go off up to this long after the task lands.
+_ANNOUNCE_GRACE = timedelta(minutes=15)
+
+
+def calendar_announces(task, now: datetime) -> bool:
+    """The task is planned now: its event's popup reminder is going off
+    already, so a push of our own would only repeat it."""
+    if task.scheduled_date is None or not task.calendar_event_id:
+        return False
+    lead = timedelta(minutes=get_settings().reminder_lead_minutes)
+    return task.scheduled_date - lead <= now + _ANNOUNCE_GRACE
+
+
 async def notify_new_task(session: Session, task) -> None:
+    if calendar_announces(task, datetime.now(timezone.utc)):
+        return
     await send_once(
         session, key=f"created:{task.id}", kind="new_task",
         message=messages.new_task(task), task_id=task.id,

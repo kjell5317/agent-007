@@ -29,13 +29,14 @@ export function TasksPanel({
   unseenTaskIds,
   onTaskVisible,
 }: Props) {
-  const [laterOpen, setLaterOpen] = useState(false);
+  const [open, setOpen] = useState<Record<CollapsibleKey, boolean>>({ later: false, waiting: false });
   const kotxFor = (task: Task) =>
     task.kotx_task_id != null ? kotxTasks.get(task.kotx_task_id) ?? null : null;
-  const [running, today, tomorrow, later, waiting] = useMemo(() => {
+  const [today, tomorrow, later, waiting] = useMemo(() => {
     const sorted = tasks
       .filter((task) => !task.is_container)
       .sort((a, b) => compareTasks(a, b, "scheduled"));
+    // The running task leads Today.
     const r: Task[] = [];
     const t: Task[] = [];
     const tm: Task[] = [];
@@ -60,7 +61,7 @@ export function TasksPanel({
         l.push(task);
       }
     }
-    return [r, t, tm, l, w];
+    return [[...r, ...t], tm, l, w];
   }, [tasks, timeZone]);
 
   const groups = [
@@ -85,8 +86,7 @@ export function TasksPanel({
 
   return (
     <div className="space-y-6">
-      {running.length > 0 && <div className="space-y-2">{running.map(renderTask)}</div>}
-      {groups.length === 0 && running.length === 0 && (
+      {groups.length === 0 && (
         <section>
           <SectionHeader title="Today" />
           <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -95,14 +95,15 @@ export function TasksPanel({
         </section>
       )}
       {groups.map((group, index) => {
-        // Later stays collapsible only when a section sits above it.
-        if (group.key === "later" && index > 0) {
+        // Later and Waiting fold away only when a section sits above them.
+        if (isCollapsible(group.key) && index > 0) {
+          const key = group.key;
           return (
             <CollapsibleSection
-              key={group.key}
+              key={key}
               title={group.title}
-              open={laterOpen}
-              onOpenChange={setLaterOpen}
+              open={open[key]}
+              onOpenChange={(next) => setOpen((prev) => ({ ...prev, [key]: next }))}
             >
               {group.tasks.map(renderTask)}
             </CollapsibleSection>
@@ -117,6 +118,12 @@ export function TasksPanel({
       })}
     </div>
   );
+}
+
+type CollapsibleKey = "later" | "waiting";
+
+function isCollapsible(key: string): key is CollapsibleKey {
+  return key === "later" || key === "waiting";
 }
 
 function SectionHeader({ title }: { title: string }) {

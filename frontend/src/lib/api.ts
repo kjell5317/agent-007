@@ -106,8 +106,6 @@ export const api = {
     }),
   removeRecurrence: (id: string) =>
     request<Task>(`/tasks/${id}/recurrence`, { method: "DELETE" }),
-  rescheduleTask: (id: string) =>
-    request<Task>(`/tasks/${id}/reschedule`, { method: "POST" }),
   closeTask: (id: string) =>
     request<void>(`/tasks/${id}/close`, { method: "POST" }),
   markNotTask: (id: string) =>
@@ -128,6 +126,8 @@ export const api = {
   startTask: (id: string) => request<Task>(`/tasks/${id}/start`, { method: "POST" }),
   pauseTask: (id: string, reason: PauseReason) =>
     request<Task>(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify({ reason }) }),
+  // Waiting on someone, running or not: off the calendar until resumed.
+  waitTask: (id: string) => request<Task>(`/tasks/${id}/wait`, { method: "POST" }),
   resumeTask: (id: string) => request<Task>(`/tasks/${id}/resume`, { method: "POST" }),
   completeTask: (id: string) => request<Task>(`/tasks/${id}/complete`, { method: "POST" }),
   logWork: (id: string, span: WorkSpan & { complete: boolean }) =>

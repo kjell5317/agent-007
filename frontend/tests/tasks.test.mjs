@@ -62,3 +62,10 @@ test("only a new task awaiting its first solve shows as planning", () => {
   assert.equal(exports.isPlanning(task({ is_container: true })), false);
   assert.equal(exports.isPlanning(task({ schedule_state: "waiting" })), false);
 });
+
+test("only the shopping task reads as the grocery planner's", () => {
+  const task = (...sources) => ({ raw_inputs: sources.map((source) => ({ source })) });
+  assert.equal(exports.isGroceryTask(task("grocery")), true);
+  assert.equal(exports.isGroceryTask(task("gmail", "manual")), false);
+  assert.equal(exports.isGroceryTask(task()), false);
+});

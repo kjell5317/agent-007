@@ -211,10 +211,10 @@ async def extract_task_fields(
                     payload.get(key) is not None
                     for key in (
                         "title", "description", "estimation", "due_date", "location", "link",
-                        "label", "status", *ATTRIBUTE_FIELDS,
+                        "label", "status", "waiting", *ATTRIBUTE_FIELDS,
                     )
                 ):
-                    raise ValueError("Manual update_task must change a task field or status")
+                    raise ValueError("Manual update_task must change a task field, status or waiting")
                 trace["action"] = terminal_use.name
             iter_log.setdefault("tool_results", []).append(
                 tool_result_entry(

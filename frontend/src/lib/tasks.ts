@@ -24,6 +24,12 @@ export function isPlanning(
   return task.schedule_status === "pending" && !task.is_container && task.schedule_state !== "waiting";
 }
 
+// The shopping task comes from the grocery planner, not from a message or
+// the composer.
+export function isGroceryTask(task: Pick<Task, "raw_inputs">): boolean {
+  return task.raw_inputs.some((input) => input.source === "grocery");
+}
+
 // Splitting a repeating occurrence only splits that occurrence: its subtasks
 // don't repeat themselves, they show the rule of the occurrence they belong to.
 export function taskRecurrence(

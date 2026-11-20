@@ -419,8 +419,8 @@ async def test_add_task_event_persists_scheduled_date_after_calendar_create(monk
 
 @pytest.mark.asyncio
 async def test_notification_reschedule_goes_through_the_reschedule_service(monkeypatch):
-    # Same path as the UI button: the "rescheduled" log row, the refit and
-    # pulling a deferred task in all live in `reschedule_task`.
+    # The "rescheduled" log row, the refit and pulling a deferred task in all
+    # live in `reschedule_task`.
     task_id = uuid.uuid4()
     task = SimpleNamespace(id=task_id, title="Write report")
     calls = []

@@ -10,6 +10,7 @@ import {
   Play,
   Repeat,
   RotateCcw,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -26,7 +27,7 @@ import { latestHandoff } from "@/lib/handoff";
 import { kotx, type KotxTask } from "@/lib/kotx";
 import { labelChipStyle } from "@/lib/labels";
 import { pollTaskCreation, type PollHandle } from "@/lib/pollTask";
-import { isPlanning, taskRecurrence } from "@/lib/tasks";
+import { isGroceryTask, isPlanning, taskRecurrence } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TaskIdPill } from "@/components/tasks/TaskIdPill";
 import type { Task } from "@/lib/types";
@@ -93,6 +94,9 @@ export function TaskCard({
   const recurrenceTitle = recurrence
     ? `${recurrence.inherited ? "Part of a task that repeats" : "Repeats"} ${recurrence.label.toLowerCase()}`
     : null;
+  const waitingTitle = work.waiting
+    ? task.waiting_since ? `Waiting since ${fmtClock(task.waiting_since)}` : "Waiting on someone"
+    : null;
   const cardBorderClass =
     work.running ? "border-flow-primary"
       : handoffRunning ? "border-flow-sky"
@@ -102,7 +106,6 @@ export function TaskCard({
       : unseen ? "border-emerald-500/70"
       : null;
   const locationProbeKey = [
-    work.waiting,
     handoffRunning,
     displayDate ?? "",
     task.label ?? "",
@@ -308,7 +311,16 @@ export function TaskCard({
         }}
       >
         <div className="flex w-full items-center gap-2">
-          {workable ? (
+          {workable && work.waiting ? (
+            <IconButton
+              label="Resume"
+              disabled={busy || crossed}
+              onClick={work.resume}
+              className="text-muted-foreground hover:bg-accent hover:text-primary"
+            >
+              <RotateCcw className="h-5 w-5" />
+            </IconButton>
+          ) : workable ? (
             <IconButton
               label={work.running ? "Pause" : "Start"}
               disabled={busy || crossed}
@@ -369,23 +381,26 @@ export function TaskCard({
               >
                 {task.title}
               </span>
+              {isGroceryTask(task) && (
+                <TitleIcon title="Kept up to date by AI from your grocery list">
+                  <Sparkles className="h-3.5 w-3.5" />
+                </TitleIcon>
+              )}
               {recurrenceTitle && (
-                <span title={recurrenceTitle} aria-label={recurrenceTitle} className="shrink-0 text-muted-foreground">
+                <TitleIcon title={recurrenceTitle}>
                   <Repeat className="h-3.5 w-3.5" />
-                </span>
+                </TitleIcon>
+              )}
+              {waitingTitle && (
+                <TitleIcon title={waitingTitle}>
+                  <Hourglass className="h-3.5 w-3.5" />
+                </TitleIcon>
               )}
             </div>
             <div
               ref={metadataRef}
               className={cn("mt-1 flex items-center gap-x-2 gap-y-1 text-xs text-muted-foreground", compact ? "overflow-hidden whitespace-nowrap" : "flex-wrap")}
             >
-              {work.waiting && task.waiting_since && (
-                <Badge variant="muted" className="gap-1">
-                  <Hourglass className="h-3 w-3" />
-                  Waiting since {fmtClock(task.waiting_since)}
-                </Badge>
-              )}
-
               {displayDate && (
                 <Badge variant={displayDateVariant}>
                   {fmtDue(displayDate)}
@@ -442,15 +457,19 @@ export function TaskCard({
                 {kotxAction}
               </Button>
             )
-          ) : workable && work.waiting ? (
-            <Button size="sm" variant="secondary" className="shrink-0" disabled={crossed} onClick={work.resume}>
-              Resume
-            </Button>
           ) : null}
         </div>
       </CardContent>
       {work.dialogs}
     </Card>
+  );
+}
+
+function TitleIcon({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <span title={title} aria-label={title} className="shrink-0 text-muted-foreground">
+      {children}
+    </span>
   );
 }
 

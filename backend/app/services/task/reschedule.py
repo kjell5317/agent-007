@@ -1,5 +1,5 @@
-"""The "Reschedule" tap: move a task off its slot, or plan a task waiting in
-"Later" this week."""
+"""The Home Assistant `RESCHEDULE_TASK` action: move a task off its slot, or
+plan a task waiting in "Later" this week."""
 
 from __future__ import annotations
 

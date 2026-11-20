@@ -182,6 +182,41 @@ async def test_waiting_takes_the_task_off_the_calendar_until_resumed(world):
 
 
 @pytest.mark.asyncio
+async def test_a_task_can_wait_before_it_was_ever_started(world):
+    task = _add(world, _task())
+
+    await work.wait_task(_session(), task, now=NOW)
+
+    assert task.schedule_state == "waiting" and task.waiting_since == NOW
+    assert task.scheduled_date is None and world.deleted == [task.id]
+    assert world.sessions == [] and world.solves == ["work_session"]
+
+    # Waiting again changes nothing.
+    await work.wait_task(_session(), task, now=NOW + timedelta(minutes=5))
+    assert task.waiting_since == NOW and world.deleted == [task.id]
+
+
+@pytest.mark.asyncio
+async def test_waiting_on_a_running_task_ends_its_session(world):
+    task = _add(world, _task())
+    await work.start_task(_session(), task, now=NOW)
+
+    await work.wait_task(_session(), task, now=NOW + timedelta(minutes=10))
+
+    assert world.sessions[0].end_reason == "waiting" and task.worked_minutes == 10
+    assert task.schedule_state == "waiting" and task.running_since is None
+
+
+@pytest.mark.asyncio
+async def test_a_closed_task_cant_wait(world):
+    task = _add(world, _task())
+    world.status[task.id] = "closed"
+    with pytest.raises(ValueError):
+        await work.wait_task(_session(), task, now=NOW)
+    assert task.schedule_state == "placed"
+
+
+@pytest.mark.asyncio
 async def test_pausing_a_task_that_isnt_running_fails(world):
     task = _add(world, _task())
     with pytest.raises(LookupError):

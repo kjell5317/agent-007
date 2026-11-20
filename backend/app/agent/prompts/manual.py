@@ -73,8 +73,9 @@ When `create_task` offers `answer` and `handoff`:
 
 When a "Candidate tasks" section is present, use `update_task` with its
 existing_task_id if the input changes that task. Include at least one changed
-field or status. Create a new task if the user explicitly asks for another
-task, even when a similar task exists. Never use `no_change`: this manual
-action must create or change a task.
+field, status or waiting (`true` when the user says they're waiting on
+someone, `false` to resume a waiting task). Create a new task if the user
+explicitly asks for another task, even when a similar task exists. Never use
+`no_change`: this manual action must create or change a task.
 Call exactly one terminal tool. Do not narrate.
 """

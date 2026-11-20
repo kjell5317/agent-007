@@ -8,8 +8,13 @@ tool:
       include only the fields that actually change; and/or
     * change the lifecycle via `status`: `closed` when the follow-up indicates
       the task is done or cancelled (a "thanks, sent", a confirmation, a
-      cancellation), or `open` to reopen a task that was previously closed.
-  You may edit fields and set `status` in the same call.
+      cancellation), or `open` to reopen a task that was previously closed;
+      and/or
+    * put the task on hold via `waiting: true` when the user can't go on
+      until someone else acts (a "I'll get back to you", a pending approval
+      or delivery), or resume it via `waiting: false` when a task that is
+      waiting (its fields show `waiting since`) gets what it waited on.
+  You may edit fields and set `status` or `waiting` in the same call.
   When reopening a closed task whose current `due_date` or `scheduled_date`
   is in the past, include a new future `due_date` in the same `update_task`
   call unless the follow-up explicitly says the date should not change.
@@ -20,7 +25,8 @@ tool:
   actually creates new work for the user.
 
 Be conservative: do not rewrite fields the new message doesn't change, and only
-set `status` when the message genuinely signals completion or revival.
+set `status` when the message genuinely signals completion or revival, or
+`waiting` when it genuinely blocks or unblocks the user.
 
 Both tools accept an optional `notes` array (durable, cross-project long-term
 memory; the `notes` field describes what makes a good note). Include them when
