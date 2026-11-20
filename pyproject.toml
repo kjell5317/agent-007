@@ -18,7 +18,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.3",
     # PDF text extraction for the Drive file reader (Office formats use lxml).
-    "pypdf>=6.19.0",
+    "pypdf>=6.21.4",
     "itsdangerous>=2.2",
     # Bundled IANA timezone database — `zoneinfo.ZoneInfo("Europe/Berlin")`
     # otherwise raises on minimal Python images that omit /usr/share/zoneinfo,
