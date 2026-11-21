@@ -90,7 +90,7 @@ async def test_search_scopes_to_owner_and_formats(monkeypatch):
     # Contributing repos fetched first, then the (owner-scoped) search.
     assert fake.calls[0]["url"] == "/user/repos"
     search_call = next(c for c in fake.calls if c["url"] == "/search/issues")
-    assert search_call["params"]["q"] == "is:open assignee:@me org:acme"
+    assert search_call["params"]["q"] == "(is:open assignee:@me) (org:acme)"
     assert search_call["headers"]["Authorization"] == "Bearer ghp_x"
     assert "[acme/widgets#7]" in out
     assert "issue, open, by octocat" in out
@@ -142,6 +142,12 @@ async def test_search_hits_carry_the_connected_label_and_a_repo_free_title(monke
 )
 def test_strip_repo_prefix(title, expected):
     assert github.strip_repo_prefix(title, "acme/widgets") == expected
+
+
+def test_scope_to_owners_ors_the_owner_qualifiers():
+    owners = ("org:acme", "user:me")
+    assert github.scope_to_owners("fix OR bug", owners) == "(fix OR bug) (org:acme OR user:me)"
+    assert github.scope_to_owners("  ", owners) == "(org:acme OR user:me)"
 
 
 @pytest.mark.asyncio

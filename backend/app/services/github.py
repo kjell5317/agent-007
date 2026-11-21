@@ -188,7 +188,7 @@ async def _fetch(
         # query already carries its own repo/user/org scope; then over-fetch
         # a little and post-filter to the exact repo set.
         if owners and len(owners) <= _MAX_OWNER_QUALIFIERS and not _SCOPED_RE.search(query):
-            q = f"{query} {' '.join(owners)}".strip()
+            q = scope_to_owners(query, owners)
             per_page = max(limit, _SCOPED_PAGE)
         else:
             per_page = 100
@@ -204,6 +204,15 @@ async def _fetch(
         items = [it for it in items if _repo_name(str(it.get("repository_url") or "")).lower() in repos]
         return items[:limit], len(items)
     return items[:limit], int(data.get("total_count") or 0)
+
+
+def scope_to_owners(query: str, owners: tuple[str, ...]) -> str:
+    # Advanced search ANDs space-separated qualifiers, so `user:a org:b` matches
+    # nothing; the owners must be an explicit OR group. The query gets its own
+    # parens so a top-level OR in it can't escape the owner scope.
+    group = f"({' OR '.join(owners)})"
+    query = query.strip()
+    return f"({query}) {group}" if query else group
 
 
 async def _contributing_repos() -> tuple[frozenset[str], tuple[str, ...]]:
